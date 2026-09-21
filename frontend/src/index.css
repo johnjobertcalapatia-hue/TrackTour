@@ -1,0 +1,761 @@
+﻿@import "tailwindcss";
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --font-sans: 'Figtree', ui-sans-serif, system-ui, sans-serif;
+  --font-poppins: 'Poppins', sans-serif;
+
+  /* ---- Premium white palette ---- */
+  --color-canvas: #f4f6f9;
+  --color-primary: #2563eb;
+  --color-primary-dark: #1d4ed8;
+  --color-success: #10b981;
+  --color-success-dark: #059669;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  --color-purple: #8b5cf6;
+  --color-ink: #111827;
+  --color-ink-soft: #6b7280;
+
+  /* ---- Tourism green palette (Restaurant Owner) ---- */
+  --color-forest: #056B35;
+  --color-tourism: #087F3F;
+  --color-mint: #E9F7EF;
+  --color-gold: #f4b400;
+  --color-soft-gold: #fff7d6;
+  --color-ink-deep: #17201B;
+  --color-forest-border: #E5E9E7;
+  --color-forest-soft: #E9F7EF;
+  --color-forest-line: #DDF4E6;
+
+  /* ---- TrackTour brand palette ---- */
+  --color-brand: #087F3F;
+  --color-brand-dark: #056B35;
+  --color-brand-light: #22c55e;
+  --color-gold: #F4B400;
+  --color-night: #f8faf7;
+  --color-night-soft: #ffffff;
+  --color-night-card: #ffffff;
+  --color-muted: #68736D;
+
+  /* ---- Official TrackTour design tokens ---- */
+  --color-tracktour-green: #087F3F;
+  --color-tracktour-dark-green: #056B35;
+  --color-tracktour-light-green: #E9F7EF;
+  --color-tracktour-yellow: #F4B400;
+  --color-tracktour-light-yellow: #FFF7D6;
+  --color-tracktour-white: #FFFFFF;
+  --color-tracktour-background: #F7FAF7;
+  --color-tt-text: #17201B;
+  --color-tt-text-secondary: #68736D;
+  --color-tt-border: #E5E9E7;
+
+  --shadow-glass: 0 8px 20px rgba(0, 0, 0, 0.06);
+  --shadow-glass-lg: 0 12px 28px rgba(0, 0, 0, 0.1);
+  --shadow-primary: 0 10px 25px rgba(37, 99, 235, 0.25);
+  --shadow-tourism: 0 4px 18px rgba(8, 127, 63, 0.06);
+  --shadow-tourism-lg: 0 12px 24px rgba(8, 127, 63, 0.12);
+
+  --animate-fade-in: fade-in 0.6s ease-out forwards;
+  --animate-slide-up: slide-up 0.5s ease-out forwards;
+  --animate-float: float 3s ease-in-out infinite;
+  --animate-fade-in-up: fade-in-up 0.5s ease-out forwards;
+  --animate-scale-in: scale-in 0.3s ease-out forwards;
+  --animate-glow: glow 2s ease-in-out infinite;
+  --animate-shimmer: shimmer 3s linear infinite;
+  --animate-card-lift: card-lift 3s ease-in-out infinite;
+  --animate-ken-burns: ken-burns 40s linear infinite alternate;
+
+  @keyframes fade-in {
+    0% { opacity: 0; }
+    100% { opacity: 1; }
+  }
+  @keyframes slide-up {
+    0% { opacity: 0; transform: translateY(30px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+  }
+  @keyframes fade-in-up {
+    0% { opacity: 0; transform: translateY(20px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes scale-in {
+    0% { transform: scale(0.95); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  @keyframes rider-alert-in {
+    from { opacity: 0; transform: scale(0.95) translateY(10px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+  }
+  @keyframes rider-alert-out {
+    from { opacity: 1; transform: scale(1) translateY(0); }
+    to { opacity: 0; transform: scale(0.97) translateY(8px); }
+  }
+  @keyframes rider-alert-backdrop {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+    50% { box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+  }
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  @keyframes card-lift {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-4px); }
+  }
+  @keyframes ken-burns {
+    0% { transform: scale(1); }
+    100% { transform: scale(1.03); }
+  }
+  @keyframes dropdown-in {
+    0% { opacity: 0; transform: translateY(-6px) scale(0.98); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+  }
+}
+
+/* ---- Neutral canvas: soft gray, only a whisper of gradient ---- */
+.glass-bg {
+  background:
+    linear-gradient(135deg, #f8fafc 0%, #f4f7fc 50%, #f8fafc 100%);
+}
+
+.glass-bg-orbs {
+  position: relative;
+  overflow: hidden;
+}
+
+.glass-bg-orbs::before,
+.glass-bg-orbs::after {
+  content: '';
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(90px);
+  opacity: 0.08;
+  pointer-events: none;
+}
+
+.glass-bg-orbs::before {
+  width: 420px;
+  height: 420px;
+  top: -120px;
+  left: -80px;
+  background: radial-gradient(circle, #60a5fa, transparent 70%);
+}
+
+.glass-bg-orbs::after {
+  width: 520px;
+  height: 520px;
+  bottom: -160px;
+  right: -120px;
+  background: radial-gradient(circle, #c084fc, transparent 70%);
+}
+
+/* ---- Cards: white on gray canvas, visible border, clean shadow ---- */
+.glass-card {
+  background: #ffffff;
+  border: 1px solid #E5E7EB;
+  border-radius: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.glass-panel {
+  background: #ffffff;
+  border: 1px solid #E5E7EB;
+  border-radius: 16px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* ---- Navbar ---- */
+.glass-nav {
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid #eef1f5;
+}
+
+/* ---- Sidebar: distinct layer against the canvas ---- */
+.glass-sidebar {
+  background: #fafafb;
+  border-right: 1px solid #e9edf2;
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.04);
+}
+
+/* ---- Inputs: glass theme ---- */
+.glass-input {
+  background: #ffffff;
+  border: 1.5px solid #CBD5E1;
+  border-radius: 12px;
+  color: #111827;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.glass-input::placeholder {
+  color: #6B7280;
+}
+
+.glass-input:hover:not(:disabled) {
+  border-color: #94A3B8;
+}
+
+.glass-input:focus {
+  outline: none;
+  border-color: #16A34A;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.15);
+}
+
+.glass-input:disabled {
+  background: #F3F4F6;
+  border-color: #D1D5DB;
+  color: #6B7280;
+  cursor: not-allowed;
+}
+
+/* ---- Primary button ---- */
+.btn-primary {
+  background: #2563eb;
+  color: #fff;
+  border-radius: 12px;
+  box-shadow: 0 10px 25px rgba(37, 99, 235, 0.25);
+  transition: transform 0.25s ease, box-shadow 0.25s ease, background-color 0.2s ease;
+}
+
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  background: #1d4ed8;
+  box-shadow: 0 14px 30px rgba(37, 99, 235, 0.3);
+}
+
+.btn-primary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* ---- Tourism theme (Restaurant Owner) ---- */
+.tourism-bg {
+  background-color: #F7FAF7;
+}
+
+@keyframes rider-online-pulse {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.65;
+  }
+  70%, 100% {
+    transform: scale(1.65);
+    opacity: 0;
+  }
+}
+
+@keyframes rider-bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.online-pulse-ring {
+  position: absolute;
+  inset: -8px;
+  border: 2px solid #39FF14;
+  border-radius: 9999px;
+  pointer-events: none;
+  animation: rider-online-pulse 2.2s ease-out infinite;
+}
+
+.online-pulse-ring-delayed {
+  animation-delay: 1.1s;
+}
+
+.online-toggle-active {
+  box-shadow: 0 0 0 6px #FEF3C7, 0 4px 14px rgba(250, 204, 21, 0.3);
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.rider-circle-bounce {
+  animation: rider-bounce 1.5s ease-in-out infinite;
+}
+
+.map-nav-3d {
+  transform: perspective(2000px) rotateX(15deg);
+  transform-origin: center bottom;
+  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@media (min-width: 768px) {
+  .map-nav-3d {
+    transform: perspective(2000px) rotateX(20deg);
+  }
+}
+
+.map-nav-3d .leaflet-container {
+  height: 100% !important;
+  width: 100% !important;
+}
+
+.leaflet-container {
+  background: #e8e4de;
+  scrollbar-width: none;
+}
+
+.leaflet-container::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes rider-request-slide-up {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.rider-request-sheet {
+  animation: rider-request-slide-up 400ms cubic-bezier(.2,.8,.2,1);
+}
+
+.tourism-sidebar {
+  background: #ffffff;
+  border-right: 1px solid #E2E8E3;
+}
+
+.tourism-nav {
+  background: #ffffff;
+  border-bottom: 1px solid #E2E8E3;
+}
+
+.tourism-card {
+  background: #ffffff;
+  border: 1px solid #E2E8E3;
+  border-radius: 16px;
+  box-shadow: 0 4px 18px rgba(22, 128, 60, 0.06);
+}
+
+/* ---- Tourism theme: auth pages (login / register) ---- */
+.tourism-bg-orbs {
+  position: relative;
+  overflow: hidden;
+}
+
+.tourism-bg-orbs::before,
+.tourism-bg-orbs::after {
+  content: '';
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(90px);
+  opacity: 0.1;
+  pointer-events: none;
+}
+
+.tourism-bg-orbs::before {
+  width: 420px;
+  height: 420px;
+  top: -120px;
+  left: -80px;
+  background: radial-gradient(circle, #34d399, transparent 70%);
+}
+
+.tourism-bg-orbs::after {
+  width: 520px;
+  height: 520px;
+  bottom: -160px;
+  right: -120px;
+  background: radial-gradient(circle, #f4b400, transparent 70%);
+}
+
+/* ---- Tourism theme: inputs ---- */
+.tourism-input {
+  background: #ffffff;
+  border: 1.5px solid #CBD5E1;
+  border-radius: 12px;
+  color: #111827;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.tourism-input::placeholder {
+  color: #6B7280;
+}
+
+.tourism-input:hover:not(:disabled) {
+  border-color: #94A3B8;
+}
+
+.tourism-input:focus {
+  outline: none;
+  border-color: #16A34A;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.15);
+}
+
+.tourism-input:disabled {
+  background: #F3F4F6;
+  border-color: #D1D5DB;
+  color: #6B7280;
+  cursor: not-allowed;
+}
+
+.btn-tourism {
+  background: #16803C;
+  color: #fff;
+  border-radius: 12px;
+  box-shadow: 0 4px 18px rgba(22, 128, 60, 0.2);
+  transition: transform 0.25s ease, box-shadow 0.25s ease, background-color 0.2s ease;
+}
+
+.btn-tourism:hover:not(:disabled) {
+  transform: translateY(-2px);
+  background: #126B32;
+  box-shadow: 0 12px 24px rgba(22, 128, 60, 0.25);
+}
+
+.btn-tourism:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* =================================================================
+   Global form control styles
+   Ensures all inputs, textareas, selects, checkboxes, radios, and
+   switches have visible borders, consistent colors, and clear
+   focus/hover/disabled states.
+   ================================================================= */
+
+/* ---- Text fields, textareas, selects ---- */
+input[type="text"],
+input[type="email"],
+input[type="number"],
+input[type="password"],
+input[type="tel"],
+input[type="url"],
+input[type="search"],
+input[type="date"],
+input[type="time"],
+input[type="datetime-local"],
+textarea,
+select {
+  border: 1.5px solid #CBD5E1;
+  background-color: #FFFFFF;
+  color: #111827;
+  border-radius: 12px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+input[type="text"]::placeholder,
+input[type="email"]::placeholder,
+input[type="number"]::placeholder,
+input[type="password"]::placeholder,
+input[type="tel"]::placeholder,
+input[type="url"]::placeholder,
+input[type="search"]::placeholder,
+input[type="date"]::placeholder,
+input[type="time"]::placeholder,
+input[type="datetime-local"]::placeholder,
+textarea::placeholder {
+  color: #6B7280;
+}
+
+/* Hover */
+input[type="text"]:hover:not(:disabled):not(:focus),
+input[type="email"]:hover:not(:disabled):not(:focus),
+input[type="number"]:hover:not(:disabled):not(:focus),
+input[type="password"]:hover:not(:disabled):not(:focus),
+input[type="tel"]:hover:not(:disabled):not(:focus),
+input[type="url"]:hover:not(:disabled):not(:focus),
+input[type="search"]:hover:not(:disabled):not(:focus),
+input[type="date"]:hover:not(:disabled):not(:focus),
+input[type="time"]:hover:not(:disabled):not(:focus),
+input[type="datetime-local"]:hover:not(:disabled):not(:focus),
+textarea:hover:not(:disabled):not(:focus),
+select:hover:not(:disabled):not(:focus) {
+  border-color: #94A3B8;
+}
+
+/* Focus */
+input[type="text"]:focus,
+input[type="email"]:focus,
+input[type="number"]:focus,
+input[type="password"]:focus,
+input[type="tel"]:focus,
+input[type="url"]:focus,
+input[type="search"]:focus,
+input[type="date"]:focus,
+input[type="time"]:focus,
+input[type="datetime-local"]:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: #16A34A;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.15);
+}
+
+/* Disabled */
+input[type="text"]:disabled,
+input[type="email"]:disabled,
+input[type="number"]:disabled,
+input[type="password"]:disabled,
+input[type="tel"]:disabled,
+input[type="url"]:disabled,
+input[type="search"]:disabled,
+input[type="date"]:disabled,
+input[type="time"]:disabled,
+input[type="datetime-local"]:disabled,
+textarea:disabled,
+select:disabled {
+  background-color: #F3F4F6;
+  border-color: #D1D5DB;
+  color: #6B7280;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* ---- Checkboxes ---- */
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid #CBD5E1;
+  border-radius: 5px;
+  background: #FFFFFF;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+input[type="checkbox"]:hover:not(:disabled) {
+  border-color: #94A3B8;
+}
+
+input[type="checkbox"]:focus {
+  outline: none;
+  border-color: #16A34A;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.2);
+}
+
+input[type="checkbox"]:checked {
+  background-color: #16A34A;
+  border-color: #16A34A;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'%3E%3C/polyline%3E%3C/svg%3E");
+  background-size: 12px;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+input[type="checkbox"]:disabled {
+  background-color: #F3F4F6;
+  border-color: #D1D5DB;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+input[type="checkbox"]:disabled:checked {
+  background-color: #D1D5DB;
+  border-color: #D1D5DB;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'%3E%3C/polyline%3E%3C/svg%3E");
+}
+
+/* ---- Radio buttons ---- */
+input[type="radio"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid #CBD5E1;
+  border-radius: 50%;
+  background: #FFFFFF;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+input[type="radio"]:hover:not(:disabled) {
+  border-color: #94A3B8;
+}
+
+input[type="radio"]:focus {
+  outline: none;
+  border-color: #16A34A;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.2);
+}
+
+input[type="radio"]:checked {
+  border-color: #16A34A;
+  border-width: 1.5px;
+  background-image: radial-gradient(circle, #16A34A 35%, transparent 36%);
+  background-size: 18px;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+input[type="radio"]:disabled {
+  background-color: #F3F4F6;
+  border-color: #D1D5DB;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+input[type="radio"]:disabled:checked {
+  background-image: radial-gradient(circle, #D1D5DB 35%, transparent 36%);
+}
+
+table {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+table thead th {
+  background: #f9fafb;
+  border-bottom: 2px solid #e5e7eb;
+}
+
+table tbody tr {
+  transition: background-color 0.15s ease;
+}
+
+table tbody tr:hover {
+  background-color: #f3f8f4;
+}
+
+table tbody td {
+  border-bottom: 1px solid #f0f0f0;
+}
+
+/* ---- Tourism theme: card shadow + border ---- */
+.tourism-card {
+  background: #ffffff;
+  border: 1px solid #E2E8E3;
+  border-radius: 16px;
+  box-shadow: 0 4px 18px rgba(22, 128, 60, 0.06);
+}
+
+[class*="bg-white rounded-2xl border border-[#E2E8E3]"] {
+  border-color: #E5E7EB !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06) !important;
+}
+
+[class*="bg-white rounded-2xl border border-[#E2E8E3]"]:hover {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06) !important;
+}
+
+/* ---- Global label styles ---- */
+label {
+  color: #374151;
+  font-weight: 500;
+}
+
+/* Labels adjacent to form controls get slightly larger text */
+label + input[type="text"],
+label + input[type="email"],
+label + input[type="number"],
+label + input[type="password"],
+label + input[type="tel"],
+label + input[type="url"],
+label + input[type="search"],
+label + input[type="date"],
+label + input[type="time"],
+label + input[type="datetime-local"],
+label + textarea,
+label + select,
+label + div > input[type="text"],
+label + div > input[type="email"],
+label + div > input[type="number"],
+label + div > input[type="password"],
+label + div > input[type="tel"],
+label + div > input[type="url"],
+label + div > input[type="search"],
+label + div > input[type="date"],
+label + div > input[type="time"],
+label + div > input[type="datetime-local"],
+label + div > textarea,
+label + div > select {
+  margin-top: 6px;
+}
+
+/* Ensure the MapLibre engine canvas layer matches its frame container dimensions */
+.maplibregl-canvas {
+  width: 100% !important;
+  height: 100% !important;
+  outline: none;
+}
+
+/* Force hide standard MapLibre control banners to prevent UI collision layers */
+.maplibregl-ctrl {
+  display: none !important;
+}
+
+/* Rider Delivery Request Alert â€” receipt viewport scrollbar + entrance animations */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #121214;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 99px;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.animate-slide-up {
+  animation: slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* ---- Rider global arrival alert enter/exit (open & close) ---- */
+.rider-alert-in {
+  animation: rider-alert-in 250ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.rider-alert-out {
+  animation: rider-alert-out 250ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.rider-alert-backdrop {
+  animation: rider-alert-backdrop 250ms ease-out forwards;
+}
+
+/* ---- Booking Alert scanning / radar / glass drawer animation layer ---- */
+@keyframes double-ping {
+  0% { transform: scale(1); opacity: 0.8; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+@keyframes subtle-float {
+  0%, 100% { transform: translateY(0px) scale(1); }
+  50% { transform: translateY(-6px) scale(1.02); }
+}
+@keyframes tracking-glow {
+  0%, 100% { box-shadow: 0 0 15px rgba(16, 185, 129, 0.4), inset 0 0 10px rgba(16, 185, 129, 0.2); }
+  50% { box-shadow: 0 0 30px rgba(16, 185, 129, 0.8), inset 0 0 15px rgba(16, 185, 129, 0.4); }
+}
+@keyframes gradient-slide {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 100% 50%; }
+}
+.animate-double-ping {
+  animation: double-ping 2.5s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+.animate-subtle-float {
+  animation: subtle-float 3s ease-in-out infinite;
+}
+.animate-tracking-glow {
+  animation: tracking-glow 2s ease-in-out infinite;
+}
+.animate-gradient-slide {
+  background-size: 200% auto;
+  animation: gradient-slide 1.5s linear infinite;
+}

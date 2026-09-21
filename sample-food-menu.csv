@@ -1,0 +1,31 @@
+name,category,price,available,featured,stock,unit,description
+Adobo,Main Dishes,150.00,yes,no,25,plates,Classic Filipino chicken adobo
+Sinigang na Baboy,Main Dishes,170.00,yes,no,20,plates,Sour pork soup with tamarind
+Kare-Kare,Main Dishes,190.00,yes,no,15,plates,Peanut sauce stew with oxtail
+Lechon Kawali,Main Dishes,200.00,yes,no,18,plates,Crispy deep-fried pork belly
+Bicol Express,Main Dishes,160.00,yes,no,20,plates,Spicy pork in coconut milk
+Tinola,Main Dishes,140.00,yes,no,22,plates,Chicken ginger soup with papaya
+Pinakbet,Main Dishes,150.00,yes,no,20,plates,Mixed vegetables with shrimp paste
+Sisig,Main Dishes,160.00,yes,no,25,plates,Sizzling chopped pork
+Pancit Canton,Noodles,100.00,yes,no,30,plates,Stir-fried noodles with vegetables
+Pancit Bihon,Noodles,95.00,yes,no,30,plates,Rice noodles with vegetables
+Palabok,Noodles,110.00,yes,no,25,plates,Rice noodles with shrimp sauce
+Lumpia Shanghai,Appetizers,120.00,yes,no,35,pieces,Fried pork spring rolls
+Kinilaw,Appetizers,130.00,yes,no,15,plates,Fresh fish ceviche
+Chicharon,Appetizers,80.00,yes,no,40,packs,Crispy pork rinds
+Tortang Talong,Appetizers,90.00,yes,no,25,plates,Eggplant omelette
+Tokwa't Baboy,Appetizers,100.00,yes,no,20,plates,Tofu and pork in vinegar sauce
+Halo-Halo,Desserts,90.00,yes,no,30,orders,Mixed shaved ice dessert
+Leche Flan,Desserts,80.00,yes,no,25,orders,Caramel custard
+Bibingka,Desserts,75.00,yes,no,20,orders,Rice cake with salted egg
+Puto,Desserts,50.00,yes,no,40,pieces,Steamed rice cakes
+Cassava Cake,Desserts,70.00,yes,no,20,orders,Cassava dessert with coconut
+Rice,Sides,25.00,yes,no,100,cups,Steamed white rice
+Garlic Rice,Sides,30.00,yes,no,80,cups,Fried rice with garlic
+Atchara,Sides,35.00,yes,no,50,containers,Pickled green papaya
+Bagoong,Sides,20.00,yes,no,60,tablespoons,Fermented shrimp paste
+Coke,Drinks,25.00,yes,no,50,cans,Coca-Cola 330ml
+Sprite,Drinks,25.00,yes,no,50,cans,Sprite 330ml
+Bottled Water,Drinks,15.00,yes,no,100,bottles,500ml mineral juice
+Iced Tea,Drinks,30.00,yes,no,40,glasses,House-blend iced tea
+Calamansi Juice,Drinks,35.00,yes,no,30,glasses,Fresh calamansi juice
