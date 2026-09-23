@@ -1,4 +1,4 @@
-import { STATUS_COLORS } from '@/shared/constants'
+import { STATUS_COLORS, STATUS_LABELS } from '@/shared/constants'
 import { capitalize } from '@/shared/utils'
 
 interface StatusBadgeProps {
@@ -16,7 +16,7 @@ export function StatusBadge({ status, size = 'sm' }: StatusBadgeProps) {
       }`}
     >
       <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${c.dot}`} />
-      {capitalize(status)}
+      {STATUS_LABELS[status] ?? capitalize(status)}
     </span>
   )
 }

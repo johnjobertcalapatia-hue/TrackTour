@@ -15,9 +15,13 @@ We implemented a **Group Checkout** architecture:
    - The tourist enters delivery details once and authorizes payment in a single transaction (one PayMongo charge or one unified COD agreement).
 2. **Umbrella Parent Record (`group_checkouts`)**:
    - Stores the high-level group total, customer reference, and overall checkout lifecycle.
-3. **Independent Sub-Orders (`orders`)**:
-   - A distinct child `orders` row is created for each merchant represented in the cart.
-   - Sub-orders carry their respective merchant ID, item list, subtotal, and delivery fee.
+3. **Canonical Order (`orders`)**:
+   - Exactly one `orders` row is created for the checkout.
+   - Each `order_items` row carries its supplying `business_id`.
+   - The order owns one subtotal, one delivery fee, one total, one delivery, and one rider.
+4. **Restaurant Fulfillment Groups**:
+   - Restaurants prepare and mark ready only their own item groups within the canonical order.
+   - Fulfillment groups never create child orders, deliveries, riders, or additional delivery fees.
 
 ## Consequences
 ### Positive:
@@ -25,4 +29,4 @@ We implemented a **Group Checkout** architecture:
 - Single payment intent simplifies the customer's banking/e-wallet experience.
 
 ### Trade-offs & Mitigations:
-- **Partial Failure Handling**: If one merchant rejects an item or runs out of stock, refunding a child order requires custom ledger accounting because the parent payment was charged as a single block. This is resolved by store-credit ledger records (`refunds` table) for child cancellations.
+- **Partial Failure Handling**: If one merchant rejects an item or runs out of stock, the item-level refund/credit ledger handles that item while the canonical order and shared delivery remain authoritative.

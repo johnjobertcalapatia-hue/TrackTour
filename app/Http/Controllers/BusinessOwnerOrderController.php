@@ -5,20 +5,14 @@ namespace App\Http\Controllers;
 use App\Http\Requests\BusinessOwner\UpdateOrderStatusRequest;
 use App\Events\OrderStatusChanged;
 use App\Http\Resources\OrderResource;
-use App\Models\Delivery;
 use App\Models\Order;
 use App\Models\OrderItem;
-use App\Models\Payment;
 use App\Models\User;
-use App\Services\NearestRiderService;
-use App\Services\OrderRefundService;
 use App\Services\OrderService;
-use App\Services\PaymongoService;
 use App\Services\PreparationPredictionService;
 use App\Services\SmartDispatchService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class BusinessOwnerOrderController extends Controller
@@ -33,7 +27,10 @@ class BusinessOwnerOrderController extends Controller
         $filters = $request->only(['status', 'business_id', 'search', 'order_type', 'perPage']);
         $perPage = $filters['perPage'] ?? 20;
 
-        $orders = Order::whereIn('business_id', $businessIds)
+        $orders = Order::where(function ($query) use ($businessIds) {
+                $query->whereIn('business_id', $businessIds)
+                    ->orWhereHas('items', fn ($items) => $items->whereIn('business_id', $businessIds));
+            })
             ->with('business', 'items', 'delivery.rider.profile', 'groupOrder')
             ->when($filters['status'] ?? null, fn ($q, $s) => $q->where('status', $s))
             ->when($filters['business_id'] ?? null, fn ($q, $id) => $q->where('business_id', $id))
@@ -47,7 +44,7 @@ class BusinessOwnerOrderController extends Controller
 
     public function show(Request $request, Order $order): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -58,7 +55,7 @@ class BusinessOwnerOrderController extends Controller
 
     public function updateStatus(UpdateOrderStatusRequest $request, Order $order): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -111,152 +108,9 @@ class BusinessOwnerOrderController extends Controller
         );
     }
 
-    public function acceptOrder(Request $request, Order $order): JsonResponse
-    {
-        if ($order->business->owner_id !== $request->user()->id) {
-            return $this->forbiddenResponse('You do not own this business.');
-        }
-
-        if ($order->status !== 'waiting_restaurant') {
-            return $this->errorResponse('This order is not waiting for acceptance.', 422);
-        }
-
-        // Accepting auto-starts preparation; a rider must already be assigned.
-        if ($this->requiresAcceptedRider($order)) {
-            return $this->errorResponse('This delivery order cannot be accepted until a rider has accepted the delivery.', 422);
-        }
-
-        // Accepting auto-starts preparation: the order goes straight to "preparing"
-        // so the next available action is marking the food "ready".
-        $predictedReadyAt = $order->predicted_preparation_seconds
-            ? now()->addSeconds($order->predicted_preparation_seconds)
-            : now()->addMinutes(15); // Fallback
-
-        $order->items()
-            ->where('status', 'pending')
-            ->update([
-                'status' => 'preparing',
-                'accepted_at' => now(),
-                'preparation_started_at' => now(),
-            ]);
-
-        $order->update([
-            'status' => 'preparing',
-            'accepted_at' => now(),
-            'preparation_started_at' => now(),
-            'predicted_ready_at' => $predictedReadyAt,
-        ]);
-
-        OrderStatusChanged::dispatch(
-            $order->fresh(),
-            'waiting_restaurant',
-            'preparing',
-            $request->user(),
-        );
-
-        $payment = Payment::where('payable_type', Order::class)
-            ->where('payable_id', $order->id)
-            ->where('status', 'authorized')
-            ->first();
-
-        if ($payment) {
-            $payment->update([
-                'status' => 'paid',
-                'paid_at' => now(),
-            ]);
-            $order->update(['payment_status' => 'paid']);
-        }
-
-        // Predict preparation time and schedule smart dispatch
-        if ($order->order_type === 'delivery') {
-            try {
-                $predictionService = app(PreparationPredictionService::class);
-                $predictionService->predictAndLog($order->fresh());
-
-                $dispatchService = app(SmartDispatchService::class);
-                $dispatchService->scheduleDispatch($order->fresh());
-            } catch (\Exception $e) {
-                Log::warning('Prediction/dispatch failed after acceptance', [
-                    'order_id' => $order->id,
-                    'error' => $e->getMessage(),
-                ]);
-            }
-        }
-
-        return $this->successResponse(
-            OrderResource::make($order->fresh()->load('business', 'items', 'delivery.rider.profile')),
-            'Order accepted successfully.'
-        );
-    }
-
-    public function rejectOrder(Request $request, Order $order): JsonResponse
-    {
-        if ($order->business->owner_id !== $request->user()->id) {
-            return $this->forbiddenResponse('You do not own this business.');
-        }
-
-        if ($order->status !== 'waiting_restaurant') {
-            return $this->errorResponse('This order is not waiting for acceptance.', 422);
-        }
-
-        $validated = $request->validate([
-            'reason' => 'nullable|string|max:500',
-        ]);
-
-        // Any ongoing delivery is cancelled via the canonical cancel path (a group
-        // child cancels the shared trip only when no sibling still needs it).
-        app(NearestRiderService::class)->cancelDeliveryForOrder($order);
-
-        $order->update([
-            'status' => 'rejected',
-            'cancelled_by' => $request->user()->id,
-            'cancellation_reason' => $validated['reason'] ?? null,
-            'cancelled_at' => now(),
-        ]);
-
-        OrderStatusChanged::dispatch(
-            $order->fresh(),
-            'waiting_restaurant',
-            'rejected',
-            $request->user(),
-        );
-
-        // Group children are paid via one group-level payment; cancel the child's
-        // delivery and record a local partial refund without touching the sibling orders.
-        if ($order->group_order_id) {
-            app(OrderRefundService::class)->refundPaidGroupChild(
-                $order,
-                $validated['reason'] ?? 'Order rejected by restaurant'
-            );
-
-            return $this->successResponse(
-                OrderResource::make($order->fresh()->load('business', 'items', 'delivery.rider.profile')),
-                'Order rejected. Payment has been refunded.'
-            );
-        }
-
-        app(OrderRefundService::class)->refundPaidOrder(
-            $order,
-            $validated['reason'] ?? 'Order rejected by restaurant'
-        );
-
-        $fresh = $order->fresh()->load('business', 'items', 'delivery.rider.profile');
-        $message = match ($fresh->refund_status) {
-            'refunded' => 'Order rejected. Payment has been refunded.',
-            'pending' => 'Order rejected. Your refund is being processed.',
-            'failed' => 'Order rejected. The refund failed and will be retried automatically.',
-            default => 'Order rejected.',
-        };
-
-        return $this->successResponse(
-            OrderResource::make($fresh),
-            $message
-        );
-    }
-
     public function assignRider(Request $request, Order $order): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -317,11 +171,12 @@ class BusinessOwnerOrderController extends Controller
 
     /**
      * POST /business-owner/orders/{order}/start-preparation
-     * Restaurant signals they are starting to prepare food.
+     * Manual recovery path: normally PreparationStartService starts this
+     * automatically the moment a rider accepts (or immediately for pickup).
      */
     public function startPreparation(Request $request, Order $order): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -333,37 +188,24 @@ class BusinessOwnerOrderController extends Controller
             return $this->errorResponse('Order has already been marked ready.', 422);
         }
 
-        $previousStatus = (string) $order->status;
+        // Canonical transition (waiting → preparing + countdown). No-op when
+        // the order already left waiting_restaurant (e.g. manually assigned).
+        if (app(\App\Services\PreparationStartService::class)->startForOrder($order)) {
+            $fresh = $order->fresh();
 
-        $order->items()
-            ->whereIn('status', ['pending', 'accepted'])
-            ->update([
-                'status' => 'preparing',
-                'preparation_started_at' => now(),
-            ]);
+            return $this->successResponse(
+                OrderResource::make($fresh->load('business', 'items')),
+                'Preparation started. Estimated ready: '.($fresh->predicted_ready_at?->format('g:i A') ?? '—'),
+            );
+        }
 
-        $order->update([
-            'status' => 'preparing',
-            'preparation_started_at' => now(),
-        ]);
-
-        OrderStatusChanged::dispatch(
-            $order->fresh(),
-            $previousStatus,
-            'preparing',
-            $request->user(),
-        );
-
-        // Calculate predicted ready time
-        $predictedReadyAt = $order->predicted_preparation_seconds
-            ? now()->addSeconds($order->predicted_preparation_seconds)
-            : now()->addMinutes(15); // Fallback
-
-        $order->update(['predicted_ready_at' => $predictedReadyAt]);
+        if ($order->status !== 'preparing') {
+            return $this->errorResponse('Order cannot start preparation in its current status.', 422);
+        }
 
         return $this->successResponse(
             OrderResource::make($order->fresh()->load('business', 'items')),
-            'Preparation started. Estimated ready: '.$predictedReadyAt->format('g:i A'),
+            'Preparation already started. Estimated ready: '.($order->predicted_ready_at?->format('g:i A') ?? '—'),
         );
     }
 
@@ -373,7 +215,7 @@ class BusinessOwnerOrderController extends Controller
      */
     public function markReady(Request $request, Order $order): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -439,243 +281,6 @@ class BusinessOwnerOrderController extends Controller
     }
 
     /**
-     * POST /business-owner/orders/{order}/accept-all
-     * Accept all pending items in the order and start preparation.
-     */
-    public function acceptAll(Request $request, Order $order): JsonResponse
-    {
-        if ($order->business->owner_id !== $request->user()->id) {
-            return $this->forbiddenResponse('You do not own this business.');
-        }
-
-        if ($order->status !== 'waiting_restaurant') {
-            return $this->errorResponse('This order is not waiting for acceptance.', 422);
-        }
-
-        if ($this->requiresAcceptedRider($order)) {
-            return $this->errorResponse('This delivery order cannot be accepted until a rider has accepted the delivery.', 422);
-        }
-
-        DB::beginTransaction();
-
-        try {
-            // Accept all pending items
-            $pendingItems = $order->items()->where('status', 'pending')->get();
-            foreach ($pendingItems as $item) {
-                $item->update([
-                    'status' => 'accepted',
-                    'accepted_at' => now(),
-                ]);
-            }
-
-            // Accept payment if authorized
-            $payment = Payment::where('payable_type', Order::class)
-                ->where('payable_id', $order->id)
-                ->where('status', 'authorized')
-                ->first();
-
-            if ($payment) {
-                $payment->update(['status' => 'paid', 'paid_at' => now()]);
-            }
-
-            // Update order status to preparing
-            $orderData = [
-                'status' => 'preparing',
-                'accepted_at' => now(),
-                'preparation_started_at' => now(),
-            ];
-
-            // Only a captured online payment flips payment_status to 'paid' —
-            // never a COD order (its cash is settled at delivery) and never an
-            // order with no actual paid payment.
-            if ($payment) {
-                $orderData['payment_status'] = 'paid';
-            }
-
-            $order->update($orderData);
-
-            // Start prediction and dispatch
-            if ($order->order_type === 'delivery') {
-                try {
-                    $predictionService = app(PreparationPredictionService::class);
-                    $predictionService->predictAndLog($order->fresh());
-
-                    $dispatchService = app(SmartDispatchService::class);
-                    $dispatchService->scheduleDispatch($order->fresh());
-                } catch (\Exception $e) {
-                    Log::warning('Prediction/dispatch failed after acceptAll', [
-                        'order_id' => $order->id,
-                        'error' => $e->getMessage(),
-                    ]);
-                }
-            }
-
-            DB::commit();
-
-            OrderStatusChanged::dispatch(
-                $order->fresh(),
-                'waiting_restaurant',
-                'preparing',
-                $request->user(),
-            );
-
-            return $this->successResponse(
-                OrderResource::make($order->fresh()->load('business', 'items', 'delivery.rider.profile')),
-                'All items accepted. Preparation started.',
-            );
-        } catch (\Exception $e) {
-            DB::rollBack();
-            throw $e;
-        }
-    }
-
-    /**
-     * POST /business-owner/orders/{order}/items/{item}/accept
-     * Accept a single item in the order.
-     */
-    public function acceptItem(Request $request, Order $order, OrderItem $item): JsonResponse
-    {
-        if ($order->business->owner_id !== $request->user()->id) {
-            return $this->forbiddenResponse('You do not own this business.');
-        }
-
-        if ($item->order_id !== $order->id) {
-            return $this->errorResponse('Item does not belong to this order.', 422);
-        }
-
-        if (! $item->canAccept()) {
-            return $this->errorResponse('This item cannot be accepted.', 422);
-        }
-
-        $item->update([
-            'status' => 'accepted',
-            'accepted_at' => now(),
-        ]);
-
-        // If this is the first item accepted, update order status
-        if ($order->status === 'waiting_restaurant') {
-            $payment = Payment::where('payable_type', Order::class)
-                ->where('payable_id', $order->id)
-                ->where('status', 'authorized')
-                ->first();
-
-            $orderData = [
-                'status' => 'accepted',
-                'accepted_at' => now(),
-            ];
-
-            // Only a captured online payment flips payment_status to 'paid' —
-            // never a COD order (its cash is settled at delivery) and never an
-            // order with no actual paid payment (matches acceptOrder).
-            if ($payment) {
-                $payment->update(['status' => 'paid', 'paid_at' => now()]);
-                $orderData['payment_status'] = 'paid';
-            }
-
-            $order->update($orderData);
-
-            OrderStatusChanged::dispatch(
-                $order->fresh(),
-                'waiting_restaurant',
-                'accepted',
-                $request->user(),
-            );
-        }
-
-        // Check if all items are now accepted
-        $this->refreshOrderStatus($order);
-
-        return $this->successResponse(
-            OrderResource::make($order->fresh()->load('business', 'items', 'delivery.rider.profile')),
-            'Item accepted.',
-        );
-    }
-
-    /**
-     * POST /business-owner/orders/{order}/items/{item}/reject
-     * Reject a single item with reason and refund.
-     */
-    public function rejectItem(Request $request, Order $order, OrderItem $item): JsonResponse
-    {
-        if ($order->business->owner_id !== $request->user()->id) {
-            return $this->forbiddenResponse('You do not own this business.');
-        }
-
-        if ($item->order_id !== $order->id) {
-            return $this->errorResponse('Item does not belong to this order.', 422);
-        }
-
-        if (! $item->canReject()) {
-            return $this->errorResponse('This item cannot be rejected.', 422);
-        }
-
-        $validated = $request->validate([
-            'reason' => 'required|string|max:500',
-            'note' => 'nullable|string|max:500',
-        ]);
-
-        $refundAmount = (float) $item->subtotal;
-
-        $item->update([
-            'status' => 'rejected',
-            'rejection_reason' => $validated['reason'],
-            'rejected_by' => $request->user()->id,
-        ]);
-
-        // Process refund
-        if ($refundAmount > 0) {
-            $this->processItemRefund($order, $item, $refundAmount, $validated['reason'], $request->user()->id);
-        }
-
-        // Refresh order status
-        $this->refreshOrderStatus($order);
-
-        return $this->successResponse(
-            OrderResource::make($order->fresh()->load('business', 'items', 'delivery.rider.profile')),
-            'Item rejected. Refund of ₱'.number_format($refundAmount, 2).' will be processed.',
-        );
-    }
-
-    /**
-     * Process refund for a rejected item.
-     */
-    private function processItemRefund(Order $order, OrderItem $item, float $amount, string $reason, int $cancelledBy): void
-    {
-        // For group orders, use local refund only
-        if ($order->group_order_id) {
-            app(OrderRefundService::class)->refundCancelledItem(
-                $item,
-                $item->activeQuantity(),
-                $reason,
-                $cancelledBy,
-                $order->user_id,
-            );
-            return;
-        }
-
-        // For standalone orders, process through PayMongo (provider-authoritative).
-        // The P11.3 processor records the refunds ledger row (with the provider
-        // refund id), tracks refund_status, and never marks anything refunded
-        // unless the provider confirms the refund succeeded.
-        $payment = Payment::where('payable_type', Order::class)
-            ->where('payable_id', $order->id)
-            ->where('status', 'paid')
-            ->first();
-
-        if ($payment && $payment->provider_payment_id) {
-            app(\App\Services\PaymentRefundProcessor::class)->initiateRefund(
-                payment: $payment,
-                amount: $amount,
-                reason: $reason,
-                forOrder: $order,
-                orderItemId: $item->id,
-                userId: $order->user_id,
-                originalAmount: (float) $item->subtotal,
-            );
-        }
-    }
-
-    /**
      * PATCH /business-owner/orders/{order}/items/{item}/status
      * Update preparation status for an individual food item.
      * Item statuses: pending, accepted, preparing, ready, cancelled, rejected.
@@ -684,7 +289,7 @@ class BusinessOwnerOrderController extends Controller
      */
     public function updateItemStatus(Request $request, Order $order, OrderItem $item): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 

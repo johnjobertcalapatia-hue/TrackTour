@@ -1,9 +1,21 @@
-﻿import { useQuery } from '@tanstack/react-query'
-import { get } from '@/shared/services/api'
+﻿import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { get, post } from '@/shared/services/api'
 import { TableSkeleton } from '@/shared/components/Skeleton'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { formatDateTime } from '@/shared/utils'
-import { Truck, MapPin, Package, Clock } from 'lucide-react'
+import { Truck, MapPin, Package, Clock, Banknote, Wallet } from 'lucide-react'
+
+interface LiveOrder {
+  payment_method?: string | null
+}
+
+interface LiveCodPurchase {
+  id: number
+  business_id: number
+  business_name?: string | null
+  purchase_amount: number
+  status: 'pending' | 'purchased' | 'collected'
+}
 
 interface LiveDelivery {
   id: number
@@ -16,18 +28,57 @@ interface LiveDelivery {
   customer_name: string
   created_at: string
   updated_at: string
+  order?: LiveOrder | null
+  purchasing_cash?: number | null
+  purchasing_cash_issued_at?: string | null
+  purchasing_cash_received_at?: string | null
+  cod_purchases?: LiveCodPurchase[]
 }
 
+const PICKUP_STAGE_STATUSES = ['assigned', 'arrived_pickup']
+
 export default function AdminLiveDeliveries() {
+  const queryClient = useQueryClient()
   const { data, isLoading } = useQuery({
     queryKey: ['admin-live-deliveries'],
     queryFn: () => get<{ data: LiveDelivery[] }>('/admin/live/deliveries'),
     refetchInterval: 10000,
   })
 
+  const issueCashMutation = useMutation({
+    mutationFn: (deliveryId: number) => post(`/admin/deliveries/${deliveryId}/issue-purchasing-cash`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-live-deliveries'] }),
+  })
+
   if (isLoading) return <TableSkeleton rows={6} cols={5} />
 
   const deliveries = data?.data ?? []
+  const isCod = (delivery: LiveDelivery) => (delivery.order?.payment_method ?? '').toLowerCase() === 'cash'
+  const deliverable = (delivery: LiveDelivery) =>
+    PICKUP_STAGE_STATUSES.includes(delivery.status) &&
+    delivery.purchasing_cash_issued_at == null &&
+    (delivery.cod_purchases?.length ?? 0) > 0
+
+  const purchasingStatus = (delivery: LiveDelivery) => {
+    if (delivery.purchasing_cash_issued_at == null) {
+      return (
+        <button
+          type="button"
+          disabled={!deliverable(delivery) || issueCashMutation.isPending}
+          onClick={() => issueCashMutation.mutate(delivery.id)}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-[#B45309] hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed text-white px-3 py-1.5 text-xs font-semibold transition"
+        >
+          <Wallet className="w-3.5 h-3.5" /> Issue Cash
+        </button>
+      )
+    }
+    return (
+      <div className="flex items-center gap-1.5 text-xs font-semibold text-[#B45309]">
+        <Banknote className="w-3.5 h-3.5" />
+        ₱{Number(delivery.purchasing_cash ?? 0).toFixed(2)} · {delivery.purchasing_cash_received_at ? 'Received' : 'Issued'}
+      </div>
+    )
+  }
 
   return (
     <div>
@@ -75,6 +126,9 @@ export default function AdminLiveDeliveries() {
                     Status
                   </th>
                   <th className="text-left px-5 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">
+                    Purchasing Cash
+                  </th>
+                  <th className="text-left px-5 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">
                     Updated
                   </th>
                 </tr>
@@ -118,8 +172,16 @@ export default function AdminLiveDeliveries() {
                       </div>
                     </td>
                     <td className="px-5 lg:px-6 py-3 whitespace-nowrap">
-                      <StatusBadge status={delivery.status} />
+                      <div className="flex items-center gap-2">
+                        <StatusBadge status={delivery.status} />
+                        {isCod(delivery) && PICKUP_STAGE_STATUSES.includes(delivery.status) && (
+                          <span className="text-[10px] font-bold uppercase tracking-wide text-[#B45309] rounded-full bg-amber-50 border border-amber-200 px-2 py-0.5">
+                            COD
+                          </span>
+                        )}
+                      </div>
                     </td>
+                    <td className="px-5 lg:px-6 py-3 whitespace-nowrap">{purchasingStatus(delivery)}</td>
                     <td className="px-5 lg:px-6 py-3 whitespace-nowrap">
                       <div className="flex items-center gap-1.5 text-[#6B7280] text-xs">
                         <Clock className="w-3 h-3" />

@@ -14,6 +14,7 @@ class BusinessOwnerFoodController extends Controller
             'name' => 'required|string|max:255',
             'description' => 'nullable|string',
             'price' => 'required|numeric|min:0',
+            'preparation_time' => 'nullable|integer|min:0|max:240',
             'offering_category_id' => 'nullable|integer|exists:offering_categories,id',
             'is_available' => 'boolean',
         ]);

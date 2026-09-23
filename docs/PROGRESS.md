@@ -9,6 +9,28 @@ A multi-role tourism management platform built with **Laravel 12** (PHP 8.2), **
 
 Checkpoint log for the multi-restaurant delivery architecture work.
 
+### Multi-Restaurant Canonical Order Correction — Implemented
+
+The grouped checkout flow now creates **one canonical `orders` row per tourist checkout**, with restaurant ownership carried by `order_items.business_id`. The order owns one delivery fee, one shared delivery, and one rider; participating restaurants retain independent item preparation/readiness groups inside that order. The shared delivery references the canonical order and the realtime bridge fans status events to every participating business room.
+
+- Added `order_items.business_id` with an index and item/business API exposure.
+- Group checkout creation now calculates one delivery fee and one aggregate order total.
+- Business-owner order access is item-aware so each participating restaurant can manage its own order items.
+- Tourist checkout and tracking now show one rider, one delivery route, and multiple restaurant pickup stops.
+- Focused verification: **38 tests / 479 assertions / 0 failures** across group creation, shared delivery lifecycle, rider gate, COD settlement, and realtime fan-out.
+- Legacy child-order tests were reconciled to the canonical order contract.
+
+### Rider-Credit System Removal: Complete & Verified
+
+The prepaid rider-credit wallet no longer exists anywhere in the codebase or database. COD is now **credit-free**: no rider balance is checked, reserved, or deducted for COD eligibility or settlement, and the rider-credit code was removed end-to-end.
+
+- **Removed from disk**: `RiderCredit`, `RiderCreditTransaction`, `RiderTopUp` models; `RiderCreditService`; `AdminCreditsController`, `RiderCreditController`; frontend `AdminCredits`, `RiderCreditActivity`, `RiderCreditDetails`, `RiderWallet`, `TopUpSuccess` pages + their routes/nav.
+- **Schema (verified + applied)**: `2026_09_22_000003_remove_rider_credit_system` drops `rider_top_ups`, `rider_credit_transactions`, `rider_credits` and `deliveries.cod_credit_reserved`. Confirmed in the live MySQL DB: all credit tables and the credit-reserve column are gone; the `cod_settlements`, `rider_payouts`, `restaurant_wallet*`, `order_settlements` ledgers and `payment_webhook_events` remain intact.
+- **Grep-verified**: zero references to rider credits in `app/`, `routes/`, or `frontend/src/`; dead `/rider/wallet` UI entries removed (`RiderMap` earnings panel + `DashboardLayout` bottom nav) and `vite build` passes.
+- **Test reconciliation** (drift, per AGENTS §12): `RealtimeCompletenessTest`/`RestaurantSubOrderItemsLifecycleTest` dropped `RiderCredit::create` blocks; `ScheduledDispatchProcessorTest` removed the undefined-`$usable` credit mock and asserts COD dispatch is credit-free; `CodDeliverySettlementTest` now asserts `cod_eligibility` over `available_working_credit`; `FastDeliveryTipTest` and `GroupItemRejectionRefundTest` assert the single canonical order carries the tip/remaining items.
+- **Documentation**: AGENTS §5.1–5.3, §9 eligibility list, §15 Admin Phase 4, §16 regress-list, §17 rewritten to the credit-free model; `rider-wallet.md`, `known-issues.md`, `roadmap.md` updated; stale `CodSettlementService` docblock corrected.
+- **Checkpoint**: full Laravel suite **311 tests / 1,493 assertions / 0 failures / 2 skipped**; socket JS **43/43**.
+
 ### P4 — Order/Delivery Regression & Rider Concurrency: Complete
 
 The delivery pipeline was regression-tested through the existing HTTP/API architecture. Rider acceptance is protected by a database transaction and rider-row lock to enforce the **one-active-delivery** rule: accepting an offer assigns the delivery, marks the rider busy, cancels that rider's other outstanding offers, and returns those deliveries to dispatch for re-offering. Concurrent acceptance attempts resolve atomically, so a rider can hold only one active delivery.
@@ -297,9 +319,396 @@ Rescoped the COD/group architecture with the user to steps 3–5 only: **credit-
 - **Tests rewritten to the new model** (session): `CodFinancialSettlementTest` 11/143 and `CodDeliverySettlementTest` 2/120 (credit-untouched, low-credit eligibility, cancelled-COD no-settlement, multi-restaurant COD settles per restaurant on one shared trip, shared-trip lifecycle + cash settlement); `RiderAcceptanceGateTest` 14/137 (prep gate resolves via the shared trip, single-trip ownership/binding, decline/reoffer, no-rider block); `GroupedOrderDeliveryLifecycleTest`, `RestaurantSubOrderItemsLifecycleTest`, and `RealtimeCompletenessTest` reconciled to the one-trip model (realtime room isolation now *per-restaurant business rooms riding a shared trip room*). Standalone-order suites (`ConcurrencyLockTest`, `OneActiveDeliveryTest`, `ScheduledDispatchProcessorTest`, `FastDeliveryTipTest`, `GpsIntegrityTest`, `OrderSizeDispatchEligibilityTest`, `GroupOrderServiceTest`) verified unaffected — non-group orders still bind per-order deliveries.
 - **Full Laravel suite**: **311 passed / 1,571 assertions / 0 failures / 2 skipped** (a clean full-suite run — the earlier documented refund-path failures are all green). Socket JS **43/43**. Frontend `tsc --noEmit` reports only the pre-existing untouched-file errors.
 - **Database**: the migration is verified via `RefreshDatabase` (sqlite `:memory:`); the development MySQL schema is **not** applied (pending-migration backlog), so this checkpoint is not marked development-schema verified.
-- **Deferred**: `cod_purchases`-based settlement formula (actual purchase cost) and `rider_credit_transactions.delivery_id` (AGENTS.md §17) both remain future/low-priority.
+- **Deferred**: `rider_credit_transactions.delivery_id` (AGENTS.md §17) remains future/low-priority. The `cod_purchases` ledger is **now implemented** (see the Purchasing-Cash checkpoint below) under the professor model with the amount anchored to the exact `CodSettlementService` allocation (settlement base), so the deferred "actual-cost" formula is superseded: the purchase ledger already reconciles to `order.rider_financed_amount`.
 
-### ✅ Completed
+### COD Purchasing-Cash Flow (Professor Model): Complete & Verified
+
+Implements the professor-required cash purchasing pipeline inside the existing credit-free COD architecture (AGENTS §5.1–5.3), without reintroducing a wallet and without changing dispatch, settlement, payments, refunds, or realtime:
+
+```text
+Tourist places multi-restaurant COD order
+    ↓
+ONE order + ONE shared delivery + ONE rider (existing)
+    ↓
+Rider accepts  →  cod_purchases per-restaurant stop rows created (atomic)
+    ↓
+Tourism Office issues purchasing cash (admin endpoint, RBAC) → ActivityLog audit
+    ↓
+Rider confirms cash receipt → buys/collects food at every restaurant
+    ↓
+ALL COLLECTED gate → rider may leave pickup area (picked_up)
+    ↓
+Delivery → tourist pays cash → settle-cod → settlement 80/20 → completed
+```
+
+- **`cod_purchases` ledger** (new table): one row per `(delivery, business)` — `purchase_number`, `purchase_amount`, `status` `pending → purchased → collected`, `purchased_at`, `collected_at`, plus `UNIQUE(delivery_id, business_id)` and index `(delivery_id, status)`. DB constraint verified in the live MySQL dev schema.
+- **Money invariant**: `Σ purchase_amount = deliveries.purchasing_cash = order.rider_financed_amount = settlement base`. Each `purchase_amount` reuses the exact `CodSettlementService` allocation formula (business subtotal + system-fee share), so the purchasing ledger is guaranteed to reconcile to the restaurant 80% / Tourism Office 20% split booked at settlement. No rider credit/wallet is read, reserved, or deducted anywhere in the flow.
+- **Issuance**: `PurchasingCashService::issuePurchasingCash()` (admin `POST /admin/deliveries/{delivery}/issue-purchasing-cash`, gated by `role:bansud_tourism_office`) validates COD + assigned rider + issueable stage (`assigned`/`en_route_pickup`/`arrived_pickup`), refuses duplicate issuance, and writes an `ActivityLog` (`purchasing_cash.issued`). `deliveries` gained `purchasing_cash`, `purchasing_cash_issued_at`, `purchasing_cash_issued_by`, `purchasing_cash_received_at`. Rider confirmation is `POST /rider/deliveries/{delivery}/purchasing-cash/receive` (idempotent).
+- **Per-stop progression**: rider-only endpoints `GET /rider/deliveries/{delivery}/purchases` and `POST .../purchases/{purchase}/mark` (`purchased` then `collected`), each under a delivery row-lock; `purchased`/`collected` require the cash to be issued first, and `collected` requires `purchased`. Duplicate marks are rejected at the API layer (message-level guard) and are harmless no-ops in the DB (no effect rows).
+- **ALL-COLLECTED departure gate**: `RiderDeliveryController::updateStatus('picked_up')` returns **422 "Collect food from every restaurant…"** until every `cod_purchases` stop for the delivery is `collected` (checked inside the existing delivery row-lock transaction; COD-only, via the canonical `isCodDelivery`). This enforces the professor's "all food collected" step as a hard backend gate, not UI state.
+- **Accept-time initialization**: `NearestRiderService::handleRiderResponse` creates the per-restaurant stop rows atomically with assignment (idempotent — safe for double-taps/race re-runs).
+- **Frontend**: `RiderMap` gains a pickup-stage **Purchasing Cash cockpit** (cash-issued state, Confirm-Cash-Received, per-restaurant Buy → Collect buttons, "All food collected — you can now leave for delivery" banner) that queries `/rider/deliveries/{id}/purchases`; `AdminLiveDeliveries` gains a **Purchasing Cash** column with an "Issue Cash" action for COD deliveries in the pickup stage. `DeliveryResource` exposes the purchasing-cash fields and per-stop ledger.
+- **Tests**: `PurchasingCashFlowTest` 5 passed / 89 assertions — acceptance ledger reconciliation to `rider_financed_amount`, admin issuance + audit trail + duplicate-issuance rejection + RBAC (403 for a rider), rider confirm/mark API guard ordering (not-issued / wrong order / duplicate / invalid status), the `picked_up` gate until all collected, and a **full end-to-end multi-restaurant COD demo scenario** (accept → issue → receive → buy/collect both restaurants → picked_up → deliver → cash settle → completed with 2 restaurant allocations reconciling to the handed-out cash).
+- **Full Laravel suite**: **316 passed / 1,582 assertions / 0 failures / 2 skipped** (pre-existing skips unchanged). Frontend `vite build` passes.
+- **Database** (development, live MySQL): migration `2026_09_22_000010_create_cod_purchases_and_purchasing_cash_tables` applied via `php artisan migrate`; `SHOW COLUMNS` verified for `cod_purchases` and the four `deliveries` purchasing-cash columns.
+- **Deterministic demo + live verification**: `CodDemoSeeder` (`php artisan db:seed --class=CodDemoSeeder`) creates 2 approved restaurants (A: Adobo ₱120 + Iced Tea ₱80; B: BBQ ₱100 + Calamansi ₱50), riders A/B (online, available, food service, fresh GPS), a tourist, and a Tourism Office account (password `Demo12345!`), then places ONE in-flight 2-restaurant COD order (one group checkout, one canonical order, one delivery) with the dispatch offer deterministically pending on **Rider A** — nothing pre-completed. Re-runs reuse the active delivery and refresh the offer (timed-out dispatch log rows are cleared before re-dispatch, since expired offers block `alreadyDispatchedRiderIds`). Live end-to-end validation against the running API on the **real MySQL dev DB** (`php` bootstrapped script driving real `Http` requests) passed **17/17 checks**: one delivery per group; offer → accept; Rider B 422 on the same delivery; stops A ₱220 / B ₱165; issuance ₱385 once + duplicate 422; cash-receipt confirmation; `picked_up` 422 until both stops `collected`; full trip to `delivered`; `settle-cod` completes; final ledger reconciles `Σ cod_purchases = purchasing_cash = rider_financed_amount = settlement base = ₱385` with **restaurant ₱308 (80%) / Tourism Office ₱77 (20%)**.
+
+### P11.8 — Simultaneous Rider Offers & Atomic Acceptance: Complete
+
+Hardened the dispatch/offer/acceptance layer so **every eligible rider gets an offer at once**, the rider may **accept any one of their pending offers**, a rider holds **only one active delivery**, and acceptance is **atomic** (an offer waves — being pinged is not being assigned). Built on the existing credit-free COD dispatch and the `booking_dispatch_logs` offer ledger — no new tables, no rebuilt dispatch engine.
+
+- **Multi-ping offer wave**: `NearestRiderService::dispatchToNearest` now offers **simultaneously** to every eligible candidate (one `booking_dispatch_logs` row per rider, `UNIQUE (delivery_id, rider_id)` backstop already in place from P9, so a repeated wave can never duplicate an offer). The MySQL candidate query is the primary source; the coordinates-radar fallback remains for SQLite-restricted test contexts and DB-unsupported setups. Dispatch sets `dispatch_status = waiting_for_rider` — a wave, not an assignment.
+- **Rider chooses among pending offers**: new `RiderDispatchController::offers()` (`GET /rider/dispatch/offers`, live riders only) returns every pending/notified offer for the authenticated rider with a shared `buildOfferPayload` (delivery/order context, pickup/dropoff, distance/estimate, `cod_amount`, `stops`, `restaurant_count`, per-offer expiry, payout). Frontend `RiderDispatchNotification` polls it every 4s: one offer → the existing alert machine, several → new `RiderOffersPanel` chooser with per-offer countdown/accept.
+- **Atomic acceptance**: `handleRiderResponse` re-checks the offer **under the delivery row-lock** inside the existing transaction — an already-assigned delivery, an already-active rider, an expired offer, or a no-longer-pending log returns **409 Conflict** (only ineligibility is 422, the P11.2 contract). Double-tap / double-click resolves with the first accept winning and the second getting a clean 409. Declining/ignoring a wave (`handleNonAcceptResponse`) leaves the delivery on the radar for other offers.
+- **Wave cancellation + socket notify**: the moment a rider claims a delivery, `cancelOtherRidersOffersForDelivery()` marks every same-delivery loser offer `cancelled` and `notifyOfferCancelled` bridges `delivery_offer_cancelled` → `rider:{id}` rooms through the existing `/event` path (`routeStatusEvent` already validates any `rider:\d+` room — **zero socket-server change**). `cancelOtherPendingOffers()` withdraws the accepting rider's own other offers; `redispatchIfOffered()` re-offers only when a delivery is unclaimed, in `notified|waiting_for_rider`, and has **no other pending offers** left in the wave.
+- **Per-offer expiry + wave-guarded timeout**: each offer expires at `min(dispatched_at + DISPATCH_TIMEOUT_SECONDS(120), delivery.dispatch_expires_at)` (`offerExpiresAt`/`offerIsExpired`). `processTimeouts` locks the delivery row, leaves the wave alone while live offers remain, marks an expired log `timeout`, and re-dispatch only after the last offer lapses — so timeout cannot race an accept or spam a predated wave.
+- **Frontend**: new `RiderOffersPanel` (multi-offer chooser: payout/stops/countdown per offer), rewritten `RiderDispatchNotification` (offers poll, 409 → drop the stale offer + toast + immediate `syncOffers()`, socket `delivery_offer_cancelled` → refetch + toast, local toast UI), `useRiderSocketReceiver` gains `onOfferCancelled`, and the delivery-request payload gains optional `stops`/`restaurant_count`/`cod_amount`.
+- **Test seam**: new `DeliveryOfferConcurrencyTest` (9 tests / A–H) drives the **real** `dispatchToNearest` wave and **real** `handleRiderResponse` transaction, with a `NearestRiderService` subclass overriding only the two SQLite-unsafe SQL candidate finders and `WebsocketNotifierService` mocked to assert `delivery_offer_cancelled` fan-out — A: winner/loser 409 + cancelled + socket notify; B: choose-one → other re-offered + second accept now 409; C: three riders, two losers cancelled + notified; D: stale/never-offered accept → 409; E: offline/ineligible rider never offered; F: offers endpoint live-only and clears after accept; G: double-click first-wins/second-409; H: expired offer → 409 + `timeout` log + fresh wave re-offered. Reconciled drift (documented in-test per AGENTS §12): `RiderAcceptanceGateTest` 4× 422→**409** (accepted = conflict, not validation), `OneActiveDeliveryTest` loser log `'declined'`→`'cancelled'` (wave cancellation semantics), `ConcurrencyLockTest` loser accept now surfaces as offer-gone `conflict` (the `already_assigned` branch still fires under genuine row-lock overlap).
+- **Full Laravel suite**: **325 passed / 1,643 assertions / 0 failures / 2 skipped** (316 + 9 new). Socket JS: **45/45** (+2 `delivery_offer_cancelled` fan-out/isolation tests). Frontend `vite build` passes; no new lint/type errors in the touched files.
+- **Database**: no schema change (the `booking_dispatch_logs` UNIQUE `(delivery_id, rider_id)` backstop already shipped in `2026_09_20_000001_add_concurrency_guards.php`).
+
+### Development Database Migration Reconciliation & Schema Verification: Complete
+
+A full audit of the development MySQL database (`track_tour_db`) against `database/migrations/` found a **pending-migration backlog**, which was then applied and verified. This is the first checkpoint that marks the development schema as **verified**, closing the "Development Schema Pending" caveat left open by P12.1–P12.4, the Group Delivery, and COD Purchasing-Cash checkpoints.
+
+**Audit before the run**
+
+- **188 migration files / 180 recorded / 13 pending**; pending also included `2026_09_19_000002_add_payment_idempotency_guards`, whose schema was already present (applied earlier via a one-off bootstrap script) but never recorded — i.e. 1 genuinely unapplied-but-recorded-less migration plus 12 genuinely unapplied migrations.
+- **Real schema drift confirmed**, not just bookkeeping: `refunds.provider_refund_id`/`metadata`/`order_id`, `restaurant_wallets`, `restaurant_wallet_transactions`, `order_settlements`, `deliveries.group_checkout_id` (with `deliveries.order_id` still NOT NULL), `order_items.business_id`, the `cod_settlements` `UNIQUE(order_id)` → `UNIQUE(order_id, business_id)` rework, the whole rider-credit system (`rider_credits`, `rider_credit_transactions`, `rider_top_ups`, `deliveries.cod_credit_reserved`, `rider_details.working_credit`/`reserved_working_credit`), and `cod_purchases` + the four `deliveries.purchasing_cash*` columns were all absent from the live DB.
+
+**Applied**
+
+- `php artisan migrate --force` ran **13/13 migrations, all DONE, no errors and no warnings**. These **13 requested migrations were the only database changes made** in this checkpoint — no other DDL, no data edits, no index/constraint changes beyond what those files declare. The five historical orphan `migrations` rows were deliberately **left untouched** (see below).
+- Migration applied: `2026_09_19_000001`, `2026_09_19_000002`, `2026_09_21_000001`–`000006`, `2026_09_21_000010`, `2026_09_22_000001`–`000003`, `2026_09_22_000010`.
+
+**Verification (SHOW CREATE TABLE pass on all 11 affected tables)**
+
+- **Migrations: 188/188 files recorded → pending = 0.**
+- **Column presence: 16/16 OK. Index assertions: 14/14 OK → schema/index drift = 0.**
+- DDL spot-checks: `refunds` carries `UNIQUE refunds_provider_refund_id_unique` + `refunds_order_id_foreign … ON DELETE SET NULL`; `payments` carries both provider UNIQUEs; `payment_webhook_events` carries `UNIQUE provider_event_id` (the §6.1 backstop); `restaurant_wallets`/`order_settlements`/`cod_purchases` carry their declared UNIQUE keys (`business_id`, `order_id`, `cod_settlement_id`, `delivery_id + business_id`); `restaurant_wallet_transactions` carries the unique `order_settlement_id` and `refund_id` effect keys.
+- `deliveries.order_id` verified `IS_NULLABLE = YES` with `UNIQUE deliveries_group_checkout_id_unique` added; `UNIQUE deliveries_order_id_unique` is **retained by design** as the one-order/one-delivery backstop declared in `2026_09_21_000010`'s docblock (§4.1).
+- `cod_settlements` verified: `UNIQUE (order_id, business_id)` present, plain `KEY (order_id)` present, old `UNIQUE (order_id)` gone.
+- Rider-credit removal verified: `rider_credits`, `rider_credit_transactions`, `rider_top_ups` all absent; `deliveries.cod_credit_reserved`, `rider_details.working_credit`, `rider_details.reserved_working_credit` all absent.
+
+**Test results**
+
+- **Full suite before the GD guard: 320 passed / 1,606 assertions / 4 failed / 3 skipped.**
+- All 4 failures were a single environment root cause — `Call to undefined function imagecreatetruecolor()` in `tests/Feature/BusinessRegistrationOcrTest.php:61` (PHP 8.2.12, `GD loaded: NO`). **Confirmed the four failures occur before any DB access**: each one throws inside the `createTestImage()` helper (`imagecreatetruecolor` is the first statement), which runs before any request is dispatched or assertion is made — so the failures are provably unrelated to the migration.
+- **GD guard added** to all four GD-dependent tests in `BusinessRegistrationOcrTest`, matching the existing `OfferingManagementTest:250-252` pattern verbatim (`if (! extension_loaded('gd')) { $this->markTestSkipped('GD extension is required to create fake images.'); }`). The suite now reports an environment prerequisite instead of four misleading failures; the non-GD test in that file (`test_business_creation_rejects_without_required_fields`) is untouched and still runs.
+- **3 skipped, all understood** (test DB is in-memory SQLite per `phpunit.xml`): `TouristApiTest` — SQLite does not support `HAVING` on non-aggregate queries; `RepositoryTest` — Haversine (`acos`/`sin`/`cos`) functions not in SQLite; `OfferingManagementTest` — GD extension required to create fake images.
+- The suite runs on `DB_CONNECTION=sqlite` / `DB_DATABASE=:memory:`, so all 320 passing tests migrate the schema from scratch independently of `track_tour_db` — confirming the migration set is internally consistent, not merely applied to the dev DB.
+
+**Remaining (non-functional) mismatch, deliberately left alone**
+
+- **5 historical orphan `migrations` rows** — rows exist for migration files that were deleted from disk: `2026_08_25_100000_create_menu_groups_table`, `2026_08_25_100001_create_menu_group_variations_table` (Menu Groups feature removal), `2026_09_14_000001_rename_rider_credits_to_rider_wallets`, `2026_09_14_000002_extend_rider_credit_transactions`, `2026_09_14_000003_create_rider_top_ups_table` (superseded by the current `2026_09_14_000001`/`000002` files). They are harmless to `migrate` (they simply never re-run) and cause **no functional or schema problem**, but they make `recorded` (193) ≠ `files` (188) and mean a fresh clone's migration history will not match this DB's. **Not deleted** in this checkpoint: removing them rewrites recorded migration history without fixing anything functional. Reconciling repository migration history for fresh-clone consistency is a separate decision.
+- Consequently the "tables in DB with no create-migration" finding is fully explained: `offerings`/`offering_categories` (renamed from `products`/`product_categories` by `2026_07_07_070558`) and `menu_groups`/`menu_group_variations`. **Correction to the Menu Groups Removal checkpoint above:** that checkpoint records "the backend tables + migration records dropped from the dev DB and `track_tour_db.sql`". Re-verified in this checkpoint: the **SQL dump is clean** (`track_tour_db.sql` contains no `menu_group` CREATE statement), but the **development MySQL database still has both tables** (`Schema::hasTable('menu_groups') === true`, `menu_group_variations === true`) **and both migration rows** (batch 4). So the removal was completed in code and in the dump, but not in the dev DB — the two leftover tables are inert (no model, route, or controller references them) and are reported here rather than dropped, since dropping them is a schema change outside this checkpoint's 13-migration scope. The four migration-created tables absent from the DB are also intentional: `products`/`product_categories` (renamed), `business_documents` (dropped by the rebuild-to-uploads migration), `business_category_documents` (dropped by `2026_07_23_120000`).
+
+**Full Laravel suite after the GD guard: 327 tests / 1,604 assertions / 0 failures / 7 skipped — GREEN** (4 failed → 0 failed; the 7 skips are the 3 pre-existing SQLite/GD skips + the 4 newly guarded OCR tests). Assertion delta 1,606 → 1,604 is fully accounted for: `test_business_created_with_documents_and_ocr_data` executed its 2 `assertNotNull` seeding checks *before* hitting the GD error, and those 2 assertions disappear once the test skips up front.
+
+Socket JS suite: **45/45** (unchanged; not re-run in this checkpoint).
+
+---
+
+### Rider Stale-`busy` Release on Delivery Cancellation: Complete
+
+**Symptom** — `POST /api/rider/availability/toggle` answered **409 Conflict** (from `frontend/src/shared/layouts/DashboardLayout.tsx:206`, surfacing as an uncaught `AxiosError` at `:215`). The route has exactly one 409 source: `RiderController::toggleAvailability()` → `errorResponse('You are currently on a delivery. Complete it before going offline.', 409)`, fired whenever `rider_details.rider_status = 'busy'`.
+
+**Root cause** — `NearestRiderService::cancelDelivery()` changed only `deliveries.status → cancelled` and never released the rider. The `busy` state is set atomically with the assignment on accept (`NearestRiderService`, accept transaction: `rider_id` + `rider_status = 'busy'`), but is only cleared by success paths: prepaid `delivered` (`RiderDeliveryController`, `RiderMapController`), COD `settle-cod` (`NearestRiderService`), and guide trip end (`TripTrackingController`). Every cancellation entry point — tourist cancel, restaurant reject, `AutoRejectWaitingOrder`, `AutoCancelUndeliveredOrder`, refund-driven cancel — funnels through `cancelDeliveryForOrder()` → `cancelDelivery()`, so a rider whose delivery was cancelled stayed `busy` indefinitely:
+
+```text
+delivery.status = cancelled     rider_status = busy     → toggle = 409 forever
+```
+
+**Fix (smallest authoritative layer)** — inside the existing `cancelDelivery()` transaction, immediately after the status flip:
+
+- **Conditional release** via new helper `riderBusyStateOwnedBy()`: release only when (a) the rider is still `busy`, and (b) the rider has **no other non-terminal delivery**. A COD delivery parked at `delivered` until `settle-cod` counts as occupying, so the intentional "busy until cash is collected" rule is preserved and a genuinely occupied rider is never blindly set `available`.
+- The release runs **inside the same transaction** as the cancellation, so the invariant is atomic — no crash window can re-create the stale state.
+- **Race safety:** the accept path writes `rider_id` + `busy` in one transaction, so a concurrent accept is either already visible here (release skipped) or commits after us (overwrites back to `busy`). Both orderings stay correct without extra locks.
+- **Post-commit, best-effort** `firebase->setRiderStatus(..., AVAILABLE, ...)` mirrors the release to the socket radar so dispatch stops treating the rider as busy.
+- The legitimate conflict is untouched: `busy` + an active delivery still returns 409, and `cancelDelivery()` still refuses `delivered`/`completed`/`cancelled` deliveries.
+
+**Deliberately not changed** — frontend error handling (separate UX follow-up), and no acceptance/dispatch/COD/one-active-delivery logic.
+
+**Tests** — new `tests/Feature/RiderBusyReleaseTest.php`, 6 tests / 17 assertions: (1) cancelling the owning delivery releases the rider → toggle 200; (2) genuine 409 preserved while on a delivery; (3) rider with another active delivery is *not* released; (4) a non-`busy` rider is never promoted to `available`; (5) the shared `cancelDeliveryForOrder()` caller inherits the release; (6) COD `delivered` is not cancelled and keeps the rider busy (409).
+
+**Full suite: 333 tests (326 passed + 7 skipped) / 1,621 assertions / 0 failures — GREEN.** Δ vs the previous checkpoint = +6 tests / +17 assertions, exactly the new file; the 7 skips are the same known environment skips (4 GD-guarded OCR, `OfferingManagementTest` GD, `TouristApiTest` SQLite HAVING, `RepositoryTest` Haversine).
+
+**Deferred follow-ups**
+
+- **Frontend:** `toggleRiderAvailability()` still has no `try/catch` (`DashboardLayout.tsx:205-215`) — any non-2xx becomes an unhandled promise rejection. UX-only fix, pending decision; it must not mask the backend message.
+- **Data repair:** riders already stuck at `busy` in `track_tour_db` stay stuck until they complete/settle or are reset manually — the fix prevents new occurrences but does not retroactively clean rows (repair SQL offered, not run).
+- **Related, separate:** PING delivery reliability checkpoint — `docs/architecture/delivery-offer-atomic-acceptance.md` and `docs/architecture/dispatch-ping-reliability-spec.md`.
+
+---
+
+### Firebase Realtime DB Fully Removed (rider "Go Online" timeout root cause): Complete & Verified
+
+**Symptom** — clicking **Go Online** in the rider sidebar showed `Unable to change availability right now.` (`frontend/src/shared/layouts/DashboardLayout.tsx:252`). That string is the *fallback* used only when the error carries **no `message`**, i.e. no JSON body at all — a 409/403/422 would have surfaced the backend's own text.
+
+**Root cause (measured, not guessed)** — `POST /api/rider/availability/toggle` performed **2–3 sequential Firebase RTDB HTTP calls** (each `Http::timeout(5)`) *before* returning, while the shared axios client aborted at **10s**:
+
+```text
+live timings before the fix: 6.1s / 7.4s / 8.8s / 9.5s   (3 × ~3s RTDB round trips)
+axios timeout:               10s  →  ECONNABORTED, no response body  →  generic fallback
+```
+
+`FirebaseService` targets `track-tour-cce1e-default-rtdb.firebaseio.com`, which this environment reaches in ~1.7s/401 and regularly times out at 5s (`laravel.log`: `Firebase patch failed: cURL error 28`), so any spike pushed the request past 10s. The DB write had already committed — the rider *was* online while the UI reported failure.
+
+**Decision** — full removal of `FirebaseService` (user decision; consistent with ADR 003, where Socket.IO was already chosen over Firebase):
+
+```text
+deleted:  app/Services/FirebaseService.php, config/firebase.php,
+          firebase.rules.json, FIREBASE_RULES.md
+.env:     FIREBASE_* and VITE_FIREBASE_* (15 lines) removed
+```
+
+**Call sites removed (all were best-effort mirrors; MySQL was already authoritative):**
+
+- `RiderController` — `toggleAvailability`, `toggleAvailable`, `switchService` status/location mirrors; unused `RiderLocation` import.
+- `AuthController::logout` — `removeRider` / `setOnlineStatus`.
+- `NearestRiderService` — constructor dependency, the dead `findNearestFromFirebase()` candidate finder, dispatch `createRiderRequest`/`createBookingRequest` (gated on `firebase.dispatch_enabled`, already `false`), accept/decline/timeout `removeRiderRequest` cleanup (5 sites), `no_rider_available` + accept status mirrors, and the cancellation release mirror (incl. the now-unused `$releasedRiderId` plumbing). `findNearestAvailableRiders()` still resolves **only** from MySQL — unchanged.
+- `TripTrackingController` — guide trip start/location/end RTDB nodes; `location_sequence` increment (only consumer was the RTDB payload) and `tourist_uid` / `tracking_path` / `guide.firebase_uid` payload keys.
+- `ChatController` — `broadcastToFirebase()` (controller is unrouted; the live message screens use `/tourist/messages`, `/rider/messages`).
+- `RiderMapController` — `firebase_config` payload key (no frontend consumer).
+- `DeliveryService` — unused constructor dependency.
+- `BusinessOwnerGuideController` — `firebase_uid` payload key.
+
+**Kept deliberately:** `users.firebase_uid` column and its migration (nullable, unwritten — dropping it is a separate schema decision); Socket.IO/GPS/dispatch/COD/acceptance-gate architecture untouched.
+
+**Verification**
+
+- **Live endpoint, same rider/token as the diagnosis:** `9.5s → 2.96s (cold) → 0.77s (warm)` per toggle, HTTP 200, status flips correctly. Comfortably inside any client timeout.
+- **Full Laravel suite: 337 tests / 1,654 assertions / 0 failures / 7 skipped — GREEN** (Δ = +4 tests vs the 333-checkpoint; the 7 skips are the known environment skips: 4 GD-guarded OCR, `OfferingManagementTest` GD, `TouristApiTest` SQLite HAVING, `RepositoryTest` Haversine).
+- **Socket JS suite: 45/45.**
+- Test updates: the 11 anonymous `NearestRiderService` subclasses now construct with no arguments (`new class() extends NearestRiderService`), `DeliveryOfferConcurrencyTest` no longer sets `firebase.dispatch_enabled`, and the stale `use App\Services\FirebaseService;` import was dropped from `CodFinancialSettlementTest`. Because the mirrors are gone, those tests no longer fire real outbound HTTP.
+- `php -l` clean on `app/` and `tests/`.
+
+**Incidental fix found during the lint sweep:** `app/Http/Controllers/StaffDashboardController.php` had `use Carbon;` next to `use Illuminate\Support\Carbon;` — a PHP fatal ("Cannot use Carbon as Carbon") that broke the file the moment it was loaded. Line removed; `Carbon::today()` now resolves through the `Illuminate\Support\Carbon` import.
+
+**Docs updated:** `README.md` (service section now describes `WebsocketNotifierService`, NearestRiderService bullets corrected), `docs/decisions/003-websocket-not-firebase.md` (amendment recording the removal), `docs/architecture/dispatch-ping-reliability-spec.md` (channel 1 struck out; only WebSocket ping + HTTP polling remain).
+
+**Known deferred items**
+
+- `users.firebase_uid` column retention (schema cleanup, low priority).
+- `delivers.location_sequence` is now write-only (its sole consumer was the RTDB payload) — left in place, no migration.
+
+---
+
+### Landing Card Feed — Realtime DB-Backed Filter Tabs: Complete & Verified
+
+**Feature** — the landing page's card grid (White Beach, Tamaraw Falls, …) was a hardcoded `DEFAULT_SPOTS` array, and the filter tabs (All / Tourist Spots / Food / Businesses / Resorts) were inert: `activeTab` was set by the buttons but never used to filter, so every tab rendered the same six fake cards.
+
+- **New public endpoint** `GET /api/landing/cards` (`LandingContentController::cards()`), read from MySQL on every request: active `tourist_destinations` first, then approved `businesses`, newest first, normalised to `{ key, types[], title, location, category, rating, image }`. `types` = filter-tab membership, classified by business category name (`CARD_TABS_BY_CATEGORY`); a `Hotel & Restaurant Combination` lands in both **Food** and **Resorts**, unclassified categories fall back to **Businesses**. Optional `?limit=` (default 200, max 500).
+- **Frontend** (`frontend/src/pages/LandingPage.tsx`): `useQuery(['landing-cards'])` with `refetchInterval: 30s` + refetch-on-focus (the app default is 5-min staleTime / no focus refetch, so both are overridden here), `TAB_TYPE` map wired to the five tabs, search still filters client-side, real cover images via `toAssetUrl()`, rating star rendered only when a rating exists, per-tab empty state. `DEFAULT_SPOTS` / `LandingSpot` removed from the page.
+- **Known drift, intentional:** the Tourism Office *Landing Content* editor's `spots_json` fields no longer drive this grid (hero + categories still do). Destinations are now managed through Tourism Management → Destinations; the admin endpoint still accepts/stores `landing_spots` untouched.
+- **Dev DB state at verification:** `active destinations = 0`, `approved businesses = 7` — so *Tourist Spots* correctly renders its empty state until destinations are created.
+
+**Tests** — new `tests/Feature/LandingCardsTest.php`, 8 tests / 25 assertions: public/no-auth, active-vs-inactive destination, approved-vs-unapproved business, card field shape, tab classification incl. the dual-tab combined hotel, `attraction_type` badge, rating null-vs-4.8, limit bounds.
+
+**23:59 suite flake — fixed (test-only).** An earlier full run produced 13 failures, all `InvalidArgumentException: Restaurant A is currently closed (Opens tomorrow at 12:00 AM)` from `GroupOrderService::createGroup()`. Cause: `Business::isInsidePeriods()` tests `$currentMin < $close` (**close is exclusive**), so fixtures declaring "open 24/7" as `[['00:00','23:59']]` read as **closed during the single minute 23:59 Manila**. The run crossed midnight, landing 13 `createGroup` calls in that minute.
+
+- **Fix:** 11 fixtures changed to `[['00:00','23:59'], ['23:59','00:00']]` — the second period is taken by the existing overnight branch (`open 1439 > close 0`), covering the boundary minute. Verified side effects: the previous-day spillover filter picks the period up but its `isInsidePeriods(..., $isOvernightSet = true)` test (`currentMin < 0`) is a harmless no-op, and no test asserts schedule/availability text.
+- **Production deliberately untouched:** making close inclusive would change when real restaurants stop accepting orders — an authoritative business rule, not a test defect.
+- **New guard:** `tests/Unit/BusinessHoursBoundaryTest.php`, 3 tests / 8 assertions — proves the old fixture returns `isOpenNow() === false` at a frozen 23:59 Manila (reproduces the flake deterministically), that the new fixture is open at 00:00/08:30/12:00/23:58/23:59, and that `isAcceptingOrders()` — the exact gate `createGroup()` uses — is true at the boundary.
+
+**Regression checkpoint — GREEN:**
+
+```text
+Tests:       344 total → 337 passed / 7 skipped / 0 failures
+Assertions:  1,654
+Duration:    463.83s
+23:59 flake reproduced: No
+```
+
+Δ vs the previous checkpoint (333 tests / 1,621 assertions / 0 failures / 7 skipped) = +11 tests / +33 assertions = 8 (`LandingCardsTest`) + 3 (`BusinessHoursBoundaryTest`). The 7 skips are the same known environment skips (4 GD-guarded OCR, `OfferingManagementTest` GD, `TouristApiTest` SQLite HAVING, `RepositoryTest` Haversine).
+
+**Independent corroboration of the wall-clock diagnosis:** the immediate post-midnight rerun (before the fixture fix) was already `334 passed / 7 skipped / 0 failures` — it simply never executed during the bad minute.
+
+Socket JS suite: 45/45 (unchanged; not re-run in this checkpoint). Frontend `npm run build` ✓ clean (`tsc` reports no errors in `LandingPage.tsx`; the repo has pre-existing type errors elsewhere that `vite build` does not check).
+
+---
+
+### Rider Auto Accept — First-Ping Auto Acceptance: Complete & Verified
+
+**Problem.** The **Auto accept** tile in the rider status panel was a dead `<button>` — no `onClick`, no state, no column anywhere in the codebase. Tapping it did nothing.
+
+**Decisions (user-confirmed):**
+1. *Server-persisted flag + the rider's device does the accepting* — not a localStorage-only flag, and not server-side acceptance inside dispatch (which would mean editing canonical `NearestRiderService`).
+2. *Stays armed* — every new ping is taken while the rider is free, not a single one-shot.
+
+**Implementation**
+
+| Layer | Change |
+|---|---|
+| Schema | `rider_details.auto_accept` — `boolean NOT NULL DEFAULT 0` after `current_service` (`2026_09_23_000001`) |
+| Endpoint | `PATCH /api/rider/auto-accept` (`role:rider`) → `RiderController::switchAutoAccept()` — `required\|boolean`, `updateOrCreate` (respects `UNIQUE(user_id)`), returns the stored value |
+| Exposure | `UserResource.auto_accept`, so `/api/user`, login, and refresh all carry it |
+| Toggle UI | `DashboardLayout.tsx` — the tile now calls the endpoint: `aria-pressed`, active/emerald state, `On`/`Off`/`…`, in-flight guard, inline error + `fetchUser()` reconcile |
+| Accepting | `RiderDispatchNotification.tsx` — while the flag is ON and the rider is online, takes the **first ping** (earliest `dispatched_at`) through the *same* `PATCH /rider/dispatch/accept` the manual button uses |
+
+**Architectural decisions**
+- **Dispatch does not know the flag exists.** `NearestRiderService` is untouched — candidate eligibility, offer wave, 120s window, COD eligibility, and re-dispatch are unchanged (AGENTS.md §9/§16). Documented in `docs/business-rules/rider-dispatch.md` §5.
+- **The toggle is state only.** Acceptance stays the exclusive job of the canonical atomic accept path, so one-active-delivery, expiry, COD eligibility, and 409/422 semantics all apply to an auto-accept exactly as to a tap.
+- **No poll loop.** A delivery already attempted once is remembered in a ref `Set`; a rejected attempt (409 claimed / 422 ineligible) degrades to the normal manual offer UI instead of re-firing every 4s.
+- **`whenLoaded()` trap.** Laravel's `ConditionallyLoadsAttributes::whenLoaded()` returns `null` when the related row doesn't exist (line 267), so a rider who had never created a `rider_details` row would read `auto_accept: null` ("unknown"). Switched to `when(relationLoaded(...))` so it emits a real `false`, and omits the key entirely when the relation isn't loaded (no N+1).
+- Works on every rider page: `RiderDispatchNotification` is mounted at the `/rider` route element (`App.tsx:763`), not inside a single page — including the settings page.
+- The rider must be online with the app open — which it already must be for GPS. Closed app ⇒ no auto-accept, identical to a rider who never taps.
+
+**Tests** — new `tests/Feature/RiderAutoAcceptTest.php`, 10 tests / 32 assertions:
+guest 401 · non-rider 403 · default off (no `rider_details` row yet) · enable · disable without duplicating the `UNIQUE` row · value survives a fresh request · non-boolean → 422 · missing field → 422 · **enabling never accepts a pending offer** (delivery stays `TripStatus::WAITING`, `rider_id` null, dispatch log `pending`, `rider_status` still `offline`) · **disabling never releases an active delivery** (stays `ASSIGNED` + `busy`).
+
+**Regression checkpoint — GREEN:**
+
+```text
+Tests:       354 total → 347 passed / 7 skipped / 0 failures
+Assertions:  1,686
+Duration:    205.37s
+```
+
+Δ vs the previous checkpoint (344 tests / 1,654 assertions / 0 failures / 7 skipped) = **+10 tests / +32 assertions** = exactly `RiderAutoAcceptTest`. The 7 skips are the same known environment skips (4 GD-guarded OCR, `OfferingManagementTest` GD, `TouristApiTest` SQLite HAVING, `RepositoryTest` Haversine).
+
+**Database verification (per §11):** migration ran on the dev DB (`2026_09_23_000001 … DONE`), `SHOW CREATE TABLE rider_details` confirms `` `auto_accept` tinyint(1) NOT NULL DEFAULT 0 `` positioned after `current_service`, and `UNIQUE KEY rider_details_user_id_unique (user_id)` intact.
+
+**Frontend verification:** `npm run build` ✓; oxlint 0 errors (1 pre-existing warning in an untouched effect); the unused `MapPin` import in `RiderDeliveryRequestAlert.tsx` was removed (`tsc` TS6133). Remaining `tsc` errors in `DashboardLayout.tsx:735`, `RiderDashboard.tsx`, `RiderMap.tsx`, `useOsrmRoute.ts`, `RiderActiveTripContext.tsx` are pre-existing and unrelated. Socket JS suite not re-run (no socket changes; 45/45 last known).
+
+**Known minor:** flipping the toggle on device A is picked up by device B on its next `fetchUser()` (socket connect, trip cancel, or error reconcile), not instantly.
+
+**Follow-up fix — false "Failed to update auto accept".** The toggle reported failure even though the write succeeded. Diagnosed by probing the real browser path (`localhost:3000` → Vite proxy → `php artisan serve :8000`): `PATCH /api/rider/auto-accept` answers `200` both direct and through the proxy, and `GET /api/user`, `/rider/dashboard`, `/rider/dispatch/offers` all answer `200`. Root cause was axios' `timeout: 10000` (`api.ts`) against the **single-request-at-a-time** dev server while the rider app polls offers every 4s and posts GPS — an abort has **no `response`**, so the catch fell through to the generic fallback even though MySQL had already committed. Fixed the same way `toggleRiderAvailability` already handles it: explicit `{ timeout: 30000 }`, a distinct no-response message ("The server took too long to respond…") instead of a false failure claim, and `fetchUser()` reconcile so the tile shows whatever the server actually stored.
+
+**Follow-up — Rider Status readout panel.** Added a `role="status"` / `aria-live="polite"` panel between the Go Online toggle and the quick-actions grid: green panel (`bg-[#16803C]`) with white text and a pulsing white dot while online; white panel with **gray** text (`#6B7280`) and a **fading gray** dot (`#9CA3AF`, `animate-pulse`) while offline — grey replacing the initially requested green, per the follow-up instruction; `…` while the availability request is in flight. It derives purely from `riderOnline`, which `toggleRiderAvailability` only ever sets from the server-returned `rider_status`, so it can never disagree with the button above it. The action region was re-labelled `Rider quick actions` — it previously carried the now-misleading `Rider status panel` label.
+
+### Ride-Hailing Service Gating — Transport Bookings Now Acceptable: Complete & Verified
+
+**Reported:** a rider offering Ride Hailing (`rider_details.current_service = 'transport'`) could not accept a transportation booking.
+
+**Root causes — two, both in `TransportationService::createRide()`:**
+
+1. **Ride booking never persisted at all (hard failure).** The ride order item was created with `description` / `price`, but `OrderItem::$fillable` exposes `product_name` / `unit_price` and both columns are `NOT NULL`. Mass assignment silently dropped the unknown keys, so the insert threw `SQLSTATE[HY000] General error: 1364 Field 'product_name' doesn't have a default value` — every ride booking 500'd. `createRide()` also ran unguarded (no transaction), so the `orders` row committed before the failure and would have been left orphaned.
+2. **`order_type` was written as `'delivery'` instead of `'transport'`.** The accept gate (`NearestRiderService::validateRiderAcceptance()`) and the re-offer path (`redispatchIfOffered()`) both derive the required service as `order_type === 'transport' ? 'transport' : 'food'`. With `'delivery'`, a non-COD ride demanded `current_service === 'food'`, so a ride-hailing rider's accept resolved to `ineligible`. The same mismatch meant `TransportController::index` / `HistoryController` (`where('order_type','transport')`) never returned rides, and `redispatchIfOffered()` re-offered declined rides to **food** riders.
+
+Note the COD branch of the gate skips the service check entirely (it only checks `available` + active limit), so cash rides behaved differently from GCash/Maya/Card rides — the same `order_type` fix resolves that inconsistency because both branches now agree on the service.
+
+**Fix (minimal, at the authoritative layer):**
+- `createRide()` persists `order_type => 'transport'`, writes `product_name` / `unit_price`, and creates order + item + delivery inside one `DB::transaction` so a partial failure can no longer leave an orphaned order. `dispatchToNearest($delivery, 'transport')` stays outside the transaction, unchanged.
+- `AutoCancelUndeliveredOrder` widened from `where('order_type','delivery')` to `whereIn('order_type', ['delivery','transport'])` — rides only inherited that protection because they were mislabeled, so the fix must not silently drop it.
+- **No schema change and no data migration.**
+
+**Verified unchanged (not weakened):** `validateRiderAcceptance()` service gate, the `dispatchToNearest()` candidate filter, the COD acceptance branch, `SmartDispatchService::scheduleDispatch()` (its `order_type !== 'delivery'` early-return now correctly skips rides, which already dispatch directly and would otherwise have been re-dispatched to **food** riders after payment), the `PaymentController` post-payment dispatch hook, `OrderRefundService` (rides carry `delivery_fee = 0`), and the kitchen/preparation gates.
+
+**Tests** — new `tests/Feature/RideHailingAcceptanceTest.php`, **5 tests / 25 assertions** (real dispatch wave + real atomic accept transaction; only the SQLite-unsafe candidate finders overridden, `WebsocketNotifierService` mocked):
+ride persists as `transport` with a valid item + delivery and reaches `notified` · **transport rider is offered AND accepts a GCash ride** · a food rider is offered nothing *and* a forged offer is refused at the accept gate · a transport rider is still refused a food delivery · the ride lists under `?tab=transport` and never `?tab=food`.
+
+**Regression checkpoint — GREEN:**
+
+```text
+Tests:       359 total → 352 passed / 7 skipped / 0 failures
+Assertions:  1,711
+Duration:    244.77s
+```
+
+Δ vs the previous checkpoint (354 tests / 1,686 assertions / 0 failures / 7 skipped) = **+5 tests / +25 assertions** = exactly `RideHailingAcceptanceTest`. The 7 skips are the same known environment skips (4 GD-guarded OCR, `OfferingManagementTest` GD, `TouristApiTest` SQLite HAVING, `RepositoryTest` Haversine).
+
+**Database verification (per §11):** `SHOW CREATE TABLE orders` run against the dev MySQL DB — `order_type varchar(255) NOT NULL DEFAULT 'pickup'`, i.e. a column comment (`delivery, pickup, dine_in`), **not** an enum/CHECK, so `'transport'` is storable without DDL. The dev DB holds **0 `TRP-%` rides**, confirmed before and after a rolled-back live probe of the pre-fix code, so there is no legacy data to backfill.
+
+**Known deferred (out of scope):** `createRide()` hardcodes `business_id = 1` and creates ride items without `business_id`, so rides still attach to business 1's order lists/reports. Correcting ride ownership is a separate decision and is not required for service gating.
+
+
+### `no_rider_available` Dispatch Recovery — Immediate Failures Now Retry: Complete & Verified
+
+**Reported:** a tourist placed a cash order and the rider never received a ping alert.
+
+**Root cause — two stacked problems:**
+
+1. **Zero eligible riders at checkout.** The order was `payment_method = cash`, so the strict COD candidate query ran (`available` + service `food` + a GPS fix **≤5 min old** + **≤5 km** from pickup + active orders < 2). Against the dev riders: rider 14's last `rider_locations` row is **2026-08-26** (28 days stale, ~10.7 km from the pickup) ✗, riders 18/19 have **no location rows at all** ✗, rider 18 is on `transport` ✗ → `eligible MySQL riders {"delivery_id":6,"count":0,"ids":[]}`. With no candidates **no `booking_dispatch_logs` offer row exists**, so `/rider/dispatch/offers` returns `[]` and the socket `order_received_ping` (which only triggers that HTTP refetch) had nothing to show — the rider UI was correct: there was no offer. The same order paid with GCash would have pinged rider 14 (50 km radius, no freshness window).
+2. **`no_rider_available` was a terminal dead end.** `ScheduledDispatchProcessor::dueDeliveryIds()` only selected `scheduled` / stale-`dispatching` rows; dispatch-on-ready (`BusinessOwnerOrderController`, `Order::refreshStatusFromItems`) is gated on `=== 'scheduled'`; `SmartDispatchService::dispatchNow()` would have accepted the state but is only reached from order creation and those scheduled-gated sites. Evidence: delivery 6 sat unchanged for a day (`dispatch_attempts = 0`, `dispatch_retry_at = NULL`) even though the processor docblock promised "no rider available → retry". Additionally **no scheduler process was running at all** on Windows (only `artisan serve` + the socket server), so no time-based task fired.
+
+**Fix (minimal — reuses the canonical `ScheduledDispatchProcessor` loop, no new dispatch system, AGENTS §9):**
+
+- `NearestRiderService` parks `dispatch_retry_at = now + retry_after_minutes` at **both** failure sites: the checkout-time no-candidate park in `dispatchToNearest()` and the wave-exhaustion park in `processTimeouts()`.
+- `ScheduledDispatchProcessor::dueDeliveryIds()` also selects due `no_rider_available` rows (`dispatch_retry_at` null **or** past — null heals legacy stuck rows like delivery 6; the attempt cap bounds them so they cannot loop forever).
+- `processDelivery()` accepts the parked state under the row lock, captures the **pre-claim** state, and restores `no_rider_available` after a still-failing retry so the merchant-visible state stays accurate (`scheduled` rows still return to `scheduled`); `dispatch_failed` now also clears `dispatch_retry_at`.
+- Untouched by design: candidate eligibility, COD gates, offer creation, the atomic accept transaction, `SmartDispatchService` claim guards.
+
+**Environment:** `php artisan schedule:work` started in background (Windows has no cron) so `schedule:dispatch`, `orders:auto-reject-waiting`, `orders:auto-cancel-undelivered`, `payments:reconcile-refunds`, `tracking:cleanup-locations`, `documents:check-expired` actually fire. Disclosed before starting: the first tick auto-rejects order **TT-04436** (paid GCash, `acceptance_deadline` expired ~27 h ago) — intended production behavior; the cash orders (`payment_status = pending`) are not matched by auto-reject and were untouched. **Persistence caveat (checkpoint note):** this `schedule:work` runs inside the agent session only — once the session/terminal closes, nothing runs the schedule. For retries (and every other time-based task) to keep firing, run it persistently: Windows Task Scheduler invoking `php artisan schedule:run` every minute, or a dedicated long-lived console on `php artisan schedule:work`. Recorded in `docs/current-status/known-issues.md` → Deployment / Environment Notes.
+
+**Tests** — new `tests/Feature/DispatchNoRiderRetryTest.php`, **6 tests / 41 assertions**, exercising the REAL `SmartDispatchService` + `ScheduledDispatchProcessor` + `NearestRiderService` end-to-end (COD order so the strict gates apply; `Http::fake` keeps the socket bridge out): checkout failure parks a retry timestamp · backoff window respected · a due retry re-claims and stays `no_rider_available` on continued failure · **recovery proof: a rider who comes online later receives the real pending offer** · exhaustion → `dispatch_failed` terminal · legacy `dispatch_retry_at = NULL` row still claimed.
+
+**Regression checkpoint — GREEN:**
+
+```text
+Tests:       365 total → 358 passed / 7 skipped / 0 failures
+Assertions:  1,752
+Duration:    162.50s
+```
+
+Δ vs the previous checkpoint (352 tests / 1,711 assertions / 0 failures / 7 skipped) = **+6 tests / +41 assertions** = exactly `DispatchNoRiderRetryTest`. The 7 skips are the same known environment skips (4 GD-guarded OCR, `OfferingManagementTest` GD, `TouristApiTest` SQLite HAVING, `RepositoryTest` Haversine).
+
+**Operational note (how to see a ping):** a rider must be eligible *at dispatch time* — for cash orders a GPS fix ≤5 min old within 5 km of the restaurant pickup; GCash orders accept any location row within 50 km. Keep the rider app open (socket) with Go Online + the matching service type.
+
+**Dev DB data cleanup (dangling offer rows).** While verifying the live retry, `booking_dispatch_logs` was found to contain **15 impossible rows** from an earlier deliveries reseed that did not clear the log: 11 rows point at delivery IDs that no longer exist, and 4 rows (ids 1, 2, 3, 26 — all `dispatched_at = 2026-08-26`) predate their reseeded delivery by weeks (delivery 6 was created 2026-09-22). Because `dispatchToNearest()` skips candidates found in `$alreadyDispatchedRiderIds` (`WHERE delivery_id = ?`), those rows **silently blocked rider 14 from deliveries 2, 4, 5 and 6** — including the very order that produced the "no ping" report. Deleted with `DELETE bdl ... WHERE d.id IS NULL OR bdl.dispatched_at < d.created_at` (19 → 4 rows; the 4 survivors are legitimate: d1, d3, and the real 2026-09-22 offers to riders 18/19 on d5). Deliveries 5 and 6 were then reset (`dispatch_attempts = 0`, `dispatch_retry_at = NULL`) to start a clean window. No production code change was made for this — the data was factually impossible, so the data layer is the correct fix layer (AGENTS §19).
+
+**Retry bound (by design):** each delivery gets `1 + max_retries` = **5 attempts at 5-minute intervals (~25 min)** of eligibility searching, then `dispatch_failed` (terminal). If no rider is eligible within that window, place a fresh order to test — or add the manual merchant/admin **Re-dispatch** action (now formally deferred as a separate product requirement).
+
+**Live end-to-end confirmation (post-cleanup).** With the rider page open and GPS streaming, the retry at **18:54:24** found rider 14 eligible (fresh fix, ≈4.3 km < the 5 km COD radius) and created a **real offer** — `booking_dispatch_logs` id 35, delivery 6 → rider 14. **Corrected the next day after investigation: the socket ping for that offer was never delivered** — every `POST /dispatch` was answering HTTP 500 `eligibleRiders is not defined` (defect recorded below), so the offer reached the rider UI only through the 4-second `/rider/dispatch/offers` poll — proven live by the `timeout` this same endpoint wrote at exactly 18:56:24. It went unaccepted within the 120-second window and was marked `timeout`, whereupon `processTimeouts()` exercised the second new park site and re-parked the delivery (`no_rider_available` + `dispatch_retry_at = 19:01:24`). Because `$alreadyDispatchedRiderIds` permanently skips riders already offered a given delivery (anti-ping-spam, by design), rider 14 will not be re-offered delivery 6; absent a newly eligible rider the delivery walks its bounded 5 attempts to `dispatch_failed` (~19:16) — expected bounded behavior, not a regression. The clean accept-path test from here is a **fresh order while the rider is ready**.
+
+**Socket bridge defect found & fixed — `eligibleRiders` ReferenceError (realtime ping was 100% dead).** Chasing the unanswered question "did the rider actually see offer #35?", `laravel.log` showed every `POST /dispatch` since the rider page opened failing with HTTP 500 `{"message":"eligibleRiders is not defined"}` — including the 18:54:24 ping for offer #35 (`riderId: 14`). Root cause in `socket-server.js` → `startDispatchChallenge()`: `const eligibleRiders` was declared **inside** the `if (!targetRider)` block but referenced at function scope in the `activeTrips.set(...)` trip record → `ReferenceError` whenever execution reached that line, i.e. (a) a preferred rider was honored (block skipped entirely) or (b) the radar scan found ≥1 rider (binding was block-scoped). The `order_received_ping` emit sits *after* that line, so **no realtime ping was ever emitted in those cases**. The bug was masked historically because an *empty* radar takes the early "no eligible riders" `return` before reaching the crash — which is why the 2026-09-22 18:25 bridge call had answered 200. The file was git-clean (unchanged since the initial commit); it surfaced only now because the rider page was finally open and on the radar after the server restart (2026-09-22 22:52). **Fix (approved minimal scope, 2 statements):** hoist `let eligibleRiders = []` to function scope and *assign* (not re-declare) inside the block — re-declaring would have left the preferred path still undeclared and made the radar path store an empty fallback list. Socket server restarted with the same plain `node socket-server.js` command (`.env` self-load supplies the bridge secret). **Verification:** `npm run test:js` → **45/45**; live bridge probe replaying the exact crash payload (`preferredRiderId: 14`) → `200 {"success":true,"message":"Dispatch ping sent."}` with the server console proving the honored path, `Phase C Match`, and `emitting "order_received_ping"` to rider 14's live socket. HTTP polling worked throughout (4 s poll) and was the only channel carrying #35 — consistent with AGENTS §8.7 (socket = transport, HTTP = recovery). **Known test gap:** `startDispatchChallenge` has no unit seam (`socket-server.js` has no exports and binds its ports on import); extracting the trip-challenge decision into a pure module (the `socket-events.js` pattern) would turn this class of scope bug into a regression test — offered as follow-up.
+
+
+
+
+### Dispatch Reliability P0–P3 — Radar Eligibility Consistency, Live-GPS Freshness, 60-Minute Cycle Deadline: Complete & Verified
+
+**Spec:** master rider-dispatch implementation specification, Priorities 0–3 (B1/B2 fixes). Scope confirmed with the user: P0–P3 this round; B2 = **Option C** (live socket radar as the freshness source); ghost COD delivery #3 left unsettled for the user to settle later with the real cash — the B1 fix makes it non-blocking at limit 2.
+
+**Verified failure recap (three stacked causes — delivery #8 / order #13, 2026-09-23 05:51:38):**
+1. Rider 14 became `available` 18 s AFTER checkout → primary COD query = 0 eligible riders.
+2. The radar fallback then blanket-excluded rider 14 via `getBusyRiderIds()` because unsettled COD delivery #3 still bound them — a rule the primary COD path does NOT apply (it only enforces `cod_active_order_limit = 2`). Inconsistent rules for the same rider.
+3. No scheduler process was running → `dispatch_retry_at = 05:56:40` never executed. Additionally `dispatchNow()` returned silently BEFORE `dispatch_started_at` was recorded when business coordinates were null (a second, previously-undocumented dead end: `waiting_for_rider` is a status `dueDeliveryIds()` never selects).
+
+**Fixes**
+
+| Layer | Change |
+|---|---|
+| **B1** — radar loop in `NearestRiderService::dispatchToNearest()` | Blanket `getBusyRiderIds()` exclusion now applies to **non-COD only** (it mirrors the non-COD primary query's one-active-delivery rule). COD radar candidates go through the same gates as `findNearestEligibleCodRiders()`: approved → available → food service → ≤5 km on **live** coordinates → `passesCodActiveOrderLimit()`. `$isCod` hoisted out of the per-rider loop. |
+| **B2 (Option C)** — GPS freshness | MySQL `rider_locations` stays the persistent source with its 5-min gate; the live radar is the freshness **source** when `updatedAt` is within the new `delivery.radar_location_max_age_seconds` (default **120 s**, mirroring `socket-validation.js` `LIMITS.radarStaleMs`). `/status` returns raw unfiltered entries, so Laravel now applies this window itself; null `updatedAt` = never stamped → treated fresh (the entry still must pass every COD gate). |
+| **P3** — cycle deadline (§17/§19/§49/§54) | Derived deadline: `orders.dispatch_started_at + delivery.scheduler.dispatch_deadline_minutes` (default **60**, env `DISPATCH_DEADLINE_MINUTES`). Enforced at ONE authoritative layer — the `dispatchToNearest()` entry — so scheduler retries, decline/timeout re-offers (`redispatchIfOffered`) and dispatch-on-ready all inherit it; `ScheduledDispatchProcessor` additionally checks pre-claim (no attempt burned) and post-attempt. |
+| **P3** — no silent dead ends | `dispatchNow()` records `dispatch_started_at` BEFORE any coordinate guard and no longer early-returns on null business coordinates; null pickup coordinates park via `parkForRetry()` instead of a bare `return`. |
+| **P3** — observable termination | Migration `2026_09_23_000001_add_dispatch_end_fields_to_deliveries_table` adds `deliveries.dispatch_ended_at` + `deliveries.dispatch_end_reason`. Terminal reasons wired at the canonical sites: `rider_accepted` (accept transaction), `order_cancelled` (`cancelDelivery`), `no_rider_accepted` (attempt cap / deadline), `invalid_pickup_coordinates` (derived at terminal time). `failDispatch()` writes terminal state under a `rider_id IS NULL` + not-already-failed guard. |
+| Retry window sizing | `delivery.scheduler.max_retries` default 4 → **11** (1 + 11 × 5 min ≈ 60 min) so the retry loop can actually span the deadline instead of dying at ~25 min. Suites that pin `max_retries = 3` are unaffected. |
+| Diagnostics (§57/§58) | `[COD Dispatch] delivery=N eligible riders=N riders=[…]` on every attempt; when 0, `logCodExclusionDiagnostics()` evaluates every rider account in PHP and logs per-rider reasons (`gps_stale(60.4min)`, `wrong_service(transport)`, `too_far(…)`, `active_order_limit`, `not_available(…)`, `gps_missing`, `wrong_municipality`, `already_offered`). Radar-loop skips logged as `[COD Dispatch] radar exclusions`. Rider browser: `[Rider] order_received_ping received — fetching dispatch offers` / `[Rider] dispatch offers received N`. |
+
+**Deliberate spec deviation (recorded):** `deliveries.dispatch_expires_at` was **not** repurposed to the 60-minute cycle. It already carries the **wave/offer deadline** — `offerExpiresAt()` bounds offers by it, `AdminMapController` uses `whereNull` as "actively dispatching", and ~10 test fixtures assert its wave semantics — and every wave overwrites it. Repurposing would break working components the same spec says to preserve. The cycle deadline is therefore **derived** from `orders.dispatch_started_at`; all §17 required fields exist (`dispatch_started_at`, `dispatch_expires_at` [wave], `dispatch_retry_at`, `dispatch_ended_at`, `dispatch_end_reason`).
+
+**Tests** — new files, **+16 tests / +138 assertions** (isolated runs):
+- `DispatchRadarEligibilityConsistencyTest` **10 / 50** (§62/§63): stale-DB + live-radar offer (the field case) · missing-DB + live-radar offer · stale radar entry not trusted · **below-limit COD rider with one unsettled delivered COD still gets the radar offer** (B1 regression — pre-fix: excluded) · at-limit excluded on radar · above-limit excluded on radar · at-limit excluded on the **primary** path too (consistency) · terminal unrelated delivery stays eligible · non-COD active delivery still excluded on radar (one-active-delivery preserved) · non-COD free rider gets a radar offer (control). The non-COD cases stub only `findNearestAvailableRiders()` — its raw `ACOS/COS/RADIANS` distance SQL is MySQL-only (SQLite cannot run it; every existing non-COD test stubs the same seam) — while the **real radar loop** runs.
+- `DispatchDeadlineTest` **6 / 88** (§17/§19/§64): null-coords business parks with retry **and records the cycle anchor** (pre-fix: silent return, no anchor, stranded `waiting_for_rider`) · null-coords → terminal `invalid_pickup_coordinates` at the attempt cap · expired cycle terminated pre-claim by the scheduler with `no_rider_accepted` and **no attempt burned** · direct `dispatchToNearest()` respects the deadline (covers decline/timeout re-offers) · accept records `rider_accepted` + `ended_at` · cancel records `order_cancelled`.
+- §64's "retry due + deadline active + rider appears later" remains covered by `DispatchNoRiderRetryTest::test_parked_delivery_recovers_once_a_rider_becomes_eligible` (preserved, green).
+
+**Regression checkpoint — GREEN:**
+
+```text
+Tests:       381 total → 374 passed / 7 skipped / 0 failures
+Assertions:  1,846
+Duration:    144.28s
+```
+
+Δ vs the previous checkpoint (365 tests / 1,752 assertions / 0 failures / 7 skipped) = **+16 tests** = exactly the two new files. The 7 skips are the same known environment skips (4 GD-guarded OCR, `OfferingManagementTest` GD, `TouristApiTest` SQLite HAVING, `RepositoryTest` Haversine). Protected suites re-run green before the full run — `DispatchNoRiderRetryTest` + `ScheduledDispatchProcessorTest` + `DeliveryOfferConcurrencyTest` + `RiderBusyReleaseTest` + `OrderSizeDispatchEligibilityTest` + `RideHailingAcceptanceTest` + `CodFinancialSettlementTest` + `CodDeliverySettlementTest` = **56 passed / 454 assertions**: retry loop, offer concurrency/atomic accept, one-active-delivery, order-size gating, ride-hailing and both COD settlement suites untouched-green — **settlement code was not modified** (per instruction; the bug was before rider acceptance). Socket JS suite re-run clean: **46/46 passed / 0 failed** (no `socket-server.js` changes); frontend `npm run build` clean (covers the `RiderDispatchNotification.tsx` logging change).
+
+**Database verification (per §11):** `php artisan migrate --force` → `2026_09_23_000001_add_dispatch_end_fields_to_deliveries_table … DONE` on dev MySQL (`track_tour_db`); `SHOW CREATE TABLE deliveries` shows `` `dispatch_ended_at` timestamp NULL `` after `dispatch_failed_at` and `` `dispatch_end_reason` varchar(255) NULL ``; a zero-row `UPDATE` write probe against both columns was accepted (no data mutated); `deliveries_order_id_unique` was incidentally re-verified when the first probe form hit it. Note: this migration shares the `2026_09_23_000001` numeric prefix with the auto-accept migration — harmless, rows are recorded by full filename and each ran exactly once.
+
+**Live verification of the whole P3 chain (dev environment):**
+- §58 diagnostics are live: `[COD Dispatch] exclusion diagnostics {"delivery_id":8,"exclusions":{"14":"gps_stale(60.4min)","18":"wrong_service(transport)","19":"gps_stale(1198.1min)"}}` — "0 eligible riders" now explains itself.
+- The original field-failure **delivery #8** was terminated by the running scheduler at the first post-deadline tick: retry due 06:56:08 → `schedule:dispatch` 06:57:02 → `dispatch_failed`, `dispatch_ended_at=06:57:03`, `dispatch_end_reason=no_rider_accepted`, `retry_at=NULL`, attempts stayed **8** (pre-claim, no attempt burned), `offers ever created = 0`. Previously it looped invisibly forever.
+- Legacy parked delivery #2 (2026-09-04) stays parked **by design**: its order is `cancelled_by_tourist` → outside `DISPATCHABLE_ORDER_STATUSES` → `dueDeliveryIds()` never selects it.
+- `php artisan schedule:work` is running **in this agent session only** (repeat of the persistence caveat): for retries to keep firing after the session closes, use Windows Task Scheduler → `php artisan schedule:run` every minute (recorded in `docs/current-status/known-issues.md`).
+
+**Operational fast-path to see a live ping (spec §56):** scheduler running → settle any delivered-unsettled COD with the real cash (`POST /rider/deliveries/{id}/settle-cod`; delivery #3 left for the user by decision) → rider `available` + rider app open (socket) + GPS fresh ≤5 min within 5 km → place a COD order → expect `eligible riders > 0` → `booking_dispatch_logs` row → `POST /dispatch` 200 → `order_received_ping` → offer card (or the 4 s poll fallback).
+
+**Known deferred (P4–P6):** pickup geofence + explicit pickup confirmation, grouped pickup sequencing + preparation-aware/dynamic routing, and a §22 multi-rider-wave policy review (current wave = simultaneous offers to all eligible candidates within the 120 s window — unchanged this round).
+
+**Probe scripts left in repo root (uncommitted, diagnostics only, safe to delete):** `tmp_cod_probe.php`, `tmp_cod_gate_autopsy.php`, `tmp_cod_why_zero.php`, `tmp_dispatch_end_verify.php`.
+
+---
 
 #### 1. Authentication & Authorization
 - User registration, login, email verification, password reset
@@ -413,7 +822,6 @@ Rescoped the COD/group architecture with the user to steps 3–5 only: **credit-
 - Tracking indexes for performance
 
 #### 12. Services
-- **FirebaseService** — FCM push notifications
 - **GpsService** — GPS coordinate handling
 - **LocationPersistenceService** — rider location persistence
 - **NearestRiderService** — nearest rider matching algorithm
@@ -439,8 +847,121 @@ Rescoped the COD/group architecture with the user to steps 3–5 only: **credit-
 
 ---
 
+### Restaurant Order Redesign — Automatic Preparation Lifecycle: Complete & Verified (2026-09-23)
+
+**Scope:** Restaurants no longer Accept/Reject orders. A delivery order sits in `waiting_restaurant` (*Finding Rider*) until a rider accepts; rider acceptance then auto-transitions the order to `preparing` and arms a countdown derived from owner-configured per-food `preparation_time`, auto-flipping to `ready` at 00:00. Pickup orders start preparation at placement (no rider). Orders with no rider wait indefinitely — never auto-cancelled.
+
+**Implementation summary — backend**
+
+- Removed the order-level accept / reject / accept-all and item-level accept / reject routes and controller methods entirely (per-dish out-of-stock reject/refund flow retired); removed all frontend callers.
+- New canonical `PreparationStartService` owns `waiting_restaurant → preparing` (including payment capture moved out of the removed accept endpoints) and `preparing → ready`; row-locked and idempotent.
+- Prep-start hooks: `NearestRiderService::handleRiderResponse` (before `DeliveryAssigned`), `FoodController::store`, `GroupOrderService`, `PaymentController::markPayablePaid`; `BusinessOwnerOrderController::startPreparation` delegates to the service.
+- Timer math: `effective = max(1, MAX(order_items.preparation_time snapshot) − reduction)`, snapshotted to `orders.preparation_time` / `predicted_preparation_seconds` / `predicted_ready_at`; quantity never multiplies; menu edits never mutate an in-flight timer.
+- Priority tips: `restaurant_settings.priority_preparation_reduction_enabled` + per-tier minutes (defaults off), configured via `GET /restaurants/{id}/preparation-settings` and `PATCH /restaurants/{id}/settings/preparation` (owner-only → 403).
+- Scheduler: `orders:advance-preparation` every minute (promote eligible waiting orders + complete due timers). `AutoRejectWaitingOrder` and its schedule entry deleted (`never auto-cancel`).
+- Dispatch priority: `ScheduledDispatchProcessor::dueDeliveryIds()` orders `COALESCE(orders.rider_tip,0) DESC, deliveries.scheduled_at` (no `SmartDispatchService` rewrite).
+- `preparation_time` validation (nullable integer 0–240) on offering/food/menu store+update; exposed through `OfferingResource` / `OrderResource`.
+- `Offering`, `OrderItem`, `Order`, `RestaurantSetting` models updated.
+
+**Database verification (done)**
+
+- 3 migrations created, applied to the development database, and verified with `SHOW CREATE TABLE` + a live write probe (probe deleted afterward):
+  - `2026_09_23_100000_add_preparation_time_to_offerings_table`
+  - `2026_09_23_100001_add_preparation_time_snapshots_to_orders_table`
+  - `2026_09_23_100002_add_priority_preparation_reduction_to_restaurant_settings`
+
+**Implementation summary — frontend**
+
+- `STATUS_LABELS` map (`waiting_restaurant → Finding Rider`) applied in `StatusBadge`; backend vocabulary untouched.
+- `BusinessOwnerOrders` rewritten: tabs (All, Pending, Preparing, Ready, Picked Up, Out For Delivery, Delivered, Completed, Cancelled), server-side status filter, Preparation countdown column, Priority column; View-only row actions.
+- `BusinessOwnerOrderShow`: "Food Preparation" card (Preparation Time, live Time Remaining, Estimated Ready, Priority) + finding-rider guidance; accept/reject mutations removed.
+- Shared `PreparationCountdown` component (ticks against server `predicted_ready_at`).
+- `TouristFoodCart`: ₱25 / ₱50 / ₱100 tip presets with selection gate (tips feed dispatch priority).
+- Preparation Time inputs added to food/menu/offering create + edit forms.
+
+**Tests added / reconciled**
+
+- New: `RestaurantPreparationTimerTest` (11 tests) and `PreparationStartServiceGateTest` (5 tests).
+- Reconciled: `RiderAcceptanceGateTest` (accept-driven flows rebased on rider acceptance; `preparing` is now a single rider-acceptance-triggered transition), `RealtimeCompletenessTest` (business-reject realtime bridge test retired — no producer remains), `RestaurantSubOrderItemsLifecycleTest` (restaurant accepts → 404 + auto-start).
+- Deleted: `GroupItemRejectionRefundTest` — the entire per-dish reject/refund flow it covered was retired by decision; its invariants (reject never causes preparing, refund integrity) are covered by the removed-endpoint 404 tests and the refund-hardening suite.
+
+**Regression results**
+
+```text
+Laravel: 386 passed / 1,937 assertions / 0 failures / 7 skipped (393 total)
+         (7 skipped = known environment skips: 5 GD, 2 SQLite-only)
+Socket JS: 45/45 pass (tests/js/socket-realtime.test.js carries prior uncommitted additions)
+Frontend:  npm run build clean (pre-existing chunk-size warning only)
+```
+
+The 5 `PreparationStartServiceGateTest` tests are included in the totals above (+5 tests / +41 assertions vs the 381 / 1,896 pre-gate figure): no test had previously referenced `PreparationStartService` by name, so the §4.2 gate was only reachable indirectly through HTTP — the new file pins the canonical layer every caller funnels through. Two further defects found and fixed while reconciling the retired-route tests: `ScheduledDispatchProcessor::dueDeliveryIds()` used an unqualified `updated_at` (ambiguous after the `leftJoin('orders')` → `deliveries.updated_at`), and `PaymentApiTest` expected a paid pickup order to remain `waiting_restaurant` (reconciled to `preparing` — the gate is delivery-only).
+
+**Architectural decisions**
+
+- Labels are display-only; no DB status renames or vocabulary changes.
+- Canonical fields reused (`predicted_ready_at`, `predicted_preparation_seconds`, `preparation_started_at`, `food_ready_at`, `rider_tip`); no new timer table.
+- `PreparationStartService` is the single canonical prep lifecycle owner — the minute scheduler is a backstop, not a second implementation.
+- Never auto-cancel: riderless orders wait indefinitely (auto-reject removed rather than re-parameterized).
+
+**Known deferred items**
+
+- Admin module (AGENTS §15) and P12.5 wallet backfill remain planned and untouched by this phase.
+- Ledger-delivery audit enhancement stays LOW priority (AGENTS §17).
+
+---
+
+### COD Ping Root Causes — GPS Heartbeat, Radar Liveness, Timed-Out Re-Offer, Socket Reconnect: Complete & Verified (2026-09-23)
+
+**Context.** The reported symptom was "the rider never receives the COD order ping." Diagnosis established that Socket.IO **transport was never the failure point** — no offer row existed to ping, and the one offer that did exist (id 37) timed out and could not be reissued. Four independent root causes, all confirmed in code before any change.
+
+**Root causes & fixes**
+
+| # | Root cause | Evidence | Fix |
+|---|---|---|---|
+| **A** | **MySQL GPS aged out → `gps_stale`.** COD eligibility drops a rider whose latest `rider_locations.recorded_at` is older than `cod_location_max_age_minutes` (5 min). The only MySQL writer was `RiderMap`'s `watchPosition`, which runs only while `/rider/map` is mounted and never fires for a **stationary** rider; socket telemetry is explicitly *zero-DB-write* and cannot help. | `socket-server.js:250`, `RiderMap.tsx:294`, `NearestRiderService.php` (5-min gate) | **Heartbeat in `DashboardLayout`**: while `roleLabel === 'Rider'` and `riderOnline`, POST `/rider/map/location` every **60 s** (`RIDER_LOCATION_HEARTBEAT_MS`). `DashboardLayout` is mounted for every `/rider/*` route, so freshness no longer depends on the map page or on movement. |
+| **B** | **Radar entries always stale.** `driver_go_online` is the only thing that stamps radar `updatedAt` for an idle rider — `rider_location_update` is ownership-gated to the *assigned* rider, so a rider with no delivery can never refresh it. `useRiderSocketReceiver` registered **once per connect**, then never again; `isRadarEntryEligible()` drops entries after `LIMITS.radarStaleMs` (120 s), and Laravel's radar fallback applies the same window → every online-but-parked rider aged out after 2 min as `radar_gps_stale`. | `useRiderSocketReceiver.ts`, `socket-validation.js:17`, `socket-server.js:264` | **Periodic re-registration**: re-emit `driver_go_online` every **60 s** (`RADAR_REFRESH_MS`) while connected + online — comfortably inside the 120 s window. |
+| **C** | **`already_offered` was permanent.** `alreadyDispatchedRiderIds` matched **every** prior offer row regardless of `response`, so one TIMED-OUT offer excluded that rider from the delivery forever — and `UNIQUE(delivery_id, rider_id)` forbade a second row, leaving **no path back**. A single-candidate town dead-ended while diagnostics reported `already_offered`. | `NearestRiderService.php` (offer filter, wave loop, radar skip, diagnostics) | **Re-offer after timeout**: `response = 'timeout'` rows are re-offerable; the reopen is `BookingDispatchLog::updateOrCreate` (an UPDATE of the one row, never a second insert). Wave sequencing and the state machine are untouched: `pending`/`declined`/`accepted` still block, so live offers are left alone and a decline stays final. Reopening removes **only** the already-offered blocker — all other COD gates still apply. Diagnostics no longer labels a re-offerable rider `already_offered`. |
+| **D** | **Socket gave up after 3 attempts.** `reconnectionAttempts: 3` × 2 s exhausted in ~6 s, after which the socket stayed dark until a full page reload — the rider silently vanished from the radar (the observed connect/disconnect cycle). | `useRiderSocketReceiver.ts:86-88` | `reconnectionAttempts: Infinity` + `reconnectionDelayMax: 30000` (backoff). |
+
+**Finding recorded (no change):** `useRiderSocketDispatch.ts` — source of the often-cited 180 s idle telemetry interval, which itself exceeds the 120 s radar window — is **never imported anywhere**. It is dead code; fix B was therefore applied to the live hook (`useRiderSocketReceiver`) instead.
+
+**Tests** — new file, **+5 tests / +31 assertions**:
+- `DispatchTimedOutReofferTest` **5 / 31** — timed-out offer reopened for the same rider (row reverted to `pending`, `dispatched_at` re-armed, `dispatch_expires_at` restored) · reopen **reuses the single row** (UNIQUE backstop verified by asserting the same `id`) · `declined` never re-offered · an in-flight `pending` offer is never duplicated nor re-armed · reopening does **not** bypass the other COD gates (rider taken offline → no offer, row stays `timeout`).
+
+**Reconciled test (AGENTS §12 — drift documented):** `DeliveryOfferConcurrencyTest::test_accept_after_offer_expiry_times_out_and_reoffers` asserted that a timed-out rider stays excluded forever. That was the implementation artifact behind the dead end, not a documented rule — `docs/business-rules/rider-dispatch.md` governs **wave sequencing** ("re-offered to the next candidate only once the wave is exhausted; live offers are left alone"), which is preserved. Assertion updated to `pending`, with the reasoning written inline; every other assertion in that test is unchanged (accept still 409-times-out, no rider assigned, fresh rider B still receives the offer).
+
+**Business rule documented:** `docs/business-rules/rider-dispatch.md` now states the timeout-re-offer rule explicitly, including that it stays bounded by the 60-minute dispatch deadline and `1 + max_retries`.
+
+**Regression checkpoint — GREEN:**
+
+```text
+Laravel:  391 passed / 1,968 assertions / 0 failures / 7 skipped (398 total)
+Socket JS: 45/45 passed / 0 failed
+Frontend:  npm run build clean (pre-existing chunk-size warning only)
+Lint:      oxlint on both touched frontend files → 0 errors
+           (2 pre-existing `set-state-in-effect` warnings in an unrelated menu effect)
+```
+
+Δ vs the previous checkpoint (386 passed / 1,937 assertions) = **+5 tests / +31 assertions** = exactly `DispatchTimedOutReofferTest`.
+
+**Architectural decisions**
+
+- Fixes target the **eligibility/liveness** layer only. The spec's separate **PING-honesty** workstream (G1–G6: honest notification state, honest bridge response, ping persistence, retries, Level-3 client ack) is **untouched** and still awaits its checkpoint (`docs/architecture/dispatch-ping-reliability-spec.md`).
+- No change to atomic acceptance, delivery ownership, the offer state machine, cancellation, the ALL-COLLECTED gate, COD settlement, `SmartDispatchService`, or Socket.IO infrastructure (spec §9 / AGENTS §9).
+- The re-offer is bounded by existing P0–P3 machinery (60-min cycle deadline, `1 + max_retries`, `dispatch_end_reason`) rather than by any new limit.
+- The original failure diagnosis stands: **eligibility + offer lifecycle, not the socket transport.** Preserve it for future "rider never got a ping" reports — a transport-level investigation would have missed all four causes.
+
+**Known deferred**
+
+- `dispatch-ping-reliability-spec.md` G1/G3 and its P1–P12 test matrix — awaiting checkpoint agreement.
+- `known-issues.md` MED item 4 — offer timeout remains **poll-driven** (`processTimeouts()` has no scheduled runner). Note the interaction: with fix C a timed-out offer now reopens on the next cycle, but the *transition* to `timeout` still waits for a rider poll.
+- `useRiderSocketDispatch.ts` left in place as dead code (deletion is a separate cleanup decision).
+
+---
+
 ### 🚧 In Progress / Planned
 
+- **P12.5 — Restaurant Wallet Foundation Backfill** (planned, next small phase) — one-time idempotent `wallets:backfill` Artisan command: approved restaurants missing a wallet → `RestaurantWalletService::ensureForBusiness()` → one ₱0 wallet each, no transactions, no funds, no DDL. 5 tests; guards the `delivered-but-unsettled → rider busy → no ping` failure class (rider 14 / delivery #3, 2026-09-23). Plan: `docs/current-status/wallet-backfill-plan.md`
 - **Mobile application** (Ionic?) — API routes are defined, Sanctum auth ready
 - **Real-time tracking enhancements** — deeper WebSocket/pusher integration
 - **Automated test coverage expansion** — more feature/unit tests
@@ -483,7 +1004,7 @@ app/
 ├── Models/                  # 43 Eloquent models
 ├── Notifications/            # ResetPassword, RiderAccountStatusChanged
 ├── Observers/               # BookingObserver, FavoriteObserver, ReviewObserver
-├── Services/                # Firebase, GPS, Transport, etc.
+├── Services/                # GPS, Transport, Dispatch, Websocket bridge, etc.
 └── View/Components/         # AppLayout, GuestLayout
 database/
 ├── migrations/              # 85 migration files

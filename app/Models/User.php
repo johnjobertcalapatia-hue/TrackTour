@@ -260,11 +260,6 @@ class User extends Authenticatable
         return $this->hasMany(BookingDispatchLog::class, 'rider_id');
     }
 
-    public function riderCredit(): HasOne
-    {
-        return $this->hasOne(RiderCredit::class, 'rider_id');
-    }
-
     public function favorites(): HasMany
     {
         return $this->hasMany(Favorite::class);

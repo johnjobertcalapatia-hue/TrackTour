@@ -141,12 +141,17 @@ class OrderSettlementService
 
             $existing = OrderSettlement::query()
                 ->where('order_id', $order->id)
+                ->where('business_id', $lockedCodSettlement->business_id)
                 ->first();
             if ($existing) {
                 return $existing;
             }
 
-            if ((int) $lockedCodSettlement->business_id !== (int) $order->business_id) {
+            $businessIsInOrder = (int) $lockedCodSettlement->business_id === (int) $order->business_id
+                || $order->items()
+                    ->where('business_id', $lockedCodSettlement->business_id)
+                    ->exists();
+            if (! $businessIsInOrder) {
                 throw new \LogicException('COD settlement business does not match its order.');
             }
 
@@ -158,7 +163,7 @@ class OrderSettlementService
             }
 
             $wallet = RestaurantWallet::query()
-                ->where('business_id', $order->business_id)
+                ->where('business_id', $lockedCodSettlement->business_id)
                 ->lockForUpdate()
                 ->first();
             if (! $wallet) {
@@ -170,9 +175,9 @@ class OrderSettlementService
             $availableAfter = round($availableBefore + $restaurantAmount, 2);
 
             $settlement = OrderSettlement::create([
-                'settlement_number' => 'ORD-STL-COD-'.$order->id,
+                'settlement_number' => 'ORD-STL-COD-'.$order->id.'-'.$lockedCodSettlement->business_id,
                 'order_id' => $order->id,
-                'business_id' => $order->business_id,
+                'business_id' => $lockedCodSettlement->business_id,
                 'cod_settlement_id' => $lockedCodSettlement->id,
                 'source' => OrderSettlement::SOURCE_COD,
                 'payment_method' => $order->payment_method,
@@ -186,7 +191,7 @@ class OrderSettlementService
             RestaurantWalletTransaction::create([
                 'transaction_number' => 'RWT-SET-'.$settlement->id,
                 'wallet_id' => $wallet->id,
-                'business_id' => $order->business_id,
+                'business_id' => $lockedCodSettlement->business_id,
                 'order_settlement_id' => $settlement->id,
                 'type' => RestaurantWalletTransaction::TYPE_ORDER_EARNING,
                 'reference_type' => OrderSettlement::class,

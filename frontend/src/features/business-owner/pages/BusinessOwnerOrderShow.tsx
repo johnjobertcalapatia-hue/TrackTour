@@ -1,7 +1,8 @@
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { get, patch, post } from '@/shared/services/api'
+import { get, patch } from '@/shared/services/api'
 import { StatusBadge } from '@/shared/components/StatusBadge'
+import { PreparationCountdown } from '@/shared/components/PreparationCountdown'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { formatCurrency, formatDateTime } from '@/shared/utils'
 import { ArrowLeft, User, Mail, Phone, Building2, Truck, Clock, MapPin, FileText, CheckCircle, XCircle } from 'lucide-react'
@@ -38,6 +39,12 @@ interface OrderDetail {
   group_order_id?: number | null
   group_reference_number?: string | null
   group_paid?: boolean
+  rider_tip?: number | string | null
+  delivery_speed?: string | null
+  preparation_time?: number | null
+  preparation_started_at?: string | null
+  predicted_ready_at?: string | null
+  food_ready_at?: string | null
   items: OrderItem[]
   delivery?: {
     id: number
@@ -75,22 +82,6 @@ export default function BusinessOwnerOrderShow() {
 
   const statusMutation = useMutation({
     mutationFn: (status: string) => patch(`/business-owner/orders/${id}/status`, { status }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['bo-order', id] })
-      queryClient.invalidateQueries({ queryKey: ['bo-orders'] })
-    },
-  })
-
-  const acceptMutation = useMutation({
-    mutationFn: () => post(`/business-owner/orders/${id}/accept`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['bo-order', id] })
-      queryClient.invalidateQueries({ queryKey: ['bo-orders'] })
-    },
-  })
-
-  const rejectMutation = useMutation({
-    mutationFn: () => post(`/business-owner/orders/${id}/reject`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['bo-order', id] })
       queryClient.invalidateQueries({ queryKey: ['bo-orders'] })
@@ -340,36 +331,65 @@ export default function BusinessOwnerOrderShow() {
         </div>
 
         <div className="space-y-6">
+          {/* Preparation countdown (starts when a rider accepts) */}
+          <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-6">
+            <h2 className="text-lg font-semibold text-[#17201A] mb-4">Food Preparation</h2>
+            <div className="space-y-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-[#647067]">Preparation Time</span>
+                <span className="text-[#17201A] font-medium">
+                  {order.preparation_time ? `${order.preparation_time} minutes` : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-[#647067]">Time Remaining</span>
+                {order.status === 'preparing' ? (
+                  <PreparationCountdown
+                    readyAt={order.predicted_ready_at}
+                    className="font-mono text-lg font-bold text-[#16803C]"
+                  />
+                ) : (
+                  <span className="text-[#9CA3AF]">—</span>
+                )}
+              </div>
+              {order.status === 'preparing' && order.predicted_ready_at && (
+                <div className="flex justify-between">
+                  <span className="text-[#647067]">Estimated Ready</span>
+                  <span className="text-[#17201A]">{formatDateTime(order.predicted_ready_at)}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-[#647067]">Priority</span>
+                <span className={Number(order.rider_tip ?? 0) > 0 ? 'font-semibold text-[#B45309]' : 'text-[#17201A]'}>
+                  {Number(order.rider_tip ?? 0) <= 0
+                    ? 'Normal'
+                    : Number(order.rider_tip) >= 100
+                      ? `₱${Number(order.rider_tip)} Fast`
+                      : `₱${Number(order.rider_tip)}`}
+                </span>
+              </div>
+            </div>
+            {order.status === 'waiting_restaurant' && (
+              <p className="text-xs text-[#647067] mt-4">
+                Finding a rider — the preparation timer starts automatically once a rider accepts this delivery.
+              </p>
+            )}
+            {order.status === 'preparing' && (
+              <p className="text-xs text-[#647067] mt-4">
+                The order becomes Ready automatically when the timer reaches 00:00.
+              </p>
+            )}
+          </div>
+
           <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-6">
             <h2 className="text-lg font-semibold text-[#17201A] mb-4">Actions</h2>
 
-            {/* Waiting for restaurant - Accept/Reject */}
-            {order.status === 'waiting_restaurant' && (
-              <div className="space-y-3">
-                <button
-                  onClick={() => acceptMutation.mutate()}
-                  disabled={acceptMutation.isPending}
-                  className="w-full px-4 py-2.5 rounded-xl text-sm font-semibold bg-[#16803C] hover:bg-[#126B32] text-white transition disabled:opacity-50 inline-flex items-center justify-center gap-2"
-                >
-                  <CheckCircle className="w-4 h-4" />
-                  {acceptMutation.isPending ? 'Accepting...' : 'Accept Order'}
-                </button>
-                <button
-                  onClick={() => rejectMutation.mutate()}
-                  disabled={rejectMutation.isPending}
-                  className="w-full px-4 py-2.5 rounded-xl text-sm font-semibold border border-red-200 text-red-600 hover:bg-red-50 transition disabled:opacity-50 inline-flex items-center justify-center gap-2"
-                >
-                  <XCircle className="w-4 h-4" />
-                  {rejectMutation.isPending ? 'Rejecting...' : 'Reject Order'}
-                </button>
-                <p className="text-xs text-[#647067] text-center mt-2">
-                  The customer has paid. Accept to start preparing, or reject to cancel and refund.
-                </p>
-              </div>
-            )}
-
-            {/* Standard transitions */}
-            {order.status !== 'waiting_restaurant' && (
+            {/* Finding rider: no restaurant action exists in this state */}
+            {order.status === 'waiting_restaurant' ? (
+              <p className="text-sm text-[#647067]">
+                No action needed — the system is dispatching this order to nearby riders. Preparation starts as soon as a rider accepts.
+              </p>
+            ) : (
               transitions.length > 0 ? (
                 <div className="space-y-3">
                   {transitions.map((t) => (

@@ -280,6 +280,9 @@ class FoodController extends Controller
                 'quantity' => $qty,
                 'unit_price' => $offering->price,
                 'subtotal' => $offering->price * $qty,
+                // Snapshot the menu's preparation time so later menu edits
+                // never change this order's countdown (spec §16).
+                'preparation_time' => $offering->preparation_time,
                 'notes' => $item['notes'] ?? null,
             ];
         }
@@ -341,6 +344,18 @@ class FoodController extends Controller
 
         if ($order->order_type === 'delivery' && $order->status === 'waiting_restaurant') {
             app(\App\Services\SmartDispatchService::class)->scheduleDispatch($order->fresh());
+        } elseif ($order->status === 'waiting_restaurant') {
+            // Pickup food orders need no rider: preparation starts as soon as
+            // the order is placed. (Delivery orders start when a rider
+            // accepts — see PreparationStartService.)
+            try {
+                app(\App\Services\PreparationStartService::class)->startForOrder($order->fresh());
+            } catch (\Exception $e) {
+                \Illuminate\Support\Facades\Log::warning('Preparation start after order placement failed', [
+                    'order_id' => $order->id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
 
         return $this->createdResponse([
@@ -355,8 +370,25 @@ class FoodController extends Controller
             abort(403);
         }
 
-        $order->load('items.offering', 'business', 'delivery.rider.profile');
+        $order->load('items.offering', 'items.business', 'business', 'delivery.rider.profile');
         $delivery = $order->activeDelivery();
+
+        $pickupStops = $order->items
+            ->groupBy(fn ($item) => $item->business_id ?: $order->business_id)
+            ->map(function ($items, $businessId) use ($order) {
+                $business = $items->first()->business ?? $order->business;
+                return [
+                    'business_id' => (int) $businessId,
+                    'business_name' => $business?->business_name ?? $business?->name ?? 'Restaurant',
+                    'address' => $business?->address,
+                    'latitude' => $business?->latitude !== null ? (float) $business->latitude : null,
+                    'longitude' => $business?->longitude !== null ? (float) $business->longitude : null,
+                    'item_count' => $items->sum(fn ($item) => max(0, (int) $item->quantity - (int) $item->cancelled_quantity)),
+                    'ready_item_count' => $items->where('status', 'ready')->sum(fn ($item) => max(0, (int) $item->quantity - (int) $item->cancelled_quantity)),
+                ];
+            })
+            ->values()
+            ->all();
 
         $dispatchLogs = null;
         $riderLocation = null;
@@ -374,6 +406,7 @@ class FoodController extends Controller
         }
 
         $data = compact('order', 'delivery', 'dispatchLogs');
+        $data['pickup_stops'] = $pickupStops;
         $data['rider_location'] = $riderLocation ? [
             'latitude' => (float) $riderLocation->latitude,
             'longitude' => (float) $riderLocation->longitude,

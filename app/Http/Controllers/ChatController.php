@@ -6,19 +6,11 @@ use App\Models\ChatMessage;
 use App\Models\ChatParticipant;
 use App\Models\ChatRoom;
 use App\Models\User;
-use App\Services\FirebaseService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class ChatController extends Controller
 {
-    protected FirebaseService $firebase;
-
-    public function __construct(FirebaseService $firebase)
-    {
-        $this->firebase = $firebase;
-    }
-
     public function rooms(Request $request): JsonResponse
     {
         $user = $request->user();
@@ -112,9 +104,6 @@ class ChatController extends Controller
 
         $message->load('sender');
 
-        // Broadcast to Firebase
-        $this->broadcastToFirebase($room, $message, $user);
-
         return response()->json([
             'id' => $message->id,
             'sender_id' => $message->sender_id,
@@ -190,33 +179,5 @@ class ChatController extends Controller
         ]);
 
         return response()->json(['room_id' => $room->id], 201);
-    }
-
-    protected function broadcastToFirebase(ChatRoom $room, ChatMessage $message, User $sender): void
-    {
-        if (! $this->firebase->isConfigured()) {
-            return;
-        }
-
-        $participants = $room->participants()->where('user_id', '!=', $sender->id)->get();
-
-        foreach ($participants as $participant) {
-            $path = "chat_rooms/{$room->id}/messages/{$message->id}";
-            $this->firebase->put($path, [
-                'sender_id' => $sender->id,
-                'sender_name' => $sender->name,
-                'message' => $message->message,
-                'message_type' => $message->message_type,
-                'created_at' => $message->created_at->toIso8601String(),
-            ]);
-
-            // Notify the recipient about new message
-            $this->firebase->put("user_inbox/{$participant->user_id}/{$room->id}", [
-                'room_id' => $room->id,
-                'last_message' => $message->message,
-                'last_message_at' => $message->created_at->toIso8601String(),
-                'sender_name' => $sender->name,
-            ]);
-        }
     }
 }

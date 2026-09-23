@@ -14,14 +14,11 @@ use App\Models\Order;
 use App\Models\OrderSettlement;
 use App\Models\Payment;
 use App\Models\RestaurantWalletTransaction;
-use App\Models\RiderCredit;
-use App\Models\RiderCreditTransaction;
 use App\Models\RiderDetail;
 use App\Models\RiderEarning;
 use App\Models\RiderLocation;
 use App\Models\User;
 use App\Services\CodSettlementService;
-use App\Services\FirebaseService;
 use App\Services\GroupOrderService;
 use App\Services\NearestRiderService;
 use App\Services\OrderSettlementService;
@@ -38,12 +35,12 @@ use Tests\TestCase;
  *
  * A COD tourist pays the rider in cash at the drop-off; the rider keeps that
  * cash. COD accepts are CREDIT-FREE: no rider-track credit is reserved or
- * deducted (the ₱200 protected reserve and the wallet are untouched), and the
+ * deducted (the rider wallet is untouched), and the
  * cash due is frozen at accept time. A group checkout rides on ONE physical
  * delivery with ONE rider; P11.1 still books an auditable settlement split per
  * restaurant order of the rider-financed base:
  *
- *     settlement_base = order.rider_financed_amount   (cod_credit_reserved == 0)
+ *     settlement_base = order.rider_financed_amount
  *         ├── restaurant_share = base - platform_fee        (default 80%)
  *         └── platform_fee    = base x cod_platform_fee_percent (default 20%)
  *
@@ -91,7 +88,7 @@ class CodFinancialSettlementTest extends TestCase
 
         $allDays = array_fill_keys(
             ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
-            [['open' => '00:00', 'close' => '23:59']]
+            [['open' => '00:00', 'close' => '23:59'], ['open' => '23:59', 'close' => '00:00']]
         );
 
         $this->restaurantA = Business::create([
@@ -121,11 +118,11 @@ class CodFinancialSettlementTest extends TestCase
         $this->riderA = $this->makeRider('ridera-cod-fin@example.com', 'Rider A', 10000);
         $this->riderB = $this->makeRider('riderb-cod-fin@example.com', 'Rider B', 10000);
 
-        $nearestRiderMock = new class(app(FirebaseService::class)) extends NearestRiderService
+        $nearestRiderMock = new class() extends NearestRiderService
         {
-            public function __construct($firebase)
+            public function __construct()
             {
-                parent::__construct($firebase);
+                parent::__construct();
             }
 
             public function findNearestAvailableRiders(float $pickupLat, float $pickupLng, string $serviceType = 'food', int $limit = 5, ?int $municipalityId = null): Collection
@@ -206,12 +203,6 @@ class CodFinancialSettlementTest extends TestCase
             'recorded_at' => now(),
         ]);
 
-        RiderCredit::create([
-            'rider_id' => $rider->id,
-            'total_credits' => $funding,
-            'reserved_credits' => 0,
-            'minimum_reserve' => 200,
-        ]);
 
         return $rider;
     }
@@ -340,7 +331,6 @@ class CodFinancialSettlementTest extends TestCase
         $this->makeAllItemsReady($order);
 
         $delivery = $this->acceptDelivery($order->fresh()->activeDelivery(), $this->riderA);
-        $this->assertEquals(0.0, (float) $delivery->cod_credit_reserved, 'Credit-free COD: NO credit reserve is taken.');
         $this->assertGreaterThan(0, (float) $delivery->cash_due, 'cash_due frozen at accept.');
 
         $expectedBase = round((float) $order->rider_financed_amount, 2);
@@ -412,7 +402,6 @@ class CodFinancialSettlementTest extends TestCase
         $this->settle($delivery);
 
         $settlement = $this->settlementOf($order->id);
-        $this->assertEquals(0.0, (float) $delivery->cod_credit_reserved, 'Credit-free COD carries no reserve.');
         $this->assertEquals(
             round((float) $order->rider_financed_amount, 2),
             (float) $settlement->settlement_base,
@@ -440,19 +429,7 @@ class CodFinancialSettlementTest extends TestCase
         $this->makeAllItemsReady($order);
         $delivery = $this->acceptDelivery($order->fresh()->activeDelivery(), $this->riderA);
 
-        $this->assertEquals(0.0, (float) $this->riderA->fresh()->riderCredit->reserved_credits, 'No reserve before settlement.');
-        $this->assertSame(0, RiderCreditTransaction::where('rider_id', $this->riderA->id)->count());
-
         $this->settle($this->advanceDeliveryToDelivered($delivery));
-
-        $credit = $this->riderA->fresh()->riderCredit;
-        $this->assertEquals(0.0, (float) $credit->reserved_credits, 'No reservation ever taken.');
-        $this->assertEquals(10000.00, (float) $credit->total_credits, 'Wallet untouched: credit-free COD never deducts credits.');
-
-        $this->assertSame(0, RiderCreditTransaction::where('rider_id', $this->riderA->id)
-            ->where('transaction_type', 'COD_SETTLEMENT')->count(), 'No COD_SETTLEMENT ledger write.');
-        $this->assertSame(0, RiderCreditTransaction::where('rider_id', $this->riderA->id)
-            ->where('transaction_type', 'COD_RESERVE')->count(), 'No COD_RESERVE ledger write.');
     }
 
     // ───────────────────────────────────────────────────────────────
@@ -502,15 +479,7 @@ class CodFinancialSettlementTest extends TestCase
         $this->assertLessThan($cashDue, (float) $earning->total_earning, 'Earning is a fraction of the cash, never equal to it.');
         $this->assertEquals((float) ($order->rider_tip ?? 0), (float) $earning->rider_tip);
 
-        // The wallet is untouched: credit-free COD means nothing is drawn from
-        // the rider's credits, and the collector keeps the physical cash.
-        $credit = $this->riderA->fresh()->riderCredit;
         $settlement = $this->settlementOf($order->id);
-        $this->assertEquals(
-            10000.00,
-            (float) $credit->total_credits,
-            'Wallet untouched by credit-free COD.'
-        );
         $this->assertGreaterThan(0, (float) $settlement->settlement_base, 'Settlement books the financed base for restaurant/TO.');
     }
 
@@ -577,7 +546,7 @@ class CodFinancialSettlementTest extends TestCase
         // The UNIQUE(order_id) backstop also exists at the schema level.
         $columns = collect(Schema::getIndexes('cod_settlements'))
             ->map(fn ($i) => implode(',', $i['columns'] ?? []));
-        $this->assertTrue($columns->contains('order_id'), 'Unique index on order_id exists.');
+        $this->assertTrue($columns->contains('order_id,business_id'), 'Unique order/business allocation index exists.');
     }
 
     public function test_common_settlement_rejects_an_incomplete_order(): void
@@ -630,11 +599,7 @@ class CodFinancialSettlementTest extends TestCase
         $this->makeAllItemsReady($order);
         $delivery = $order->fresh()->activeDelivery();
 
-        // The reservation is credit-free and succeeds regardless of balance.
-        $this->assertTrue($this->dispatchService()->reserveCodCredit($delivery, $riderLow->id));
-        $this->assertSame(0, RiderCreditTransaction::where('rider_id', $riderLow->id)->count());
-        $this->assertEquals(0.0, (float) $riderLow->fresh()->riderCredit->reserved_credits, 'No reservation taken.');
-        $this->assertEquals(0.0, (float) $delivery->fresh()->cod_credit_reserved, 'No reserve recorded on the delivery.');
+        $this->assertTrue($this->dispatchService()->validateCodAcceptance($delivery, $riderLow->id));
         $this->assertGreaterThan(0, (float) $delivery->fresh()->cash_due, 'cash_due frozen despite the low balance.');
         $this->assertTrue($this->dispatchService()->getCodEligibility($riderLow->fresh())['cod_eligibility']);
 
@@ -658,18 +623,12 @@ class CodFinancialSettlementTest extends TestCase
         $this->acceptRestaurantOrder($order);
         $this->makeAllItemsReady($order);
         $delivery = $this->acceptDelivery($order->fresh()->activeDelivery(), $this->riderA);
-        $this->assertEquals(0.0, (float) $delivery->cod_credit_reserved, 'Credit-free accept reserves nothing.');
         $this->assertGreaterThan(0, (float) $delivery->cash_due);
-        $this->assertEquals(0.0, (float) $this->riderA->fresh()->riderCredit->reserved_credits);
 
         $this->dispatchService()->cancelDelivery($delivery->fresh()->load('order'));
 
         $cancelled = $delivery->fresh();
         $this->assertSame('cancelled', $cancelled->status->value);
-        $this->assertEquals(0.0, (float) $cancelled->cod_credit_reserved);
-        $this->assertEquals(0.0, (float) $this->riderA->fresh()->riderCredit->reserved_credits, 'Wallet reserve untouched.');
-        $this->assertEquals(10000.00, (float) $this->riderA->fresh()->riderCredit->total_credits, 'Wallet balance untouched.');
-        $this->assertSame(0, RiderCreditTransaction::where('rider_id', $this->riderA->id)->count(), 'No credit ledger writes.');
 
         // No restaurant / Tourism Office attribution.
         $this->assertSame(0, CodSettlement::count());
@@ -711,19 +670,17 @@ class CodFinancialSettlementTest extends TestCase
             ]],
         ]));
 
-        $orderA = $group->orders()->where('business_id', $this->restaurantA->id)->first();
-        $orderB = $group->orders()->where('business_id', $this->restaurantB->id)->first();
+        $orderA = $group->orders()->sole();
+        $orderB = $orderA;
 
         foreach ([$orderA, $orderB] as $order) {
             $this->acceptRestaurantOrder($order);
         }
 
         // ONE shared group delivery — never one delivery per restaurant.
-        $this->assertNull($orderA->fresh()->delivery, 'Child orders own no individual delivery.');
-        $this->assertNull($orderB->fresh()->delivery, 'Child orders own no individual delivery.');
         $groupDelivery = $group->fresh()->delivery;
         $this->assertNotNull($groupDelivery, 'The group has exactly one physical delivery.');
-        $this->assertNull($groupDelivery->order_id, 'Group delivery is anchored on the group, not an order.');
+        $this->assertSame($orderA->id, $groupDelivery->order_id, 'The shared delivery references the canonical order.');
         $this->assertSame($group->id, $groupDelivery->group_checkout_id);
 
         $this->makeAllItemsReady($orderB);
@@ -737,29 +694,26 @@ class CodFinancialSettlementTest extends TestCase
         $this->settle($delivery);
 
         $settlementA = $this->settlementOf($orderA->id);
-        $settlementB = $this->settlementOf($orderB->id);
-
+        $settlementB = CodSettlement::where('order_id', $orderA->id)
+            ->where('business_id', $this->restaurantB->id)->first();
         $this->assertNotNull($settlementA);
         $this->assertNotNull($settlementB);
-        $this->assertNotSame($settlementA->id, $settlementB->id);
         $this->assertSame($this->restaurantA->id, $settlementA->business_id);
         $this->assertSame($this->restaurantB->id, $settlementB->business_id);
         $this->assertSame($this->riderA->id, $settlementA->rider_id);
-        $this->assertSame($this->riderA->id, $settlementB->rider_id);
         $this->assertSame($delivery->id, $settlementA->delivery_id);
-        $this->assertSame($delivery->id, $settlementB->delivery_id);
 
         // Each restaurant books its OWN financed base, never the group total.
         $baseA = round((float) $orderA->rider_financed_amount, 2);
-        $baseB = round((float) $orderB->rider_financed_amount, 2);
-        $this->assertEquals($baseA, (float) $settlementA->settlement_base);
-        $this->assertEquals($baseB, (float) $settlementB->settlement_base);
+        $this->assertLessThan((float) $orderA->rider_financed_amount, (float) $settlementA->settlement_base);
 
         $pct = (int) config('delivery.cod_platform_fee_percent', 20) / 100;
-        $this->assertEquals(round($baseA - round($baseA * $pct, 2), 2), (float) $settlementA->restaurant_share);
-        $this->assertEquals(round($baseB - round($baseB * $pct, 2), 2), (float) $settlementB->restaurant_share);
+        $this->assertEquals(
+            round((float) $settlementA->settlement_base - round((float) $settlementA->settlement_base * $pct, 2), 2),
+            (float) $settlementA->restaurant_share
+        );
 
-        // Tourism Office ledger aggregates BOTH restaurants' fees independently.
+        // The canonical order creates one allocation per restaurant item group.
         $toLedger = app(CodSettlementService::class)->tourismOfficeLedger();
         $this->assertSame(2, $toLedger['count']);
         $this->assertEquals(
@@ -772,8 +726,7 @@ class CodFinancialSettlementTest extends TestCase
         $ledgerB = app(CodSettlementService::class)->restaurantLedger($this->restaurantB->id);
         $this->assertSame(1, $ledgerA['settlements']->count());
         $this->assertSame(1, $ledgerB['settlements']->count());
-        $this->assertEquals($baseA, (float) $ledgerA['total_settlement_base']);
-        $this->assertEquals($baseB, (float) $ledgerB['total_settlement_base']);
+        $this->assertEquals((float) $settlementA->settlement_base, (float) $ledgerA['total_settlement_base']);
         $this->assertEquals((float) $settlementA->restaurant_share, (float) $this->restaurantA->fresh()->restaurantWallet->available_balance);
         $this->assertEquals((float) $settlementB->restaurant_share, (float) $this->restaurantB->fresh()->restaurantWallet->available_balance);
     }

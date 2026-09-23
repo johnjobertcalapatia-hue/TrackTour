@@ -85,7 +85,7 @@ The project code is divided into backend (Laravel framework files at the root) a
 - [app/Http/Controllers/](file:///C:/xampp/htdocs/Capstone%20Project%201/app/Http/Controllers) — RESTful API controllers grouped by roles (Admin, Api, Auth, Rider, Tourist, BusinessOwner).
 - [app/Http/Middleware/](file:///C:/xampp/htdocs/Capstone%20Project%201/app/Http/Middleware) — Custom routing guards (`CheckRole.php`, `CheckAccountStatus.php`, `StaffMiddleware.php`).
 - [app/Models/](file:///C:/xampp/htdocs/Capstone%20Project%201/app/Models) — 43 active Eloquent models representing the database schema.
-- [app/Services/](file:///C:/xampp/htdocs/Capstone%20Project%201/app/Services) — Core services powering matching, geo-calculations, and FCM logic.
+- [app/Services/](file:///C:/xampp/htdocs/Capstone%20Project%201/app/Services) — Core services powering matching, geo-calculations, dispatch, and the Socket.IO realtime bridge.
 - [database/migrations/](file:///C:/xampp/htdocs/Capstone%20Project%201/database/migrations) — 85+ database migrations establishing the structural schema.
 - [routes/api.php](file:///C:/xampp/htdocs/Capstone%20Project%201/routes/api.php) — Primary route definition containing 100+ endpoints.
 
@@ -93,7 +93,7 @@ The project code is divided into backend (Laravel framework files at the root) a
 - [frontend/src/components/](file:///C:/xampp/htdocs/Capstone%20Project%201/frontend/src/components) — Reusable components (e.g. app cards, chat widgets, tracking maps).
 - [frontend/src/pages/](file:///C:/xampp/htdocs/Capstone%20Project%201/frontend/src/pages) — Views layout segregated by role workflows.
 - [frontend/src/services/](file:///C:/xampp/htdocs/Capstone%20Project%201/frontend/src/services) — Api endpoints wrapper clients.
-- [frontend/src/context/](file:///C:/xampp/htdocs/Capstone%20Project%201/frontend/src/context) — Auth context, Cart stores, and Firebase listeners.
+- [frontend/src/context/](file:///C:/xampp/htdocs/Capstone%20Project%201/frontend/src/context) — Auth context, Cart stores, and realtime socket listeners.
 
 ---
 
@@ -102,7 +102,7 @@ The project code is divided into backend (Laravel framework files at the root) a
 ### 1. `NearestRiderService`
 Located at [NearestRiderService.php](file:///C:/xampp/htdocs/Capstone%20Project%201/app/Services/NearestRiderService.php), this service calculates the nearest available riders relative to a booking pickup location:
 - Computes distances using the **Haversine formula** (`6371 * ACOS(...)`).
-- Reads coordinate statuses from Firebase Realtime Database for active online tracking, falling back to local MySQL logs if Firebase is offline.
+- Resolves candidates from local MySQL rider state (`rider_details` + `rider_locations`); the old Firebase Realtime Database mirror was removed (see ADR 003), so MySQL is the only candidate source.
 - dispatches delivery jobs in sequence. If a rider fails to respond within the `DISPATCH_TIMEOUT_SECONDS` (60s), the service automatically attempts to dispatch to the next nearest rider.
 
 ### 2. `TransportationService`
@@ -110,10 +110,12 @@ Located at [TransportationService.php](file:///C:/xampp/htdocs/Capstone%20Projec
 - Calculates fare pricing details based on vehicle type (Motorcycle, Tricycle, Car, Van) using base fare rates and rates per kilometer.
 - Generates a unique 4-digit verification PIN (`ride_pin`) for tourist security.
 
-### 3. `FirebaseService`
-Located at [FirebaseService.php](file:///C:/xampp/htdocs/Capstone%20Project%201/app/Services/FirebaseService.php), this service bridges Laravel events with Firebase:
-- Sends real-time push notifications using Firebase Cloud Messaging (FCM).
-- Manages Firebase Realtime database entries for chat channels, tracking sessions, and location coordinates.
+### 3. `WebsocketNotifierService`
+Located at [WebsocketNotifierService.php](file:///C:/xampp/htdocs/Capstone%20Project%201/app/Services/WebsocketNotifierService.php), this service bridges Laravel events with the self-hosted Socket.IO server:
+- Emits dispatch pings, assignment, cancellation, and status events to authorized rooms over the internal HTTP bridge.
+- MySQL/Laravel stays authoritative; the socket layer only transports events.
+
+> **Removed:** `FirebaseService` (Firebase Realtime Database mirrors for rider status, dispatch requests, chat, and trip tracking) was deleted in favour of MySQL + Socket.IO — see `docs/decisions/003-websocket-not-firebase.md`.
 
 ---
 

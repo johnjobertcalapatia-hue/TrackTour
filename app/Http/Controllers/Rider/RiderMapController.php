@@ -8,7 +8,6 @@ use App\Http\Controllers\Controller;
 use App\Models\Delivery;
 use App\Models\RiderLocation;
 use App\Models\User;
-use App\Services\FirebaseService;
 use App\Services\LocationPersistenceService;
 use App\Services\NearestRiderService;
 use Illuminate\Http\JsonResponse;
@@ -18,7 +17,6 @@ use Illuminate\Support\Facades\DB;
 class RiderMapController extends Controller
 {
     public function __construct(
-        private FirebaseService $firebase,
         private NearestRiderService $dispatchService,
         private LocationPersistenceService $persistence,
     ) {}
@@ -58,7 +56,6 @@ class RiderMapController extends Controller
                 'longitude' => $lastLocation->longitude,
                 'recorded_at' => $lastLocation->recorded_at,
             ] : null,
-            'firebase_config' => $this->firebase->isConfigured() ? $this->firebase->getFrontendConfig() : null,
         ]);
     }
 

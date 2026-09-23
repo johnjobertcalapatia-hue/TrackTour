@@ -17,6 +17,12 @@ export const ORDER_STATUS = {
   CANCELLED: 'cancelled',
 } as const
 
+// Display overrides for statuses whose raw name no longer matches the UI
+// vocabulary (the order status itself never changes in the DB — AGENTS §10).
+export const STATUS_LABELS: Record<string, string> = {
+  waiting_restaurant: 'Finding Rider',
+}
+
 export const BOOKING_STATUS = {
   PENDING: 'pending',
   CONFIRMED: 'confirmed',

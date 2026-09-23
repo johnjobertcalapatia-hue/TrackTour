@@ -10,7 +10,6 @@ class DeliveryService
 {
     public function __construct(
         protected DeliveryRepositoryInterface $deliveryRepository,
-        protected FirebaseService $firebaseService,
     ) {}
 
     public function getPendingDeliveries(int $riderId, int $limit = 20): Collection

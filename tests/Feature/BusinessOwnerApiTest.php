@@ -98,6 +98,59 @@ class BusinessOwnerApiTest extends TestCase
             ]);
     }
 
+    /**
+     * The Orders card list expands inline (no second request), so the index
+     * payload must already carry the per-item detail the cards render:
+     * name, qty, price, per-item preparation_time snapshot and item status.
+     */
+    public function test_order_index_exposes_item_detail_for_expandable_cards(): void
+    {
+        $order = Order::create([
+            'order_number' => 'ORD-CARD001',
+            'business_id' => $this->business->id,
+            'customer_name' => 'Card Customer',
+            'customer_email' => 'card@example.com',
+            'customer_phone' => '09171234567',
+            'delivery_address' => '123 Sampaguita St, Bansud',
+            'order_type' => 'delivery',
+            'status' => 'preparing',
+            'subtotal' => 300.00,
+            'delivery_fee' => 45.00,
+            'total' => 345.00,
+            'notes' => 'Extra rice, no chili',
+            'preparation_time' => 12,
+        ]);
+
+        $order->items()->create([
+            'business_id' => $this->business->id,
+            'product_name' => 'Adobo',
+            'quantity' => 2,
+            'unit_price' => 150.00,
+            'subtotal' => 300.00,
+            'preparation_time' => 12,
+            'status' => 'preparing',
+        ]);
+
+        $response = $this->actingAs($this->owner, 'sanctum')
+            ->getJson('/api/business-owner/orders');
+
+        $response->assertOk()
+            ->assertJsonPath('data.0.order_number', 'ORD-CARD001')
+            ->assertJsonPath('data.0.customer_name', 'Card Customer')
+            ->assertJsonPath('data.0.customer_phone', '09171234567')
+            ->assertJsonPath('data.0.delivery_address', '123 Sampaguita St, Bansud')
+            ->assertJsonPath('data.0.subtotal', 300)
+            ->assertJsonPath('data.0.delivery_fee', 45)
+            ->assertJsonPath('data.0.total', 345)
+            ->assertJsonPath('data.0.special_instructions', 'Extra rice, no chili')
+            ->assertJsonPath('data.0.items.0.product_name', 'Adobo')
+            ->assertJsonPath('data.0.items.0.quantity', 2)
+            ->assertJsonPath('data.0.items.0.unit_price', 150)
+            ->assertJsonPath('data.0.items.0.total_price', 300)
+            ->assertJsonPath('data.0.items.0.status', 'preparing')
+            ->assertJsonPath('data.0.items.0.preparation_time', 12);
+    }
+
     public function test_business_owner_can_list_bookings(): void
     {
         Booking::create([

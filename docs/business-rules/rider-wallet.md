@@ -1,48 +1,50 @@
 # Rider Wallet & Financial Rules
 
-## 1. Credit Wallet Architecture
+> **Architecture note (P11 clean-up):** the former prepaid rider-credit wallet
+> (`rider_credits`, `rider_credit_transactions`, `rider_top_ups`,
+> `deliveries.cod_credit_reserved`) has been **removed**. COD is now
+> **credit-free**: no wallet balance is checked, reserved, or deducted for a
+> COD dispatch or settlement. This document describes the current authority.
 
-Every rider maintains a prepaid credit balance stored in `rider_credits` and logged in `rider_credit_transactions`. This credit wallet acts as financial collateral for Cash on Delivery (COD) deliveries.
+## 1. Rider Financial Concepts
 
-### Balance Definitions:
-- **`total_credits`**: The total cash value deposited by the rider into the platform.
-- **`reserved_credits`**: Funds temporarily locked as collateral for in-progress COD deliveries.
-- **`minimum_reserve`**: Minimum buffer required to remain eligible for dispatches (default `₱0.00` or configured platform minimum).
-- **`usable_balance`**: Formula:
-  $$\text{usable\_balance} = \max(0, \text{total\_credits} - \text{minimum\_reserve} - \text{reserved\_credits})$$
+- **COD cash**: physical cash the tourist hands to the rider at delivery. The
+  rider keeps it (not remitted to TrackTour).
+- **Rider earnings**: `delivery commission + eligible tip`, recorded in
+  `rider_earnings`. COD cash is **not** rider earnings.
+- **Rider credit**: removed. There is no prepaid financing ledger for COD.
 
----
-
-## 2. COD Credit Reservation (At Dispatch Acceptance)
-
-When a rider accepts a COD delivery:
-1. The required financed amount is:
-   $$\text{settlement\_base} = \text{order.subtotal} + \text{order.system\_fee}$$
-2. The system checks:
-   $$\text{usable\_balance} \ge \text{settlement\_base}$$
-3. If insufficient, acceptance is blocked with an `ineligible` error.
-4. If eligible, `reserved_credits` is incremented by `settlement_base`, locking that amount from being used on other deliveries.
-5. If the order is subsequently cancelled before pickup or delivery, `releaseCodCredit()` unlocks the reserve, restoring usable balance.
+The current dispatch has no COD credit-eligibility step. `NearestRiderService`
+returns a credit-free `getCodEligibility()` (no `available_working_credit`,
+`enough_credits`, etc.) and COD riders are not filtered by wallet balance.
 
 ---
 
-## 3. COD Settlement & Revenue Allocation (At Delivery)
+## 2. COD Settlement & Revenue Allocation (At Delivery)
 
-When the rider successfully hands food to the customer and marks the delivery `delivered`:
-1. **Cash Collection**: The rider collects 100% of physical cash from the tourist:
+When the rider hands food to the customer and the delivery is settled:
+
+1. **Cash Collection**: the rider collects 100% of physical cash from the
+   tourist:
    $$\text{cash\_collected} = \text{food subtotal} + \text{system fee} + \text{delivery fee} + \text{rider tip}$$
-2. **Credit Finalization**:
-   - The rider keeps the collected cash in hand.
-   - The platform finalizes the credit lock: `total_credits` is decremented by `settlement_base`, and `reserved_credits` is released.
-3. **Auditable Settlement Allocation (`cod_settlements`)**:
-   Inside the atomic settlement transaction, `CodSettlementService` splits the `settlement_base`:
-   - **Restaurant Share (80%)**: Credited to the restaurant's payable balance.
-   - **Tourism Office / Platform Share (20%)**: Retained by the municipality of Bansud as platform commission.
-   - *Note*: Fast delivery tips and delivery commissions are excluded from the settlement split and belong 100% to the rider.
+2. The rider keeps the collected cash.
+3. **Auditable Settlement Allocation (`cod_settlements`)** — booked by
+   `CodSettlementService` inside the atomic settlement transaction. The split
+   base is the rider-financed/restaurant-platform amount:
+   $$\text{settlement\_base} = \text{order.subtotal} + \text{order.system\_fee}$$
+   - **Restaurant Share (80%)**: credited to the restaurant's payable balance.
+   - **Tourism Office / Platform Share (20%)**: retained by the municipality of
+     Bansud as platform commission.
+   - *Note*: the fast-delivery tip and delivery commission are excluded from
+     the settlement split and belong 100% to the rider.
+4. No rider-credit deduction occurs at settlement. The authoritative invariant:
+   $$\text{delivery.cod\_credit\_reserved} = \text{order.rider\_financed\_amount} = \text{restaurant share} + \text{Tourism Office share}$$
+   (with `cod_credit_reserved` removed, the base is simply
+   `order.rider_financed_amount`).
 
 ---
 
-## 4. Rider Earnings & Payout Workflow
+## 3. Rider Earnings & Payout Workflow
 
 ### Earnings Generation:
 - On every completed delivery (Prepaid or COD), a row is recorded in `rider_earnings`:

@@ -23,12 +23,38 @@ export const useAuthStore = create<AuthState>((set) => ({
       set({ user: null, loading: false })
       return
     }
-    try {
-      const data = await get<User>('/user')
-      set({ user: data, loading: false })
-    } catch {
-      localStorage.removeItem('auth_token')
-      set({ user: null, loading: false })
+
+    // Only a definitive auth rejection may end the session. Every other
+    // failure (axios timeout, network drop, 5xx) is transient and must leave
+    // the stored token and current user untouched — otherwise a single slow
+    // response logs the rider out of the app.
+    const maxAttempts = 3
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const data = await get<User>('/user')
+        set({ user: data, loading: false })
+        return
+      } catch (error) {
+        const status = axios.isAxiosError(error) ? error.response?.status : undefined
+
+        // 401 = token missing/expired/revoked server-side. Genuine logout.
+        if (status === 401) {
+          localStorage.removeItem('auth_token')
+          set({ user: null, loading: false })
+          return
+        }
+
+        // No response at all (timeout/network) or a server error: retry a few
+        // times, then keep the existing session rather than destroying it.
+        const transient = status === undefined || status >= 500
+        if (transient && attempt < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 250 * attempt))
+          continue
+        }
+
+        set({ loading: false })
+        return
+      }
     }
   },
 

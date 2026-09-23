@@ -1,14 +1,21 @@
 import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { get, post, put } from '@/shared/services/api'
+import { get, put } from '@/shared/services/api'
 import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
-import { useAuthStore } from '@/features/auth/services/auth-store'
-import { useLocation, useNavigate } from 'react-router-dom'
-import { History, Save, ChevronRight } from 'lucide-react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { ArrowLeft, ChevronRight, DollarSign, History, Map as MapIcon, MessageSquare, Save, User } from 'lucide-react'
+
+const settingsLinks = [
+  { to: '/rider/profile', icon: User, title: 'Profile', description: 'Manage your account information' },
+  { to: '/rider/history', icon: History, title: 'History', description: 'View your completed deliveries and ride history' },
+  { to: '/rider/earnings', icon: DollarSign, title: 'Earnings', description: 'Track your delivery earnings and payouts' },
+  { to: '/rider/messages', icon: MessageSquare, title: 'Messages', description: 'Read conversations with tourists and restaurants' },
+  { to: '/rider/map', icon: MapIcon, title: 'Live Map', description: 'Open the map for your active trips' },
+]
 
 const schema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
@@ -29,34 +36,23 @@ interface RiderProfile {
   barangay: string
   role: string
   account_status: string
-  current_service?: 'food' | 'transport' | null
-}
-
-interface CreditTransaction {
-  id: number
-  transaction_type: string
-  amount: number
-  description: string
-  created_at: string
 }
 
 export default function RiderProfile() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
-  const setUser = useAuthStore((state) => state.setUser)
-  const queryClient = useQueryClient()
   const location = useLocation()
   const navigate = useNavigate()
   const isSettingsPage = location.pathname === '/rider/settings'
 
+  const handleBack = () => {
+    if (window.history.length > 1) navigate(-1)
+    else navigate('/rider/map')
+  }
+
   const { data: profile, isLoading } = useQuery({
     queryKey: ['rider-profile'],
     queryFn: () => get<RiderProfile>('/rider/profile'),
-  })
-
-  const { data: transactions } = useQuery({
-    queryKey: ['rider-credits-transactions'],
-    queryFn: () => get<CreditTransaction[]>('/rider/credits/transactions'),
   })
 
   const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
@@ -76,22 +72,23 @@ export default function RiderProfile() {
     onError: (err: any) => setError(err.response?.data?.message || 'Failed to update profile.'),
   })
 
-  const serviceMutation = useMutation({
-    mutationFn: (service: 'food' | 'transport') => post(`/rider/service`, { service }),
-    onSuccess: (_data, service) => {
-      const currentUser = useAuthStore.getState().user
-      if (currentUser) {
-        setUser({ ...currentUser, current_service: service })
-      }
-      queryClient.invalidateQueries({ queryKey: ['rider-profile'] })
-    },
-    onError: (err: any) => setError(err.response?.data?.message || 'Failed to switch rider mode.'),
-  })
-
   if (isLoading) return <DashboardSkeleton />
 
   return (
     <div className="max-w-2xl mx-auto">
+      {isSettingsPage && (
+        <div className="mb-3 flex justify-start">
+          <button
+            type="button"
+            onClick={handleBack}
+            className="inline-flex items-center gap-2 rounded-xl border border-[#E5E9E7] bg-white px-3.5 py-2 text-sm font-semibold text-[#17201B] transition hover:bg-[#F3F8F5] hover:text-[#087F3F]"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back
+          </button>
+        </div>
+      )}
+
       <div className="mb-8">
         <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">{isSettingsPage ? 'Settings' : 'My Profile'}</h1>
         <p className="mt-1 text-sm text-[#6B7280]">
@@ -148,101 +145,28 @@ export default function RiderProfile() {
         </div>}
 
         {isSettingsPage && <div className="bg-white rounded-2xl border border-[#E5E9E7] p-6">
-          <h2 className="text-lg font-semibold text-[#17201B]">Rider Mode</h2>
-          <p className="mt-1 text-sm text-[#6B7280]">Choose which requests you want to receive.</p>
-          <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl bg-[#F3F8F5] p-1">
-            {([
-              { value: 'food' as const, label: 'Food Delivery' },
-              { value: 'transport' as const, label: 'Ride Hailing' },
-            ]).map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => serviceMutation.mutate(option.value)}
-                disabled={serviceMutation.isPending || profile?.current_service === option.value}
-                className={`rounded-lg px-3 py-2.5 text-sm font-semibold transition ${
-                  profile?.current_service === option.value
-                    ? 'bg-emerald-600 text-white'
-                    : 'text-[#6B7280] hover:bg-[#E5E9E7] hover:text-[#17201B]'
-                } disabled:cursor-not-allowed disabled:opacity-70`}
-              >
-                {option.label}
-              </button>
+          <h2 className="text-lg font-semibold text-[#17201B]">Settings</h2>
+          <p className="mt-1 text-sm text-[#6B7280]">Open a section to manage your rider account.</p>
+
+          <ul className="mt-4 divide-y divide-[#E5E9E7]">
+            {settingsLinks.map((item) => (
+              <li key={item.to}>
+                <Link
+                  to={item.to}
+                  className="group flex items-center gap-3 rounded-xl px-2 py-3 transition hover:bg-[#F3F8F5]"
+                >
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#E9F7EF] text-[#087F3F] transition group-hover:bg-emerald-600 group-hover:text-white">
+                    <item.icon className="h-5 w-5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-semibold text-[#17201B]">{item.title}</span>
+                    <span className="block truncate text-xs text-[#6B7280]">{item.description}</span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-[#9CA3AF] transition group-hover:translate-x-0.5 group-hover:text-[#087F3F]" />
+                </Link>
+              </li>
             ))}
-          </div>
-        </div>}
-
-        {isSettingsPage && <div className="bg-white rounded-2xl border border-[#E5E9E7] p-6">
-          <h2 className="text-lg font-semibold text-[#17201B]">Activity</h2>
-          <p className="mt-1 text-sm text-[#6B7280]">View your completed deliveries and ride history.</p>
-          <button
-            type="button"
-            onClick={() => navigate('/rider/history')}
-            className="mt-4 inline-flex items-center gap-2 rounded-xl border border-emerald-500/40 px-4 py-2.5 text-sm font-semibold text-emerald-400 transition hover:bg-emerald-500/10"
-          >
-            <History className="h-4 w-4" />
-            View History
-          </button>
-        </div>}
-
-        {isSettingsPage && <div className="bg-white rounded-2xl border border-[#E5E9E7] shadow-sm">
-          <div className="p-5 border-b border-[#E5E9E7] flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-[#17201B]">Transaction History</h2>
-            <button
-              type="button"
-              onClick={() => navigate('/rider/credit-activity')}
-              className="text-xs text-[#087F3F] hover:text-[#065F2E] transition flex items-center gap-1"
-            >
-              View All <ChevronRight className="w-3 h-3" />
-            </button>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[#E5E9E7] bg-[#F3F8F5]">
-                  <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">Type</th>
-                  <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">Description</th>
-                  <th className="text-right px-5 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">Amount</th>
-                  <th className="text-right px-5 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">Date</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#E5E9E7]">
-                {(transactions ?? []).slice(0, 5).map((tx) => (
-                  <tr key={tx.id} className="hover:bg-[#F3F8F5] transition-colors">
-                    <td className="px-5 py-3 whitespace-nowrap">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        tx.transaction_type === 'CREDIT_TOPUP' || tx.transaction_type === 'COD_RELEASE'
-                          ? 'bg-emerald-50 text-emerald-700'
-                          : tx.transaction_type === 'COD_RESERVE'
-                          ? 'bg-amber-50 text-amber-700'
-                          : 'bg-gray-50 text-gray-700'
-                      }`}>
-                        {tx.transaction_type === 'CREDIT_TOPUP' ? 'Credit Top-up'
-                          : tx.transaction_type === 'COD_RESERVE' ? 'COD Reserved'
-                          : tx.transaction_type === 'COD_RELEASE' ? 'COD Released'
-                          : 'Adjustment'}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3 text-[#4B5563]">{tx.description}</td>
-                    <td className={`px-5 py-3 text-right font-medium whitespace-nowrap ${
-                      tx.transaction_type === 'CREDIT_TOPUP' || tx.transaction_type === 'COD_RELEASE'
-                        ? 'text-emerald-600' : 'text-amber-600'
-                    }`}>
-                      {tx.transaction_type === 'COD_RESERVE' ? '-' : '+'}{new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(tx.amount)}
-                    </td>
-                    <td className="px-5 py-3 text-[#6B7280] text-right whitespace-nowrap">
-                      {new Date(tx.created_at).toLocaleDateString()}
-                    </td>
-                  </tr>
-                ))}
-                {(!transactions || transactions.length === 0) && (
-                  <tr>
-                    <td colSpan={4} className="px-5 py-12 text-center text-[#9CA3AF]">No transactions yet</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          </ul>
         </div>}
 
         {!isSettingsPage && <div className="flex items-center justify-end">

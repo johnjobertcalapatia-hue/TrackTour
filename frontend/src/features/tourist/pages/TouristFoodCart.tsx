@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useMutation, useQueries, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { post } from '@/shared/services/api'
 import { createCheckoutSession } from '@/shared/services/payment'
 import { useAuthStore } from '@/features/auth/services/auth-store'
@@ -206,26 +206,12 @@ export default function TouristFoodCart() {
       delivery_latitude: markerPos?.[0],
       delivery_longitude: markerPos?.[1],
     }),
-    enabled: singleBusinessDelivery,
+    enabled: orderType === 'delivery' && businessId != null && markerPos !== null,
     staleTime: 60_000,
     retry: 1,
   })
 
-  const groupFeeQueries = useQueries({
-    queries: distinctBusinessIds.map((restaurantId) => ({
-      queryKey: ['group-delivery-fee', restaurantId, markerPos?.[0], markerPos?.[1], orderType],
-      queryFn: () => post<DeliveryFeeData>('/tourist/food/delivery-fee', {
-        business_id: restaurantId,
-        delivery_latitude: markerPos?.[0],
-        delivery_longitude: markerPos?.[1],
-      }),
-      enabled: isMultiBusinessCart && orderType === 'delivery' && markerPos !== null,
-      staleTime: 60_000,
-      retry: 1,
-    })),
-  })
-
-  const feeData = singleBusinessDelivery ? feeQuery.data : null
+  const feeData = feeQuery.data
   const estimatedDistanceKm = feeData?.distance_km ?? (singleBusinessDelivery ? clientFallbackKm : null)
   const distanceCharge = feeData?.distance_charge ?? (estimatedDistanceKm == null
     ? 0
@@ -233,17 +219,10 @@ export default function TouristFoodCart() {
   const deliveryFee = feeData?.delivery_fee ?? (orderType === 'delivery' && estimatedDistanceKm != null
     ? Math.max(DELIVERY_BASE_FARE + distanceCharge, DELIVERY_BASE_FARE)
     : 0)
-  const groupDeliveryFees = distinctBusinessIds.map((restaurantId, index) => ({
-    businessId: restaurantId,
-    businessName: cart.find((item) => item.business_id === restaurantId)?.business_name || `Restaurant #${restaurantId}`,
-    fee: groupFeeQueries[index]?.data ?? null,
-  }))
   const groupFeesReady = !isMultiBusinessCart
     || orderType !== 'delivery'
-    || groupDeliveryFees.every((restaurant) => restaurant.fee !== null)
-  const groupDeliveryFee = groupFeesReady
-    ? groupDeliveryFees.reduce((sum, restaurant) => sum + (restaurant.fee?.delivery_fee ?? 0), 0)
-    : 0
+    || feeData !== undefined
+  const groupDeliveryFee = groupFeesReady ? (feeData?.delivery_fee ?? 0) : 0
   const calculatedDeliveryFee = isMultiBusinessCart ? groupDeliveryFee : deliveryFee
   const riderTipAmount = deliverySpeed === 'fast' && orderType === 'delivery' ? Number(riderTip) || 0 : 0
   const total = subtotal + calculatedDeliveryFee + riderTipAmount
@@ -504,32 +483,41 @@ export default function TouristFoodCart() {
                     <p className="flex items-center gap-1.5 text-sm font-semibold text-[#17201B]">
                       <Zap className="w-4 h-4 text-[#F4B400]" /> Fast Delivery
                     </p>
-                    <p className="text-xs text-[#6B7280] mt-1">Priority delivery with a ₱20–₱100 rider tip</p>
+                    <p className="text-xs text-[#6B7280] mt-1">Priority delivery with a ₱25 / ₱50 / ₱100 rider tip</p>
                   </button>
                 </div>
                 {deliverySpeed === 'fast' && (
                   <div className="mt-4">
-                    <label className="block text-sm font-medium text-[#17201B] mb-2" htmlFor="rider-tip">
-                      Rider tip <span className="text-red-500">*</span>
+                    <label className="block text-sm font-medium text-[#17201B] mb-2">
+                      Priority tip <span className="text-red-500">*</span>
                     </label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-[#6B7280]">₱</span>
-                      <input
-                        id="rider-tip"
-                        type="number"
-                        min="20"
-                        max="100"
-                        step="1"
-                        value={riderTip}
-                        onChange={(e) => setRiderTip(e.target.value)}
-                        placeholder="Enter tip amount (₱20–₱100)"
-                        className="w-full pl-8 pr-4 py-2.5 bg-white border border-[#E5E9E7] rounded-xl text-sm text-[#17201B] placeholder-[#6B7280] focus:ring-2 focus:ring-[#F4B400]/40 focus:border-[#F4B400] outline-none transition"
-                      />
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { value: '25', label: '₱25', sub: 'Priority' },
+                        { value: '50', label: '₱50', sub: 'Higher priority' },
+                        { value: '100', label: '₱100', sub: 'Fastest' },
+                      ].map((tier) => (
+                        <button
+                          key={tier.value}
+                          type="button"
+                          onClick={() => setRiderTip(tier.value)}
+                          className={`p-2.5 rounded-xl border-2 text-center transition ${
+                            riderTip === tier.value
+                              ? 'border-[#F4B400] bg-[#F4B400]/10'
+                              : 'border-[#E5E9E7] hover:border-[#F4B400]/50'
+                          }`}
+                        >
+                          <p className="text-sm font-semibold text-[#17201B]">{tier.label}</p>
+                          <p className="text-[11px] text-[#6B7280] mt-0.5">{tier.sub}</p>
+                        </button>
+                      ))}
                     </div>
-                    {riderTip !== '' && riderTipAmount < 20 && (
-                      <p className="text-xs text-red-600 mt-1.5">Minimum tip amount is ₱20.</p>
+                    {riderTip === '' && (
+                      <p className="text-xs text-red-600 mt-1.5">Select a priority tip to continue.</p>
                     )}
-                    <p className="text-[11px] text-[#9CA3AF] mt-1.5">The tip is added to your total and given to the rider.</p>
+                    <p className="text-[11px] text-[#9CA3AF] mt-1.5">
+                      Added to your total and given to the rider. Higher tips get higher rider-matching priority, and may reduce preparation time if the restaurant offers priority preparation.
+                    </p>
                   </div>
                 )}
               </div>
@@ -701,19 +689,12 @@ export default function TouristFoodCart() {
                   </span>
                 </div>
                 {isMultiBusinessCart ? (
-                  <div className="space-y-1.5 rounded-lg bg-[#F8FAF9] px-3 py-2">
-                    <div className="flex justify-between text-xs font-medium text-[#567064]">
-                      <span>Delivery fee per restaurant</span>
-                      <span>{distinctBusinessIds.length} riders</span>
+                  <div className="rounded-lg bg-[#F8FAF9] px-3 py-2 text-xs text-[#567064]">
+                    <div className="flex justify-between font-medium">
+                      <span>Shared delivery</span>
+                      <span>1 rider</span>
                     </div>
-                    {orderType === 'delivery' && groupDeliveryFees.map((restaurant) => (
-                      <div key={restaurant.businessId} className="flex justify-between gap-3 text-xs text-[#6B7280]">
-                        <span className="truncate">{restaurant.businessName}</span>
-                        <span className="whitespace-nowrap font-medium text-[#17201B]">
-                          {restaurant.fee ? formatCurrency(restaurant.fee.delivery_fee) : 'Calculating...'}
-                        </span>
-                      </div>
-                    ))}
+                    <p className="mt-1">Restaurants prepare their own items for one shared pickup route.</p>
                   </div>
                 ) : orderType === 'delivery' && feeData && (
                   <>
@@ -731,7 +712,7 @@ export default function TouristFoodCart() {
                   <div className="rounded-lg bg-[#F3F8F5] px-3 py-2 text-[11px] leading-relaxed text-[#567064]">
                     <span className="font-semibold text-[#087F3F]">How delivery is calculated:</span>{' '}
                     ₱40 covers the first 2 km, then ₱15 is added for every kilometer beyond 2 km.
-                    {isMultiBusinessCart && ' Items from the same restaurant share one fee; each restaurant in a group order has its own fee and rider.'}
+                    {isMultiBusinessCart && ' All restaurants share one delivery and one rider. Restaurant items are fulfilled separately before the shared pickup route.'}
                   </div>
                 )}
                 {orderType === 'delivery' && deliverySpeed === 'fast' && riderTipAmount > 0 && (

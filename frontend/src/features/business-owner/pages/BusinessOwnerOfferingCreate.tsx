@@ -15,6 +15,7 @@ const schema = z.object({
   description: z.string().optional(),
   type: z.string().min(1, 'Type is required'),
   price: z.coerce.number().min(0, 'Price must be positive'),
+  preparation_time: z.coerce.number().min(0, 'Must be 0 or more').max(240, 'Max 240 minutes').optional().or(z.literal('')),
   business_id: z.coerce.number().min(1, 'Business is required'),
   category_id: z.coerce.number().min(1, 'Category is required'),
 })
@@ -117,6 +118,13 @@ export default function BusinessOwnerOfferingCreate() {
               <input {...register('price')} type="number" step="0.01" placeholder="0" className="w-full px-4 py-3 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition" />
               {errors.price && <p className="text-[#B91C1C] text-xs mt-1">{errors.price.message}</p>}
             </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-[#4B5563] mb-1.5">Preparation Time (minutes)</label>
+            <input {...register('preparation_time')} type="number" min="0" max="240" placeholder="e.g. 30" className="w-full px-4 py-3 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition" />
+            <p className="text-xs text-[#647067] mt-1">How long the kitchen takes to prepare this dish. Drives the order preparation countdown.</p>
+            {errors.preparation_time && <p className="text-[#B91C1C] text-xs mt-1">{errors.preparation_time.message}</p>}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

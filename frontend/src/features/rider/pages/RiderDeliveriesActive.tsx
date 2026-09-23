@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { get, patch, post } from '@/shared/services/api'
+import { useAuthStore } from '@/features/auth/services/auth-store'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { formatDateTime, formatCurrency } from '@/shared/utils'
@@ -9,6 +10,7 @@ import { MapPin, Navigation, X, Banknote, Loader2 } from 'lucide-react'
 
 export default function RiderDeliveriesActive() {
   const queryClient = useQueryClient()
+  const fetchUser = useAuthStore((s) => s.fetchUser)
   const [settleDelivery, setSettleDelivery] = useState<Delivery | null>(null)
   const [cashReceived, setCashReceived] = useState('')
 
@@ -30,6 +32,9 @@ export default function RiderDeliveriesActive() {
       setSettleDelivery(null)
       setCashReceived('')
       queryClient.invalidateQueries({ queryKey: ['rider-deliveries-active'] })
+      // Settling the last COD delivery ends the trip on the backend —
+      // reconcile rider_status from the server instead of assuming it.
+      void fetchUser()
     },
   })
 

@@ -8,7 +8,7 @@ import { useAuthStore } from '@/features/auth/services/auth-store'
 import L from 'leaflet'
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
-import { Navigation, MapPin, Play, Truck, CheckCircle, Radio, DollarSign, Star } from 'lucide-react'
+import { Navigation, MapPin, Play, Truck, CheckCircle, Radio, DollarSign, Wallet, Package } from 'lucide-react'
 import { useRiderActiveTrip } from '@/features/rider/context/RiderActiveTripContext'
 import { useOsrmRoute } from '@/features/rider/hooks/useOsrmRoute'
 
@@ -118,6 +118,26 @@ interface LocationData {
   deliveries: Delivery[]
 }
 
+interface PurchaseStop {
+  id: number
+  business_id: number
+  business_name: string | null
+  purchase_amount: number
+  status: 'pending' | 'purchased' | 'collected'
+  purchased_at?: string | null
+  collected_at?: string | null
+}
+
+interface PurchasesData {
+  delivery_id: number
+  is_cod: boolean
+  purchasing_cash: number | null
+  purchasing_cash_issued_at: string | null
+  purchasing_cash_received_at: string | null
+  fully_collected: boolean
+  purchases: PurchaseStop[]
+}
+
 function RecenterMap({ center }: { center: [number, number] }) {
   const map = useMap()
   const lastRef = useRef<[number, number] | null>(null)
@@ -196,6 +216,34 @@ export default function RiderMap() {
     mutationFn: ({ id, status }: { id: number; status: string }) =>
       patch(`/rider/deliveries/${id}/status`, { status }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rider-map-location'] }),
+  })
+
+  const isPickupStage = !!activeDelivery && ['assigned', 'arrived_pickup'].includes(activeDelivery.status)
+  const isFoodService = user?.current_service !== 'transport'
+
+  const { data: purchasesData } = useQuery({
+    queryKey: ['rider-delivery-purchases', activeDelivery?.id],
+    queryFn: async () => {
+      if (!activeDelivery) return null
+      return (await get<PurchasesData>(`/rider/deliveries/${activeDelivery.id}/purchases`)) ?? null
+    },
+    enabled: !!activeDelivery && isPickupStage && isFoodService,
+    refetchInterval: 10000,
+    staleTime: 5000,
+  })
+
+  const markPurchaseMutation = useMutation({
+    mutationFn: ({ purchaseId, status }: { purchaseId: number; status: 'purchased' | 'collected' }) =>
+      post(`/rider/deliveries/${activeDelivery!.id}/purchases/${purchaseId}/mark`, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['rider-delivery-purchases', activeDelivery?.id] })
+      queryClient.invalidateQueries({ queryKey: ['rider-map-location'] })
+    },
+  })
+
+  const receiveCashMutation = useMutation({
+    mutationFn: () => post(`/rider/deliveries/${activeDelivery!.id}/purchasing-cash/receive`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rider-delivery-purchases', activeDelivery?.id] }),
   })
 
   const lastLocationSent = useRef(0)
@@ -392,6 +440,13 @@ export default function RiderMap() {
     }
   })()
 
+  const purchaseStops = purchasesData?.purchases ?? []
+  const purchasingCash = purchasesData?.purchasing_cash ?? null
+  const cashIssued = purchasesData?.purchasing_cash_issued_at != null
+  const cashReceived = purchasesData?.purchasing_cash_received_at != null
+  const collectedCount = purchaseStops.filter((p) => p.status === 'collected').length
+  const allPurchasesCollected = purchaseStops.length > 0 && collectedCount === purchaseStops.length
+
   if (isLoading) return <DashboardSkeleton />
 
   return (
@@ -492,25 +547,111 @@ export default function RiderMap() {
                   <p className="text-xs font-bold text-[#087F3F]">₱{(earningsData?.summary?.total_earnings ?? 0).toFixed(2)}</p>
                 </div>
               </button>
-              <button
-                type="button"
-                onClick={() => navigate('/rider/wallet')}
-                className="w-full flex items-center gap-2 rounded-lg bg-amber-400/15 border border-amber-400/20 backdrop-blur-md p-2 transition hover:bg-amber-400/25"
-              >
-                <span className="w-6 h-6 shrink-0 rounded-full bg-amber-400/20 flex items-center justify-center">
-                  <Star className="w-3 h-3 text-amber-500" />
-                </span>
-                <div>
-                  <p className="text-[8px] font-medium text-amber-600/80 uppercase tracking-wider">Credits</p>
-                  <p className="text-xs font-bold text-amber-600">₱0.00</p>
-                </div>
-              </button>
-            </div>
+              </div>
           )}
         </div>
 
+      {isPickupStage && purchaseStops.length > 0 && (
+        <div className="absolute left-3 bottom-[calc(80px+env(safe-area-inset-bottom))] z-[1200] w-[330px] max-w-[calc(100%-1.5rem)] max-h-[46vh] overflow-y-auto rounded-2xl border border-[#E4E9E6] bg-white/95 p-3 sm:p-4 shadow-2xl backdrop-blur">
+          <div className="flex items-center gap-2">
+            <span className="w-8 h-8 shrink-0 rounded-full bg-[#E9F7EF] border border-[#D7E8DB] flex items-center justify-center">
+              <Wallet className="w-4 h-4 text-[#B45309]" />
+            </span>
+            <div className="flex-1">
+              <p className="text-xs font-bold text-[#17202A]">Purchasing Cash · {collectedCount}/{purchaseStops.length} collected</p>
+              <p className="text-[10px] text-[#6B7280] font-semibold">
+                Tourism Office funds the food · paid by tourist at delivery
+              </p>
+            </div>
+            {cashIssued && (
+              <span className="text-sm font-extrabold text-[#B45309]">
+                ₱{(purchasingCash ?? 0).toFixed(2)}
+              </span>
+            )}
+          </div>
+
+          {!cashIssued && (
+            <div className="mt-3 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2.5 text-xs font-medium text-amber-800">
+              Waiting for the Tourism Office to issue the purchasing cash…
+            </div>
+          )}
+
+          {cashIssued && !cashReceived && (
+            <button
+              type="button"
+              onClick={() => receiveCashMutation.mutate()}
+              disabled={receiveCashMutation.isPending}
+              className="mt-3 w-full inline-flex items-center justify-center gap-2 bg-[#B45309] hover:bg-amber-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition"
+            >
+              <Wallet className="w-4 h-4" />
+              {receiveCashMutation.isPending ? 'Confirming…' : `Confirm Cash Received (₱${(purchasingCash ?? 0).toFixed(2)})`}
+            </button>
+          )}
+
+          {cashIssued && cashReceived && !allPurchasesCollected && (
+            <p className="mt-3 rounded-xl bg-[#EAF6ED] border border-[#D7E8DB] px-3 py-2.5 text-xs font-semibold text-[#087F3F]">
+              Cash received — buy &amp; collect the food at every restaurant below.
+            </p>
+          )}
+
+          {cashIssued && (
+            <div className="mt-3 space-y-2">
+              {purchaseStops.map((stop) => (
+                <div key={stop.id} className="flex items-center gap-3 rounded-xl border border-[#E4E9E6] bg-[#FAFBFB] px-3 py-2.5">
+                  <span className={`w-8 h-8 shrink-0 rounded-full flex items-center justify-center ${
+                    stop.status === 'collected' ? 'bg-[#087F3F]/15' : stop.status === 'purchased' ? 'bg-amber-100' : 'bg-gray-100'
+                  }`}>
+                    {stop.status === 'collected'
+                      ? <CheckCircle className="w-4 h-4 text-[#087F3F]" />
+                      : <Package className={`w-4 h-4 ${stop.status === 'purchased' ? 'text-amber-600' : 'text-[#9CA3AF]'}`} />}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-[#17202A] truncate">{stop.business_name || `Business #${stop.business_id}`}</p>
+                    <p className="text-[10px] text-[#6B7280] font-medium">₱{stop.purchase_amount.toFixed(2)}</p>
+                  </div>
+                  <div className="shrink-0 flex gap-1.5">
+                    {stop.status === 'pending' && (
+                      <button
+                        type="button"
+                        onClick={() => markPurchaseMutation.mutate({ purchaseId: stop.id, status: 'purchased' })}
+                        disabled={markPurchaseMutation.isPending}
+                        className="text-[11px] font-semibold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 px-2.5 py-1.5 rounded-lg transition"
+                      >
+                        Buy
+                      </button>
+                    )}
+                    {stop.status === 'purchased' && (
+                      <>
+                        <span className="text-[11px] font-semibold text-amber-700 self-center">Bought ✓</span>
+                        <button
+                          type="button"
+                          onClick={() => markPurchaseMutation.mutate({ purchaseId: stop.id, status: 'collected' })}
+                          disabled={markPurchaseMutation.isPending}
+                          className="text-[11px] font-semibold text-white bg-[#087F3F] hover:bg-emerald-700 disabled:opacity-50 px-2.5 py-1.5 rounded-lg transition"
+                        >
+                          Collect
+                        </button>
+                      </>
+                    )}
+                    {stop.status === 'collected' && (
+                      <span className="text-[11px] font-semibold text-[#087F3F] self-center">Collected ✓</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {allPurchasesCollected && (
+            <div className="mt-3 rounded-xl bg-[#087F3F] px-3 py-2.5 text-xs font-bold text-white text-center">
+              All food collected — you can now leave for delivery.
+            </div>
+          )}
+        </div>
+      )}
+
       {!activeDelivery && deliveries.length > 0 && (
-          <div className="fixed bottom-[calc(64px+env(safe-area-inset-bottom))] sm:bottom-[calc(72px+env(safe-area-inset-bottom))] left-0 right-0 z-[1200] max-h-[35vh] sm:max-h-[40vh] overflow-y-auto rounded-t-2xl border-t border-[#E4E9E6] bg-white/95 p-3 sm:p-4 shadow-2xl backdrop-blur lg:p-5">
+          <div className="fixed bottom-[calc(80px+env(safe-area-inset-bottom))] left-0 right-0 z-[1200] max-h-[35vh] sm:max-h-[40vh] overflow-y-auto rounded-t-2xl border-t border-[#E4E9E6] bg-white/95 p-3 sm:p-4 shadow-2xl backdrop-blur lg:p-5">
             <div className="space-y-3">
               {deliveries.map((d) => (
                 <div

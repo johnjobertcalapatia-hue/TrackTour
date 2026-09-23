@@ -58,6 +58,30 @@ test('routeStatusEvent never emits an unauthorized room list', () => {
   assert.equal(result.emits.length, 0);
 });
 
+test('routeStatusEvent fans out delivery_offer_cancelled only to the losing rider room', () => {
+  const data = { delivery_id: 18, reason: 'accepted_another_delivery' };
+  const result = routeStatusEvent({
+    eventName: 'delivery_offer_cancelled',
+    rooms: ['rider:4'],
+    data,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.emits.length, 1, 'Only the rider owning the offer is notified.');
+  assert.deepEqual(result.emits[0], { room: 'rider:4', eventName: 'delivery_offer_cancelled', data });
+});
+
+test('routeStatusEvent isolates an offer-cancel broadcast from unauthorized rooms', () => {
+  const result = routeStatusEvent({
+    eventName: 'delivery_offer_cancelled',
+    rooms: ['rider:4', 'trip:99', 'evil:1'],
+    data: { delivery_id: 18 },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.emits.length, 0, 'Invalid rooms are rejected as a whole, nothing is emitted.');
+});
+
 test('routeStatusEvent forces non-object data to an empty object payload', () => {
   const result = routeStatusEvent({ eventName: 'delivery.status.changed', rooms: ['trip:3'], data: null });
   assert.equal(result.ok, true);

@@ -16,14 +16,7 @@ class GroupOrderService
     ) {
     }
 
-    /**
-     * Create a group checkout plus one independent order per restaurant.
-     *
-     * Items from the same restaurant are grouped into a single restaurant
-     * order with its own acceptance lifecycle and a delivery fee calculated
-     * once for that restaurant. This mirrors the single-order flow: one
-     * `orders` row per restaurant, each with one or more order items.
-     */
+    /** Create one canonical order containing restaurant-owned item groups. */
     public function createGroup(\Illuminate\Contracts\Auth\Authenticatable $user, array $payload): GroupCheckout
     {
         $orderType = $payload['order_type'];
@@ -31,10 +24,8 @@ class GroupOrderService
         $deliveryLng = $orderType === 'delivery' ? (float) $payload['delivery_longitude'] : null;
 
         $subtotalTotal = 0.0;
-        $deliveryTotal = 0.0;
-        $systemFeeTotal = 0.0;
-        $restaurantOrders = [];
-        $deliveryFeeCache = [];
+        $orderItems = [];
+        $businesses = [];
 
         foreach ($payload['restaurants'] as $restaurantGroup) {
             $businessId = (int) $restaurantGroup['business_id'];
@@ -49,25 +40,7 @@ class GroupOrderService
                 throw new InvalidArgumentException($business->business_name.' is '.$detail.'. Please remove its items before continuing.');
             }
 
-            // Calculate delivery fee once per restaurant
-            if (! isset($deliveryFeeCache[$businessId])) {
-                $fee = $orderType === 'delivery'
-                    ? $this->deliveryFeeService->calculateOrderDeliveryFee($business, $deliveryLat, $deliveryLng)
-                    : null;
-                $deliveryFeeCache[$businessId] = $fee;
-            }
-            $fee = $deliveryFeeCache[$businessId];
-            $deliveryFee = (float) ($fee['delivery_fee'] ?? 0);
-
-            if (! isset($restaurantOrders[$businessId])) {
-                $restaurantOrders[$businessId] = [
-                    'business' => $business,
-                    'items' => [],
-                    'subtotal' => 0.0,
-                    'delivery_fee' => $deliveryFee,
-                    'fee' => $fee,
-                ];
-            }
+            $businesses[$businessId] = $business;
 
             foreach ($restaurantGroup['items'] as $item) {
                 $offering = Offering::findOrFail($item['offering_id']);
@@ -82,50 +55,36 @@ class GroupOrderService
                 $itemSubtotal = round($offering->price * $qty, 2);
 
                 $subtotalTotal += $itemSubtotal;
-                $restaurantOrders[$businessId]['items'][] = [
+                $orderItems[] = [
+                    'business_id' => $businessId,
                     'offering_id' => $offering->id,
                     'product_name' => $offering->name,
                     'quantity' => $qty,
                     'unit_price' => $offering->price,
                     'subtotal' => $itemSubtotal,
+                    // Snapshot the menu's preparation time so later menu edits
+                    // never change this order's countdown (spec §16).
+                    'preparation_time' => $offering->preparation_time,
                     'notes' => $item['notes'] ?? null,
                 ];
-                $restaurantOrders[$businessId]['subtotal'] += $itemSubtotal;
             }
         }
 
-        if (empty($restaurantOrders)) {
+        if (empty($orderItems) || empty($businesses)) {
             throw new InvalidArgumentException('No valid restaurant items were provided.');
         }
 
-        $restaurantOrders = array_values($restaurantOrders);
         $riderTip = round((float) ($payload['rider_tip'] ?? 0), 2);
-        $tipPerOrder = count($restaurantOrders) > 0 ? round($riderTip / count($restaurantOrders), 2) : 0;
-
-        foreach ($restaurantOrders as &$data) {
-            $data['subtotal'] = round($data['subtotal'], 2);
-            $data['tip'] = $tipPerOrder;
-
-            // Calculate system fee (10% of food subtotal)
-            $data['system_fee'] = Order::calculateSystemFee($data['subtotal']);
-
-            // Calculate rider financed amount (food subtotal + system fee)
-            $data['rider_financed_amount'] = Order::calculateRiderFinancedAmount($data['subtotal'], $data['system_fee']);
-
-            // Rider delivery earnings = delivery fee
-            $data['rider_delivery_earnings'] = $data['delivery_fee'];
-
-            // Total includes system fee
-            $data['total'] = round($data['subtotal'] + $data['delivery_fee'] + $data['system_fee'] + $data['tip'], 2);
-
-            $deliveryTotal += $data['delivery_fee'];
-            $systemFeeTotal += $data['system_fee'];
-        }
-        unset($data);
-
+        $firstBusiness = array_values($businesses)[0];
+        $fee = $orderType === 'delivery'
+            ? $this->deliveryFeeService->calculateOrderDeliveryFee($firstBusiness, $deliveryLat, $deliveryLng)
+            : null;
+        $deliveryTotal = (float) ($fee['delivery_fee'] ?? 0);
+        $systemFeeTotal = Order::calculateSystemFee($subtotalTotal);
+        $riderFinancedAmount = Order::calculateRiderFinancedAmount($subtotalTotal, $systemFeeTotal);
         $grandTotal = round($subtotalTotal + $deliveryTotal + $systemFeeTotal + $riderTip, 2);
 
-        return DB::transaction(function () use ($user, $orderType, $payload, $subtotalTotal, $deliveryTotal, $systemFeeTotal, $riderTip, $grandTotal, $deliveryLat, $deliveryLng, $restaurantOrders) {
+        return DB::transaction(function () use ($user, $orderType, $payload, $subtotalTotal, $deliveryTotal, $systemFeeTotal, $riderTip, $grandTotal, $deliveryLat, $deliveryLng, $orderItems, $firstBusiness, $fee, $riderFinancedAmount) {
             $group = GroupCheckout::create([
                 'reference_number' => 'TT-GROUP-'.strtoupper(str_pad((string) random_int(1, 99999), 5, '0', STR_PAD_LEFT)),
                 'user_id' => $user->getAuthIdentifier(),
@@ -149,10 +108,9 @@ class GroupOrderService
                 'notes' => $payload['notes'] ?? null,
             ]);
 
-            foreach ($restaurantOrders as $data) {
-                $order = Order::create([
+            $order = Order::create([
                     'order_number' => 'TT-'.strtoupper(str_pad((string) random_int(1, 99999), 5, '0', STR_PAD_LEFT)),
-                    'business_id' => $data['business']->id,
+                    'business_id' => $firstBusiness->id,
                     'group_order_id' => $group->id,
                     'user_id' => $user->getAuthIdentifier(),
                     'customer_name' => $user->fullName,
@@ -163,29 +121,28 @@ class GroupOrderService
                     'payment_method' => $payload['payment_method'] ?? 'gcash',
                     'payment_status' => 'pending',
                     'status' => ($payload['payment_method'] ?? 'gcash') === 'cash' ? 'waiting_restaurant' : 'pending_payment',
-                    'subtotal' => $data['subtotal'],
-                    'delivery_fee' => $data['delivery_fee'],
-                    'rider_tip' => $data['tip'],
+                    'subtotal' => $subtotalTotal,
+                    'delivery_fee' => $deliveryTotal,
+                    'rider_tip' => $riderTip,
                     'discount' => 0,
-                    'system_fee' => $data['system_fee'],
-                    'rider_financed_amount' => $data['rider_financed_amount'],
-                    'rider_delivery_earnings' => $data['rider_delivery_earnings'],
-                    'total' => $data['total'],
+                    'system_fee' => $systemFeeTotal,
+                    'rider_financed_amount' => $riderFinancedAmount,
+                    'rider_delivery_earnings' => $deliveryTotal,
+                    'total' => $grandTotal,
                     'delivery_address' => $payload['delivery_address'] ?? null,
-                    'delivery_distance_km' => $data['fee']['distance_km'] ?? null,
-                    'delivery_duration_minutes' => $data['fee']['estimated_duration_minutes'] ?? null,
-                    'pickup_latitude' => $data['fee']['pickup_latitude'] ?? null,
-                    'pickup_longitude' => $data['fee']['pickup_longitude'] ?? null,
+                    'delivery_distance_km' => $fee['distance_km'] ?? null,
+                    'delivery_duration_minutes' => $fee['estimated_duration_minutes'] ?? null,
+                    'pickup_latitude' => $fee['pickup_latitude'] ?? null,
+                    'pickup_longitude' => $fee['pickup_longitude'] ?? null,
                     'delivery_latitude' => $deliveryLat,
                     'delivery_longitude' => $deliveryLng,
-                    'delivery_fee_calculated_at' => $data['fee']['calculated_at'] ?? null,
-                    'delivery_distance_is_estimated' => $data['fee']['is_estimated'] ?? false,
+                    'delivery_fee_calculated_at' => $fee['calculated_at'] ?? null,
+                    'delivery_distance_is_estimated' => $fee['is_estimated'] ?? false,
                     'notes' => $payload['notes'] ?? null,
-                ]);
+            ]);
 
-                foreach ($data['items'] as $item) {
-                    $order->items()->create($item);
-                }
+            foreach ($orderItems as $item) {
+                $order->items()->create($item);
             }
 
             // One group checkout => ONE physical delivery with ONE rider trip
@@ -193,6 +150,17 @@ class GroupOrderService
             // creation; restaurant sub-orders never spawn their own delivery.
             if ($orderType === 'delivery' && $group->payment_method === 'cash') {
                 app(SmartDispatchService::class)->scheduleGroupDispatch($group->fresh());
+            } elseif ($group->payment_method === 'cash') {
+                // Pickup groups need no rider: start preparation immediately.
+                // Delivery groups start when a rider accepts the shared trip.
+                try {
+                    app(PreparationStartService::class)->startForOrder($order->fresh());
+                } catch (\Exception $e) {
+                    \Illuminate\Support\Facades\Log::warning('Preparation start after group placement failed', [
+                        'group_order_id' => $group->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
             }
 
             return $group->fresh();

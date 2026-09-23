@@ -11,12 +11,11 @@ TrackTour supports two primary payment channels:
 ## 2. Payment Intent & Group Checkout Billing
 
 - When a tourist checks out, the backend creates a payment session via `PaymongoService`.
-- For single-restaurant orders, the payment is attached directly to the `Order`.
-- For multi-restaurant **Group Checkouts**:
-  - A single PayMongo payment intent covers the aggregated grand total:
-    $$\text{grand\_total} = \sum \text{subtotals} + \sum \text{delivery\_fees} + \text{fast\_delivery\_tip} + \text{system\_fee\_total}$$
+- The payment is attached to the canonical `Order`.
+- For multi-restaurant **Group Checkouts**, one PayMongo payment intent or one COD agreement covers the single order total:
+  $$\text{total} = \text{subtotal} + \text{one delivery fee} + \text{fast\_delivery\_tip} + \text{system\_fee\_total}$$
   - The tourist pays once.
-  - Upon webhook confirmation, all child restaurant orders transition from `pending_payment` to `waiting_restaurant`.
+  - Upon confirmation, the canonical order transitions from `pending_payment` to `waiting_restaurant`.
 
 ---
 
@@ -44,4 +43,4 @@ Refund processing is governed by `PaymentRefundProcessor` and `OrderRefundServic
 - If the gateway fails, the payment status remains `paid` with a `pending_refund` flag, and is retried via the scheduled command `payments:reconcile-refunds`.
 
 ### Multi-Restaurant Group Orders:
-- Because PayMongo captures the group checkout as a single consolidated charge, individual sub-order cancellations (e.g., Restaurant A is out of stock, but Restaurant B is preparing) are credited via a local store-credit ledger (`refunds` table) rather than splitting the provider payment intent.
+- Because PayMongo captures the group checkout as a single consolidated charge, item-level cancellations are credited via the local refund ledger (`refunds` table) rather than splitting the provider payment intent.

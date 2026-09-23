@@ -832,12 +832,22 @@ class PaymentController extends Controller
 
             // Dispatch immediately: riders are offered the trip before the
             // restaurant starts preparing. Preparation is gated on the rider's
-            // acceptance (see BusinessOwnerOrderController).
+            // acceptance (see PreparationStartService).
             if ($payable->order_type === 'delivery') {
                 try {
                     app(\App\Services\SmartDispatchService::class)->scheduleDispatch($payable->fresh());
                 } catch (\Exception $e) {
                     Log::warning('Dispatch after payment failed', [
+                        'order_id' => $payable->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            } else {
+                // Pickup food orders need no rider: paid → preparation starts.
+                try {
+                    app(\App\Services\PreparationStartService::class)->startForOrder($payable->fresh());
+                } catch (\Exception $e) {
+                    Log::warning('Preparation start after payment failed', [
                         'order_id' => $payable->id,
                         'error' => $e->getMessage(),
                     ]);
@@ -876,6 +886,18 @@ class PaymentController extends Controller
                         'group_order_id' => $payable->id,
                         'error' => $e->getMessage(),
                     ]);
+                }
+            } else {
+                // Pickup groups need no rider: paid → preparation starts.
+                foreach ($orders as $childOrder) {
+                    try {
+                        app(\App\Services\PreparationStartService::class)->startForOrder($childOrder->fresh());
+                    } catch (\Exception $e) {
+                        Log::warning('Preparation start after group payment failed', [
+                            'order_id' => $childOrder->id,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
                 }
             }
 

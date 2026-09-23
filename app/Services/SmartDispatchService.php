@@ -173,10 +173,13 @@ class SmartDispatchService
     public function dispatchNow(Order $order, Delivery $delivery): void
     {
         $business = $order->business;
-        if (! $business?->latitude || ! $business?->longitude) {
-            return;
-        }
 
+        // P3 (master spec §17/§19): the cycle anchor must be recorded BEFORE
+        // any coordinate guard. A business without coordinates used to return
+        // here silently — no dispatch_started_at, no dispatchToNearest, no
+        // retry — stranding the delivery at 'waiting_for_rider' forever (a
+        // status the scheduler never selects). Invalid pickup coordinates are
+        // now parked/failed by dispatchToNearest with an observable reason.
         $order->update(['dispatch_started_at' => now()]);
 
         try {
@@ -194,7 +197,7 @@ class SmartDispatchService
                 $this->nearestRiderService->dispatchToNearest(
                     $lockedDelivery,
                     'food',
-                    $business->municipality_id,
+                    $business?->municipality_id,
                 );
             });
         } catch (\Exception $e) {
@@ -209,9 +212,8 @@ class SmartDispatchService
     /**
      * Get or create the single physical delivery for a group checkout.
      *
-     * One group checkout => ONE delivery (deliveries.group_checkout_id,
-     * UNIQUE backstop). Pickup is anchored on the first (pickup-point)
-     * restaurant; order_id is NULL for group deliveries.
+    * One group checkout => ONE delivery. The delivery references the single
+    * canonical order and retains the group anchor for checkout lookups.
      */
     public function createOrGetGroupDelivery(GroupCheckout $group): ?Delivery
     {
@@ -248,8 +250,8 @@ class SmartDispatchService
 
                 return Delivery::create([
                     'group_checkout_id' => $lockedGroup->id,
-                    'order_id' => null,
-                    'delivery_fee' => round($orders->sum(fn (Order $o) => (float) $o->delivery_fee), 2),
+                    'order_id' => $orders->first()->id,
+                    'delivery_fee' => (float) $orders->first()->delivery_fee,
                     'distance_km' => $orders->max(fn (Order $o) => (float) $o->delivery_distance_km) ?? null,
                     'estimated_duration_minutes' => $orders->max(fn (Order $o) => (int) $o->delivery_duration_minutes) ?? null,
                     'status' => 'waiting',

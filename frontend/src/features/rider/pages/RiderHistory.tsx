@@ -5,17 +5,9 @@ import { StatusBadge } from '@/shared/components/StatusBadge'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { formatDateTime } from '@/shared/utils'
 import type { Delivery } from '@/shared/types'
-import { ChevronLeft, ChevronRight, CheckCircle, ArrowDownLeft, ArrowUpRight, Coins, Motorbike } from 'lucide-react'
+import { ChevronLeft, ChevronRight, CheckCircle, Motorbike } from 'lucide-react'
 
-interface CreditTransaction {
-  id: number
-  transaction_type: string
-  amount: number
-  description: string
-  created_at: string
-}
-
-type Tab = 'deliveries' | 'rider_hailing' | 'credits'
+type Tab = 'deliveries' | 'rider_hailing'
 
 const ITEMS_PER_PAGE = 10
 
@@ -28,15 +20,9 @@ export default function RiderHistory() {
     queryFn: () => get<{ data: Delivery[] }>('/rider/deliveries/completed'),
   })
 
-  const { data: creditsData, isLoading: creditsLoading } = useQuery({
-    queryKey: ['rider-credits-transactions'],
-    queryFn: () => get<CreditTransaction[]>('/rider/credits/transactions'),
-  })
-
   const deliveries = deliveriesData?.data ?? []
-  const credits = creditsData ?? []
 
-  const tabItems: (Delivery | CreditTransaction)[] = tab === 'deliveries' ? deliveries : tab === 'credits' ? credits : []
+  const tabItems: Delivery[] = tab === 'deliveries' ? deliveries : []
   const totalPages = Math.ceil(tabItems.length / ITEMS_PER_PAGE)
   const paginated = tabItems.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE)
 
@@ -45,35 +31,13 @@ export default function RiderHistory() {
     setPage(1)
   }
 
-  const getCreditLabel = (type: string) => {
-    switch (type) {
-      case 'CREDIT_TOPUP': return 'Credit Top-up'
-      case 'COD_RESERVE': return 'COD Reserved'
-      case 'COD_RELEASE': return 'COD Released'
-      case 'CREDIT_ADJUSTMENT': return 'Adjustment'
-      default: return type
-    }
-  }
-
-  const getCreditColor = (type: string) => {
-    switch (type) {
-      case 'CREDIT_TOPUP':
-      case 'COD_RELEASE':
-        return 'bg-emerald-50 text-emerald-700'
-      case 'COD_RESERVE':
-        return 'bg-amber-50 text-amber-700'
-      default:
-        return 'bg-gray-50 text-gray-700'
-    }
-  }
-
-  if (deliveriesLoading || creditsLoading) return <DashboardSkeleton />
+  if (deliveriesLoading) return <DashboardSkeleton />
 
   return (
     <div>
       <div className="mb-6">
         <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">History</h1>
-        <p className="mt-1 text-sm text-[#6B7280]">Your deliveries and credit transactions</p>
+        <p className="mt-1 text-sm text-[#6B7280]">Your completed deliveries</p>
       </div>
 
       {/* Tabs */}
@@ -99,17 +63,6 @@ export default function RiderHistory() {
         >
           <Motorbike className="w-4 h-4" />
           Rider Hailing
-        </button>
-        <button
-          onClick={() => handleTabChange('credits')}
-          className={`flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold transition ${
-            tab === 'credits'
-              ? 'bg-white text-[#17201B] shadow-sm'
-              : 'text-[#6B7280] hover:text-[#17201B]'
-          }`}
-        >
-          <Coins className="w-4 h-4" />
-          Credits
         </button>
       </div>
 
@@ -146,58 +99,6 @@ export default function RiderHistory() {
                 {deliveries.length === 0 && (
                   <tr>
                     <td colSpan={5} className="px-5 py-12 text-center text-[#9CA3AF]">No completed deliveries yet</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Credits Tab */}
-      {tab === 'credits' && (
-        <div className="bg-white rounded-2xl border border-[#E5E9E7] shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[#E5E9E7] bg-[#F3F8F5]">
-                  <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">Type</th>
-                  <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">Description</th>
-                  <th className="text-right px-5 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">Amount</th>
-                  <th className="text-right px-5 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">Date</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#E5E9E7]">
-                {paginated.map((tx) => {
-                  const creditTx = tx as CreditTransaction
-                  return (
-                    <tr key={tx.id} className="hover:bg-[#F3F8F5] transition-colors">
-                      <td className="px-5 py-3 whitespace-nowrap">
-                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${getCreditColor(creditTx.transaction_type)}`}>
-                          {creditTx.transaction_type === 'COD_RESERVE' ? (
-                            <ArrowUpRight className="w-3 h-3" />
-                          ) : (
-                            <ArrowDownLeft className="w-3 h-3" />
-                          )}
-                          {getCreditLabel(creditTx.transaction_type)}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3 text-[#4B5563]">{creditTx.description}</td>
-                      <td className={`px-5 py-3 text-right font-medium whitespace-nowrap ${
-                        creditTx.transaction_type === 'CREDIT_TOPUP' || creditTx.transaction_type === 'COD_RELEASE'
-                          ? 'text-emerald-600' : 'text-amber-600'
-                      }`}>
-                        {creditTx.transaction_type === 'COD_RESERVE' ? '-' : '+'}₱{Number(creditTx.amount).toFixed(2)}
-                      </td>
-                      <td className="px-5 py-3 text-[#6B7280] text-right whitespace-nowrap">
-                        {new Date(creditTx.created_at).toLocaleDateString()}
-                      </td>
-                    </tr>
-                  )
-                })}
-                {credits.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="px-5 py-12 text-center text-[#9CA3AF]">No credit transactions yet</td>
                   </tr>
                 )}
               </tbody>

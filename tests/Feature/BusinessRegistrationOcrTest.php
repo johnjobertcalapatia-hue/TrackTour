@@ -77,6 +77,10 @@ class BusinessRegistrationOcrTest extends TestCase
 
     public function test_ocr_endpoint_extracts_document_data(): void
     {
+        if (! extension_loaded('gd')) {
+            $this->markTestSkipped('GD extension is required to create fake images.');
+        }
+
         $user = $this->createOwner();
         $file = $this->createTestImage("PERMIT NO: PMT-2026-00123\nBusiness Name: TEST RESTAURANT\nDate Issued: January 15, 2026\nExpiry Date: December 31, 2027");
 
@@ -100,6 +104,10 @@ class BusinessRegistrationOcrTest extends TestCase
 
     public function test_business_created_with_documents_and_ocr_data(): void
     {
+        if (! extension_loaded('gd')) {
+            $this->markTestSkipped('GD extension is required to create fake images.');
+        }
+
         $user = $this->createOwner();
         $category = BusinessCategory::where('name', 'Restaurant')->first();
         $municipality = Municipality::first();
@@ -176,6 +184,10 @@ class BusinessRegistrationOcrTest extends TestCase
 
     public function test_business_with_mismatched_ocr_data_gets_flagged(): void
     {
+        if (! extension_loaded('gd')) {
+            $this->markTestSkipped('GD extension is required to create fake images.');
+        }
+
         $user = $this->createOwner();
         $category = BusinessCategory::where('name', 'Restaurant')->first();
         $municipality = Municipality::first();
@@ -248,6 +260,10 @@ class BusinessRegistrationOcrTest extends TestCase
 
     public function test_ocr_endpoint_rejects_without_auth(): void
     {
+        if (! extension_loaded('gd')) {
+            $this->markTestSkipped('GD extension is required to create fake images.');
+        }
+
         $file = $this->createTestImage("PERMIT NO: TEST-001");
 
         $response = $this->postJson('/api/documents/extract', [

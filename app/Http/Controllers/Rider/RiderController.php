@@ -6,10 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\UserResource;
 use App\Models\BookingDispatchLog;
 use App\Models\Delivery;
-use App\Models\RiderLocation;
 use App\Models\User;
 use App\Services\DeliveryService;
-use App\Services\FirebaseService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -17,7 +15,6 @@ class RiderController extends Controller
 {
     public function __construct(
         private DeliveryService $deliveryService,
-        private FirebaseService $firebase
     ) {}
 
     public function dashboard(Request $request): JsonResponse
@@ -92,13 +89,37 @@ class RiderController extends Controller
             ['current_service' => $newService]
         );
 
-        if ($this->firebase->isConfigured()) {
-            $this->firebase->setRiderStatus($user->id, $user->riderDetail?->rider_status, $newService, $user->municipality_id);
-        }
-
         return $this->successResponse(
             UserResource::make($user->fresh()->load('riderDetail')),
             'Switched to ' . ($newService === 'food' ? 'Food Delivery' : 'Transportation') . ' mode.'
+        );
+    }
+
+    /**
+     * Persist the rider's Auto accept preference.
+     *
+     * This is state ONLY — it never accepts an offer by itself. Acceptance
+     * stays on the canonical atomic path (PATCH /rider/dispatch/accept →
+     * NearestRiderService::handleRiderResponse), which is what still enforces
+     * one active delivery per rider, offer expiry, and COD eligibility.
+     */
+    public function switchAutoAccept(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'auto_accept' => ['required', 'boolean'],
+        ]);
+
+        $user = $request->user();
+        $enabled = (bool) $validated['auto_accept'];
+
+        $user->riderDetail()->updateOrCreate(
+            ['user_id' => $user->id],
+            ['auto_accept' => $enabled]
+        );
+
+        return $this->successResponse(
+            UserResource::make($user->fresh()->load('riderDetail')),
+            $enabled ? 'Auto accept enabled.' : 'Auto accept disabled.'
         );
     }
 
@@ -121,33 +142,11 @@ class RiderController extends Controller
                     'rider_status_updated_at' => now(),
                 ]
             );
-            if ($this->firebase->isConfigured()) {
-                $lastLocation = RiderLocation::where('rider_id', $user->id)
-                    ->latest('recorded_at')
-                    ->first();
-                if ($lastLocation) {
-                    $this->firebase->updateRiderLocation(
-                        $user->id,
-                        (float) $lastLocation->latitude,
-                        (float) $lastLocation->longitude,
-                        null,
-                        null,
-                        $user->riderDetail?->current_service,
-                        $user->municipality_id
-                    );
-                }
-                $this->firebase->setRiderStatus($user->id, User::RIDER_STATUS_AVAILABLE, $user->riderDetail?->current_service ?? 'food', $user->municipality_id);
-                $this->firebase->setOnlineStatus('riders', $user->id, true);
-            }
         } else {
             $user->riderDetail()->updateOrCreate(
                 ['user_id' => $user->id],
                 ['rider_status' => User::RIDER_STATUS_OFFLINE, 'rider_status_updated_at' => now()]
             );
-            if ($this->firebase->isConfigured()) {
-                $this->firebase->removeRider($user->id);
-                $this->firebase->setOnlineStatus('riders', $user->id, false);
-            }
         }
 
         $status = $user->fresh()->riderDetail?->rider_status;
@@ -168,9 +167,6 @@ class RiderController extends Controller
                 ['user_id' => $user->id],
                 ['rider_status' => User::RIDER_STATUS_AVAILABLE, 'rider_status_updated_at' => now()]
             );
-            if ($this->firebase->isConfigured()) {
-                $this->firebase->setRiderStatus($user->id, User::RIDER_STATUS_AVAILABLE, $user->riderDetail?->current_service, $user->municipality_id);
-            }
 
             return $this->successResponse(
                 UserResource::make($user->fresh()->load('riderDetail')),
@@ -183,9 +179,6 @@ class RiderController extends Controller
                 ['user_id' => $user->id],
                 ['rider_status' => User::RIDER_STATUS_ONLINE, 'rider_status_updated_at' => now()]
             );
-            if ($this->firebase->isConfigured()) {
-                $this->firebase->setRiderStatus($user->id, User::RIDER_STATUS_ONLINE, $user->riderDetail?->current_service, $user->municipality_id);
-            }
 
             return $this->successResponse(
                 UserResource::make($user->fresh()->load('riderDetail')),

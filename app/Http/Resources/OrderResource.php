@@ -87,6 +87,7 @@ class OrderResource extends JsonResource
             'preparation_started_at' => $this->preparation_started_at,
             'predicted_ready_at' => $this->predicted_ready_at,
             'food_ready_at' => $this->food_ready_at,
+            'preparation_time' => $this->preparation_time,
             'predicted_preparation_seconds' => $this->predicted_preparation_seconds,
             'prediction_source' => $this->prediction_source,
         ];

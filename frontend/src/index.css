@@ -287,6 +287,25 @@
   animation: rider-bounce 1.5s ease-in-out infinite;
 }
 
+@keyframes rider-auto-accept-slide {
+  0% {
+    transform: translateX(110%);
+    opacity: 0;
+  }
+  60% {
+    transform: translateX(-6px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.rider-auto-accept-slide {
+  animation: rider-auto-accept-slide 0.55s cubic-bezier(0.25, 0.1, 0.25, 1) both;
+}
+
 .map-nav-3d {
   transform: perspective(2000px) rotateX(15deg);
   transform-origin: center bottom;

@@ -8,7 +8,6 @@ use App\Models\BusinessCategory;
 use App\Models\Delivery;
 use App\Models\Municipality;
 use App\Models\Order;
-use App\Models\RiderCredit;
 use App\Models\RiderDetail;
 use App\Models\RiderLocation;
 use App\Models\User;
@@ -55,10 +54,10 @@ class ScheduledDispatchProcessorTest extends TestCase
             'account_status' => 'approved',
         ]);
 
-        $this->app->instance(NearestRiderService::class, new class(app(\App\Services\FirebaseService::class)) extends NearestRiderService {
-            public function __construct($firebase)
+        $this->app->instance(NearestRiderService::class, new class() extends NearestRiderService {
+            public function __construct()
             {
-                parent::__construct($firebase);
+                parent::__construct();
             }
 
             public function findNearestAvailableRiders(float $pickupLat, float $pickupLng, string $serviceType = 'food', int $limit = 5, ?int $municipalityId = null): Collection
@@ -77,10 +76,6 @@ class ScheduledDispatchProcessorTest extends TestCase
 
             public function dispatchToNearest(Delivery $delivery, string $serviceType = 'food', ?int $municipalityId = null): ?User
             {
-                $order = $delivery->order;
-                $isCod = strtolower((string) ($order?->payment_method ?? '')) === 'cash';
-                $requiredCredit = (float) ($order?->rider_financed_amount ?? $order?->subtotal ?? 0);
-
                 $riders = User::where('role', User::ROLE_RIDER)
                     ->where('account_status', User::ACCOUNT_STATUS_APPROVED)
                     ->whereHas('riderDetail', fn ($q) => $q
@@ -88,15 +83,18 @@ class ScheduledDispatchProcessorTest extends TestCase
                         ->where('current_service', $serviceType))
                     ->with(['locations' => fn ($q) => $q->latest('recorded_at')->limit(1)])
                     ->get()
-                    ->filter(function (User $rider) use ($isCod, $requiredCredit) {
+                    ->filter(function (User $rider) {
                         $location = $rider->locations->first();
                         if (! $location?->latitude || ! $location?->longitude) {
                             return false;
                         }
-                        if ($isCod && ! $this->mockCodCreditEligible($rider, $requiredCredit)) {
-                            return false;
-                        }
-                        return true;
+                        $detail = $rider->riderDetail;
+                        $activeLimit = (int) ($detail?->active_order_limit ?: config('delivery.cod_active_order_limit', 2));
+                        $activeOrders = Delivery::where('rider_id', $rider->id)
+                            ->whereIn('status', NearestRiderService::COD_ACTIVE_STATUSES)
+                            ->count();
+
+                        return $activeOrders < $activeLimit;
                     })
                     ->sortBy('id');
 
@@ -127,22 +125,6 @@ class ScheduledDispatchProcessorTest extends TestCase
                 $delivery->update(['dispatch_status' => 'no_rider_available']);
 
                 return null;
-            }
-
-            private function mockCodCreditEligible(User $rider, float $requiredCredit): bool
-            {
-                $detail = $rider->riderDetail;
-                if (! $detail) {
-                    return false;
-                }
-
-                $usable = app(\App\Services\RiderCreditService::class)->getUsableCredits($rider->id);
-                $activeLimit = (int) ($detail->active_order_limit ?: config('delivery.cod_active_order_limit', 2));
-                $activeOrders = Delivery::where('rider_id', $rider->id)
-                    ->whereIn('status', NearestRiderService::COD_ACTIVE_STATUSES)
-                    ->count();
-
-                return $usable >= $requiredCredit && $activeOrders < $activeLimit;
             }
         });
 
@@ -200,12 +182,6 @@ class ScheduledDispatchProcessorTest extends TestCase
             'recorded_at' => now(),
         ]);
 
-        RiderCredit::create([
-            'rider_id' => $rider->id,
-            'total_credits' => $totalCredits,
-            'reserved_credits' => 0,
-            'minimum_reserve' => $minReserve,
-        ]);
 
         return $rider;
     }
@@ -347,23 +323,21 @@ class ScheduledDispatchProcessorTest extends TestCase
         $this->assertSame(0, BookingDispatchLog::where('delivery_id', $delivery->id)->count());
     }
 
-    public function test_cod_rider_with_insufficient_credit_is_excluded(): void
+    public function test_cod_dispatch_is_credit_free_and_ignores_wallet_balance(): void
     {
         $business = $this->makeBusiness('Sched E');
-        $poorRider = $this->makeRider('poor-sched@example.com', 100, 500); // usable 0.
-        $richRider = $this->makeRider('rich-sched@example.com', 10000, 200); // usable 9800.
+        $zeroCreditRider = $this->makeRider('poor-sched@example.com', 0, 0); // no wallet/credit — still eligible.
         $order = $this->makeOrder($business, ['payment_method' => 'cash', 'rider_financed_amount' => 300.00]);
         $delivery = $this->makeScheduledDelivery($order, now()->subMinute());
 
         $this->assertSame(1, $this->processor->process());
 
         $delivery->refresh();
-        $this->assertSame('notified', $delivery->dispatch_status);
+        $this->assertSame('notified', $delivery->dispatch_status, 'A zero-balance rider is still offered a COD trip.');
 
         $logs = BookingDispatchLog::where('delivery_id', $delivery->id)->get();
-        $this->assertCount(1, $logs, 'Only the credit-worthy rider receives the offer.');
-        $this->assertSame($richRider->id, $logs->first()->rider_id);
-        $this->assertSame(0, $logs->where('rider_id', $poorRider->id)->count());
+        $this->assertCount(1, $logs, 'The credit-free candidate list offers the nearest rider.');
+        $this->assertSame($zeroCreditRider->id, $logs->first()->rider_id);
     }
 
     public function test_multiple_due_deliveries_are_processed_independently(): void

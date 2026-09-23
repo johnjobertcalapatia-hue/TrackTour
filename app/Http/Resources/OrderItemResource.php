@@ -11,11 +11,14 @@ class OrderItemResource extends JsonResource
     {
         return [
             'id' => $this->id,
+            'business_id' => $this->business_id,
+            'business' => new BusinessResource($this->whenLoaded('business')),
             'offering' => new OfferingResource($this->whenLoaded('offering')),
             'product_name' => $this->product_name,
             'quantity' => $this->quantity,
             'unit_price' => $this->unit_price,
             'total_price' => $this->subtotal,
+            'preparation_time' => $this->preparation_time,
             'special_notes' => $this->notes,
             'status' => $this->status ?? 'pending',
             'accepted_at' => $this->accepted_at,

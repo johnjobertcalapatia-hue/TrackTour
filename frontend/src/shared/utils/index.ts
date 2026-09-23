@@ -100,7 +100,7 @@ export function getRoleDashboardPath(role: string): string {
     tourist: '/tourist/dashboard',
     business_owner: '/business-owner/dashboard',
     staff: '/staff/dashboard',
-    rider: '/rider',
+    rider: '/rider/map',
     bansud_tourism_office: '/admin/dashboard',
     tourism_office: '/tourism-office/dashboard',
   }

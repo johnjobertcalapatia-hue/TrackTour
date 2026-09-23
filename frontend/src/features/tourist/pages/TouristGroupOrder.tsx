@@ -23,6 +23,8 @@ import { resolveSubOrderStatus } from '../utils/subOrderStatusEngine'
 
 interface GroupItem {
   id: number
+  business_id?: number | null
+  business?: { id: number; name: string; address?: string } | null
   product_name: string
   quantity: number
   unit_price: number
@@ -78,6 +80,14 @@ interface GroupCheckoutData {
   notes?: string | null
   created_at: string
   orders: GroupOrder[]
+  delivery?: {
+    id: number
+    status: string
+    dispatch_status?: string | null
+    pickup_address?: string | null
+    delivery_address?: string | null
+    rider?: { id: number; name: string; profile?: { photo?: string } } | null
+  } | null
 }
 
 const GROUP_STATUS_LABELS: Record<string, string> = {
@@ -199,7 +209,7 @@ export default function TouristGroupOrder() {
             <p className="text-sm font-semibold text-[#17201B]">{formatCurrency(group.subtotal)}</p>
           </div>
           <div>
-            <p className="text-xs text-[#6B7280]">Delivery Total</p>
+            <p className="text-xs text-[#6B7280]">Shared Delivery</p>
             <p className="text-sm font-semibold text-[#17201B]">{formatCurrency(group.delivery_total)}</p>
           </div>
           <div>
@@ -237,17 +247,45 @@ export default function TouristGroupOrder() {
         </div>
       </div>
 
-      {/* Per-restaurant Orders */}
+      {group.delivery ? (
+        <div className="bg-white border border-[#E5E9E7] rounded-2xl px-5 py-4 mb-6 flex flex-wrap items-center gap-3 text-sm">
+          {group.delivery.status === 'delivered' || group.delivery.status === 'completed' ? (
+            <CheckCircle2 className="w-4 h-4 text-[#087F3F] shrink-0" />
+          ) : (
+            <Truck className="w-4 h-4 text-[#087F3F] shrink-0" />
+          )}
+          <span className="font-semibold text-[#17201B]">Shared delivery</span>
+          <span className="text-[#6B7280] capitalize">{ORDER_STATUS_LABELS[group.delivery.status] || group.delivery.status}</span>
+          {group.delivery.dispatch_status === 'no_rider_available' && (
+            <span className="text-amber-600 text-xs flex items-center gap-1">
+              <Clock className="w-3 h-3" /> Finding rider...
+            </span>
+          )}
+          {group.delivery.rider ? (
+            <span className="flex items-center gap-1.5 text-xs text-[#6B7280] sm:ml-auto">
+              <Phone className="w-3 h-3" />
+              Rider: {group.delivery.rider.name || 'Rider'}
+            </span>
+          ) : null}
+          <Link
+            to={`/tourist/food/order/${group.orders[0]?.id}/status`}
+            className="text-xs font-semibold text-[#087F3F] hover:text-[#056B35] underline underline-offset-2 sm:ml-2"
+          >
+            Track shared delivery →
+          </Link>
+        </div>
+      ) : null}
+
+      {/* Restaurant fulfillment groups within the shared order */}
       <div className="space-y-6">
         {group.orders.map((order, orderIdx) => {
           const biz = order.business
-          const delivery = order.delivery
-          const riderName = delivery?.rider?.name || null
+          const riderName = group.delivery?.rider?.name || null
 
           const resolution = resolveSubOrderStatus({
             orderStatus: order.status,
-            deliveryStatus: delivery?.status,
-            dispatchStatus: delivery?.dispatch_status,
+            deliveryStatus: group.delivery?.status,
+            dispatchStatus: group.delivery?.dispatch_status,
             riderName: riderName,
             subOrderTotal: order.total,
             paymentMethod: order.payment_method || group.payment_method || 'cash',
@@ -265,7 +303,7 @@ export default function TouristGroupOrder() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <p className="font-bold text-[#17201B] truncate">
-                        SUB-ORDER {subOrderLetter}: {biz?.name || `Restaurant #${order.business?.id ?? ''}`}
+                        {biz?.name || `Restaurant #${order.business?.id ?? ''}`} fulfillment
                       </p>
                       {riderName && (
                         <span className="text-xs bg-[#E9F7EF] text-[#087F3F] font-semibold px-2.5 py-0.5 rounded-full">
@@ -273,7 +311,7 @@ export default function TouristGroupOrder() {
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-[#6B7280] mt-0.5">Order #{order.order_number}</p>
+                    <p className="text-xs text-[#6B7280] mt-0.5">Items in shared order {group.reference_number}</p>
                   </div>
                 </div>
                 <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold shrink-0 ${statusBadgeClass(order.status)}`}>
@@ -374,10 +412,6 @@ export default function TouristGroupOrder() {
                   <span className="text-[#6B7280]">Subtotal</span>
                   <span className="font-medium text-[#17201B]">{formatCurrency(order.subtotal)}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-[#6B7280]">Delivery Fee</span>
-                  <span className="font-medium text-[#087F3F]">{order.delivery_fee > 0 ? formatCurrency(order.delivery_fee) : 'Free'}</span>
-                </div>
                 {(order.refunded_amount ?? 0) > 0 && (
                   <div className="flex justify-between">
                     <span className="text-red-500">Refunded</span>
@@ -390,34 +424,6 @@ export default function TouristGroupOrder() {
                 </div>
               </div>
 
-              {delivery ? (
-                <div className={`px-5 py-3 border-t flex items-center gap-3 text-sm ${order.status === 'delivered' || order.status === 'completed' ? 'bg-[#F0Faf3]' : 'bg-[#F8FAF9]'}`}>
-                  {delivery.status === 'delivered' ? (
-                    <CheckCircle2 className="w-4 h-4 text-[#087F3F] shrink-0" />
-                  ) : (
-                    <Truck className="w-4 h-4 text-[#087F3F] shrink-0" />
-                  )}
-                  <span className="text-[#17201B] font-medium">Delivery</span>
-                  <span className="text-[#6B7280] capitalize">{ORDER_STATUS_LABELS[delivery.status] || delivery.status}</span>
-                  {delivery.dispatch_status === 'no_rider_available' && (
-                    <span className="text-amber-600 text-xs flex items-center gap-1 ml-auto">
-                      <Clock className="w-3 h-3" /> Finding rider...
-                    </span>
-                  )}
-                  {delivery.rider ? (
-                    <span className="ml-auto flex items-center gap-1.5 text-xs text-[#6B7280]">
-                      <Phone className="w-3 h-3" />
-                      {delivery.rider.name || 'Rider'}
-                    </span>
-                  ) : null}
-                  <Link
-                    to={`/tourist/food/order/${order.id}/status`}
-                    className="ml-auto text-xs font-semibold text-[#087F3F] hover:text-[#056B35] underline underline-offset-2"
-                  >
-                    Track Delivery →
-                  </Link>
-                </div>
-              ) : null}
             </div>
           )
         })}

@@ -28,3 +28,25 @@ We chose a **Dedicated Node.js Socket.IO Server (`socket-server.js`)**:
 ## Consequences
 - Requires running and supervising a Node.js background process alongside the PHP/Apache server.
 - WebSockets require token verification logic in both Node.js and PHP.
+
+## Amendment (2026-09-23) — Firebase fully removed
+
+The remaining Firebase Realtime Database mirrors were deleted rather than
+merely disabled:
+
+```text
+app/Services/FirebaseService.php  → deleted
+config/firebase.php               → deleted
+firebase.rules.json, FIREBASE_RULES.md → deleted
+FIREBASE_* / VITE_FIREBASE_*      → removed from .env
+```
+
+Removed call sites: rider availability toggle / switch-service / logout mirrors,
+dispatch `createRiderRequest`/`createBookingRequest`, offer accept/decline/timeout
+cleanup, cancellation release mirror, guide trip start/location/end nodes, chat
+broadcast, and the `/rider/map` `firebase_config` payload.
+
+Authoritative state was never in Firebase (ADR 003), so no behavior moved:
+MySQL + `WebsocketNotifierService` remain the canonical sources. The
+`users.firebase_uid` column was left in place (nullable, unwritten) as a
+deferred schema cleanup.

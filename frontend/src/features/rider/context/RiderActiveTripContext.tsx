@@ -77,6 +77,7 @@ export function useRiderActiveTrip(): RiderActiveTripContextValue {
 export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.user)
+  const fetchUser = useAuthStore((state) => state.fetchUser)
   const [riderPosition, setRiderPositionState] = useState<[number, number]>([12.8667, 121.45])
   const [arrivalAlert, setArrivalAlert] = useState<ArrivalAlertKind>(null)
   const lastAlertStatus = useRef<string | null>(null)
@@ -132,6 +133,22 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
     const list = data?.deliveries ?? []
     return list.find((d) => ACTIVE_STATUSES.includes(d.status)) as TripDelivery | null
   }, [data])
+
+  // Trip-end reconciliation: whenever an active trip disappears from the
+  // authoritative poll (cancelled, completed, or settled elsewhere), the
+  // backend has already released rider_status — so re-sync the store from
+  // the server instead of assuming it. HTTP is the sanctioned recovery path
+  // (the socket `trip_cancelled` listener is the low-latency twin of this).
+  const hadActiveTripRef = useRef(false)
+  useEffect(() => {
+    if (activeDelivery) {
+      hadActiveTripRef.current = true
+      return
+    }
+    if (!hadActiveTripRef.current) return
+    hadActiveTripRef.current = false
+    void fetchUser()
+  }, [activeDelivery, fetchUser])
 
   const nearPickup =
     activeDelivery?.pickup_lat != null && activeDelivery?.pickup_lng != null

@@ -61,6 +61,11 @@ class GroupCheckout extends Model
         return $this->hasMany(Order::class, 'group_order_id');
     }
 
+    public function order(): HasOne
+    {
+        return $this->hasOne(Order::class, 'group_order_id');
+    }
+
     /**
      * One group checkout -> ONE physical delivery (UNIQUE deliveries.group_checkout_id).
      */

@@ -73,6 +73,7 @@ class Order extends Model
         'actual_preparation_seconds',
         'prediction_error_seconds',
         'prediction_source',
+        'preparation_time',
         'dispatch_scheduled_at',
         'dispatch_started_at',
         'selected_rider_id',
@@ -117,6 +118,7 @@ class Order extends Model
             'predicted_preparation_seconds' => 'integer',
             'actual_preparation_seconds' => 'integer',
             'prediction_error_seconds' => 'integer',
+            'preparation_time' => 'integer',
             'rider_eta_seconds' => 'integer',
             'pickup_buffer_seconds' => 'integer',
         ];
@@ -125,6 +127,17 @@ class Order extends Model
     public function business(): BelongsTo
     {
         return $this->belongsTo(Business::class);
+    }
+
+    public function isManagedBy(User $user): bool
+    {
+        if ($this->business?->owner_id === $user->id) {
+            return true;
+        }
+
+        return $this->items()
+            ->whereHas('business', fn ($query) => $query->where('owner_id', $user->id))
+            ->exists();
     }
 
     public function groupOrder(): BelongsTo
@@ -150,19 +163,10 @@ class Order extends Model
         return $this->hasOne(Delivery::class);
     }
 
-    /**
-     * The delivery trip that fulfills this order.
-     *
-     * Standalone orders use their own delivery; restaurant sub-orders of a
-     * group checkout ride on the group's single physical delivery.
-     */
+    /** The single delivery trip that fulfills this order. */
     public function activeDelivery(): ?Delivery
     {
-        if ($this->group_order_id !== null) {
-            return $this->groupOrder?->delivery;
-        }
-
-        return $this->delivery;
+        return $this->delivery ?? $this->groupOrder?->delivery;
     }
 
     public function settlement(): HasOne
@@ -173,11 +177,8 @@ class Order extends Model
     /**
      * A rider has accepted the delivery trip for this order.
      *
-     * The P11.2 contract requires an accepted/assigned rider before the
-     * restaurant may start preparing: dispatch is scheduled as soon as the
-     * order enters `waiting_restaurant`, and preparation is gated on the
-     * rider's acceptance. Group sub-orders resolve their prep gate through
-     * the group's single delivery (4.2, 4.4).
+    * The P11.2 contract requires an accepted/assigned rider before any
+    * restaurant item in this order may start preparing.
      */
     public function hasAcceptedRider(): bool
     {
@@ -227,11 +228,6 @@ class Order extends Model
         return $this->hasMany(RiderEarning::class);
     }
 
-    public function riderCreditTransactions()
-    {
-        return $this->hasMany(RiderCreditTransaction::class);
-    }
-
     /**
      * Calculate the system fee (configurable percentage of food subtotal, default 10%).
      */
@@ -268,9 +264,10 @@ class Order extends Model
      * - If all active items are 'ready' -> 'ready' (READY_FOR_PICKUP) & trigger smart dispatch.
      * - If at least one active item is actually 'preparing' -> 'preparing' (the kitchen is cooking).
      * - Otherwise, if at least one active item is 'accepted' -> 'accepted'. Merely-accepted or
-     *   still-pending items (e.g. siblings left by an acceptItem/rejectItem action) must NEVER
-     *   authorize 'preparing' on their own — a reject is a refusal, not a cooking action, and a
-     *   single item acceptance does not start the kitchen (P11.6).
+     *   still-pending items (e.g. a sibling rejected through the item-status endpoint, or one
+     *   accepted while another stays pending) must NEVER authorize 'preparing' on their own — a
+     *   reject is a refusal, not a cooking action, and a single item acceptance does not start
+     *   the kitchen (P11.6).
      */
     public function refreshStatusFromItems(): void
     {

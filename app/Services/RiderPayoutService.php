@@ -61,9 +61,7 @@ class RiderPayoutService
      * UNIQUE active_payout_key index is the DB backstop for that rule. The
      * pivot UNIQUE violation is translated from a raw 500 into a 409 as well.
      *
-     * Both COD-sourced and prepaid-sourced earnings are equally drawable here.
-     * The rider's credit wallet (rider_credits) is a SEPARATE financing ledger
-     * and is never touched by a payout.
+    * Both COD-sourced and prepaid-sourced earnings are equally drawable here.
      */
     public function requestPayout(User $rider): RiderPayout
     {

@@ -14,6 +14,7 @@ const schema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
   description: z.string().optional(),
   price: z.coerce.number().min(0, 'Price must be positive'),
+  preparation_time: z.coerce.number().min(0, 'Must be 0 or more').max(240, 'Max 240 minutes').optional().or(z.literal('')),
   compare_price: z.coerce.number().min(0).optional().or(z.literal('')),
   offering_category_id: z.coerce.number().min(1, 'Category is required'),
   is_available: z.boolean(),
@@ -54,6 +55,7 @@ export default function BusinessOwnerMenuCreate() {
       is_available: true,
       is_featured: false,
       compare_price: '' as any,
+      preparation_time: '' as any,
     },
   })
 
@@ -84,6 +86,7 @@ export default function BusinessOwnerMenuCreate() {
       payload.append('name', formData.name)
       if (formData.description) payload.append('description', formData.description)
       payload.append('price', String(formData.price))
+      if (formData.preparation_time) payload.append('preparation_time', String(formData.preparation_time))
       if (formData.compare_price) payload.append('compare_price', String(formData.compare_price))
       payload.append('offering_category_id', String(formData.offering_category_id))
       payload.append('is_available', formData.is_available ? '1' : '0')
@@ -205,6 +208,13 @@ export default function BusinessOwnerMenuCreate() {
                   <input {...register('compare_price')} type="number" step="0.01" className="w-full px-4 py-3 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition" placeholder="Original price" />
                   <p className="text-xs text-[#647067] mt-1">Set a higher original price to show customers how much they save. Leave empty if not on sale.</p>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-[#4B5563] mb-1.5">Preparation Time (minutes)</label>
+                <input {...register('preparation_time')} type="number" min="0" max="240" placeholder="e.g. 30" className="w-full px-4 py-3 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition" />
+                <p className="text-xs text-[#647067] mt-1">How long the kitchen takes to prepare this dish. Drives the order preparation countdown.</p>
+                {errors.preparation_time && <p className="text-[#B91C1C] text-xs mt-1">{errors.preparation_time.message}</p>}
               </div>
 
               {discountPct > 0 && (

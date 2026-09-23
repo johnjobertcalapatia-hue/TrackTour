@@ -23,6 +23,7 @@ export interface User {
   updated_at: string
   rider_status?: 'offline' | 'online' | 'available' | 'busy'
   current_service?: 'food' | 'transport' | null
+  auto_accept?: boolean
   rider_rating?: number
 }
 
@@ -87,6 +88,23 @@ export interface Booking {
   updated_at: string
 }
 
+/** A single food line inside an order (OrderItemResource payload). */
+export interface OrderItem {
+  id: number
+  business_id?: number
+  product_name: string
+  quantity: number
+  unit_price: number
+  /** Line total (subtotal) — server field is `total_price`. */
+  total_price?: number
+  preparation_time?: number | null
+  status?: string
+  accepted_at?: string | null
+  preparation_started_at?: string | null
+  ready_at?: string | null
+  special_notes?: string | null
+}
+
 export interface Order {
   id: number
   order_number: string
@@ -98,9 +116,25 @@ export interface Order {
   notes: string | null
   created_at: string
   updated_at: string
+  order_type?: string | null
+  customer_email?: string | null
+  customer_phone?: string | null
+  delivery_address?: string | null
+  subtotal?: number | null
+  delivery_fee?: number | null
+  discount?: number | null
+  /** OrderResource exposes the order notes as `special_instructions`. */
+  special_instructions?: string | null
+  items?: OrderItem[]
   group_order_id?: number | null
   group_reference_number?: string | null
   group_paid?: boolean
+  rider_tip?: number | string | null
+  delivery_speed?: string | null
+  preparation_time?: number | null
+  preparation_started_at?: string | null
+  predicted_ready_at?: string | null
+  food_ready_at?: string | null
 }
 
 export interface Event {

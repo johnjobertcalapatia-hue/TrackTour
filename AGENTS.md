@@ -20,7 +20,7 @@ The system includes:
     
 - Rider dispatch
     
-- Rider wallet / credits
+- Rider earnings / payouts
     
 - PayMongo payments
     
@@ -129,38 +129,31 @@ The backend creates:
 
 - one `group_checkouts` record
     
-- one `orders` record per restaurant
+- one canonical `orders` record for the checkout
     
-- order items belonging to that restaurant's order
+- order items carrying their restaurant `business_id`
     
-- one independent delivery per restaurant order
+- one delivery for the canonical order
     
-- an independent rider for each delivery
+- one rider for the shared delivery
     
 
 Example:
 
 ```text
 Group Checkout
-│
-├── Order A
-│   ├── Restaurant A items
-│   └── Delivery A
-│       └── Rider A
-│
-└── Order B
+        │
+        ▼
+    One Order
+    ├── Restaurant A items
     ├── Restaurant B items
-    └── Delivery B
-        └── Rider B
+    └── One Delivery → One Rider
 ```
 
-Never create one `orders` row per item.
+Never create one `orders` row per restaurant or item for a group checkout.
 
-Each restaurant has one independent restaurant order containing its own items.
-
-Restaurant fulfillment is independent.
-
-If Restaurant A has no rider, Restaurant A must not block Restaurant B from proceeding.
+Each restaurant fulfills only its own item group inside the canonical order.
+Restaurant preparation may progress independently, but all restaurants share the same accepted rider, pickup route, delivery fee, and tourist drop-off.
 
 ---
 
@@ -168,22 +161,20 @@ If Restaurant A has no rider, Restaurant A must not block Restaurant B from proc
 
 This is a mandatory business rule.
 
-A restaurant must NOT begin preparing an order until a rider has successfully accepted that restaurant's delivery.
+A restaurant must NOT begin preparing its items until the shared order delivery has been accepted by a rider.
 
 Correct lifecycle:
 
 ```text
 Tourist places order
-        ↓
-Restaurant order created
-        ↓
-Delivery created
-        ↓
+    ↓
+One order and one delivery created
+    ↓
 Rider dispatched/offered
-        ↓
-Rider accepts delivery
-        ↓
-Restaurant may prepare
+    ↓
+Rider accepts shared delivery
+    ↓
+All participating restaurants may prepare their own items
         ↓
 Restaurant marks items/order ready
         ↓
@@ -290,7 +281,7 @@ Restaurant A's preparation gate must resolve only from Restaurant A's accepted r
 
 # 5. COD Financial Rules
 
-## 5.1 Rider Credit vs COD Cash
+## 5.1 COD Cash vs Rider Earnings
 
 These are different financial concepts.
 
@@ -298,10 +289,6 @@ These are different financial concepts.
 COD Cash
     =
 physical cash paid by tourist to rider
-
-Rider Credit
-    =
-TrackTour wallet balance used to finance COD settlement
 
 Rider Earnings
     =
@@ -314,34 +301,26 @@ The rider does NOT remit the COD cash to TrackTour under the current architectur
 
 Do not treat COD cash as rider earnings.
 
-Do not deduct rider payout from rider credit.
-
 Do not deduct COD cash from rider earnings.
 
 ---
 
-## 5.2 Protected Rider Reserve
+## 5.2 COD Is Credit-Free
 
-The protected reserve is:
+COD is financed by physical cash paid by the tourist to the rider. There is no prepaid rider-credit wallet:
 
 ```text
-₱200
+rider_credits            → removed
+rider_credit_transactions→ removed
+rider_top_ups            → removed
+deliveries.cod_credit_reserved → removed
 ```
 
-It is NOT:
+Dispatch must not check, reserve, or deduct a rider wallet balance for COD eligibility.
 
-- usable delivery credit
-    
-- COD financing credit
-    
-- `reserved_credit`
-    
-- deductible for COD settlement
-    
+Use the current credit-free `getCodEligibility()` in `NearestRiderService`.
 
-Usable credit is calculated according to the established rider-credit implementation.
-
-Do not modify the protected-reserve rule without an explicit architectural decision.
+Do not reintroduce a credit wallet, a protected reserve, `reserved_credit`, or `available_working_credit` without an explicit architectural decision.
 
 ---
 
@@ -368,11 +347,9 @@ The settlement base must be the actual rider-financed/reserved amount.
 Authoritative invariant:
 
 ```text
-delivery.cod_credit_reserved
-    =
 order.rider_financed_amount
     =
-actual rider-credit deduction
+settlement base
     =
 restaurant share + Tourism Office share
 ```
@@ -392,9 +369,7 @@ Examples:
 ₱1000 → Restaurant ₱800 + Tourism Office ₱200
 ```
 
-Do not deduct rider credit twice.
-
-The existing `RiderCredit::finalize()` already performs the rider-credit deduction. New settlement functionality must not duplicate that deduction.
+The existing `CodSettlementService` performs the settlement allocation once. New settlement functionality must not duplicate that allocation or reintroduce a rider-credit deduction.
 
 ---
 
@@ -560,7 +535,7 @@ The socket server must NOT become authoritative for:
     
 - COD settlement
     
-- rider credit
+- rider earnings
     
 - payouts
     
@@ -764,8 +739,6 @@ Rider eligibility includes the established requirements such as:
 - valid required documents
     
 - appropriate service eligibility
-    
-- sufficient usable credit for COD
     
 
 A rider may receive offers but can accept only one active delivery.
@@ -1019,7 +992,7 @@ Admin Phase 3 — Rider Operations Monitoring
 
 Admin Phase 4 — Financial Monitoring
     [ ] COD settlements dashboard (restaurant 80 / tourism office 20)
-    [ ] Rider credit & protected reserve visibility (never mutable)
+    [ ] CodSettlement / rider-earnings / payout read-only views
     [ ] Payments, refunds, payouts read-only views
     [ ] System-fee / COD receivable reporting
     [ ] Tests: financial totals accuracy, no mutation of money state
@@ -1055,9 +1028,7 @@ Unless a proven defect requires it, do not rewrite:
 
 - COD settlement
     
-- rider credit deduction
-    
-- protected reserve
+- credit-free COD eligibility
     
 - rider acceptance gate
     
@@ -1080,21 +1051,14 @@ Prefer targeted fixes over architectural rewrites.
 
 # 17. Deferred Low-Priority Item
 
-The following is intentionally deferred:
+The former `rider_credit_transactions` ledger and its `delivery_id` field have
+been removed with the credit-free COD architecture (AGENTS.md §5.2).
 
-```text
-rider_credit_transactions.delivery_id
-```
-
-Currently the ledger records `order_id`.
-
-Because:
+The delivery is deterministically reconstructable from the order because:
 
 ```text
 deliveries.order_id = UNIQUE
 ```
-
-the delivery is deterministically reconstructable from the order.
 
 Additionally:
 
@@ -1104,7 +1068,7 @@ cod_settlements.delivery_id
 
 already provides an explicit settlement-level delivery reference.
 
-Treat this as a LOW-priority audit enhancement.
+Treat any ledger-delivery audit enhancement as LOW priority.
 
 Do not expand unrelated financial work merely to add this field.
 
@@ -1185,17 +1149,30 @@ before introducing a new behavior.
 Complete:
 
 ```text
-Admin Module Phase 1 — Foundation
+Dispatch Reliability P0–P3 — COMPLETE & VERIFIED (2026-09-23)
+    P0 — Operational recovery / scheduler running
+    P1 — B1 radar eligibility consistency (COD active-order policy on the radar path)
+    P2 — B2 live socket GPS freshness (radar entry ≤ 120 s = socket radarStaleMs)
+    P3 — 60-minute dispatch deadline, no silent dead ends,
+         observable dispatch_end_reason, §57/§58 diagnostics
 ```
 
-Starting regression checkpoint:
+Verified checkpoint (full record: docs/PROGRESS.md):
 
 ```text
-305 tests
-1,479 assertions
-0 failures
-2 skipped
-43/43 JS socket tests
+381 tests / 1,846 assertions / 0 failures / 7 skipped (Laravel)
+46/46 socket JS tests · frontend build clean
+protected regression suites: 56 passed / 454 assertions
+7 skipped = known environment skips (5 GD, 2 SQLite-only)
+migration 2026_09_23_000001 applied + write-probed
 ```
 
-Admin Phase 1 must establish the canonical Tourism Office governance surface: shared admin layout, RBAC gating on admin API routes, audit-trail recording, and read-only operational KPIs — while preserving the existing financial, dispatch, preparation-gate, payment, refund, payout, GPS, and realtime architecture (monitor/verify/approve/audit only).
+Next phase — deliberately deferred by decision:
+
+```text
+P4 — Pickup geofence
+P5 — Grouped pickup/routing
+P6 — Multi-rider wave policy
+```
+
+Dispatch reliability is finished; pickup/routing features (P4–P6) are the next phase. The original "rider never received the ping" failure was eligibility + retry lifecycle, NOT the Socket.IO transport — preserve that diagnosis for future ping reports. The Admin module plan (§15) is unchanged scope for a later track.

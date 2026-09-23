@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Delivery;
 use App\Models\Order;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 class TransportationService
 {
@@ -85,53 +86,64 @@ class TransportationService
         $passengerCount = (int) ($data['passenger_count'] ?? 1);
         $riderCommission = max(20, $fare * 0.4);
 
-        $order = Order::create([
-            'order_number' => 'TRP-'.strtoupper(uniqid()),
-            'business_id' => 1,
-            'customer_name' => Auth::user()->fullName,
-            'customer_email' => Auth::user()->email,
-            'customer_phone' => $data['customer_phone'] ?? null,
-            'order_type' => 'delivery',
-            'payment_method' => $data['payment_method'] ?? 'cash',
-            'status' => 'pending',
-            'subtotal' => $fare,
-            'delivery_fee' => 0,
-            'discount' => 0,
-            'total' => $fare,
-            'paid_amount' => 0,
-        ]);
-
-        $order->items()->create([
-            'description' => 'Ride: '.ucfirst($vehicleType).' ('.$passengerCount.' pax)',
-            'quantity' => 1,
-            'price' => $fare,
-            'subtotal' => $fare,
-        ]);
-
         $ridePin = str_pad(random_int(1000, 9999), 4, '0', STR_PAD_LEFT);
 
-        $delivery = Delivery::create([
-            'order_id' => $order->id,
-            'status' => 'waiting',
-            'dispatch_status' => 'waiting_for_rider',
-            'pickup_address' => $data['pickup_address'] ?? '',
-            'pickup_latitude' => $data['pickup_lat'],
-            'pickup_longitude' => $data['pickup_lng'],
-            'delivery_address' => $data['destination_address'] ?? '',
-            'delivery_latitude' => $data['destination_lat'],
-            'delivery_longitude' => $data['destination_lng'],
-            'rider_commission' => $riderCommission,
-            'notes' => json_encode([
-                'vehicle_type' => $vehicleType,
-                'passenger_count' => $passengerCount,
-                'estimated_distance_km' => $data['distance_km'] ?? 0,
-                'estimated_duration_min' => $data['duration_min'] ?? 0,
-                'booking_notes' => $data['booking_notes'] ?? '',
-                'ride_pin' => $ridePin,
+        // Order + item + delivery must commit atomically: the item insert and the
+        // delivery row are both required for the ride to reach dispatch, and a
+        // partial failure previously left an orphaned order behind.
+        [$order, $delivery] = DB::transaction(function () use ($data, $fare, $vehicleType, $passengerCount, $riderCommission, $ridePin) {
+            $order = Order::create([
+                'order_number' => 'TRP-'.strtoupper(uniqid()),
+                'business_id' => 1,
+                'customer_name' => Auth::user()->fullName,
+                'customer_email' => Auth::user()->email,
+                'customer_phone' => $data['customer_phone'] ?? null,
+                // 'transport' is the value every consumer already expects:
+                // validateRiderAcceptance() and redispatchIfOffered() derive the
+                // gated service from it, and TransportController/HistoryController
+                // filter ride history on it.
+                'order_type' => 'transport',
                 'payment_method' => $data['payment_method'] ?? 'cash',
-                'fare' => $fare,
-            ]),
-        ]);
+                'status' => 'pending',
+                'subtotal' => $fare,
+                'delivery_fee' => 0,
+                'discount' => 0,
+                'total' => $fare,
+                'paid_amount' => 0,
+            ]);
+
+            $order->items()->create([
+                'product_name' => 'Ride: '.ucfirst($vehicleType).' ('.$passengerCount.' pax)',
+                'quantity' => 1,
+                'unit_price' => $fare,
+                'subtotal' => $fare,
+            ]);
+
+            $delivery = Delivery::create([
+                'order_id' => $order->id,
+                'status' => 'waiting',
+                'dispatch_status' => 'waiting_for_rider',
+                'pickup_address' => $data['pickup_address'] ?? '',
+                'pickup_latitude' => $data['pickup_lat'],
+                'pickup_longitude' => $data['pickup_lng'],
+                'delivery_address' => $data['destination_address'] ?? '',
+                'delivery_latitude' => $data['destination_lat'],
+                'delivery_longitude' => $data['destination_lng'],
+                'rider_commission' => $riderCommission,
+                'notes' => json_encode([
+                    'vehicle_type' => $vehicleType,
+                    'passenger_count' => $passengerCount,
+                    'estimated_distance_km' => $data['distance_km'] ?? 0,
+                    'estimated_duration_min' => $data['duration_min'] ?? 0,
+                    'booking_notes' => $data['booking_notes'] ?? '',
+                    'ride_pin' => $ridePin,
+                    'payment_method' => $data['payment_method'] ?? 'cash',
+                    'fare' => $fare,
+                ]),
+            ]);
+
+            return [$order, $delivery];
+        });
 
         try {
             $this->dispatchService->dispatchToNearest($delivery, 'transport');

@@ -8,7 +8,6 @@ use App\Models\Delivery;
 use App\Models\RiderLocation;
 use App\Models\TripLog;
 use App\Models\User;
-use App\Services\FirebaseService;
 use App\Services\GpsService;
 use App\Services\LocationPersistenceService;
 use App\Services\PolylineEncoder;
@@ -20,12 +19,11 @@ use Illuminate\Support\Facades\DB;
 class TripTrackingController extends Controller
 {
     public function __construct(
-        private FirebaseService $firebase,
         private LocationPersistenceService $persistence,
     ) {}
 
     /**
-     * Start a trip - create Firebase tracking nodes and assignments
+     * Start a trip - mark it active in the database
      * POST /api/trips/{trip}/start
      */
     public function start(Delivery $trip): JsonResponse
@@ -56,7 +54,7 @@ class TripTrackingController extends Controller
         }
 
         try {
-            DB::transaction(function () use ($trip, $guide, $tourist) {
+            DB::transaction(function () use ($trip, $guide) {
                 $trip->update([
                     'status' => TripStatus::TOUR_STARTED->value,
                     'started_at' => now(),
@@ -66,50 +64,6 @@ class TripTrackingController extends Controller
                     ['user_id' => $guide->id],
                     ['rider_status' => User::RIDER_STATUS_BUSY, 'rider_status_updated_at' => now()]
                 );
-
-                if ($this->firebase->isConfigured()) {
-                    $ts = now()->timestamp;
-                    $bid = $trip->order?->business_id;
-
-                    $this->firebase->update([
-                        "assignments/{$guide->id}/{$tourist->firebase_uid}" => [
-                            'trip' => $trip->id,
-                            'bid' => $trip->order_id,
-                            'guide' => $guide->id,
-                            'tuser' => $tourist->id,
-                            'start' => $ts,
-                            'status' => 'active',
-                            'ts' => $ts,
-                        ],
-                        "active_trackings/{$trip->id}" => [
-                            'guide' => $guide->id,
-                            'tuid' => $tourist->firebase_uid,
-                            'bid' => $trip->order_id,
-                            'status' => TripStatus::TOUR_STARTED->value,
-                            'start' => $ts,
-                            'plat' => $trip->pickup_latitude,
-                            'plng' => $trip->pickup_longitude,
-                            'dlat' => $trip->delivery_latitude,
-                            'dlng' => $trip->delivery_longitude,
-                            'ts' => $ts,
-                        ],
-                        "riders/{$guide->id}" => array_filter([
-                            'lat' => $trip->pickup_latitude,
-                            'lng' => $trip->pickup_longitude,
-                            'status' => TripStatus::TOUR_STARTED->value,
-                            'svc' => $guide->riderDetail?->current_service,
-                            'hb' => 1,
-                            'ts' => $ts,
-                        ]),
-                        "active_guides/{$guide->id}" => array_filter([
-                            'trip' => $trip->id,
-                            'bid' => $bid,
-                            'status' => TripStatus::TOUR_STARTED->value,
-                            'start' => $ts,
-                            'ts' => $ts,
-                        ]),
-                    ]);
-                }
             });
 
             return response()->json([
@@ -119,8 +73,6 @@ class TripTrackingController extends Controller
                     'trip_id' => $trip->id,
                     'status' => TripStatus::TOUR_STARTED->value,
                     'guide_id' => $guide->id,
-                    'tourist_uid' => $tourist->firebase_uid,
-                    'tracking_path' => "riders/{$guide->id}",
                 ],
             ]);
         } catch (\Exception $e) {
@@ -188,45 +140,6 @@ class TripTrackingController extends Controller
             ]);
         }
 
-        // Update Firebase atomically
-        if ($this->firebase->isConfigured()) {
-            $trip->increment('location_sequence');
-            $seq = $trip->location_sequence;
-            $ts = now()->timestamp;
-            $dts = $request->input('device_time', $ts);
-
-            $this->firebase->update([
-                "riders/{$guide->id}" => array_filter([
-                    'lat' => $lat,
-                    'lng' => $lng,
-                    'hdg' => $heading,
-                    'spd' => $speed,
-                    'acc' => $accuracy,
-                    'svc' => $guide->riderDetail?->current_service,
-                    'mun' => $guide->municipality_id,
-                    'seq' => $seq,
-                    'hb' => $seq,
-                    'status' => $trip->status,
-                    'ts' => $ts,
-                    'dts' => $dts,
-                ], fn ($v) => $v !== null),
-                "active_trackings/{$trip->id}" => array_filter([
-                    'lat' => $lat,
-                    'lng' => $lng,
-                    'hdg' => $heading,
-                    'spd' => $speed,
-                    'acc' => $accuracy,
-                    'status' => $trip->status,
-                    'seq' => $seq,
-                    'ts' => $ts,
-                ], fn ($v) => $v !== null),
-                "active_guides/{$guide->id}" => [
-                    'status' => $trip->status,
-                    'ts' => $ts,
-                ],
-            ]);
-        }
-
         return response()->json([
             'success' => true,
             'message' => 'Location updated.',
@@ -234,7 +147,7 @@ class TripTrackingController extends Controller
     }
 
     /**
-     * End a trip - clean up Firebase nodes and assignments
+     * End a trip - mark it completed in the database
      * POST /api/trips/{trip}/end
      */
     public function end(Delivery $trip): JsonResponse
@@ -256,10 +169,8 @@ class TripTrackingController extends Controller
             ], 422);
         }
 
-        $tourist = $trip->order?->customer;
-
         try {
-            DB::transaction(function () use ($trip, $guide, $tourist) {
+            DB::transaction(function () use ($trip, $guide) {
                 $trip->update([
                     'status' => TripStatus::COMPLETED->value,
                     'delivered_at' => now(),
@@ -269,24 +180,6 @@ class TripTrackingController extends Controller
                     ['user_id' => $guide->id],
                     ['rider_status' => User::RIDER_STATUS_AVAILABLE, 'rider_status_updated_at' => now()]
                 );
-
-                if ($this->firebase->isConfigured()) {
-                    $ts = now()->timestamp;
-
-                    $updates = [
-                        "active_trackings/{$trip->id}" => null,
-                        "active_guides/{$guide->id}" => null,
-                        "riders/{$guide->id}/status" => 'available',
-                        "riders/{$guide->id}/svc" => $guide->riderDetail?->current_service,
-                        "riders/{$guide->id}/ts" => $ts,
-                    ];
-
-                    if ($tourist) {
-                        $updates["assignments/{$guide->id}/{$tourist->firebase_uid}"] = null;
-                    }
-
-                    $this->firebase->update($updates);
-                }
 
                 // Compress route history into encoded polyline
                 $this->storeTripLog($trip, $guide);
@@ -311,7 +204,7 @@ class TripTrackingController extends Controller
     }
 
     /**
-     * Get tracking info for frontend (guide ID + Firebase path)
+     * Get tracking info for frontend (guide ID + tracking path)
      * GET /api/trips/{trip}/tracking
      */
     public function tracking(Delivery $trip): JsonResponse
@@ -352,13 +245,11 @@ class TripTrackingController extends Controller
                 'guide' => [
                     'id' => $guide->id,
                     'name' => $guide->name,
-                    'firebase_uid' => $guide->firebase_uid,
                     'photo' => $guide->profile?->photo_url,
                     'vehicle' => $guide->riderDetail?->vehicle_type,
                     'plate_number' => $guide->riderDetail?->vehicle_plate_number,
                 ],
                 'tracking' => [
-                    'path' => "riders/{$guide->id}",
                     'guide_id' => $guide->id,
                 ],
                 'pickup' => [

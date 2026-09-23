@@ -18,6 +18,10 @@ return [
     'cod_max_pickup_distance_km' => (float) env('COD_MAX_PICKUP_DISTANCE_KM', 5.00),
     'cod_location_max_age_minutes' => (int) env('COD_LOCATION_MAX_AGE_MINUTES', 5),
     'cod_active_order_limit' => (int) env('COD_ACTIVE_ORDER_LIMIT', 2),
+    // B2 (Option C, master spec §14): a live socket-radar entry is trusted as
+    // the GPS freshness source only when the rider reported within this window.
+    // Mirrors socket-validation.js LIMITS.radarStaleMs (2 minutes).
+    'radar_location_max_age_seconds' => (int) env('DISPATCH_RADAR_MAX_AGE_SECONDS', 120),
     'order_size' => [
         // P5.2 basic order-size classification. Deliberately quantity-based and
         // lightweight (no weights/dimensions). An order is 'large' when its live
@@ -29,10 +33,16 @@ return [
     ],
     'scheduler' => [
         // Total allowed attempts = 1 initial + max_retries retries.
-        'max_retries' => (int) env('DISPATCH_MAX_RETRIES', 4),
+        // Default sized so the retry loop can span the full dispatch cycle:
+        // 1 + 11 attempts x 5 min ~= 60 min = dispatch_deadline_minutes.
+        'max_retries' => (int) env('DISPATCH_MAX_RETRIES', 11),
         'retry_after_minutes' => (int) env('DISPATCH_RETRY_AFTER_MINUTES', 5),
         // A 'dispatching' claim older than this is treated as a crashed worker
         // and safely re-claimed by the next scheduler run.
         'claim_timeout_minutes' => (int) env('DISPATCH_CLAIM_TIMEOUT_MINUTES', 5),
+        // Master spec §17: the whole dispatch cycle (every retry, every wave)
+        // is bounded by dispatch_started_at + this deadline. On expiry the
+        // delivery terminally fails with dispatch_end_reason.
+        'dispatch_deadline_minutes' => (int) env('DISPATCH_DEADLINE_MINUTES', 60),
     ],
 ];

@@ -56,6 +56,8 @@ interface OrderData {
     longitude?: number
   }
   items?: Array<{
+    business_id?: number | null
+    business?: { id: number; name: string; address?: string; latitude?: number; longitude?: number }
     product_name: string
     quantity: number
     unit_price: number
@@ -98,6 +100,15 @@ interface OrderStatusResponse {
     token: string
     role: string
   } | null
+  pickup_stops?: Array<{
+    business_id: number
+    business_name: string
+    address?: string | null
+    latitude?: number | null
+    longitude?: number | null
+    item_count: number
+    ready_item_count: number
+  }>
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -201,13 +212,29 @@ function num(v: number | string | null | undefined): number | null {
   return Number.isFinite(n) && n !== 0 ? n : null
 }
 
-function LiveTrackingMap({ delivery, riderLocation }: {
+function LiveTrackingMap({ delivery, pickupStops, riderLocation }: {
   delivery: OrderData['delivery']
+  pickupStops: NonNullable<OrderStatusResponse['pickup_stops']>
   riderLocation: OrderStatusResponse['rider_location']
 }) {
-  const pickup = delivery && num(delivery.pickup_latitude) != null && num(delivery.pickup_longitude) != null
-    ? [num(delivery.pickup_latitude)!, num(delivery.pickup_longitude)!] as [number, number]
-    : null
+  const stops = pickupStops.length > 0
+    ? pickupStops.map((stop) => ({
+        ...stop,
+        position: stop.latitude != null && stop.longitude != null
+          ? [stop.latitude, stop.longitude] as [number, number]
+          : null,
+      })).filter((stop) => stop.position !== null)
+    : delivery && num(delivery.pickup_latitude) != null && num(delivery.pickup_longitude) != null
+      ? [{
+          business_id: 0,
+          business_name: delivery.pickup_address || 'Restaurant',
+          address: delivery.pickup_address,
+          item_count: 0,
+          ready_item_count: 0,
+          position: [num(delivery.pickup_latitude)!, num(delivery.pickup_longitude)!] as [number, number],
+        }]
+      : []
+  const pickup = stops[0]?.position ?? null
   const destination = delivery && num(delivery.delivery_latitude) != null && num(delivery.delivery_longitude) != null
     ? [num(delivery.delivery_latitude)!, num(delivery.delivery_longitude)!] as [number, number]
     : null
@@ -240,11 +267,11 @@ function LiveTrackingMap({ delivery, riderLocation }: {
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         />
         <RecenterMap />
-        {pickup && (
-          <Marker position={pickup} icon={pickupIcon}>
-            <Popup>Pickup · {delivery?.pickup_address || 'Restaurant'}</Popup>
+        {stops.map((stop, index) => (
+          <Marker key={stop.business_id || index} position={stop.position!} icon={pickupIcon}>
+            <Popup>Pickup {index + 1} · {stop.business_name}</Popup>
           </Marker>
-        )}
+        ))}
         {destination && (
           <Marker position={destination} icon={deliveryDestIcon}>
             <Popup>Delivery · {delivery?.delivery_address || 'Your location'}</Popup>
@@ -307,7 +334,8 @@ export default function TouristOrderStatus() {
   const isActive = order != null && !['delivered', 'completed', 'rejected', 'cancelled', 'cancelled_by_tourist', 'pending_payment'].includes(order.status)
   const canCancel = order?.status === 'waiting_restaurant'
   const isCod = (order?.payment_method || 'cash') === 'cash'
-  const restaurantName = order?.business?.name ?? 'the restaurant'
+  const pickupStops = response?.pickup_stops ?? []
+  const restaurantName = pickupStops.length > 1 ? 'the restaurant pickup route' : (order?.business?.name ?? 'the restaurant')
   const rider = delivery?.rider ?? null
   const deliveryStatus = delivery?.status ?? null
   const hasRider = !!rider || (deliveryStatus != null && ['assigned', 'en_route_pickup', 'arrived_pickup', 'picked_up', 'in_transit', 'en_route_destination', 'arrived_destination'].includes(deliveryStatus))
@@ -549,11 +577,11 @@ export default function TouristOrderStatus() {
               </span>
             </div>
             <p className="text-sm text-[#6B7280] mb-3">
-              {['on_the_way', 'out_for_delivery'].includes(order.status)
+              {['on_the_way', 'out_for_delivery', 'in_transit', 'picked_up'].includes(order.status)
                 ? `${rider.name} is on the way to you`
-                : `${rider.name} is heading to ${restaurantName}`}
+                : `${rider.name} is visiting ${pickupStops.length || 1} pickup location${pickupStops.length === 1 ? '' : 's'}`}
             </p>
-            <LiveTrackingMap delivery={delivery} riderLocation={trackingLocation} />
+            <LiveTrackingMap delivery={delivery} pickupStops={pickupStops} riderLocation={trackingLocation} />
           </div>
         )}
 
@@ -562,7 +590,7 @@ export default function TouristOrderStatus() {
           <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6">
             <div className="flex items-center gap-2 mb-4">
               <Store className="w-5 h-5 text-[#087F3F]" />
-              <h2 className="text-lg font-semibold text-[#17201B]">{restaurantName}</h2>
+              <h2 className="text-lg font-semibold text-[#17201B]">Order Items</h2>
             </div>
 
             {/* Order Items */}
@@ -582,6 +610,7 @@ export default function TouristOrderStatus() {
                 </div>
                   <div className="flex-1">
                     <p className="text-sm text-[#17201B]">{item.product_name}</p>
+                    {item.business?.name && <p className="text-xs text-[#087F3F]">{item.business.name}</p>}
                     <p className="text-xs text-[#6B7280]">Qty: {item.quantity}</p>
                   </div>
                   <span className="text-sm font-medium text-[#17201B]">{formatCurrency(item.unit_price * item.quantity)}</span>
@@ -645,8 +674,12 @@ export default function TouristOrderStatus() {
                       <Store className="w-4 h-4 text-[#F4B400]" />
                     </div>
                     <div>
-                      <p className="text-xs text-[#6B7280] mb-0.5">Pickup</p>
-                      <p className="text-sm text-[#17201B]">{delivery?.pickup_address || order.business?.address || 'Restaurant'}</p>
+                      <p className="text-xs text-[#6B7280] mb-0.5">Pickup route</p>
+                      <div className="space-y-1">
+                        {(pickupStops.length > 0 ? pickupStops : [{ business_name: delivery?.pickup_address || order.business?.address || 'Restaurant', address: delivery?.pickup_address || order.business?.address }]).map((stop, index) => (
+                          <p key={`${stop.business_name}-${index}`} className="text-sm text-[#17201B]">{index + 1}. {stop.business_name}{stop.address && stop.address !== stop.business_name ? ` · ${stop.address}` : ''}</p>
+                        ))}
+                      </div>
                     </div>
                   </div>
                   <div className="flex items-start gap-3">

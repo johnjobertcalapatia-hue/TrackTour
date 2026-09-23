@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import * as maplibregl from 'maplibre-gl'
+import 'maplibre-gl/dist/maplibre-gl.css'
 import { ArrowUp, Search, Volume2, VolumeX, GitFork } from 'lucide-react'
 
 interface ActiveNavigationMapProps {

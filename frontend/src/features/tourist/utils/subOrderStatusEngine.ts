@@ -2,7 +2,7 @@
  * TrackTour — Customer UI Architecture: Sub-Status Message Matrix Engine
  *
  * Resolves the 5-step progress stages and dynamic customer messaging for multi-restaurant
- * group order sub-orders as well as single restaurant checkout tracking.
+ * restaurant fulfillment groups within a shared order as well as single-restaurant tracking.
  *
  * Progress Stages (1 to 5):
  * 1. Placed
@@ -102,8 +102,8 @@ export function resolveSubOrderStatus(input: SubOrderInput): SubOrderStatusResol
       stepIndex: -1,
       stepLabel: 'Cancelled',
       statusMessage: orderStatus === 'rejected'
-        ? 'The restaurant was unable to accept this sub-order.'
-        : 'This sub-order has been cancelled.',
+        ? 'The restaurant was unable to accept these items.'
+        : 'These restaurant items have been cancelled.',
       stageCondition: 'CANCELLED',
       payoutText,
       isCancelled: true,

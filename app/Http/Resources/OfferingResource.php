@@ -25,6 +25,7 @@ class OfferingResource extends JsonResource
             'name' => $this->name,
             'description' => $this->description,
             'price' => $this->price,
+            'preparation_time' => $this->preparation_time,
             'compare_price' => $this->compare_price,
             'unit' => $this->unit,
             'stock' => $this->stock,
