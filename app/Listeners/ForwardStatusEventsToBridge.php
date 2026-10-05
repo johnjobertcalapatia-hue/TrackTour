@@ -50,8 +50,8 @@ class ForwardStatusEventsToBridge
 
         $rooms = ['rider:'.$event->rider->id, 'trip:'.$delivery->id];
 
-        if ($order->business_id) {
-            $rooms[] = 'business:'.$order->business_id;
+        foreach ($this->businessIdsForOrder($order) as $businessId) {
+            $rooms[] = 'business:'.$businessId;
         }
 
         if ($order->user_id) {
@@ -64,6 +64,7 @@ class ForwardStatusEventsToBridge
         $data['user_id'] = $order->user_id;
         $data['rider_id'] = $event->rider->id;
         $data['trip'] = "trip:{$delivery->id}";
+        $data['business_ids'] = $this->businessIdsForOrder($order);
 
         return [$rooms, $data];
     }
@@ -75,8 +76,8 @@ class ForwardStatusEventsToBridge
 
         $rooms = [];
 
-        if ($order->business_id) {
-            $rooms[] = 'business:'.$order->business_id;
+        foreach ($this->businessIdsForOrder($order) as $businessId) {
+            $rooms[] = 'business:'.$businessId;
         }
 
         if ($order->user_id) {
@@ -96,6 +97,7 @@ class ForwardStatusEventsToBridge
         $data['user_id'] = $order->user_id;
         $data['delivery_id'] = $delivery?->id;
         $data['rider_id'] = $delivery?->rider_id;
+        $data['business_ids'] = $this->businessIdsForOrder($order);
 
         return [$rooms, $data];
     }
@@ -112,10 +114,10 @@ class ForwardStatusEventsToBridge
             $rooms[] = 'rider:'.$delivery->rider_id;
         }
 
-        // Fan out to every restaurant whose order rides on the shared trip.
+        // Fan out to every restaurant represented by the shared order items.
         foreach ($orders as $order) {
-            if ($order->business_id) {
-                $rooms[] = 'business:'.$order->business_id;
+            foreach ($this->businessIdsForOrder($order) as $businessId) {
+                $rooms[] = 'business:'.$businessId;
             }
         }
 
@@ -129,5 +131,21 @@ class ForwardStatusEventsToBridge
         $data['rider_id'] = $delivery->rider_id;
 
         return [$rooms, $data];
+    }
+
+    private function businessIdsForOrder($order): array
+    {
+        $ids = $order->items()
+            ->whereNotNull('business_id')
+            ->distinct()
+            ->pluck('business_id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+
+        if ($ids === [] && $order->business_id) {
+            $ids[] = (int) $order->business_id;
+        }
+
+        return array_values(array_unique($ids));
     }
 }

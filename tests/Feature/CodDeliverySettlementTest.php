@@ -11,8 +11,6 @@ use App\Models\Municipality;
 use App\Models\Offering;
 use App\Models\Order;
 use App\Models\Payment;
-use App\Models\RiderCredit;
-use App\Models\RiderCreditTransaction;
 use App\Models\RiderDetail;
 use App\Models\RiderEarning;
 use App\Models\RiderLocation;
@@ -179,13 +177,6 @@ class CodDeliverySettlementTest extends TestCase
             'recorded_at' => now(),
         ]);
 
-        // Fund the wallet: 10,000 total with a 200 protected reserve.
-        RiderCredit::create([
-            'rider_id' => $rider->id,
-            'total_credits' => 10000,
-            'reserved_credits' => 0,
-            'minimum_reserve' => 200,
-        ]);
 
         return $rider;
     }
@@ -237,8 +228,8 @@ class CodDeliverySettlementTest extends TestCase
             ]],
         ]));
 
-        $orderA = $group->orders()->where('business_id', $this->restaurantA->id)->first()->load('items');
-        $orderB = $group->orders()->where('business_id', $this->restaurantB->id)->first()->load('items');
+        $orderA = $group->orders()->sole()->load('items');
+        $orderB = $orderA;
 
         $this->assertSame('cash', $orderA->payment_method);
         $this->assertSame('pending', $orderA->payment_status, 'COD order unpaid until cash collected.');
@@ -246,10 +237,9 @@ class CodDeliverySettlementTest extends TestCase
         // ---- Step 2: ONE shared physical delivery, dispatched at creation ----
         $delivery = $group->fresh()->delivery;
         $this->assertNotNull($delivery, 'The group owns exactly one physical delivery.');
-        $this->assertNull($delivery->order_id, 'Group delivery is not bound to a single restaurant order.');
+        $this->assertSame($orderA->id, $delivery->order_id, 'The shared delivery references the canonical order.');
         $this->assertSame($group->id, $delivery->group_checkout_id);
-        $this->assertNull($orderA->fresh()->delivery, 'Order A has no per-restaurant delivery.');
-        $this->assertNull($orderB->fresh()->delivery, 'Order B has no per-restaurant delivery.');
+        $this->assertSame($delivery->id, $orderA->fresh()->activeDelivery()?->id);
 
         $dispatchLog = BookingDispatchLog::where('delivery_id', $delivery->id)
             ->where('response', 'pending')->first();
@@ -275,21 +265,14 @@ class CodDeliverySettlementTest extends TestCase
         $this->assertSame('assigned', $delivery->status->value);
         $this->assertSame($this->riderA->id, $delivery->rider_id);
         $this->assertEquals((float) $group->grand_total, (float) $delivery->cash_due, 'cash_due = group grand total (cash on hand).');
-        $this->assertEquals(0.0, (float) $delivery->cod_credit_reserved, 'No credit reserve (credit-free COD).');
         $this->assertSame('busy', $this->riderA->fresh()->riderDetail->rider_status);
-        $this->assertEquals(0.0, (float) $this->riderA->fresh()->riderCredit->reserved_credits, 'Wallet never reserved.');
-        $this->assertSame(0, RiderCreditTransaction::where('rider_id', $this->riderA->id)->count(), 'No wallet ledger writes.');
 
         // ---- Step 5: both restaurants mark ready independently ----
-        $this->setItemStatus($orderB, 'Pizza', 'ready');
-        $this->setItemStatus($orderB, 'Pasta', 'ready');
-        $this->invokeRefreshOrderStatus($orderB);
-        $orderB->refresh();
-        $this->assertSame('ready', $orderB->status);
-
         $this->setItemStatus($orderA, 'Burger', 'ready');
         $this->setItemStatus($orderA, 'Fries', 'ready');
         $this->setItemStatus($orderA, 'Coke', 'ready');
+        $this->setItemStatus($orderA, 'Pizza', 'ready');
+        $this->setItemStatus($orderA, 'Pasta', 'ready');
         $this->invokeRefreshOrderStatus($orderA);
         $orderA->refresh();
         $this->assertSame('ready', $orderA->status);
@@ -341,7 +324,6 @@ class CodDeliverySettlementTest extends TestCase
 
         $this->assertSame('completed', $delivery->status->value);
         $this->assertNotNull($delivery->cash_settled_at);
-        $this->assertEquals(0.0, (float) $delivery->cod_credit_reserved);
 
         $this->assertSame('paid', $orderA->payment_status);
         $this->assertSame('paid', $orderB->payment_status);
@@ -350,36 +332,26 @@ class CodDeliverySettlementTest extends TestCase
         $this->assertNotNull($orderA->completed_at);
         $this->assertNotNull($orderB->completed_at);
 
-        // One cod_settlement row per restaurant on the shared trip.
+        // One cod_settlement row for the canonical order on the shared trip.
         $settlementA = CodSettlement::where('order_id', $orderA->id)->first();
-        $settlementB = CodSettlement::where('order_id', $orderB->id)->first();
+        $settlementB = CodSettlement::where('order_id', $orderA->id)
+            ->where('business_id', $this->restaurantB->id)->first();
         $this->assertNotNull($settlementA);
         $this->assertNotNull($settlementB);
-        $this->assertNotSame($settlementA->id, $settlementB->id);
         $this->assertSame($delivery->id, $settlementA->delivery_id);
         $this->assertSame($delivery->id, $settlementB->delivery_id);
-        $this->assertEquals(round((float) $orderA->rider_financed_amount, 2), (float) $settlementA->settlement_base);
-        $this->assertEquals(round((float) $orderB->rider_financed_amount, 2), (float) $settlementB->settlement_base);
 
         // One cash payment per restaurant order.
         $paymentA = Payment::where('payable_type', Order::class)->where('payable_id', $orderA->id)
             ->where('method', 'cash')->where('status', 'paid')->first();
-        $paymentB = Payment::where('payable_type', Order::class)->where('payable_id', $orderB->id)
-            ->where('method', 'cash')->where('status', 'paid')->first();
         $this->assertNotNull($paymentA);
-        $this->assertNotNull($paymentB);
         $this->assertEquals((float) $orderA->total, (float) $paymentA->amount);
-        $this->assertEquals((float) $orderB->total, (float) $paymentB->amount);
 
-        // Trip commission (40) split across the two restaurant orders; tip shared.
+        // One shared trip creates one rider earning for the canonical order.
         $earningA = RiderEarning::where('rider_id', $this->riderA->id)->where('order_id', $orderA->id)->first();
-        $earningB = RiderEarning::where('rider_id', $this->riderA->id)->where('order_id', $orderB->id)->first();
         $this->assertNotNull($earningA);
-        $this->assertNotNull($earningB);
         $this->assertSame('earned', $earningA->status);
-        $this->assertSame('earned', $earningB->status);
-        $this->assertEquals(round((40.00 / 2) + (float) $orderA->rider_tip, 2), (float) $earningA->total_earning);
-        $this->assertEquals(round((40.00 / 2) + (float) $orderB->rider_tip, 2), (float) $earningB->total_earning);
+        $this->assertEquals(round(40.00 + (float) $orderA->rider_tip, 2), (float) $earningA->total_earning);
 
         // ---- Step 9: overpayment on a second COD trip (change returned) ----
         $group2 = $this->groupService->createGroup($this->owner, $this->basePayload([
@@ -387,7 +359,7 @@ class CodDeliverySettlementTest extends TestCase
                 ['offering_id' => $coke->id, 'quantity' => 1, 'notes' => null],
             ]],
         ]));
-        $order2 = $group2->orders()->where('business_id', $this->restaurantA->id)->first();
+        $order2 = $group2->orders()->sole();
 
         $delivery2 = $group2->fresh()->delivery;
         $result2 = $this->dispatchService()->handleRiderResponse($delivery2->id, $this->riderA->id, 'accepted');
@@ -408,12 +380,9 @@ class CodDeliverySettlementTest extends TestCase
 
         $this->assertSame('paid', $order2->payment_status);
 
-        // Rider free again; the wallet was never involved end-to-end.
+        // Rider free again after the single cash settlement.
         $this->assertSame('available', $this->riderA->fresh()->riderDetail->rider_status);
-        $this->assertEquals(10000.00, (float) $this->riderA->fresh()->riderCredit->total_credits, 'Wallet untouched.');
-        $this->assertEquals(0.0, (float) $this->riderA->fresh()->riderCredit->reserved_credits);
-        $this->assertSame(0, RiderCreditTransaction::where('rider_id', $this->riderA->id)->count(), 'Zero wallet ledger writes in the credit-free model.');
-        $this->assertSame(3, CodSettlement::count(), 'A + B + order2 settlements.');
+        $this->assertSame(3, CodSettlement::count(), 'Two restaurant allocations + order2 settlement.');
 
         $this->assertSame(2, Delivery::where('status', 'completed')->count());
     }
@@ -432,12 +401,9 @@ class CodDeliverySettlementTest extends TestCase
             ]],
         ]));
 
-        $orderA = $group->orders()->where('business_id', $this->restaurantA->id)->first();
-        $orderB = $group->orders()->where('business_id', $this->restaurantB->id)->first();
-
-        foreach ([$orderA, $orderB] as $order) {
-            $this->acceptRestaurantOrder($order);
-        }
+        $orderA = $group->orders()->sole();
+        $orderB = $orderA;
+        $this->acceptRestaurantOrder($orderA);
 
         // ONE shared delivery, ONE rider for both restaurants.
         $delivery = $group->fresh()->delivery;
@@ -451,13 +417,9 @@ class CodDeliverySettlementTest extends TestCase
 
         // Both restaurants mark ready.
         $this->setItemStatus($orderA, 'Burger', 'ready');
+        $this->setItemStatus($orderA, 'Pizza', 'ready');
         $this->invokeRefreshOrderStatus($orderA);
         $orderA->refresh();
-        $this->assertSame('ready', $orderA->status);
-
-        $this->setItemStatus($orderB->fresh(), 'Pizza', 'ready');
-        $this->invokeRefreshOrderStatus($orderB->fresh());
-        $orderB->refresh();
         $this->assertSame('ready', $orderB->status);
 
         $this->advanceDeliveryToDelivered($delivery);
@@ -479,7 +441,6 @@ class CodDeliverySettlementTest extends TestCase
         $this->assertEquals($cashDue, (float) $delivery->cash_received);
         $this->assertEquals(0.0, (float) $delivery->change_given);
         $this->assertNotNull($delivery->cash_settled_at);
-        $this->assertEquals(0.0, (float) $delivery->cod_credit_reserved);
 
         $this->assertSame('paid', $orderA->payment_status);
         $this->assertSame('paid', $orderB->payment_status);
@@ -511,21 +472,15 @@ class CodDeliverySettlementTest extends TestCase
         $this->assertNotNull($earningB, 'Rider earning recorded at settlement.');
         $this->assertSame('earned', $earningA->status);
         $this->assertSame('earned', $earningB->status);
-        $this->assertEquals(round((40.00 / 2) + (float) $orderA->rider_tip, 2), (float) $earningA->total_earning);
-        $this->assertEquals(round((40.00 / 2) + (float) $orderB->rider_tip, 2), (float) $earningB->total_earning);
-
-        // --- Wallet never involved (credit-free COD) ---
-        $this->assertSame(0, RiderCreditTransaction::where('rider_id', $this->riderA->id)->count(), 'No wallet ledger writes.');
-        $this->assertSame(0, RiderCreditTransaction::count(), 'No rider-credit transactions at all.');
+        $this->assertEquals(round(40.00 + (float) $orderA->rider_tip, 2), (float) $earningA->total_earning);
+        $this->assertEquals(round(40.00 + (float) $orderB->rider_tip, 2), (float) $earningB->total_earning);
 
         $this->assertSame('available', $this->riderA->fresh()->riderDetail->rider_status);
-        $this->assertEquals(0.0, (float) $this->riderA->fresh()->riderCredit->reserved_credits);
-        $this->assertEquals(10000.00, (float) $this->riderA->fresh()->riderCredit->total_credits);
 
-        // Read-only eligibility is unaffected: wallet is informational only.
+        // COD eligibility is CREDIT-FREE: no wallet/reserve is ever consulted.
         $eligibility = $this->dispatchService()->getCodEligibility($this->riderA->fresh());
-        $this->assertEquals(9800.00, (float) $eligibility['available_working_credit']);
         $this->assertTrue($eligibility['cod_eligibility']);
+        $this->assertSame(0, $eligibility['active_orders']);
 
         $this->assertSame(1, Delivery::where('status', 'completed')->count());
     }

@@ -10,7 +10,7 @@ class AdminLiveController extends Controller
 {
     public function deliveries(): JsonResponse
     {
-        $deliveries = Delivery::with(['order', 'rider'])
+        $deliveries = Delivery::with(['order', 'rider', 'codPurchases.business'])
             ->whereIn('status', ['assigned', 'arrived_pickup', 'picked_up', 'in_transit', 'arrived_destination'])
             ->get();
 

@@ -4,7 +4,7 @@ import { useAuthStore } from '@/features/auth/services/auth-store'
 import { post } from '@/shared/services/api'
 import type { User as AppUser } from '@/shared/types'
 import { cn, getInitials } from '@/shared/utils'
-import { ChevronLeft, ChevronRight, ChevronDown, LogOut, Power, User, Settings, Navigation, Star } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronDown, LogOut, Power, User, Settings, Star } from 'lucide-react'
 
 export interface NavItem {
   to: string
@@ -48,7 +48,6 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
   const [expandedSections, setExpandedSections] = useState<Record<number, boolean>>({})
   const [riderOnline, setRiderOnline] = useState(() => user?.rider_status === 'online' || user?.rider_status === 'available')
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
-  const [searchQuery, setSearchQuery] = useState('')
   useEffect(() => {
     if (roleLabel === 'Rider' && user?.rider_status) {
       setRiderOnline(user.rider_status === 'online' || user.rider_status === 'available')
@@ -202,21 +201,6 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
       </div>
     ))
   }
-
-  const bottomItems = sections
-    ? sections.flatMap((section) => section.items)
-    : (navItems ?? [])
-  const riderBottomItems = [
-    bottomItems.find((item) => item.to === '/rider'),
-    {
-      ...bottomItems.find((item) => item.to === '/rider/deliveries/pending'),
-      label: user?.current_service === 'transport' ? 'Bookings' : 'Deliveries',
-    },
-    bottomItems.find((item) => item.to === '/rider/map'),
-    bottomItems.find((item) => item.to === '/rider/wallet'),
-    bottomItems.find((item) => item.to === '/rider/earnings'),
-  ].filter((item): item is NavItem => Boolean(item))
-  const navigationItems = roleLabel === 'Rider' && bottomNavigation ? riderBottomItems : bottomItems
 
   const toggleRiderAvailability = async () => {
     const response = await post<{ rider_status?: string }>('/rider/availability/toggle')
@@ -421,7 +405,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
             'box-border w-full pt-3 px-4 sm:pt-4 lg:pt-4',
             bottomNavigation && 'max-w-[480px] mx-auto',
             bottomNavigation
-              ? 'pb-[calc(96px+env(safe-area-inset-bottom))]'
+              ? 'pb-24'
               : 'pb-5 sm:pb-6 lg:pb-6'
           )}>
             <Suspense fallback={<div />}>
@@ -431,9 +415,9 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
         </main>
       </div>
 
-      {bottomNavigation && roleLabel === 'Rider' && (
+      {bottomNavigation && (
         <div className={cn(
-          'fixed bottom-[80px] left-2 right-2 sm:left-4 sm:right-4 z-[1150] max-w-[480px] mx-auto flex transition-all duration-[1000ms] ease-[cubic-bezier(0.25,0.1,0.25,1)]',
+          'fixed bottom-6 left-2 right-2 sm:left-4 sm:right-4 z-[1150] max-w-[480px] mx-auto flex transition-all duration-[1000ms] ease-[cubic-bezier(0.25,0.1,0.25,1)]',
           riderOnline ? 'justify-start' : 'justify-center'
         )}>
           <button
@@ -461,30 +445,6 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
             )}
           </button>
         </div>
-      )}
-      {bottomNavigation && (
-        <nav className={cn(
-          'fixed bottom-0 left-0 right-0 z-[1100] box-border h-[64px] sm:h-[72px] w-full rounded-none border-x-0 border-b-0 px-2 pt-2 pb-[env(safe-area-inset-bottom)] shadow-2xl',
-          'bg-[#16803C]/95 border-[#126B32] backdrop-blur-md'
-        )}>
-          <div className="relative mx-auto grid h-full w-full max-w-[480px] grid-cols-5 items-stretch">
-          {navigationItems.map((item) => (
-            <Link
-              key={item.to}
-              to={item.to}
-              className={cn(
-                'flex min-w-0 flex-col items-center justify-center gap-0.5 sm:gap-1 rounded-xl px-1 sm:px-2 py-1.5 sm:py-2 text-[10px] sm:text-[11px] font-medium whitespace-nowrap',
-                isActive(item.to)
-                  ? 'bg-white/20 text-white'
-                  : 'text-white hover:bg-white/10'
-              )}
-            >
-              {item.icon && <span className="w-4 h-4 sm:w-5 sm:h-5">{item.icon}</span>}
-              <span>{item.label}</span>
-            </Link>
-          ))}
-          </div>
-        </nav>
       )}
       {bottomNavigation && roleLabel === 'Rider' && (
         <div className="fixed top-3 right-3 z-[1200] flex flex-col items-center gap-1">

@@ -101,7 +101,7 @@ class GroupOrderServiceTest extends TestCase
         ];
     }
 
-    public function test_create_group_creates_one_order_per_restaurant_with_individual_items(): void
+    public function test_create_group_creates_one_order_with_restaurant_owned_items(): void
     {
         $burger = $this->makeOffering($this->restaurantA, 'Burger', 120.00);
         $fries = $this->makeOffering($this->restaurantA, 'Fries', 80.00);
@@ -129,54 +129,52 @@ class GroupOrderServiceTest extends TestCase
 
         $this->assertInstanceOf(GroupCheckout::class, $group);
 
-        $ordersA = $group->orders()->where('business_id', $this->restaurantA->id)->get();
-        $ordersB = $group->orders()->where('business_id', $this->restaurantB->id)->get();
+        $order = $group->orders()->sole()->load('items');
 
-        // Exactly one Order per restaurant.
-        $this->assertCount(1, $ordersA, 'Restaurant A should have exactly one Order.');
-        $this->assertCount(1, $ordersB, 'Restaurant B should have exactly one Order.');
-        $this->assertCount(2, $group->orders()->get(), 'Total Orders should equal number of restaurants.');
+        $this->assertCount(1, $group->orders()->get(), 'The checkout has one canonical order.');
+        $this->assertEquals($this->restaurantA->id, $order->business_id, 'The primary business anchors the order route.');
+        $this->assertCount(5, $order->items, 'All restaurant items belong to the canonical order.');
+        $this->assertSame(
+            [$this->restaurantA->id, $this->restaurantA->id, $this->restaurantA->id, $this->restaurantB->id, $this->restaurantB->id],
+            $order->items->sortBy('id')->pluck('business_id')->values()->all()
+        );
 
-        // Restaurant A order has all three of its items individually, and business_id is set.
-        $orderA = $ordersA->first()->load('items');
-        $this->assertEquals($this->restaurantA->id, $orderA->business_id);
-        $this->assertCount(3, $orderA->items, 'Restaurant A Order should contain all three OrderItems.');
+        // Restaurant A items remain grouped by business_id inside the order.
+        $restaurantAItems = $order->items->where('business_id', $this->restaurantA->id);
+        $this->assertCount(3, $restaurantAItems, 'Restaurant A owns its three items.');
         $this->assertSame(
             ['Burger', 'Fries', 'Coke'],
-            $orderA->items->sortBy('id')->pluck('product_name')->values()->all()
+            $restaurantAItems->sortBy('id')->pluck('product_name')->values()->all()
         );
 
         // Each item keeps its own quantity, price, subtotal and notes.
-        $burgerItem = $orderA->items->firstWhere('product_name', 'Burger');
+        $burgerItem = $order->items->firstWhere('product_name', 'Burger');
         $this->assertSame(2, (int) $burgerItem->quantity);
         $this->assertSame(120.00, (float) $burgerItem->unit_price);
         $this->assertSame(240.00, (float) $burgerItem->subtotal);
         $this->assertSame('No onions', $burgerItem->notes);
         $this->assertEquals($burger->id, $burgerItem->offering_id);
 
-        $friesItem = $orderA->items->firstWhere('product_name', 'Fries');
+        $friesItem = $order->items->firstWhere('product_name', 'Fries');
         $this->assertSame(1, (int) $friesItem->quantity);
         $this->assertSame(80.00, (float) $friesItem->subtotal);
         $this->assertSame('Extra ketchup', $friesItem->notes);
 
-        $cokeItem = $orderA->items->firstWhere('product_name', 'Coke');
+        $cokeItem = $order->items->firstWhere('product_name', 'Coke');
         $this->assertSame(2, (int) $cokeItem->quantity);
         $this->assertSame(50.00, (float) $cokeItem->unit_price);
         $this->assertSame(100.00, (float) $cokeItem->subtotal);
         $this->assertNull($cokeItem->notes);
 
-        // Restaurant B order has two items.
-        $orderB = $ordersB->first()->load('items');
-        $this->assertEquals($this->restaurantB->id, $orderB->business_id);
-        $this->assertCount(2, $orderB->items);
+        // Restaurant B owns its two items in the same order.
+        $restaurantBItems = $order->items->where('business_id', $this->restaurantB->id);
+        $this->assertCount(2, $restaurantBItems);
         $this->assertSame(
             ['Pizza', 'Pasta'],
-            $orderB->items->sortBy('id')->pluck('product_name')->values()->all()
+            $restaurantBItems->sortBy('id')->pluck('product_name')->values()->all()
         );
 
-        // Order subtotals aggregate the restaurant's items.
-        $this->assertSame(420.00, (float) $orderA->subtotal, 'Restaurant A subtotal = 240 + 80 + 100.');
-        $this->assertSame(650.00, (float) $orderB->subtotal, 'Restaurant B subtotal = 400 + 250.');
+        $this->assertSame(1070.00, (float) $order->subtotal, 'The canonical subtotal includes every restaurant item.');
     }
 
     public function test_create_group_groups_items_sharing_same_business_into_one_order(): void

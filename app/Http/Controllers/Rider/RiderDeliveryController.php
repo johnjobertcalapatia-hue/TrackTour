@@ -90,6 +90,16 @@ class RiderDeliveryController extends Controller
                 $updateData[$timestampField] = now();
             }
 
+            // Purchasing-cash gate: a COD delivery may not leave the pickup area
+            // until food from every restaurant has been bought AND collected.
+            if (
+                $newStatus === 'picked_up'
+                && $this->dispatchService->isCodDelivery($locked)
+                && ! app(\App\Services\PurchasingCashService::class)->isFullyCollected($locked)
+            ) {
+                return ['error' => 'not_all_collected'];
+            }
+
             $locked->update($updateData);
 
             $finalStatus = $newStatus;
@@ -125,6 +135,13 @@ class RiderDeliveryController extends Controller
                 'Delivery must be ' . strtoupper(str_replace('_', ' ', $outcome['current'])) .
                 ' before moving to ' . strtoupper(str_replace('_', ' ', $newStatus)) . '.',
                 409
+            );
+        }
+
+        if ($outcome['error'] === 'not_all_collected') {
+            return $this->errorResponse(
+                'Collect food from every restaurant before leaving the pickup area.',
+                422
             );
         }
 

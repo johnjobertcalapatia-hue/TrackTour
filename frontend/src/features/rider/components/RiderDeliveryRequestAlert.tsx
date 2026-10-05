@@ -30,6 +30,9 @@ export interface RiderDeliveryRequestData {
   distance_km?: number | null
   duration_minutes?: number
   items?: ReceiptItem[]
+  stops?: number
+  restaurant_count?: number
+  cod_amount?: number
   expires_in?: number
   initial_timeout?: number
 }

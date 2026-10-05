@@ -18,8 +18,9 @@ use Tests\TestCase;
 
 /**
  * Regression: the restaurant item-rejection/refund flow must refund ONLY the
- * rejected item of the restaurant's child order and leave the sibling items
- * (same restaurant) and the other restaurants' child orders intact.
+ * rejected item's own restaurant line and leave the sibling items (same
+ * restaurant) and the other restaurants' item groups on the canonical order
+ * intact (one-order group-checkout architecture, AGENTS.md §4.1).
  *
  * https://github.com/anomalyco/opencode tracking: BusinessOwnerOrderController::processItemRefund
  * passed (Order, OrderItem, ...) to OrderRefundService::refundCancelledItem(OrderItem, int, ...)
@@ -168,19 +169,19 @@ class GroupItemRejectionRefundTest extends TestCase
     {
         $group = $this->makePaidGroup();
 
-        $orderA = $group->orders()->where('business_id', $this->restaurantA->id)->first()->load('items');
-        $orderB = $group->orders()->where('business_id', $this->restaurantB->id)->first()->load('items');
+        // ONE canonical order carries every restaurant's item group (§4.1).
+        $order = $group->orders()->sole()->load('items');
 
-        $burger = $orderA->items->firstWhere('product_name', 'Burger');
-        $fries = $orderA->items->firstWhere('product_name', 'Fries');
-        $pizza = $orderB->items->firstWhere('product_name', 'Pizza');
+        $burger = $order->items->firstWhere('product_name', 'Burger');
+        $fries = $order->items->firstWhere('product_name', 'Fries');
+        $pizza = $order->items->firstWhere('product_name', 'Pizza');
 
         $this->assertSame('pending', $burger->status);
         $this->assertSame(1, $burger->activeQuantity());
 
         // Restaurant A rejects ONLY the Burger.
         $this->postJson(
-            "/api/business-owner/orders/{$orderA->id}/items/{$burger->id}/reject",
+            "/api/business-owner/orders/{$order->id}/items/{$burger->id}/reject",
             ['reason' => 'Item unavailable'],
             $this->authHeaders($this->ownerA)
         )->assertOk();
@@ -193,13 +194,13 @@ class GroupItemRejectionRefundTest extends TestCase
         $this->assertSame('Item unavailable', $burger->cancellation_reason);
         $this->assertSame($this->ownerA->id, (int) $burger->cancelled_by);
 
-        // Sibling item in the SAME restaurant sub-order remains intact and active.
+        // Sibling item in the SAME restaurant's item group remains intact and active.
         $fries->refresh();
         $this->assertSame('pending', $fries->status);
         $this->assertSame(0, (int) $fries->cancelled_quantity);
         $this->assertSame(1, $fries->activeQuantity());
 
-        // Other restaurant's item is completely untouched.
+        // The other restaurant's item is completely untouched.
         $pizza->refresh();
         $this->assertSame('pending', $pizza->status);
         $this->assertSame(0, (int) $pizza->cancelled_quantity);
@@ -217,10 +218,10 @@ class GroupItemRejectionRefundTest extends TestCase
         $this->assertSame(0, Refund::where('order_item_id', $pizza->id)->count());
         $this->assertSame(1, Refund::count(), 'Only the rejected item produced a refund row.');
 
-        // Restaurant A's sub-order is NOT cancelled (Fries remains active) and
-        // Restaurant B's sub-order is untouched.
-        $this->assertNotSame('cancelled', $orderA->fresh()->status);
-        $this->assertSame('pending_payment', $orderB->fresh()->status);
+        // The canonical order is NOT cancelled (Fries remains active) — the order
+        // stays in its payment-pending state, untouched by the single rejection.
+        $this->assertNotSame('cancelled', $order->fresh()->status);
+        $this->assertSame('pending_payment', $order->fresh()->status);
 
         // The group refund ledger tracks exactly the burger amount.
         $group->refresh();

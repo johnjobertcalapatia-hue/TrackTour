@@ -34,14 +34,22 @@ return new class extends Migration
                 $table->unique('group_checkout_id');
             });
         } else {
-            Schema::table('deliveries', function (Blueprint $table) {
-                $table->dropForeign(['order_id']);
+            $foreignKeys = collect(Schema::getForeignKeys('deliveries'))->pluck('name');
+            $hasGroupAnchor = Schema::hasColumn('deliveries', 'group_checkout_id');
+            Schema::table('deliveries', function (Blueprint $table) use ($foreignKeys, $hasGroupAnchor) {
+                if ($foreignKeys->contains('deliveries_order_id_foreign')) {
+                    $table->dropForeign(['order_id']);
+                }
                 $table->unsignedBigInteger('order_id')->nullable()->change();
-                $table->foreign('order_id')->references('id')->on('orders')->cascadeOnDelete();
+                if (! $foreignKeys->contains('deliveries_order_id_foreign')) {
+                    $table->foreign('order_id')->references('id')->on('orders')->cascadeOnDelete();
+                }
 
-                $table->foreignId('group_checkout_id')->nullable()->after('order_id')
-                    ->constrained('group_checkouts')->cascadeOnDelete();
-                $table->unique('group_checkout_id');
+                if (! $hasGroupAnchor) {
+                    $table->foreignId('group_checkout_id')->nullable()->after('order_id')
+                        ->constrained('group_checkouts')->cascadeOnDelete();
+                    $table->unique('group_checkout_id');
+                }
             });
         }
     }

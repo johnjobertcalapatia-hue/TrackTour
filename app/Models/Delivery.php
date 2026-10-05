@@ -38,11 +38,14 @@ class Delivery extends Model
         'arrived_destination_at',
         'delivered_at',
         'rider_commission',
-        'cod_credit_reserved',
         'cash_due',
         'cash_received',
         'change_given',
         'cash_settled_at',
+        'purchasing_cash',
+        'purchasing_cash_issued_at',
+        'purchasing_cash_issued_by',
+        'purchasing_cash_received_at',
         'route_history',
         'location_sequence',
     ];
@@ -68,11 +71,13 @@ class Delivery extends Model
             'delivery_fee' => 'decimal:2',
             'distance_km' => 'decimal:2',
             'rider_commission' => 'decimal:2',
-            'cod_credit_reserved' => 'decimal:2',
             'cash_due' => 'decimal:2',
             'cash_received' => 'decimal:2',
             'change_given' => 'decimal:2',
             'cash_settled_at' => 'datetime',
+            'purchasing_cash' => 'decimal:2',
+            'purchasing_cash_issued_at' => 'datetime',
+            'purchasing_cash_received_at' => 'datetime',
             'estimated_duration_minutes' => 'integer',
             'route_history' => 'array',
             'status' => TripStatus::class,
@@ -137,5 +142,10 @@ class Delivery extends Model
     public function tripLog(): HasOne
     {
         return $this->hasOne(TripLog::class);
+    }
+
+    public function codPurchases(): HasMany
+    {
+        return $this->hasMany(CodPurchase::class);
     }
 }

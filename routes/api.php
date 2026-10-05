@@ -3,8 +3,8 @@
 use App\Http\Controllers\Admin\AdminAuditLogController;
 use App\Http\Controllers\Admin\AdminBusinessCategoryController;
 use App\Http\Controllers\Admin\AdminBusinessController;
-use App\Http\Controllers\Admin\AdminCreditsController;
 use App\Http\Controllers\Admin\AdminPayoutController;
+use App\Http\Controllers\Admin\AdminPurchasingCashController;
 use App\Http\Controllers\Admin\AdminDashboardController;
 use App\Http\Controllers\Admin\AdminLiveController;
 use App\Http\Controllers\Admin\AdminMapController;
@@ -49,12 +49,12 @@ use App\Http\Controllers\BusinessOwnerReportController;
 use App\Http\Controllers\BusinessOwnerSalesController;
 use App\Http\Controllers\BusinessOwnerStaffController;
 use App\Http\Controllers\Rider\RiderController;
-use App\Http\Controllers\Rider\RiderCreditController;
 use App\Http\Controllers\Rider\RiderDeliveryController;
 use App\Http\Controllers\Rider\RiderDispatchController;
 use App\Http\Controllers\Rider\RiderPayoutController;
 use App\Http\Controllers\Rider\RiderMapController;
 use App\Http\Controllers\Rider\RiderProfileController;
+use App\Http\Controllers\Rider\RiderPurchasingController;
 use App\Http\Controllers\StaffMenuController;
 use App\Http\Controllers\TourismOffice\BusinessOwnerApprovalController;
 use App\Http\Controllers\TourismOffice\LandingContentController;
@@ -95,11 +95,6 @@ Route::post('/payments/webhook', [PaymentController::class, 'webhook']);
 Route::get('/payments/check/{paymentNumber}', [PaymentController::class, 'checkAndConfirm']);
 Route::get('/payments/return', [PaymentController::class, 'paymongoReturn']);
 
-// Rider credit top-up confirmation (public — the top-up reference + PayMongo
-// checkout session id act as the proof of payment; the record belongs to the
-// rider who initiated it, so the redirect works even across origins)
-Route::post('/rider/credits/confirm-topup', [RiderCreditController::class, 'confirmTopUp']);
-Route::post('/rider/credits/cancel-topup', [RiderCreditController::class, 'cancelTopUp']);
 
 // Public: approved businesses for the landing page map
 Route::get('/map/businesses', [ExploreController::class, 'landingMap']);
@@ -467,19 +462,17 @@ Route::middleware('token.only')->group(function () {
         Route::get('/deliveries/completed', [RiderDeliveryController::class, 'completed']);
         Route::patch('/deliveries/{delivery}/status', [RiderDeliveryController::class, 'updateStatus']);
         Route::post('/deliveries/{delivery}/settle-cod', [RiderDeliveryController::class, 'settleCod']);
+        Route::get('/deliveries/{delivery}/purchases', [RiderPurchasingController::class, 'purchases']);
+        Route::post('/deliveries/{delivery}/purchases/{purchase}/mark', [RiderPurchasingController::class, 'mark']);
+        Route::post('/deliveries/{delivery}/purchasing-cash/receive', [RiderPurchasingController::class, 'confirmCashReceipt']);
         Route::get('/dispatch/pending-request', [RiderDispatchController::class, 'pendingRequest']);
+        Route::get('/dispatch/offers', [RiderDispatchController::class, 'offers']);
         Route::get('/dispatch/eligibility', [RiderDispatchController::class, 'eligibility']);
         Route::patch('/dispatch/accept', [RiderDispatchController::class, 'accept']);
         Route::patch('/dispatch/decline', [RiderDispatchController::class, 'decline']);
         Route::get('/map/location', [RiderMapController::class, 'location']);
         Route::post('/map/location', [RiderMapController::class, 'updateLocation']);
         Route::get('/messages', [MessageController::class, 'index']);
-
-        // Credits / Wallet
-        Route::get('/credits/balance', [RiderCreditController::class, 'balance']);
-        Route::get('/credits/transactions', [RiderCreditController::class, 'transactions']);
-        Route::post('/credits/topup', [RiderCreditController::class, 'topUp']);
-        Route::post('/credits/check-sufficiency', [RiderCreditController::class, 'checkSufficiency']);
 
         // Payouts
         Route::get('/payouts/available', [RiderPayoutController::class, 'available']);
@@ -547,15 +540,15 @@ Route::middleware('token.only')->group(function () {
         Route::post('/riders/{rider}/approve', [AdminRiderController::class, 'approve']);
         Route::post('/riders/{rider}/reject', [AdminRiderController::class, 'reject']);
         Route::post('/riders/{rider}/suspend', [AdminRiderController::class, 'suspend']);
-        Route::get('/credits', [AdminCreditsController::class, 'overview']);
-        Route::post('/credits/riders/{rider}/adjust', [AdminCreditsController::class, 'adjust']);
-
         // Rider Payouts (admin review workflow)
         Route::get('/payouts', [AdminPayoutController::class, 'index']);
         Route::get('/payouts/{payout}', [AdminPayoutController::class, 'show']);
         Route::post('/payouts/{payout}/approve', [AdminPayoutController::class, 'approve']);
         Route::post('/payouts/{payout}/reject', [AdminPayoutController::class, 'reject']);
         Route::post('/payouts/{payout}/mark-paid', [AdminPayoutController::class, 'markPaid']);
+
+        // Purchasing-cash (COD)
+        Route::post('/deliveries/{delivery}/issue-purchasing-cash', [AdminPurchasingCashController::class, 'issue']);
 
         // Reports
         Route::get('/reports', [AdminReportController::class, 'system']);

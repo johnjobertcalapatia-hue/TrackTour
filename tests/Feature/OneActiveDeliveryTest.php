@@ -8,7 +8,6 @@ use App\Models\BusinessCategory;
 use App\Models\Delivery;
 use App\Models\Municipality;
 use App\Models\Order;
-use App\Models\RiderCredit;
 use App\Models\RiderDetail;
 use App\Models\RiderLocation;
 use App\Models\User;
@@ -132,7 +131,6 @@ class OneActiveDeliveryTest extends TestCase
                     return false;
                 }
 
-                $usable = app(\App\Services\RiderCreditService::class)->getUsableCredits($rider->id);
                 $activeLimit = (int) ($detail->active_order_limit ?: config('delivery.cod_active_order_limit', 2));
                 $activeOrders = Delivery::where('rider_id', $rider->id)
                     ->whereIn('status', NearestRiderService::COD_ACTIVE_STATUSES)
@@ -196,12 +194,6 @@ class OneActiveDeliveryTest extends TestCase
             'recorded_at' => now(),
         ]);
 
-        RiderCredit::create([
-            'rider_id' => $rider->id,
-            'total_credits' => 10000,
-            'reserved_credits' => 0,
-            'minimum_reserve' => 200,
-        ]);
 
         return $rider;
     }
@@ -319,7 +311,10 @@ class OneActiveDeliveryTest extends TestCase
         $this->assertStringContainsString('already have an active delivery', $result['message']);
 
         $this->assertNull($deliveryB->fresh()->rider_id);
-        $this->assertSame('declined', BookingDispatchLog::where('delivery_id', $deliveryB->id)
+        // The losing offer is withdrawn ('cancelled' — the delivery is no longer
+        // available to this rider), NOT 'declined' which implies the rider chose
+        // to reject it.
+        $this->assertSame('cancelled', BookingDispatchLog::where('delivery_id', $deliveryB->id)
             ->where('rider_id', $riderX->id)->first()->response);
 
         // Still exactly one active delivery for the rider.

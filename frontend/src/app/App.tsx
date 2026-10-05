@@ -59,7 +59,6 @@ const AdminTourists = lazy_(() => import('@/features/admin/pages/AdminTourists')
 const AdminRoles = lazy_(() => import('@/features/admin/pages/AdminRoles'))
 const AdminRiders = lazy_(() => import('@/features/admin/pages/AdminRiders'))
 const AdminRiderShow = lazy_(() => import('@/features/admin/pages/AdminRiderShow'))
-const AdminCredits = lazy_(() => import('@/features/admin/pages/AdminCredits'))
 const AdminReports = lazy_(() => import('@/features/admin/pages/AdminReports'))
 const AdminAuditLogs = lazy_(() => import('@/features/admin/pages/AdminAuditLogs'))
 const AdminNotifications = lazy_(() => import('@/features/admin/pages/AdminNotifications'))
@@ -180,7 +179,6 @@ const StaffFoodCreate = lazy_(() => import('@/features/staff/pages/StaffFoodCrea
 const StaffMenuEdit = lazy_(() => import('@/features/staff/pages/StaffMenuEdit'))
 
 // --- Rider ---
-const RiderDashboard = lazy_(() => import('@/features/rider/pages/RiderDashboard'))
 const RiderProfile = lazy_(() => import('@/features/rider/pages/RiderProfile'))
 const RiderMessages = lazy_(() => import('@/features/rider/pages/RiderMessages'))
 const RiderEarnings = lazy_(() => import('@/features/rider/pages/RiderEarnings'))
@@ -190,10 +188,6 @@ const RiderDeliveriesActive = lazy_(() => import('@/features/rider/pages/RiderDe
 const RiderDeliveriesCompleted = lazy_(() => import('@/features/rider/pages/RiderDeliveriesCompleted'))
 const RiderHistory = lazy_(() => import('@/features/rider/pages/RiderHistory'))
 const RiderMap = lazy_(() => import('@/features/rider/pages/RiderMap'))
-const RiderWallet = lazy_(() => import('@/features/rider/pages/RiderWallet'))
-const RiderCreditActivity = lazy_(() => import('@/features/rider/pages/RiderCreditActivity'))
-const RiderCreditDetails = lazy_(() => import('@/features/rider/pages/RiderCreditDetails'))
-const TopUpSuccess = lazy_(() => import('@/features/rider/pages/TopUpSuccess'))
 import RiderDispatchNotification from '@/features/rider/components/RiderDispatchNotification'
 import GlobalRiderAlert from '@/features/rider/components/GlobalRiderAlert'
 import { RiderActiveTripProvider } from '@/features/rider/context/RiderActiveTripContext'
@@ -236,7 +230,6 @@ const adminSections = [
     { to: '/admin/business-categories', label: 'Categories', icon: <Tag className="w-5 h-5" /> },
     { to: '/admin/municipalities', label: 'Municipalities', icon: <MapPin className="w-5 h-5" /> },
     { to: '/admin/riders', label: 'Riders', icon: <Bike className="w-5 h-5" /> },
-    { to: '/admin/credits', label: 'Credits Management', icon: <Wallet className="w-5 h-5" /> },
     { to: '/admin/tourists', label: 'Tourists', icon: <UserCheck className="w-5 h-5" /> },
     { to: '/admin/roles', label: 'Roles', icon: <Shield className="w-5 h-5" /> },
   ]},
@@ -514,7 +507,6 @@ const riderSections = [
     { to: '/rider/map', label: 'Live Map', icon: <Map className="w-5 h-5" /> },
   ]},
   { label: 'More', items: [
-    { to: '/rider/wallet', label: 'Credits', icon: <Wallet className="w-5 h-5" /> },
     { to: '/rider/earnings', label: 'Earnings', icon: <FileBarChart className="w-5 h-5" /> },
     { to: '/rider/messages', label: 'Messages', icon: <MessageSquare className="w-5 h-5" /> },
     { to: '/rider/profile', label: 'Profile', icon: <User className="w-5 h-5" /> },
@@ -616,7 +608,6 @@ export default function App() {
             <Route path="roles" element={<AdminRoles />} />
             <Route path="riders" element={<AdminRiders />} />
             <Route path="riders/:id" element={<AdminRiderShow />} />
-            <Route path="credits" element={<AdminCredits />} />
             <Route path="reports" element={<AdminReports />} />
             <Route path="audit-logs" element={<AdminAuditLogs />} />
             <Route path="notifications" element={<AdminNotifications />} />
@@ -776,7 +767,7 @@ export default function App() {
               </ProtectedRoute>
             }
           >
-            <Route index element={<RiderDashboard />} />
+            <Route index element={<Navigate to="/rider/map" replace />} />
             <Route path="earnings" element={<RiderEarnings />} />
             <Route path="earnings/:deliveryId" element={<RiderEarningShow />} />
             <Route path="profile" element={<RiderProfile />} />
@@ -787,9 +778,6 @@ export default function App() {
             <Route path="deliveries/pending" element={<RiderDeliveriesPending />} />
             <Route path="deliveries/active" element={<RiderDeliveriesActive />} />
             <Route path="deliveries/completed" element={<RiderDeliveriesCompleted />} />
-            <Route path="wallet" element={<RiderWallet />} />
-            <Route path="credit-activity" element={<RiderCreditActivity />} />
-            <Route path="credit-details" element={<RiderCreditDetails />} />
           </Route>
 
           {/* Tourism Office */}
@@ -811,11 +799,6 @@ export default function App() {
             <Route path="reports" element={<TourismOfficeReports />} />
             <Route path="landing-content" element={<TourismOfficeLandingContent />} />
           </Route>
-
-          {/* Public PayMongo top-up return pages (must render even without a
-              session on this origin so GCash redirects always confirm) */}
-          <Route path="/rider/wallet/topup/success" element={<TopUpSuccess />} />
-          <Route path="/rider/wallet/topup/failed" element={<TopUpSuccess />} />
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

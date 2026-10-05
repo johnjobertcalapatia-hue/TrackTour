@@ -11,6 +11,7 @@ interface UseRiderSocketReceiverOptions {
   isOnline: boolean
   vehicleType?: string
   onOrderPing?: (payload: { deliveryId: string; restaurantName: string; timeoutSeconds: number; distanceKm: number }) => void
+  onOfferCancelled?: (payload: { delivery_id?: number; reason?: string }) => void
 }
 
 export function useRiderSocketReceiver({
@@ -18,10 +19,14 @@ export function useRiderSocketReceiver({
   isOnline,
   vehicleType = 'food',
   onOrderPing,
+  onOfferCancelled,
 }: UseRiderSocketReceiverOptions) {
   const socketRef = useRef<Socket | null>(null)
   const onOrderPingRef = useRef(onOrderPing)
   onOrderPingRef.current = onOrderPing
+
+  const onOfferCancelledRef = useRef(onOfferCancelled)
+  onOfferCancelledRef.current = onOfferCancelled
 
   // Keep the latest values available to the connection handler without re-creating it.
   const onlineRef = useRef({ riderId, isOnline, vehicleType })
@@ -88,6 +93,15 @@ export function useRiderSocketReceiver({
     socket.on('order_received_ping', (payload) => {
       console.log('[socket] order_received_ping received:', payload?.deliveryId)
       onOrderPingRef.current?.(payload)
+    })
+
+    socket.on('delivery_offer_cancelled', (payload) => {
+      console.log(
+        '[socket] delivery_offer_cancelled received:',
+        payload?.delivery_id,
+        payload?.reason ?? 'delivery_no_longer_available'
+      )
+      onOfferCancelledRef.current?.(payload ?? {})
     })
 
     socket.on('driver_registration_rejected', (data) => {

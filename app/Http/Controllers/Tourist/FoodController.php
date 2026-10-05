@@ -355,8 +355,25 @@ class FoodController extends Controller
             abort(403);
         }
 
-        $order->load('items.offering', 'business', 'delivery.rider.profile');
+        $order->load('items.offering', 'items.business', 'business', 'delivery.rider.profile');
         $delivery = $order->activeDelivery();
+
+        $pickupStops = $order->items
+            ->groupBy(fn ($item) => $item->business_id ?: $order->business_id)
+            ->map(function ($items, $businessId) use ($order) {
+                $business = $items->first()->business ?? $order->business;
+                return [
+                    'business_id' => (int) $businessId,
+                    'business_name' => $business?->business_name ?? $business?->name ?? 'Restaurant',
+                    'address' => $business?->address,
+                    'latitude' => $business?->latitude !== null ? (float) $business->latitude : null,
+                    'longitude' => $business?->longitude !== null ? (float) $business->longitude : null,
+                    'item_count' => $items->sum(fn ($item) => max(0, (int) $item->quantity - (int) $item->cancelled_quantity)),
+                    'ready_item_count' => $items->where('status', 'ready')->sum(fn ($item) => max(0, (int) $item->quantity - (int) $item->cancelled_quantity)),
+                ];
+            })
+            ->values()
+            ->all();
 
         $dispatchLogs = null;
         $riderLocation = null;
@@ -374,6 +391,7 @@ class FoodController extends Controller
         }
 
         $data = compact('order', 'delivery', 'dispatchLogs');
+        $data['pickup_stops'] = $pickupStops;
         $data['rider_location'] = $riderLocation ? [
             'latitude' => (float) $riderLocation->latitude,
             'longitude' => (float) $riderLocation->longitude,

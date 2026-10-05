@@ -28,8 +28,6 @@ class RiderDetail extends Model
         'rider_status',
         'rider_status_updated_at',
         'current_service',
-        'working_credit',
-        'reserved_working_credit',
         'active_order_limit',
     ];
 
@@ -37,8 +35,6 @@ class RiderDetail extends Model
         'vehicle_year' => 'integer',
         'license_expiry' => 'date',
         'rider_status_updated_at' => 'datetime',
-        'working_credit' => 'decimal:2',
-        'reserved_working_credit' => 'decimal:2',
         'active_order_limit' => 'integer',
     ];
 
@@ -47,16 +43,4 @@ class RiderDetail extends Model
         return $this->belongsTo(User::class);
     }
 
-    public function riderCredit()
-    {
-        return $this->hasOne(RiderCredit::class, 'rider_id', 'user_id');
-    }
-
-    /**
-     * Get the rider's available credit (working_credit - reserved_working_credit).
-     */
-    public function getAvailableCreditAttribute(): float
-    {
-        return (float) $this->working_credit - (float) $this->reserved_working_credit;
-    }
 }

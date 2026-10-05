@@ -23,9 +23,9 @@ use Tests\TestCase;
  * pending/approved/paid payout can never be drawn again — the same peso is
  * never paid out twice. Rejected and cancelled payouts release their earnings.
  *
- * COD-sourced and prepaid-sourced earnings are equally drawable; the rider's
- * credit wallet (rider_credits) is a SEPARATE financing ledger and is never
- * touched by a payout.
+ * COD-sourced and prepaid-sourced earnings are equally drawable; rider credit
+ * financing no longer exists (credit-free COD), so a payout never touches a
+ * credit wallet.
  */
 class RiderPayoutTest extends TestCase
 {

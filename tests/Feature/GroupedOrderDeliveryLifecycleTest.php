@@ -206,63 +206,46 @@ class GroupedOrderDeliveryLifecycleTest extends TestCase
     {
         $burger = $this->makeOffering($this->restaurantA, 'Burger', 120.00);
         $fries = $this->makeOffering($this->restaurantA, 'Fries', 80.00);
-        $coke = $this->makeOffering($this->restaurantA, 'Coke', 50.00);
         $pizza = $this->makeOffering($this->restaurantB, 'Pizza', 400.00);
-        $pasta = $this->makeOffering($this->restaurantB, 'Pasta', 250.00);
 
-        // ---- Step 1: customer places a 2-restaurant group order ----
+        // ---- Step 1: customer places one order containing two restaurant groups ----
         $group = $this->groupService->createGroup($this->owner, $this->basePayload([
             ['business_id' => $this->restaurantA->id, 'items' => [
                 ['offering_id' => $burger->id, 'quantity' => 1, 'notes' => 'No onions'],
                 ['offering_id' => $fries->id, 'quantity' => 1, 'notes' => null],
-                ['offering_id' => $coke->id, 'quantity' => 1, 'notes' => null],
             ]],
             ['business_id' => $this->restaurantB->id, 'items' => [
                 ['offering_id' => $pizza->id, 'quantity' => 1, 'notes' => null],
-                ['offering_id' => $pasta->id, 'quantity' => 1, 'notes' => null],
             ]],
         ]));
 
-        $orderA = $group->orders()->where('business_id', $this->restaurantA->id)->first()->load('items');
-        $orderB = $group->orders()->where('business_id', $this->restaurantB->id)->first()->load('items');
+        $order = $group->orders()->sole()->load('items');
+        $this->assertCount(1, $group->orders()->get(), 'Exactly one canonical order is created.');
+        $this->assertCount(3, $order->items);
+        $this->assertSame([$this->restaurantA->id, $this->restaurantA->id, $this->restaurantB->id], $order->items->pluck('business_id')->all());
+        $this->assertSame((float) $order->subtotal, (float) $group->subtotal);
+        $this->assertSame((float) $order->delivery_fee, (float) $group->delivery_total);
 
-        $this->assertCount(2, $group->orders()->get(), 'Exactly 2 restaurant orders created.');
-        $this->assertCount(3, $orderA->items);
-        $this->assertCount(2, $orderB->items);
-
-        // ---- Step 2: payment confirmed. The canonical post-payment dispatch
-        // point spawns the group's ONE physical delivery and offers it to a
-        // rider before any restaurant starts preparing (P11.2). ----
-        foreach ([$orderA, $orderB] as $order) {
-            $order->update([
-                'payment_status' => 'paid',
-                'status' => 'waiting_restaurant',
-                'acceptance_started_at' => now(),
-                'acceptance_deadline' => now()->addMinutes(10),
-            ]);
-        }
+        // ---- Step 2: payment confirmed and one shared delivery is offered ----
+        $order->update([
+            'payment_status' => 'paid',
+            'status' => 'waiting_restaurant',
+            'acceptance_started_at' => now(),
+            'acceptance_deadline' => now()->addMinutes(10),
+        ]);
 
         app(\App\Services\SmartDispatchService::class)->scheduleGroupDispatch($group->fresh());
 
-        $this->assertSame('waiting_restaurant', $orderA->fresh()->status);
-        $this->assertSame('waiting_restaurant', $orderB->fresh()->status);
-
-        // A single physical delivery anchors the whole group; restaurant
-        // sub-orders own none.
-        $this->assertNull($orderA->fresh()->delivery, 'Sub-order A owns no per-restaurant delivery.');
-        $this->assertNull($orderB->fresh()->delivery, 'Sub-order B owns no per-restaurant delivery.');
+        $this->assertSame('waiting_restaurant', $order->fresh()->status);
         $delivery = $group->fresh()->delivery;
-        $this->assertNotNull($delivery, 'The group owns exactly one delivery.');
-        $this->assertNull($delivery->order_id);
+        $this->assertNotNull($delivery, 'The order owns exactly one delivery.');
+        $this->assertSame($order->id, $delivery->order_id);
         $this->assertSame($group->id, $delivery->group_checkout_id);
-
-        // ...and the first dispatch wave fired for the nearest rider (A).
         $this->assertSame('notified', $delivery->dispatch_status, 'Shared trip offered at confirmation.');
         $this->assertSame(1, BookingDispatchLog::count());
         $this->assertSame($this->riderA->id, BookingDispatchLog::where('delivery_id', $delivery->id)->first()->rider_id);
 
-        // ---- Step 3: rider accepts. The single outstanding offer (one trip,
-        // one rider) is claimed exactly once; the other rider has no offer. ----
+        // ---- Step 3: only the offered rider can claim the shared delivery ----
         $unoffered = $this->dispatchService()->handleRiderResponse($delivery->id, $this->riderB->id, 'accepted');
         $this->assertFalse($unoffered['success'] ?? true, 'A rider without an offer cannot claim the trip.');
 
@@ -276,54 +259,28 @@ class GroupedOrderDeliveryLifecycleTest extends TestCase
         $this->assertSame('busy', $this->riderA->fresh()->riderDetail->rider_status);
         $this->assertSame('online', $this->riderB->fresh()->riderDetail->rider_status, 'Rider B never claimed this trip.');
 
-        // ---- Step 4: both restaurants accept independently (the shared trip
-        // has an accepted rider, satisfying the gate for BOTH sub-orders) ----
-        $this->acceptRestaurantOrder($orderA);
-        $this->acceptRestaurantOrder($orderB);
+        // ---- Step 4: one accepted rider unlocks all restaurant item groups ----
+        $this->acceptRestaurantOrder($order);
+        $order->refresh();
+        $this->assertSame('preparing', $order->status);
+        $this->assertSame($this->riderA->id, $order->activeDelivery()?->rider_id);
 
-        $orderA->refresh(); $orderB->refresh();
+        // Restaurant A can be ready while Restaurant B is still preparing.
+        $this->setItemStatus($order, 'Burger', 'ready');
+        $this->setItemStatus($order, 'Fries', 'ready');
+        $this->invokeRefreshOrderStatus($order);
+        $this->assertSame('preparing', $order->fresh()->status);
 
-        $this->assertSame('preparing', $orderA->status);
-        $this->assertSame('preparing', $orderB->status);
+        $this->setItemStatus($order, 'Pizza', 'ready');
+        $this->invokeRefreshOrderStatus($order);
+        $this->assertSame('ready', $order->fresh()->status);
 
-        // ---- Step 5: Restaurant A - 2 of 3 items ready -> NOT ready ----
-        $this->setItemStatus($orderA, 'Burger', 'ready');
-        $this->setItemStatus($orderA, 'Fries', 'ready');
-        $this->invokeRefreshOrderStatus($orderA);
-
-        $orderA->refresh();
-        $this->assertSame('preparing', $orderA->status, 'A stays preparing while Coke is not ready.');
-        $this->assertSame($this->riderA->id, $orderA->activeDelivery()?->rider_id, 'A resolves its rider via the shared trip.');
-
-        // ---- Step 6: Restaurant B - all items ready -> READY ----
-        $this->setItemStatus($orderB, 'Pizza', 'ready');
-        $this->setItemStatus($orderB, 'Pasta', 'ready');
-        $this->invokeRefreshOrderStatus($orderB);
-
-        $orderB->refresh();
-        $this->assertSame('ready', $orderB->status, 'B ready because all items ready.');
-        $this->assertSame($this->riderA->id, $orderB->activeDelivery()?->rider_id, 'B resolves its rider via the shared trip.');
-
-        // B ready while A remains preparing.
-        $this->assertSame('preparing', $orderA->fresh()->status);
-
-        // ---- Step 7: Restaurant A Coke becomes ready -> ALL ready ----
-        $this->setItemStatus($orderA, 'Coke', 'ready');
-        $this->invokeRefreshOrderStatus($orderA);
-
-        $orderA->refresh();
-        $this->assertSame('ready', $orderA->status, 'A ready only after all 3 items ready.');
-
-        // ---- Step 8: ONE physical shared delivery, one trip fee ----
-        $delivery = $group->fresh()->delivery;
+        // ---- Step 5: one physical shared delivery remains bound to one rider ----
+        $delivery = $order->fresh()->activeDelivery();
         $this->assertSame($this->riderA->id, $delivery->rider_id, 'The shared trip stays bound to its accepted rider.');
-        $this->assertEquals(
-            round((float) $orderA->fresh()->delivery_fee + (float) $orderB->fresh()->delivery_fee, 2),
-            (float) $delivery->delivery_fee,
-            'The group trip fee aggregates both restaurants; no per-restaurant fee rows.'
-        );
+        $this->assertSame((float) $order->fresh()->delivery_fee, (float) $delivery->delivery_fee);
 
-        // ---- Step 9: the single shared trip completes once ----
+        // ---- Step 6: the single shared trip completes once ----
         $this->advanceDeliveryStatus($delivery, 'arrived_pickup');
         $this->advanceDeliveryStatus($delivery, 'picked_up');
         $this->advanceDeliveryStatus($delivery, 'in_transit');

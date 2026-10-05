@@ -21,7 +21,7 @@ export const OrderProgressTrack: React.FC<OrderProgressTrackProps> = ({ resoluti
   if (isCancelled) {
     return (
       <div className={`rounded-xl bg-red-50 border border-red-200 p-3.5 text-sm text-red-700 ${className}`}>
-        <p className="font-semibold">Sub-Order Cancelled</p>
+        <p className="font-semibold">Restaurant items cancelled</p>
         <p className="text-xs text-red-600 mt-0.5">{statusMessage}</p>
       </div>
     )

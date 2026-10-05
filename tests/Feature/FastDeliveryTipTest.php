@@ -265,7 +265,7 @@ class FastDeliveryTipTest extends TestCase
         $this->assertSame(0, GroupCheckout::count());
     }
 
-    public function test_group_fast_delivery_tip_is_split_across_restaurants(): void
+    public function test_group_fast_delivery_tip_lives_on_the_single_order(): void
     {
         $response = $this->be($this->tourist)
             ->postJson('/api/tourist/food/group-order', $this->groupPayload(['delivery_speed' => 'fast', 'rider_tip' => 40]));
@@ -275,19 +275,19 @@ class FastDeliveryTipTest extends TestCase
         $group = GroupCheckout::firstOrFail();
         $this->assertEquals(40.00, (float) $group->rider_tip);
 
+        // ONE canonical order carries the full group tip — never split across
+        // per-restaurant child orders (AGENTS.md §4.1).
         $orders = $group->orders()->get();
-        $this->assertCount(2, $orders);
-        $this->assertEquals(40.00, (float) $orders->sum('rider_tip'), 'The full tip is distributed across the child orders.');
+        $this->assertCount(1, $orders);
 
-        foreach ($orders as $order) {
-            $this->assertEquals(20.00, (float) $order->rider_tip);
-            $this->assertSame('fast', $order->delivery_speed);
-            $this->assertEquals(
-                round((float) $order->subtotal + (float) $order->delivery_fee + (float) $order->system_fee + 20.00, 2),
-                (float) $order->total,
-                'Each child order total includes its tip share.'
-            );
-        }
+        $order = $orders->first();
+        $this->assertSame('fast', $order->delivery_speed);
+        $this->assertEquals(40.00, (float) $order->rider_tip, 'The single canonical order carries the full tip.');
+        $this->assertEquals(
+            round((float) $order->subtotal + (float) $order->delivery_fee + (float) $order->system_fee + 40.00, 2),
+            (float) $order->total,
+            'The canonical order total includes the full tip.'
+        );
     }
 
     // ---------- tip reaches rider earnings ----------

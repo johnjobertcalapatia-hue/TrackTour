@@ -74,9 +74,9 @@ class AutoRejectWaitingOrder extends Command
                         'refund_status' => 'pending',
                     ]);
 
-                    // Cancel any active delivery/dispatch (releases any COD reserve). Group
-                    // children cancel the shared group trip only when no other
-                    // sibling still needs it.
+                    // Cancel any active delivery/dispatch (credit-free COD has no
+                    // reserve to release). Group children cancel the shared group
+                    // trip only when no other sibling still needs it.
                     app(\App\Services\NearestRiderService::class)->cancelDeliveryForOrder($locked);
 
                     // Process refund — standalone or grouped

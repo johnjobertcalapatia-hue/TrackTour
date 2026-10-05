@@ -19,6 +19,7 @@ class OrderItem extends Model
 
     protected $fillable = [
         'order_id',
+        'business_id',
         'offering_id',
         'product_name',
         'quantity',
@@ -55,6 +56,17 @@ class OrderItem extends Model
     public function offering(): BelongsTo
     {
         return $this->belongsTo(Offering::class, 'offering_id');
+    }
+
+    public function business(): BelongsTo
+    {
+        return $this->belongsTo(Business::class);
+    }
+
+    public function isManagedBy(User $user): bool
+    {
+        return $this->business?->owner_id === $user->id
+            || $this->order?->business?->owner_id === $user->id;
     }
 
     public function canceller(): BelongsTo

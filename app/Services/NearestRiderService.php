@@ -13,6 +13,7 @@ use App\Models\RiderEarning;
 use App\Models\RiderLocation;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -286,19 +287,20 @@ class NearestRiderService
     }
 
     /**
-     * Secure a COD delivery for the accepting rider (credit-free, step 3).
+     * Accept-time eligibility gate. Re-checked ATOMICALLY under the delivery +
+     * rider row locks when the rider accepts, so dispatch-time eligibility is
+     * verified a second time against the authoritative state:
      *
-     * The customer's cash due is frozen at accept-time (immutable once
-     * dispatched) and the rider is validated for the one-active-delivery rule.
-     * NO rider credit is reserved or deducted, the ₱200 protected reserve is
-     * untouched, and cod_credit_reserved stays 0 for the life of the delivery.
+     *   - account must still be approved,
+     *   - the rider must still be on the exact service that was pinged,
+     *   - COD additionally requires 'available' + room under the active limit
+     *     (and freezes the cash-due snapshot once the rider passes).
+     *
+     * The ONE-active-delivery rule is enforced separately on the rider row by
+     * the caller, so it is not duplicated here.
      */
-    public function reserveCodCredit(Delivery $delivery, int $riderId): bool
+    public function validateRiderAcceptance(Delivery $delivery, int $riderId): bool
     {
-        if (! $this->isCodDelivery($delivery)) {
-            return true;
-        }
-
         return DB::transaction(function () use ($delivery, $riderId) {
             $rider = User::lockForUpdate()->find($riderId);
             $lockedDelivery = Delivery::with('order', 'groupCheckout')->lockForUpdate()->find($delivery->id);
@@ -308,28 +310,46 @@ class NearestRiderService
                 return false;
             }
 
-            $activeLimit = (int) ($detail->active_order_limit ?: config('delivery.cod_active_order_limit', 2));
-            $activeOrders = $this->activeBindingsQuery($riderId)
-                ->lockForUpdate()
-                ->count();
-
-            if (
-                $rider->account_status !== User::ACCOUNT_STATUS_APPROVED ||
-                $detail->rider_status !== User::RIDER_STATUS_AVAILABLE ||
-                $activeOrders >= $activeLimit
-            ) {
+            if ($rider->account_status !== User::ACCOUNT_STATUS_APPROVED) {
                 return false;
             }
 
-            $cashDue = $this->codAmountDue($lockedDelivery);
+            if ($this->isCodDelivery($lockedDelivery)) {
+                $activeLimit = (int) ($detail->active_order_limit ?: config('delivery.cod_active_order_limit', 2));
+                $activeOrders = $this->activeBindingsQuery($riderId)
+                    ->lockForUpdate()
+                    ->count();
 
-            $lockedDelivery->update([
-                'cod_credit_reserved' => 0,
-                'cash_due' => $cashDue,
-            ]);
+                if ($detail->rider_status !== User::RIDER_STATUS_AVAILABLE || $activeOrders >= $activeLimit) {
+                    return false;
+                }
 
-            return true;
+                $lockedDelivery->update([
+                    'cash_due' => $this->codAmountDue($lockedDelivery),
+                ]);
+
+                return true;
+            }
+
+            // Non-COD: mirror the dispatch-time gates (still online/available
+            // on the exact service that was pinged).
+            if (! in_array($detail->rider_status, [User::RIDER_STATUS_ONLINE, User::RIDER_STATUS_AVAILABLE], true)) {
+                return false;
+            }
+
+            $serviceType = $lockedDelivery->primaryOrder()?->order_type === 'transport' ? 'transport' : 'food';
+
+            return $detail->current_service === $serviceType;
         });
+    }
+
+    /**
+     * Compatibility shim kept for the COD-dispatch suite. Delegates to the
+     * generalized gate so every acceptance path shares one eligibility rule set.
+     */
+    public function validateCodAcceptance(Delivery $delivery, int $riderId): bool
+    {
+        return $this->validateRiderAcceptance($delivery, $riderId);
     }
 
     /**
@@ -345,28 +365,6 @@ class NearestRiderService
         $order = $delivery->order;
 
         return round((float) ($order?->total ?? $order?->rider_financed_amount ?? $order?->subtotal ?? 0), 2);
-    }
-
-    public function releaseCodCredit(Delivery $delivery): void
-    {
-        $reserved = (float) ($delivery->cod_credit_reserved ?? 0);
-        if ($reserved <= 0 || ! $delivery->rider_id) {
-            return;
-        }
-
-        DB::transaction(function () use ($delivery, $reserved) {
-            $orderId = (int) $delivery->order_id;
-            $riderId = (int) $delivery->rider_id;
-
-            app(RiderCreditService::class)->releaseCredits(
-                $riderId,
-                $reserved,
-                $orderId,
-                "Released ₱{$reserved} from cancelled COD order #{$orderId}"
-            );
-
-            $delivery->update(['cod_credit_reserved' => 0]);
-        });
     }
 
     /**
@@ -398,10 +396,6 @@ class NearestRiderService
                 true
             )) {
                 return false; // Already terminal (or delivered): nothing to cancel.
-            }
-
-            if ($locked->rider_id !== null) {
-                $this->releaseCodCredit($locked);
             }
 
             $locked->update([
@@ -479,14 +473,6 @@ class NearestRiderService
         $rider->load('riderDetail');
         $detail = $rider->riderDetail;
 
-        // Read-only wallet snapshot for the rider's self-service view. These
-        // keys are informational only — COD eligibility never depends on them
-        // (credit-free, step 3) and they are immutable from this endpoint.
-        $account = app(RiderCreditService::class)->getOrCreateAccount($rider->id);
-        $availableCredit = $account->usable_credits;
-        $totalCredits = (float) $account->total_credits;
-        $reservedCredits = (float) $account->reserved_credits;
-
         $activeOrders = $this->activeBindingsQuery($rider->id)->count();
         $activeLimit = (int) ($detail?->active_order_limit ?: config('delivery.cod_active_order_limit', 2));
 
@@ -495,10 +481,6 @@ class NearestRiderService
             'online' => in_array($detail?->rider_status, [User::RIDER_STATUS_ONLINE, User::RIDER_STATUS_AVAILABLE], true),
             'available' => $detail?->rider_status === User::RIDER_STATUS_AVAILABLE,
             'suspended' => $rider->account_status === User::ACCOUNT_STATUS_SUSPENDED,
-            // Legacy keys kept for frontend compatibility, now sourced from the wallet.
-            'working_credit' => $totalCredits,
-            'reserved_working_credit' => $reservedCredits,
-            'available_working_credit' => $availableCredit,
             'active_orders' => $activeOrders,
             'active_order_limit' => $activeLimit,
             'cod_eligibility' => $rider->account_status === User::ACCOUNT_STATUS_APPROVED
@@ -546,6 +528,14 @@ class NearestRiderService
             'count' => $nearestRiders->count(),
             'ids' => $nearestRiders->pluck('id')->all(),
         ]);
+
+        // Simultaneous-offer dispatch: ping EVERY eligible nearest rider (up to
+        // the limit), not just the closest one. Each ping is a dedicated offer
+        // (a booking_dispatch_logs 'pending' row + its own websocket ping). A
+        // ping is never an assignment — acceptance is the atomic assignment, and
+        // only the first accepted offer affects the delivery's rider_id.
+        $waveRider = null;
+        $offersMade = false;
 
         foreach ($nearestRiders as $rider) {
             if (in_array($rider->id, $alreadyDispatchedRiderIds)) {
@@ -614,7 +604,12 @@ class NearestRiderService
                 'timeoutSeconds' => self::DISPATCH_TIMEOUT_SECONDS,
             ]);
 
-            return $rider;
+            $waveRider ??= $rider;
+            $offersMade = true;
+        }
+
+        if ($offersMade) {
+            return $waveRider;
         }
 
         // No eligible rider found via MySQL (e.g. rider_locations is stale because
@@ -677,43 +672,55 @@ class NearestRiderService
         usort($candidates, fn ($a, $b) => $a['distance_km'] <=> $b['distance_km']);
 
         if (! empty($candidates)) {
-            $target = $candidates[0];
-            $targetRiderId = $target['rider_id'];
+            // Simultaneous-offer dispatch on the radar fallback too: every
+            // candidate gets its own pending offer + ping; the closest is the
+            // one returned to the caller.
+            $waveRider = null;
+            $offersMade = false;
 
-            BookingDispatchLog::create([
-                'delivery_id' => $delivery->id,
-                'rider_id' => $targetRiderId,
-                'distance_km' => $target['distance_km'],
-                'response' => 'pending',
-                'dispatched_at' => now(),
-            ]);
+            foreach ($candidates as $target) {
+                $targetRiderId = $target['rider_id'];
 
-            $delivery->update([
-                'dispatch_status' => 'notified',
-                'dispatch_expires_at' => now()->addSeconds(self::DISPATCH_TIMEOUT_SECONDS),
-            ]);
+                BookingDispatchLog::create([
+                    'delivery_id' => $delivery->id,
+                    'rider_id' => $targetRiderId,
+                    'distance_km' => $target['distance_km'],
+                    'response' => 'pending',
+                    'dispatched_at' => now(),
+                ]);
 
-            // Ping the specific socket so the rider gets an instant notification;
-            // even if this fails, the HTTP poll (/rider/dispatch/pending-request)
-            // will surface the BookingDispatchLog created above.
-            $notifier->notifyDispatch([
-                'deliveryId' => $delivery->id,
-                'orderId' => $delivery->order_id,
-                'restaurantName' => $delivery->primaryOrder()?->business?->name ?? 'Restaurant',
-                'restaurantLat' => $delivery->pickup_latitude,
-                'restaurantLng' => $delivery->pickup_longitude,
-                'riderId' => $targetRiderId,
-                'timeoutSeconds' => self::DISPATCH_TIMEOUT_SECONDS,
-            ]);
+                $delivery->update([
+                    'dispatch_status' => 'notified',
+                    'dispatch_expires_at' => now()->addSeconds(self::DISPATCH_TIMEOUT_SECONDS),
+                ]);
 
-            Log::info('[SocketDispatch] socket-radar rider dispatched via HTTP-poll fallback', [
-                'delivery_id' => $delivery->id,
-                'rider_id' => $targetRiderId,
-                'distance_km' => round($target['distance_km'], 2),
-                'candidates' => count($candidates),
-            ]);
+                // Ping the specific socket so the rider gets an instant notification;
+                // even if this fails, the HTTP poll (/rider/dispatch/pending-request)
+                // will surface the BookingDispatchLog created above.
+                $notifier->notifyDispatch([
+                    'deliveryId' => $delivery->id,
+                    'orderId' => $delivery->order_id,
+                    'restaurantName' => $delivery->primaryOrder()?->business?->name ?? 'Restaurant',
+                    'restaurantLat' => $delivery->pickup_latitude,
+                    'restaurantLng' => $delivery->pickup_longitude,
+                    'riderId' => $targetRiderId,
+                    'timeoutSeconds' => self::DISPATCH_TIMEOUT_SECONDS,
+                ]);
 
-            return User::find($targetRiderId);
+                Log::info('[SocketDispatch] socket-radar rider dispatched via HTTP-poll fallback', [
+                    'delivery_id' => $delivery->id,
+                    'rider_id' => $targetRiderId,
+                    'distance_km' => round($target['distance_km'], 2),
+                    'candidates' => count($candidates),
+                ]);
+
+                $waveRider ??= User::find($targetRiderId);
+                $offersMade = true;
+            }
+
+            if ($offersMade) {
+                return $waveRider;
+            }
         }
 
         // No rider candidate in MySQL OR on the socket radar. Still broadcast a
@@ -747,145 +754,156 @@ class NearestRiderService
             ->first();
 
         if (! $log) {
-            return ['success' => false, 'message' => 'No pending dispatch request found.'];
+            return [
+                'success' => false,
+                'message' => 'No pending dispatch request found.',
+                'conflict' => true,
+            ];
         }
 
-        if ($log->dispatched_at->diffInSeconds(now()) > self::DISPATCH_TIMEOUT_SECONDS) {
-            $log->update(['response' => 'timeout', 'responded_at' => now()]);
-
-            if ($this->firebase->isConfigured()) {
-                $this->firebase->removeRiderRequest($riderId, $deliveryId);
-            }
-
-            $delivery = Delivery::with('order.business')->find($deliveryId);
-            $nextRider = null;
-            if ($delivery && in_array($delivery->dispatch_status, ['notified', 'waiting_for_rider'])) {
-                $serviceType = ($delivery->primaryOrder()?->order_type === 'transport') ? 'transport' : 'food';
-                $municipalityId = $delivery->primaryOrder()?->business?->municipality_id;
-                $nextRider = $this->dispatchToNearest($delivery, $serviceType, $municipalityId);
-            }
-
-            return ['success' => false, 'message' => 'Request timed out.', 'timeout' => true, 'next_dispatched' => $nextRider !== null];
+        if ($response !== 'accepted') {
+            return $this->handleNonAcceptResponse($log, $deliveryId, $riderId, $response);
         }
 
+        $delivery = Delivery::findOrFail($deliveryId);
+        $delivery->load('order');
+
+        // Offer-level freshness check (cheap, before the locks): an expired
+        // offer is recorded as 'timeout' and the delivery re-offered to a fresh
+        // wave once no other rider still holds a live offer.
+        if ($this->offerIsExpired($log, $delivery)) {
+            return $this->expireOffer($log, $delivery);
+        }
+
+        // Serialize concurrent accepts on the delivery row FIRST (the
+        // authoritative dispatch object): two different riders accepting the
+        // SAME delivery serialize on it, and whichever loses sees the winner's
+        // committed assignment under the lock. The rider row is also locked to
+        // enforce the one-active-delivery business rule, and the offer row is
+        // re-checked inside the same isolated snapshot so an expired/cancelled
+        // offer can never slide into the atomic assignment.
+        $outcome = DB::transaction(function () use ($delivery, $deliveryId, $riderId, $log) {
+            $lockedDelivery = Delivery::with('order')->lockForUpdate()->find($deliveryId);
+
+            if (! $lockedDelivery) {
+                return 'not_found';
+            }
+
+            if ($lockedDelivery->rider_id !== null) {
+                return 'already_assigned';
+            }
+
+            User::where('id', $riderId)->lockForUpdate()->first();
+
+            // Re-check the offer under the lock: a concurrent expiry/cancel
+            // must not race into the assignment.
+            $lockedLog = BookingDispatchLog::lockForUpdate()->find($log->id);
+            if (! $lockedLog || $lockedLog->response !== 'pending') {
+                return 'offer_gone';
+            }
+
+            if ($this->offerIsExpired($lockedLog, $lockedDelivery)) {
+                $lockedLog->update(['response' => 'timeout', 'responded_at' => now()]);
+
+                return 'offer_expired';
+            }
+
+            $alreadyActive = $this->activeBindingsQuery($riderId)
+                ->where('id', '!=', $lockedDelivery->id)
+                ->exists();
+
+            if ($alreadyActive) {
+                return 'already_active';
+            }
+
+            if (! $this->validateRiderAcceptance($lockedDelivery, $riderId)) {
+                return 'ineligible';
+            }
+
+            // The offer and the assignment commit atomically: no gap exists in
+            // which another process could see 'accepted' without the delivery
+            // bound to this rider (or vice versa).
+            $lockedLog->update(['response' => 'accepted', 'responded_at' => now()]);
+
+            $lockedDelivery->update([
+                'rider_id' => $riderId,
+                'status' => 'assigned',
+                'assigned_at' => now(),
+                'dispatch_status' => null,
+                'dispatch_expires_at' => null,
+            ]);
+
+            User::where('id', $riderId)->first()?->riderDetail()?->updateOrCreate(
+                ['user_id' => $riderId],
+                ['rider_status' => 'busy', 'rider_status_updated_at' => now()]
+            );
+
+            // Purchasing-cash flow: create the per-restaurant cod_purchases
+            // stops atomically with the assignment so the Tourism Office can
+            // issue the purchasing cash immediately (idempotent).
+            if ($this->isCodDelivery($lockedDelivery)) {
+                app(PurchasingCashService::class)->initializeForDelivery($lockedDelivery);
+            }
+
+            return 'assigned';
+        });
+
+        if ($outcome !== 'assigned') {
+            return $this->rejectAcceptOutcome($outcome, $log, $delivery);
+        }
+
+        // One active delivery: withdraw this rider's other outstanding offers
+        // (their other deliveries are re-offered only when unclaimed), and
+        // cancel the losing riders' offers on the claimed delivery so no other
+        // rider can still see it as available. The winner's offer was already
+        // set to 'accepted' atomically inside the transaction.
+        $this->cancelOtherPendingOffers($riderId, $delivery->id);
+        $this->cancelOtherRidersOffersForDelivery($delivery->id, $riderId);
+
+        // Push the authoritative assignment to the real-time engine so only
+        // this rider's socket may stream location into the trip room. Best
+        // effort: the database assignment is the source of truth.
+        try {
+            app(WebsocketNotifierService::class)->notifyTripAssigned($delivery->id, $riderId);
+        } catch (\Throwable $e) {
+            // Real-time bridge unavailable; dispatch still succeeds.
+        }
+
+        // P11.5 — emit the canonical DeliveryAssigned event so the realtime
+        // bridge can notify the restaurant/kitchen, tourist and assigned
+        // rider rooms that an accepted rider now exists (preparation may
+        // proceed). Always ordered AFTER the DB assignment commits; the
+        // database assignment remains the source of truth.
+        try {
+            $assignedDelivery = Delivery::with('order')->findOrFail($delivery->id);
+            $assignedRider = User::find($riderId);
+
+            if ($assignedRider) {
+                DeliveryAssigned::dispatch($assignedDelivery, $assignedRider, $assignedDelivery->primaryOrder());
+            }
+        } catch (\Throwable $e) {
+            Log::warning('[Dispatch] DeliveryAssigned event failed', ['error' => $e->getMessage()]);
+        }
+
+        if ($this->firebase->isConfigured()) {
+            $this->firebase->updateRiderRequestStatus($riderId, $deliveryId, 'accepted');
+            $this->firebase->updateBookingRequestStatus($deliveryId, 'accepted');
+            $riderMunicipalityId = User::where('id', $riderId)->value('municipality_id');
+            $this->firebase->setRiderStatus($riderId, 'busy', null, $riderMunicipalityId);
+        }
+
+        return ['success' => true, 'message' => 'Delivery accepted!', 'assigned' => true];
+    }
+
+    /**
+     * Non-accept rider responses (decline / a poll-triggered timeout). Record
+     * the response then re-offer the delivery to a fresh wave, but ONLY once no
+     * other rider still holds a live offer on the same delivery — a wave is not
+     * replenished until the current offers are exhausted.
+     */
+    private function handleNonAcceptResponse(BookingDispatchLog $log, int $deliveryId, int $riderId, string $response): array
+    {
         $log->update(['response' => $response, 'responded_at' => now()]);
-
-        if ($response === 'accepted') {
-            $delivery = Delivery::findOrFail($deliveryId);
-            $delivery->load('order');
-
-            // Serialize concurrent accepts on the delivery row FIRST (the
-            // authoritative dispatch object): two different riders accepting
-            // the SAME delivery serialize on it, and whichever loses sees the
-            // winner's committed assignment under the lock. The rider row is
-            // also locked to enforce the one-active-delivery business rule.
-            $outcome = DB::transaction(function () use ($delivery, $riderId) {
-                $lockedDelivery = Delivery::with('order')->lockForUpdate()->find($delivery->id);
-
-                if (! $lockedDelivery) {
-                    return 'not_found';
-                }
-
-                if ($lockedDelivery->rider_id !== null) {
-                    return 'already_assigned';
-                }
-
-                User::where('id', $riderId)->lockForUpdate()->first();
-
-                $alreadyActive = $this->activeBindingsQuery($riderId)
-                    ->where('id', '!=', $lockedDelivery->id)
-                    ->exists();
-
-                if ($alreadyActive) {
-                    return 'already_active';
-                }
-
-                if (! $this->reserveCodCredit($lockedDelivery, $riderId)) {
-                    return 'ineligible';
-                }
-
-                $lockedDelivery->update([
-                    'rider_id' => $riderId,
-                    'status' => 'assigned',
-                    'assigned_at' => now(),
-                    'dispatch_status' => null,
-                    'dispatch_expires_at' => null,
-                ]);
-
-                User::where('id', $riderId)->first()?->riderDetail()?->updateOrCreate(
-                    ['user_id' => $riderId],
-                    ['rider_status' => 'busy', 'rider_status_updated_at' => now()]
-                );
-
-                return 'assigned';
-            });
-
-            if ($outcome !== 'assigned') {
-                $log->update(['response' => 'declined', 'responded_at' => now()]);
-
-                // The delivery is already claimed by another rider: do NOT re-offer
-                // it — there is no slot to re-offer, and a new wave would spam the
-                // rider who just won the claim.
-                if ($outcome === 'already_assigned' || $outcome === 'not_found') {
-                    return [
-                        'success' => false,
-                        'message' => $outcome === 'not_found'
-                            ? 'Delivery not found.'
-                            : 'This delivery was already accepted by another rider.',
-                        'already_assigned' => true,
-                    ];
-                }
-
-                $serviceType = $delivery->primaryOrder()?->order_type === 'transport' ? 'transport' : 'food';
-
-                return [
-                    'success' => false,
-                    'message' => $outcome === 'already_active'
-                        ? 'You already have an active delivery. Complete it before accepting another.'
-                        : 'You are no longer eligible for this COD delivery.',
-                    'already_active' => $outcome === 'already_active',
-                    'next_dispatched' => $this->dispatchToNearest($delivery, $serviceType, $delivery->primaryOrder()?->business?->municipality_id) !== null,
-                ];
-            }
-
-            // One active delivery: withdraw this rider's other outstanding offers
-            // and re-offer those deliveries to the next available rider.
-            $this->cancelOtherPendingOffers($riderId, $delivery->id);
-
-            // Push the authoritative assignment to the real-time engine so only
-            // this rider's socket may stream location into the trip room. Best
-            // effort: the database assignment is the source of truth.
-            try {
-                app(WebsocketNotifierService::class)->notifyTripAssigned($delivery->id, $riderId);
-            } catch (\Throwable $e) {
-                // Real-time bridge unavailable; dispatch still succeeds.
-            }
-
-            // P11.5 — emit the canonical DeliveryAssigned event so the realtime
-            // bridge can notify the restaurant/kitchen, tourist and assigned
-            // rider rooms that an accepted rider now exists (preparation may
-            // proceed). Always ordered AFTER the DB assignment commits; the
-            // database assignment remains the source of truth.
-            try {
-                $assignedDelivery = Delivery::with('order')->findOrFail($delivery->id);
-                $assignedRider = User::find($riderId);
-
-                if ($assignedRider) {
-                    DeliveryAssigned::dispatch($assignedDelivery, $assignedRider, $assignedDelivery->primaryOrder());
-                }
-            } catch (\Throwable $e) {
-                Log::warning('[Dispatch] DeliveryAssigned event failed', ['error' => $e->getMessage()]);
-            }
-
-            if ($this->firebase->isConfigured()) {
-                $this->firebase->updateRiderRequestStatus($riderId, $deliveryId, 'accepted');
-                $this->firebase->updateBookingRequestStatus($deliveryId, 'accepted');
-                $riderMunicipalityId = User::where('id', $riderId)->value('municipality_id');
-                $this->firebase->setRiderStatus($riderId, 'busy', null, $riderMunicipalityId);
-            }
-
-            return ['success' => true, 'message' => 'Delivery accepted!', 'assigned' => true];
-        }
 
         if ($this->firebase->isConfigured()) {
             $this->firebase->removeRiderRequest($riderId, $deliveryId);
@@ -894,9 +912,7 @@ class NearestRiderService
         $delivery = Delivery::with('order.business')->find($deliveryId);
         $nextRider = null;
         if ($delivery && in_array($delivery->dispatch_status, ['notified', 'waiting_for_rider'])) {
-            $serviceType = ($delivery->primaryOrder()?->order_type === 'transport') ? 'transport' : 'food';
-            $municipalityId = $delivery->primaryOrder()?->business?->municipality_id;
-            $nextRider = $this->dispatchToNearest($delivery, $serviceType, $municipalityId);
+            $nextRider = $this->redispatchIfOffered($delivery);
         }
 
         return [
@@ -908,9 +924,104 @@ class NearestRiderService
     }
 
     /**
+     * A pending offer expired before an accept arrived. Record 'timeout' and
+     * start a fresh wave only when the delivery is still unclaimed and no other
+     * rider holds a live offer.
+     */
+    private function expireOffer(BookingDispatchLog $log, Delivery $delivery): array
+    {
+        $log->update(['response' => 'timeout', 'responded_at' => now()]);
+
+        if ($this->firebase->isConfigured()) {
+            $this->firebase->removeRiderRequest($log->rider_id, $delivery->id);
+        }
+
+        $nextRider = $this->redispatchIfOffered($delivery);
+
+        return [
+            'success' => false,
+            'message' => 'Request timed out.',
+            'timeout' => true,
+            'conflict' => true,
+            'next_dispatched' => $nextRider !== null,
+        ];
+    }
+
+    /**
+     * Map a failed accept outcome to the canonical error shape. Conflicts
+     * (already assigned / active / expired / offer no longer available) are
+     * flagged so the API can respond 409 Conflict; ineligibility stays a 422.
+     */
+    private function rejectAcceptOutcome(string $outcome, BookingDispatchLog $log, Delivery $delivery): array
+    {
+        if ($outcome === 'offer_gone') {
+            // The offer row changed under the lock (expired/cancelled by a
+            // concurrent process). Never overwrite another transition.
+            return [
+                'success' => false,
+                'message' => 'This delivery request is no longer available.',
+                'conflict' => true,
+            ];
+        }
+
+        if ($outcome === 'not_found' || $outcome === 'already_assigned') {
+            // The delivery is already claimed by another rider (or gone): do NOT
+            // re-offer it — there is no slot to re-offer, and a new wave would
+            // spam the rider who just won the claim. This rider's offer is gone.
+            $this->markOfferCancelled($log);
+
+            return [
+                'success' => false,
+                'message' => $outcome === 'not_found'
+                    ? 'Delivery not found.'
+                    : 'This delivery was already accepted by another rider.',
+                'already_assigned' => true,
+                'conflict' => true,
+            ];
+        }
+
+        if ($outcome === 'offer_expired') {
+            // The offer expired inside the atomic accept window; the log row is
+            // already 'timeout'. Re-offer once no other rider holds an offer.
+            $nextRider = $this->redispatchIfOffered($delivery);
+
+            return [
+                'success' => false,
+                'message' => 'Request timed out.',
+                'timeout' => true,
+                'conflict' => true,
+                'next_dispatched' => $nextRider !== null,
+            ];
+        }
+
+        // already_active / ineligible: this rider's offer is withdrawn and the
+        // delivery re-offered to the next eligible rider (only if no other
+        // pending offer already covers it).
+        $this->markOfferCancelled($log);
+        $nextRider = $this->redispatchIfOffered($delivery);
+
+        if ($outcome === 'already_active') {
+            return [
+                'success' => false,
+                'message' => 'You already have an active delivery. Complete it before accepting another.',
+                'already_active' => true,
+                'conflict' => true,
+                'next_dispatched' => $nextRider !== null,
+            ];
+        }
+
+        return [
+            'success' => false,
+            'message' => 'You are no longer eligible for this delivery.',
+            'next_dispatched' => $nextRider !== null,
+        ];
+    }
+
+    /**
      * A rider may hold only one active delivery. When they accept one offer,
-     * every other outstanding offer to that rider is withdrawn and, if the
-     * delivery is still unclaimed, re-offered to the next available rider.
+     * every other outstanding offer to that rider is withdrawn and, if that
+     * other delivery is still unclaimed, re-offered to the next available
+     * rider (only once its current wave is exhausted).
      */
     private function cancelOtherPendingOffers(int $riderId, int $acceptedDeliveryId): void
     {
@@ -926,16 +1037,115 @@ class NearestRiderService
                 $this->firebase->removeRiderRequest($riderId, $otherLog->delivery_id);
             }
 
+            $this->notifyOfferCancelled($riderId, $otherLog->delivery_id, 'accepted_another_delivery');
+
             $otherDelivery = Delivery::with('order.business')->find($otherLog->delivery_id);
 
-            if (
-                $otherDelivery
-                && $otherDelivery->rider_id === null
-                && in_array($otherDelivery->dispatch_status, ['notified', 'waiting_for_rider'], true)
-            ) {
-                $serviceType = $otherDelivery->primaryOrder()?->order_type === 'transport' ? 'transport' : 'food';
-                $this->dispatchToNearest($otherDelivery, $serviceType, $otherDelivery->primaryOrder()?->business?->municipality_id);
+            if ($otherDelivery && $otherDelivery->rider_id === null) {
+                $this->redispatchIfOffered($otherDelivery);
             }
+        }
+    }
+
+    /**
+     * Cancel every other rider's pending offer on the claimed delivery the
+     * moment it is won, and tell each losing rider's socket that the offer is
+     * no longer available (delivery_offer_cancelled). The claim already
+     * committed; the delivery stays bound to the winner.
+     */
+    private function cancelOtherRidersOffersForDelivery(?int $deliveryId, int $winnerRiderId): void
+    {
+        if (! $deliveryId) {
+            return;
+        }
+
+        $loserLogs = BookingDispatchLog::where('delivery_id', $deliveryId)
+            ->where('rider_id', '!=', $winnerRiderId)
+            ->where('response', 'pending')
+            ->get();
+
+        foreach ($loserLogs as $loserLog) {
+            $loserLog->update(['response' => 'cancelled', 'responded_at' => now()]);
+
+            if ($this->firebase->isConfigured()) {
+                $this->firebase->removeRiderRequest($loserLog->rider_id, $deliveryId);
+            }
+
+            $this->notifyOfferCancelled($loserLog->rider_id, $deliveryId);
+        }
+    }
+
+    /**
+     * Withdraw a specific offer row (guarded on 'pending' so a concurrent
+     * timeout/accepted transition is never overwritten).
+     */
+    private function markOfferCancelled(BookingDispatchLog $log): void
+    {
+        BookingDispatchLog::where('id', $log->id)
+            ->where('response', 'pending')
+            ->update(['response' => 'cancelled', 'responded_at' => now()]);
+    }
+
+    /**
+     * Re-offer a delivery to a fresh wave, but never while:
+     *   - it already has an accepted rider, or
+     *   - it is not in a dispatchable state, or
+     *   - any other rider still holds a live pending offer (the wave is not
+     *     replenished until every current offer resolves).
+     */
+    private function redispatchIfOffered(Delivery $delivery): ?User
+    {
+        if ($delivery->rider_id !== null) {
+            return null;
+        }
+
+        if (! in_array($delivery->dispatch_status, ['notified', 'waiting_for_rider'], true)) {
+            return null;
+        }
+
+        if (BookingDispatchLog::where('delivery_id', $delivery->id)
+            ->where('response', 'pending')
+            ->exists()) {
+            return null;
+        }
+
+        $serviceType = $delivery->primaryOrder()?->order_type === 'transport' ? 'transport' : 'food';
+        $municipalityId = $delivery->primaryOrder()?->business?->municipality_id;
+
+        return $this->dispatchToNearest($delivery, $serviceType, $municipalityId);
+    }
+
+    /**
+     * Per-offer expiry: the rider's own dispatched_at + the dispatch timeout,
+     * bounded above by the wave deadline recorded on the delivery.
+     */
+    public function offerExpiresAt(BookingDispatchLog $log, ?Delivery $delivery = null): Carbon
+    {
+        $fromLog = ($log->dispatched_at?->copy() ?? now())->addSeconds(self::DISPATCH_TIMEOUT_SECONDS);
+        $waveDeadline = $delivery?->dispatch_expires_at ? Carbon::parse($delivery->dispatch_expires_at) : null;
+
+        return $waveDeadline && $waveDeadline->lt($fromLog) ? $waveDeadline : $fromLog;
+    }
+
+    public function offerIsExpired(BookingDispatchLog $log, ?Delivery $delivery = null): bool
+    {
+        return $this->offerExpiresAt($log, $delivery)->lte(now());
+    }
+
+    /**
+     * Best-effort realtime notification: tell a rider's socket that one of
+     * their offers is no longer available so the UI can drop it instantly. The
+     * booking_dispatch_logs row is the source of truth; this is a hint.
+     */
+    private function notifyOfferCancelled(int $riderId, int $deliveryId, string $code = 'delivery_no_longer_available'): void
+    {
+        try {
+            app(WebsocketNotifierService::class)->notifyStatusEvent('delivery_offer_cancelled', ["rider:{$riderId}"], [
+                'delivery_id' => $deliveryId,
+                'reason' => $code,
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('[Dispatch] delivery_offer_cancelled notify failed', ['error' => $e->getMessage()]);
         }
     }
 
@@ -968,10 +1178,17 @@ class NearestRiderService
                     return;
                 }
 
+                // The wave still carries other live offers — do not start a fresh
+                // wave yet; only re-dispatch once every current offer resolves.
+                if (BookingDispatchLog::where('delivery_id', $log->delivery_id)
+                    ->where('id', '!=', $log->id)
+                    ->where('response', 'pending')
+                    ->exists()) {
+                    return;
+                }
+
                 if (in_array($lockedDelivery->dispatch_status, ['notified', 'waiting_for_rider'])) {
-                    $serviceType = $lockedDelivery->primaryOrder()?->order_type === 'transport' ? 'transport' : 'food';
-                    $municipalityId = $lockedDelivery->primaryOrder()?->business?->municipality_id;
-                    $nextRider = $this->dispatchToNearest($lockedDelivery, $serviceType, $municipalityId);
+                    $nextRider = $this->redispatchIfOffered($lockedDelivery);
                     if (! $nextRider) {
                         $lockedDelivery->update(['dispatch_status' => 'no_rider_available']);
                     }
@@ -1027,7 +1244,6 @@ class NearestRiderService
      * booking is unconditional for COD: the persisted order.rider_financed_amount
      * is the interim settlement base (credit-free, step 3), and the legacy
      * rider-credit finalize path only runs when an old delivery still carries a
-     * cod_credit_reserved > 0.
      *
      * The delivery must already be marked 'delivered'. Cash received is
      * validated server-side and change is computed here, never by the client.
@@ -1103,25 +1319,8 @@ class NearestRiderService
                 ? round((float) ($lockedDelivery->rider_commission ?? 0) / $lockedOrders->count(), 2)
                 : null;
 
-            $reserved = (float) ($lockedDelivery->cod_credit_reserved ?? 0);
-
             foreach ($lockedOrders as $lockedOrder) {
-                $orderId = (int) $lockedOrder->id;
                 $orderCashDue = (float) ($lockedOrder->total ?? $cashDue);
-
-                // Legacy credit-financed COD (reserve > 0): finalize once. New
-                // cash-on-hand COD (reserve == 0) never touches the wallet; the
-                // rider keeps the collected cash. finalizeCredits() is the ONLY
-                // wallet deduction and is never repeated here.
-                if ($reserved > 0) {
-                    app(RiderCreditService::class)->finalizeCredits(
-                        $riderId,
-                        $reserved,
-                        $orderId,
-                        'COD settlement for order #'.$orderId.' — cash received ₱'.number_format($cashReceived, 2)
-                            .' (change ₱'.number_format($changeGiven, 2).')'
-                    );
-                }
 
                 $this->recordCashPayment($lockedOrder, $orderCashDue, $changeGiven, $lockedDelivery->id);
 
@@ -1137,10 +1336,11 @@ class NearestRiderService
                 // restaurant order. P12.2 posts its restaurant-wallet effect only
                 // after the order becomes completed, still inside this same
                 // delivery settlement transaction.
-                $orderSettlement = app(CodSettlementService::class)->record($lockedDelivery, $lockedOrder, $riderId);
-                app(OrderSettlementService::class)->recordCodSettlement($orderSettlement);
-
-                $settlement ??= $orderSettlement;
+                $orderSettlements = app(CodSettlementService::class)->recordAllocations($lockedDelivery, $lockedOrder, $riderId);
+                foreach ($orderSettlements as $orderSettlement) {
+                    app(OrderSettlementService::class)->recordCodSettlement($orderSettlement);
+                    $settlement ??= $orderSettlement;
+                }
 
                 $this->recordEarning($lockedDelivery, $lockedOrder, $riderId, $commissionShare);
             }
@@ -1151,7 +1351,6 @@ class NearestRiderService
                 'change_given' => $changeGiven,
                 'cash_settled_at' => now(),
                 'delivered_at' => $lockedDelivery->delivered_at ?? now(),
-                'cod_credit_reserved' => 0,
             ]);
 
             // Rider is free to take the next delivery once cash is collected.

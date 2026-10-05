@@ -11,7 +11,6 @@ use App\Models\Municipality;
 use App\Models\Offering;
 use App\Models\Order;
 use App\Models\Payment;
-use App\Models\RiderCredit;
 use App\Models\RiderDetail;
 use App\Models\RiderLocation;
 use App\Models\Staff;
@@ -200,11 +199,6 @@ class RiderAcceptanceGateTest extends TestCase
             'current_service' => 'food',
         ]);
 
-        RiderCredit::create([
-            'rider_id' => $rider->id,
-            'total_credits' => 10000,
-            'reserved_credits' => 0,
-        ]);
 
         RiderLocation::create([
             'rider_id' => $rider->id,
@@ -397,26 +391,22 @@ class RiderAcceptanceGateTest extends TestCase
         $this->assertNull($delivery->fresh()->rider_id);
 
         $this->patchJson('/api/rider/dispatch/accept', ['delivery_id' => $delivery->id], $this->authHeaders($this->riderB))
-            ->assertStatus(422);
+            ->assertStatus(409);
 
         // Rider A (offered) claims it exactly once.
         $this->assertRiderAccepted($delivery->fresh(), $this->riderA);
         $this->assertSame($this->riderA->id, $delivery->fresh()->rider_id);
 
-        // Rider B attempts again after assignment → still rejected.
+        // Rider B attempts again after assignment → still rejected (conflict).
         $this->patchJson('/api/rider/dispatch/accept', ['delivery_id' => $delivery->id], $this->authHeaders($this->riderB))
-            ->assertStatus(422);
+            ->assertStatus(409);
 
         // A second accept attempt by the winning rider is a no-op (already assigned).
         $second = $this->dispatchService()->handleRiderResponse($delivery->fresh()->id, $this->riderA->id, 'accepted');
         $this->assertFalse($second['success'] ?? true);
     }
 
-    /**
-     * Group orders: the prep gate for BOTH restaurant sub-orders resolves
-     * through the group's ONE shared delivery, and that delivery stays bound
-     * to the single accepted rider (4.2, 4.4).
-     */
+    /** One order with two restaurant item groups uses one shared delivery. */
     public function test_group_order_prep_gate_shares_one_delivery_and_stays_bound(): void
     {
         $burger = Offering::create(['business_id' => $this->restaurantA->id, 'name' => 'Burger', 'price' => 120.00, 'is_available' => true, 'status' => 'available']);
@@ -435,51 +425,42 @@ class RiderAcceptanceGateTest extends TestCase
             ],
         ]);
 
-        $orderA = $group->orders()->where('business_id', $this->restaurantA->id)->first();
-        $orderB = $group->orders()->where('business_id', $this->restaurantB->id)->first();
+        $order = $group->orders()->sole();
 
-        // ONE physical delivery anchors the whole group; sub-orders own none.
-        $this->assertNull($orderA->fresh()->delivery, 'Sub-order A has no per-restaurant delivery.');
-        $this->assertNull($orderB->fresh()->delivery, 'Sub-order B has no per-restaurant delivery.');
+        // ONE physical delivery belongs to the canonical order.
         $delivery = $group->fresh()->delivery;
-        $this->assertNotNull($delivery, 'The group owns exactly one delivery.');
-        $this->assertNull($delivery->order_id);
+        $this->assertNotNull($delivery, 'The order owns exactly one delivery.');
+        $this->assertSame($order->id, $delivery->order_id);
         $this->assertSame($group->id, $delivery->group_checkout_id);
 
         // Neither restaurant can prepare while the rider is still pending.
-        $this->postJson("/api/business-owner/orders/{$orderA->id}/start-preparation", [], $this->authHeaders($this->ownerA))
+        $this->postJson("/api/business-owner/orders/{$order->id}/start-preparation", [], $this->authHeaders($this->ownerA))
             ->assertStatus(422);
-        $this->postJson("/api/business-owner/orders/{$orderB->id}/start-preparation", [], $this->authHeaders($this->ownerB))
+        $this->postJson("/api/business-owner/orders/{$order->id}/start-preparation", [], $this->authHeaders($this->ownerB))
             ->assertStatus(422);
 
         // The single outstanding offer went to rider A (deterministic mock) —
-        // rider B has no offer and cannot claim the shared trip.
+        // rider B has no offer and cannot claim the shared trip (conflict).
         $this->patchJson('/api/rider/dispatch/accept', ['delivery_id' => $delivery->id], $this->authHeaders($this->riderB))
-            ->assertStatus(422);
+            ->assertStatus(409);
 
-        // Rider A claims the shared trip: BOTH restaurants may now prepare.
+        // Rider A claims the shared trip: all restaurant item groups may now prepare.
         $this->assertRiderAccepted($delivery->fresh(), $this->riderA);
 
-        $this->postJson("/api/business-owner/orders/{$orderA->id}/start-preparation", [], $this->authHeaders($this->ownerA))
+        $this->postJson("/api/business-owner/orders/{$order->id}/start-preparation", [], $this->authHeaders($this->ownerA))
             ->assertOk();
-        $this->postJson("/api/business-owner/orders/{$orderB->id}/start-preparation", [], $this->authHeaders($this->ownerB))
-            ->assertOk();
-        $this->assertSame('preparing', $orderA->fresh()->status);
-        $this->assertSame('preparing', $orderB->fresh()->status);
+        $this->assertSame('preparing', $order->fresh()->status);
 
         // The shared delivery stays permanently bound to its accepted rider.
         $this->assertSame($this->riderA->id, $delivery->fresh()->rider_id);
 
-        // Rider B still cannot claim a trip already claimed by rider A.
+        // Rider B still cannot claim a trip already claimed by rider A (conflict).
         $this->patchJson('/api/rider/dispatch/accept', ['delivery_id' => $delivery->id], $this->authHeaders($this->riderB))
-            ->assertStatus(422);
+            ->assertStatus(409);
 
-        // Both sub-orders resolve their prep gate through the SAME accepted
-        // rider — the group has one trip, one bound rider (never one per restaurant).
-        $this->assertSame($this->riderA->id, $orderA->fresh()->activeDelivery()?->rider_id);
-        $this->assertSame($this->riderA->id, $orderB->fresh()->activeDelivery()?->rider_id);
-        $this->assertTrue($orderA->fresh()->hasAcceptedRider());
-        $this->assertTrue($orderB->fresh()->hasAcceptedRider());
+        // Every item group resolves through the same accepted rider.
+        $this->assertSame($this->riderA->id, $order->fresh()->activeDelivery()?->rider_id);
+        $this->assertTrue($order->fresh()->hasAcceptedRider());
     }
 
     public function test_rider_decline_reoffers_delivery_to_next_eligible_rider(): void

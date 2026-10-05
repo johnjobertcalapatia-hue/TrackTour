@@ -11,7 +11,6 @@ use App\Models\Delivery;
 use App\Models\Municipality;
 use App\Models\Order;
 use App\Models\Payment;
-use App\Models\RiderCredit;
 use App\Models\RiderDetail;
 use App\Models\RiderEarning;
 use App\Models\RiderLocation;
@@ -121,12 +120,6 @@ class ConcurrencyLockTest extends TestCase
             'recorded_at' => now(),
         ]);
 
-        RiderCredit::create([
-            'rider_id' => $rider->id,
-            'total_credits' => 10000,
-            'reserved_credits' => 0,
-            'minimum_reserve' => 200,
-        ]);
 
         return $rider;
     }
@@ -211,7 +204,13 @@ class ConcurrencyLockTest extends TestCase
         $this->assertSame($riderX->id, $delivery->fresh()->rider_id, 'Winner is assigned.');
 
         $this->assertFalse($second['success'], 'Loser accept fails.');
-        $this->assertTrue($second['already_assigned'] ?? false);
+        // P11.8: the winner's claim immediately withdraws every other rider's
+        // offer on the delivery, so a SEQUENTIALLY-timed loser accept surfaces
+        // as an offer-gone conflict instead of 'already_assigned' (the
+        // already_assigned branch still fires when two accepts genuinely
+        // overlap on the delivery row lock). Both paths leave the delivery
+        // bound to the winner exactly once.
+        $this->assertTrue($second['conflict'] ?? false);
         $this->assertSame($riderX->id, $delivery->fresh()->rider_id, 'Loser never overwrites the winner.');
 
         $this->assertSame(1, Delivery::where('id', $delivery->id)->whereNotNull('rider_id')->count());
@@ -354,7 +353,6 @@ class ConcurrencyLockTest extends TestCase
             'rider_id' => $riderX->id,
             'status' => 'delivered',
             'cash_due' => $order->total,
-            'cod_credit_reserved' => 0,
             'pickup_address' => $business->business_name,
             'delivery_address' => $order->delivery_address,
         ]);

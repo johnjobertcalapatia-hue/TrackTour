@@ -8,7 +8,7 @@ import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { useAuthStore } from '@/features/auth/services/auth-store'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { History, Save, ChevronRight } from 'lucide-react'
+import { History, Save, DollarSign } from 'lucide-react'
 
 const schema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
@@ -32,14 +32,6 @@ interface RiderProfile {
   current_service?: 'food' | 'transport' | null
 }
 
-interface CreditTransaction {
-  id: number
-  transaction_type: string
-  amount: number
-  description: string
-  created_at: string
-}
-
 export default function RiderProfile() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -52,11 +44,6 @@ export default function RiderProfile() {
   const { data: profile, isLoading } = useQuery({
     queryKey: ['rider-profile'],
     queryFn: () => get<RiderProfile>('/rider/profile'),
-  })
-
-  const { data: transactions } = useQuery({
-    queryKey: ['rider-credits-transactions'],
-    queryFn: () => get<CreditTransaction[]>('/rider/credits/transactions'),
   })
 
   const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
@@ -175,73 +162,23 @@ export default function RiderProfile() {
         {isSettingsPage && <div className="bg-white rounded-2xl border border-[#E5E9E7] p-6">
           <h2 className="text-lg font-semibold text-[#17201B]">Activity</h2>
           <p className="mt-1 text-sm text-[#6B7280]">View your completed deliveries and ride history.</p>
+          <div className="mt-4 flex flex-wrap gap-3">
           <button
             type="button"
             onClick={() => navigate('/rider/history')}
-            className="mt-4 inline-flex items-center gap-2 rounded-xl border border-emerald-500/40 px-4 py-2.5 text-sm font-semibold text-emerald-400 transition hover:bg-emerald-500/10"
+            className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/40 px-4 py-2.5 text-sm font-semibold text-emerald-400 transition hover:bg-emerald-500/10"
           >
             <History className="h-4 w-4" />
             View History
           </button>
-        </div>}
-
-        {isSettingsPage && <div className="bg-white rounded-2xl border border-[#E5E9E7] shadow-sm">
-          <div className="p-5 border-b border-[#E5E9E7] flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-[#17201B]">Transaction History</h2>
-            <button
-              type="button"
-              onClick={() => navigate('/rider/credit-activity')}
-              className="text-xs text-[#087F3F] hover:text-[#065F2E] transition flex items-center gap-1"
-            >
-              View All <ChevronRight className="w-3 h-3" />
-            </button>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-[#E5E9E7] bg-[#F3F8F5]">
-                  <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">Type</th>
-                  <th className="text-left px-5 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">Description</th>
-                  <th className="text-right px-5 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">Amount</th>
-                  <th className="text-right px-5 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">Date</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#E5E9E7]">
-                {(transactions ?? []).slice(0, 5).map((tx) => (
-                  <tr key={tx.id} className="hover:bg-[#F3F8F5] transition-colors">
-                    <td className="px-5 py-3 whitespace-nowrap">
-                      <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        tx.transaction_type === 'CREDIT_TOPUP' || tx.transaction_type === 'COD_RELEASE'
-                          ? 'bg-emerald-50 text-emerald-700'
-                          : tx.transaction_type === 'COD_RESERVE'
-                          ? 'bg-amber-50 text-amber-700'
-                          : 'bg-gray-50 text-gray-700'
-                      }`}>
-                        {tx.transaction_type === 'CREDIT_TOPUP' ? 'Credit Top-up'
-                          : tx.transaction_type === 'COD_RESERVE' ? 'COD Reserved'
-                          : tx.transaction_type === 'COD_RELEASE' ? 'COD Released'
-                          : 'Adjustment'}
-                      </span>
-                    </td>
-                    <td className="px-5 py-3 text-[#4B5563]">{tx.description}</td>
-                    <td className={`px-5 py-3 text-right font-medium whitespace-nowrap ${
-                      tx.transaction_type === 'CREDIT_TOPUP' || tx.transaction_type === 'COD_RELEASE'
-                        ? 'text-emerald-600' : 'text-amber-600'
-                    }`}>
-                      {tx.transaction_type === 'COD_RESERVE' ? '-' : '+'}{new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' }).format(tx.amount)}
-                    </td>
-                    <td className="px-5 py-3 text-[#6B7280] text-right whitespace-nowrap">
-                      {new Date(tx.created_at).toLocaleDateString()}
-                    </td>
-                  </tr>
-                ))}
-                {(!transactions || transactions.length === 0) && (
-                  <tr>
-                    <td colSpan={4} className="px-5 py-12 text-center text-[#9CA3AF]">No transactions yet</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+          <button
+            type="button"
+            onClick={() => navigate('/rider/earnings')}
+            className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/40 px-4 py-2.5 text-sm font-semibold text-emerald-400 transition hover:bg-emerald-500/10"
+          >
+            <DollarSign className="h-4 w-4" />
+            View Earnings
+          </button>
           </div>
         </div>}
 

@@ -9,7 +9,6 @@ use App\Models\Delivery;
 use App\Models\Municipality;
 use App\Models\Offering;
 use App\Models\Order;
-use App\Models\RiderCredit;
 use App\Models\RiderDetail;
 use App\Models\RiderLocation;
 use App\Models\Staff;
@@ -184,12 +183,6 @@ class RealtimeCompletenessTest extends TestCase
             'user_id' => $rider->id,
             'rider_status' => 'available',
             'current_service' => 'food',
-        ]);
-
-        RiderCredit::create([
-            'rider_id' => $rider->id,
-            'total_credits' => 10000,
-            'reserved_credits' => 0,
         ]);
 
         RiderLocation::create([
@@ -382,15 +375,13 @@ class RealtimeCompletenessTest extends TestCase
             ],
         ]);
 
-        $orderA = $group->orders()->where('business_id', $this->restaurantA->id)->first();
-        $orderB = $group->orders()->where('business_id', $this->restaurantB->id)->first();
+        $orderA = $group->orders()->sole();
         $delivery = $group->fresh()->delivery;
 
         $this->assertRiderAccepted($delivery, $this->riderA);
 
-        // Rider A's DeliveryAssigned (primary-order anchored) must NOT mention
-        // Restaurant B or Rider B — business rooms stay per restaurant even
-        // though the trip room is shared.
+        // The shared order assignment reaches every participating restaurant
+        // room while retaining one trip and one rider audience.
         $this->assertTrue(
             $this->bridgeEvents(fn ($req) =>
                 $req['eventName'] === 'delivery.assigned'
@@ -398,40 +389,27 @@ class RealtimeCompletenessTest extends TestCase
             )->every(fn ($pair) =>
                 in_array('rider:'.$this->riderA->id, $pair[0]['rooms'], true)
                 && in_array('business:'.$this->restaurantA->id, $pair[0]['rooms'], true)
-                && ! in_array('business:'.$this->restaurantB->id, $pair[0]['rooms'], true)
+                && in_array('business:'.$this->restaurantB->id, $pair[0]['rooms'], true)
                 && ! in_array('rider:'.$this->riderB->id, $pair[0]['rooms'], true),
             ),
             'The assignment must be anchored on the primary restaurant audience only.'
         );
 
-        // The single accepted rider gates BOTH restaurants on the shared trip —
-        // each sub-order may proceed independently once the trip is claimed.
+        // The single accepted rider gates the shared order.
         $this->postJson("/api/business-owner/orders/{$orderA->id}/accept", [], $this->authHeaders($this->ownerA))
             ->assertOk();
-        $this->postJson("/api/business-owner/orders/{$orderB->id}/accept", [], $this->authHeaders($this->ownerB))
-            ->assertOk();
 
-        // Room isolation on the fan-out status events: each restaurant order
-        // reaches its OWN business room (never the sibling's), while sharing
-        // the same trip room and assigned rider.
+        // Status events fan to both business rooms, the shared trip, and rider.
         $statusEvents = $this->bridgeEvents(fn ($req) => $req['eventName'] === 'order.status.changed');
         $this->assertTrue(
             $statusEvents->contains(fn ($pair) =>
-                $pair[0]['data']['order_id'] === $orderB->id
+                $pair[0]['data']['order_id'] === $orderA->id
                 && in_array('business:'.$this->restaurantB->id, $pair[0]['rooms'], true)
-                && ! in_array('business:'.$this->restaurantA->id, $pair[0]['rooms'], true)
+                && in_array('business:'.$this->restaurantA->id, $pair[0]['rooms'], true)
                 && in_array('trip:'.$delivery->id, $pair[0]['rooms'], true)
                 && in_array('rider:'.$this->riderA->id, $pair[0]['rooms'], true),
             ),
-            'Restaurant B status events must fan only to B\'s business room, on the shared trip.'
-        );
-        $this->assertTrue(
-            $statusEvents->contains(fn ($pair) =>
-                $pair[0]['data']['order_id'] === $orderA->id
-                && in_array('business:'.$this->restaurantA->id, $pair[0]['rooms'], true)
-                && ! in_array('business:'.$this->restaurantB->id, $pair[0]['rooms'], true),
-            ),
-            'Restaurant A status events must fan only to A\'s business room.'
+            'Shared order status events must fan to every participating business room.'
         );
     }
 

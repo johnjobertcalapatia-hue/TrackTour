@@ -4,7 +4,7 @@
 
 The delivery/dispatch/payment/realtime phase is complete (P11.1 → P11.7). The next build phase is the **Admin module** — a Tourism Office governance/monitoring surface.
 
-**Starting regression baseline**: 305 tests / 1,479 assertions / 0 failures / 2 skipped (Laravel) + 43 JS socket tests.
+**Starting regression baseline**: 311 tests / 1,493 assertions / 0 failures / 2 skipped (Laravel) + 43 JS socket tests.
 
 ### Admin Boundary (non-negotiable)
 
@@ -36,7 +36,7 @@ Tourism Office manages only through **monitor / verify / approve / audit / repor
 | State-machine hardening (P11 recon #6) | Prior-state guards on item transitions, terminal-revival protection, pre-pickup delivery-state check, conditional order-status PATCH guards |
 | Payout transition atomicity (P11 recon #7) | Transactions + `lockForUpdate` on approve/markPaid/reject/cancel |
 | Admin system-fee / COD receivable reporting | Platform accounting of `system_fee` and COD receivables |
-| `rider_credit_transactions.delivery_id` | Low-priority audit enhancement (deferred by AGENTS §17) |
+| Dispatched-time vs accepted-time metrics parity | Cosmetic reporting divergence |
 
 ### Priority Tier 2 — Features
 

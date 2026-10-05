@@ -18,7 +18,7 @@ class GroupOrderController extends Controller
 
     /**
      * POST /tourist/food/group-order
-     * Creates a group checkout and one independent order per restaurant.
+    * Creates a group checkout with one canonical order and restaurant-owned items.
      */
     public function store(Request $request): JsonResponse
     {
@@ -77,7 +77,7 @@ class GroupOrderController extends Controller
         }
 
         return $this->createdResponse([
-            'group_order' => $group->load('orders.items', 'orders.business'),
+            'group_order' => $group->load('orders.items.business', 'orders.business', 'delivery.rider.profile'),
         ], 'Group order placed successfully.');
     }
 
@@ -89,8 +89,10 @@ class GroupOrderController extends Controller
     {
         $group = GroupCheckout::with([
             'orders.items.offering',
+            'orders.items.business',
             'orders.business',
             'orders.delivery.rider.profile',
+            'delivery.rider.profile',
             'payments',
         ])->findOrFail($id);
 

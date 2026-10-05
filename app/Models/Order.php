@@ -127,6 +127,17 @@ class Order extends Model
         return $this->belongsTo(Business::class);
     }
 
+    public function isManagedBy(User $user): bool
+    {
+        if ($this->business?->owner_id === $user->id) {
+            return true;
+        }
+
+        return $this->items()
+            ->whereHas('business', fn ($query) => $query->where('owner_id', $user->id))
+            ->exists();
+    }
+
     public function groupOrder(): BelongsTo
     {
         return $this->belongsTo(GroupCheckout::class, 'group_order_id');
@@ -150,19 +161,10 @@ class Order extends Model
         return $this->hasOne(Delivery::class);
     }
 
-    /**
-     * The delivery trip that fulfills this order.
-     *
-     * Standalone orders use their own delivery; restaurant sub-orders of a
-     * group checkout ride on the group's single physical delivery.
-     */
+    /** The single delivery trip that fulfills this order. */
     public function activeDelivery(): ?Delivery
     {
-        if ($this->group_order_id !== null) {
-            return $this->groupOrder?->delivery;
-        }
-
-        return $this->delivery;
+        return $this->delivery ?? $this->groupOrder?->delivery;
     }
 
     public function settlement(): HasOne
@@ -173,11 +175,8 @@ class Order extends Model
     /**
      * A rider has accepted the delivery trip for this order.
      *
-     * The P11.2 contract requires an accepted/assigned rider before the
-     * restaurant may start preparing: dispatch is scheduled as soon as the
-     * order enters `waiting_restaurant`, and preparation is gated on the
-     * rider's acceptance. Group sub-orders resolve their prep gate through
-     * the group's single delivery (4.2, 4.4).
+    * The P11.2 contract requires an accepted/assigned rider before any
+    * restaurant item in this order may start preparing.
      */
     public function hasAcceptedRider(): bool
     {
@@ -225,11 +224,6 @@ class Order extends Model
     public function riderEarnings()
     {
         return $this->hasMany(RiderEarning::class);
-    }
-
-    public function riderCreditTransactions()
-    {
-        return $this->hasMany(RiderCreditTransaction::class);
     }
 
     /**

@@ -1,8 +1,8 @@
 # Known Issues
 
 ## Current Baseline
-- **PHPUnit**: 300 tests / 1,447 assertions / 0 failures / 2 skipped
-- **Node.js Socket**: 25 tests (`npm run test:js`)
+- **PHPUnit**: 311 tests / 1,493 assertions / 0 failures / 2 skipped
+- **Node.js Socket**: 43 tests (`npm run test:js`)
 
 ---
 
@@ -27,18 +27,15 @@
 
 | # | Issue | Scope | Status |
 |---|-------|-------|--------|
-| 1 | **P11.5: Realtime completeness** — dispatch `DeliveryAssigned`/`OrderStatusChanged` on restaurant transitions; wire `restaurant_accepted_order` server handler; connect business/tourist/rider realtime | Events, Socket.IO, Frontend | Pending |
-| 2 | **State-machine hardening** — prior-state guards on item transitions, terminal-revival protection, pre-pickup delivery-state check on `completed/cancelled` PATCH, conditional `acceptAll` payment_status | Controllers, Order/OrderItem models | Pending |
-| 3 | **Payout transition atomicity** — transactions + `lockForUpdate` on approve/markPaid/reject/cancel | `RiderPayoutService` | Pending |
-| 4 | **Admin system-fee / COD receivable reporting** — no platform accounting of `system_fee` or COD receivables | `AdminReportController` | Pending |
+| 1 | **State-machine hardening** — prior-state guards on item transitions, terminal-revival protection, pre-pickup delivery-state check on `completed/cancelled` PATCH, conditional `acceptAll` payment_status | Controllers, Order/OrderItem models | Pending |
+| 2 | **Payout transition atomicity** — transactions + `lockForUpdate` on approve/markPaid/reject/cancel | `RiderPayoutService` | Pending |
+| 3 | **Admin system-fee / COD receivable reporting** — no platform accounting of `system_fee` or COD receivables | `AdminReportController` | Pending |
 
 ### LOW — Deferred
 
 | Issue | Notes |
 |-------|-------|
-| `rider_credit_transactions.delivery_id` | Reconstructable via UNIQUE `deliveries.order_id`; `cod_settlements` already carries `delivery_id` |
 | Settlement/report parity (dashboard vs payout ledger) | Cosmetic divergence |
-| Dead schema columns (`rider_credits.available_credits`) | Unused, no runtime impact |
 | Magic numbers in fee config | Config-driven, not hard-coded |
 
 ---

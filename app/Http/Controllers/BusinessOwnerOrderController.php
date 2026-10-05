@@ -33,7 +33,10 @@ class BusinessOwnerOrderController extends Controller
         $filters = $request->only(['status', 'business_id', 'search', 'order_type', 'perPage']);
         $perPage = $filters['perPage'] ?? 20;
 
-        $orders = Order::whereIn('business_id', $businessIds)
+        $orders = Order::where(function ($query) use ($businessIds) {
+                $query->whereIn('business_id', $businessIds)
+                    ->orWhereHas('items', fn ($items) => $items->whereIn('business_id', $businessIds));
+            })
             ->with('business', 'items', 'delivery.rider.profile', 'groupOrder')
             ->when($filters['status'] ?? null, fn ($q, $s) => $q->where('status', $s))
             ->when($filters['business_id'] ?? null, fn ($q, $id) => $q->where('business_id', $id))
@@ -47,7 +50,7 @@ class BusinessOwnerOrderController extends Controller
 
     public function show(Request $request, Order $order): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -58,7 +61,7 @@ class BusinessOwnerOrderController extends Controller
 
     public function updateStatus(UpdateOrderStatusRequest $request, Order $order): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -113,7 +116,7 @@ class BusinessOwnerOrderController extends Controller
 
     public function acceptOrder(Request $request, Order $order): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -191,7 +194,7 @@ class BusinessOwnerOrderController extends Controller
 
     public function rejectOrder(Request $request, Order $order): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -256,7 +259,7 @@ class BusinessOwnerOrderController extends Controller
 
     public function assignRider(Request $request, Order $order): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -321,7 +324,7 @@ class BusinessOwnerOrderController extends Controller
      */
     public function startPreparation(Request $request, Order $order): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -373,7 +376,7 @@ class BusinessOwnerOrderController extends Controller
      */
     public function markReady(Request $request, Order $order): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -444,7 +447,7 @@ class BusinessOwnerOrderController extends Controller
      */
     public function acceptAll(Request $request, Order $order): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -535,12 +538,16 @@ class BusinessOwnerOrderController extends Controller
      */
     public function acceptItem(Request $request, Order $order, OrderItem $item): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
         if ($item->order_id !== $order->id) {
             return $this->errorResponse('Item does not belong to this order.', 422);
+        }
+
+        if (! $item->load('business')->isManagedBy($request->user())) {
+            return $this->forbiddenResponse('You do not own this restaurant item.');
         }
 
         if (! $item->canAccept()) {
@@ -597,12 +604,16 @@ class BusinessOwnerOrderController extends Controller
      */
     public function rejectItem(Request $request, Order $order, OrderItem $item): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
         if ($item->order_id !== $order->id) {
             return $this->errorResponse('Item does not belong to this order.', 422);
+        }
+
+        if (! $item->load('business')->isManagedBy($request->user())) {
+            return $this->forbiddenResponse('You do not own this restaurant item.');
         }
 
         if (! $item->canReject()) {
@@ -684,7 +695,7 @@ class BusinessOwnerOrderController extends Controller
      */
     public function updateItemStatus(Request $request, Order $order, OrderItem $item): JsonResponse
     {
-        if ($order->business->owner_id !== $request->user()->id) {
+        if (! $order->isManagedBy($request->user())) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
