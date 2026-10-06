@@ -16,6 +16,9 @@
 frontend/
 node_modules/
 vendor/
+deploy/
+compose.vps.yaml
+Caddyfile
 
 # Local dev / tooling / docs that must never ship in the image.
 docs/

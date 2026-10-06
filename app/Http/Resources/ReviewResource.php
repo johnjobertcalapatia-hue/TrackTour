@@ -11,11 +11,13 @@ class ReviewResource extends JsonResource
     {
         return [
             'id' => $this->id,
+            'order_id' => $this->order_id,
             'user' => new UserResource($this->whenLoaded('user')),
             'business' => new BusinessResource($this->whenLoaded('business')),
             'rating' => $this->rating,
             'food_rating' => $this->food_rating,
             'service_rating' => $this->service_rating,
+            'delivery_rating' => $this->delivery_rating,
             'cleanliness_rating' => $this->cleanliness_rating,
             'atmosphere_rating' => $this->atmosphere_rating,
             'value_rating' => $this->value_rating,

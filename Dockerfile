@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# TrackTour Laravel API — Railway build
+# TrackTour Laravel API — production container
 # Serves the API on :80 (Apache + mod_php) and runs the scheduler + queue worker
 # via supervisord inside the same container.
 
@@ -58,7 +58,7 @@ RUN composer install --no-dev --no-scripts --no-interaction --prefer-dist --opti
 COPY . .
 
 # Runtime-home directories Laravel needs to stay writable. Uploaded media lives
-# at storage/app/public (recommended: bind a Railway volume there).
+# at storage/app/public on a persistent deployment volume.
 RUN mkdir -p bootstrap/cache storage/framework/sessions storage/framework/views storage/app/public \
     && chown -R www-data:www-data storage bootstrap/cache public
 

@@ -162,6 +162,7 @@ class TouristConfirmRatingPersistenceTest extends TestCase
     public function test_prepaid_tourist_confirmation_allows_rating_and_persists_delivery_rating(): void
     {
         $order = $this->makeOrder('gcash', 'TT-RATE-PREPAID');
+        $this->confirmPayment($order);
         $delivery = $this->makeDelivery($order);
 
         // Gate closes prepaid: tourist confirms receipt -> terminal 'completed'.
@@ -325,5 +326,22 @@ class TouristConfirmRatingPersistenceTest extends TestCase
     private function riderToken(): string
     {
         return $this->rider->createToken('test')->plainTextToken;
+    }
+
+    private function confirmPayment(Order $order): void
+    {
+        Payment::create([
+            'payment_number' => 'PAY-RATE-'.uniqid(),
+            'payable_type' => Order::class,
+            'payable_id' => $order->id,
+            'user_id' => $order->user_id,
+            'amount' => $order->total,
+            'currency' => 'PHP',
+            'method' => 'gcash',
+            'provider' => 'paymongo',
+            'provider_payment_id' => 'pi-rate-'.uniqid(),
+            'status' => 'paid',
+            'paid_at' => now(),
+        ]);
     }
 }

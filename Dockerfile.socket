@@ -1,10 +1,10 @@
-# TrackTour Socket.IO realtime engine — Railway build.
+# TrackTour Socket.IO realtime engine — production container.
 # Long-lived process: socket-server.js binds SOCKET_PORT (default 3001) for the
 # browser-facing Socket.IO traffic and SOCKET_BRIDGE_PORT (default 3002) for the
 # Laravel→socket HTTP dispatch bridge.
 #
-# Railway service setup: Root Directory = repo root, Dockerfile Path =
-# Dockerfile.socket. Expose both ports (public for 3001, internal for 3002).
+# Expose port 3001 to browsers through the HTTPS reverse proxy; keep 3002
+# internal for the Laravel-to-socket bridge.
 
 FROM node:22-alpine
 

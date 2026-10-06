@@ -1,5 +1,8 @@
 # TrackTour — Production Deployment
 
+The repository includes a self-managed VPS option in §9. The managed
+Vercel/Railway setup below remains available as an alternative.
+
 Target stack:
 
 ```text
@@ -32,6 +35,9 @@ Three Railway services share this repo:
 
 - `frontend/vercel.json` — SPA fallback + Vite build/output for Vercel.
 - `frontend/.env.example` — Vercel vars the frontend build reads.
+- `compose.vps.yaml`, `Caddyfile`, `frontend/Dockerfile`, and
+  `frontend/nginx.vps.conf` — self-managed Ubuntu VPS stack with automatic
+  HTTPS, private MySQL/socket bridge, and static SPA hosting.
 - `Dockerfile` (+ `docker/apache-vhost.conf`, `docker/supervisord.conf`,
   `docker/start-container.sh`, `docker/opcache.ini`) — Laravel API image.
   On boot it waits for MySQL, runs `php artisan migrate --force`, then starts
@@ -160,9 +166,9 @@ VITE_PAYMONGO_PUBLIC_KEY=pk_...
 1. `curl https://<api>.up.railway.app/api/health` (or any public endpoint) → JSON.
 2. Socket engine: `curl https://<socket>.up.railway.app/status` → radar/trip JSON.
 3. `npm run build` locally in `frontend/` → clean.
-4. Full Laravel suite passes locally: `php artisan test`.
-5. Socket JS suite: `npm run test:js` → 45/45.
-6. Log in from the Vercel URL; place an order; watch the dispatch ping reach an
+4. Run the Laravel suite and resolve failures before production rollout.
+5. Socket JS suite: `npm run test:js` → 51/51.
+6. Log in from the frontend URL; place an order; watch the dispatch ping reach an
    online rider and the status flow render in realtime.
 
 ## 8. Known production notes
@@ -175,3 +181,89 @@ VITE_PAYMONGO_PUBLIC_KEY=pk_...
   base OS, OCR falls back to `eng` only — check log noise after deploy.
 - Uploaded media must live on the Railway volume, not the container layer.
 - No Redis: sessions/queue/cache all use MySQL (`database` drivers).
+
+## 9. Ubuntu VPS — Docker Compose + Caddy
+
+This option serves the React SPA, Laravel API, and Socket.IO service from
+`https://tracktour.com`. Caddy obtains and renews HTTPS certificates
+automatically. MySQL and the Socket.IO bridge remain private to the Docker
+network; only ports 80 and 443 are published.
+
+### Prerequisites
+
+- Ubuntu 24.04 VPS with a public IPv4 address and at least 2 GB RAM.
+- DNS `A` record for `tracktour.com` pointing to the VPS. Allow DNS time to
+  propagate before starting Caddy.
+- In the VPS provider firewall and Ubuntu firewall, allow inbound TCP ports
+  22, 80, and 443. UDP 443 is optional (HTTP/3).
+- Docker Engine and the Docker Compose plugin.
+
+### Deploy
+
+1. Install Docker Engine and the Compose plugin using Docker's official Ubuntu
+   instructions. Clone the repository onto the VPS only after the intended
+   application changes have been committed and pushed.
+2. From the repository root on the VPS, create the private production
+   environment file:
+
+   ```sh
+   cp deploy/vps.env.example .env.production
+   chmod 600 .env.production
+   ```
+
+3. Edit `.env.production`. Set unique random values for `APP_KEY`,
+   `DB_PASSWORD`, `MYSQL_ROOT_PASSWORD`, and `SOCKET_BRIDGE_SECRET`; never reuse
+   values or commit this file. Generate the Laravel key in the expected format
+   with:
+
+   ```sh
+   printf 'base64:'
+   openssl rand -base64 32 | tr -d '\n'
+   printf '\n'
+   ```
+
+   Generate the bridge secret with `openssl rand -hex 32`. Configure the
+   PayMongo live keys only when the account and webhook are production-ready.
+   Configure a working SMTP account for production email.
+4. Build and start the services:
+
+   ```sh
+   docker compose --env-file .env.production -f compose.vps.yaml up -d --build
+   docker compose --env-file .env.production -f compose.vps.yaml ps
+   docker compose --env-file .env.production -f compose.vps.yaml logs -f api caddy
+   ```
+
+   The API container waits for healthy MySQL and applies Laravel migrations.
+   It exits rather than serving traffic if the persistent `APP_KEY`, database,
+   or migrations are invalid.
+5. Verify the public app, Laravel health endpoint, and Socket.IO handshake:
+
+   ```sh
+   curl --fail https://tracktour.com/
+   curl --fail https://tracktour.com/up
+   curl --include 'https://tracktour.com/socket.io/?EIO=4&transport=polling'
+   ```
+
+   The socket handshake should return HTTP 200 and an Engine.IO open packet.
+   Configure the PayMongo webhook URL as
+   `https://tracktour.com/api/payments/webhook`.
+
+### Production safeguards
+
+- This Compose setup initializes an empty MySQL database and applies
+  migrations. It does not import local/XAMPP data.
+- Do **not** run `php artisan db:seed --force` on production: the current
+  `DatabaseSeeder` creates demo data and Tourism Office accounts with the
+  default password `password`. Create production administrator accounts
+  through a reviewed secure procedure and set unique passwords.
+- User uploads persist in the `public_uploads` Docker volume. Back up that
+  volume together with the MySQL volume; a Docker volume is not a backup.
+- `mysql_data`, `public_uploads`, and Caddy's certificate/config volumes must
+  not be removed during routine updates. Back up the database before schema
+  changes.
+- The browser-visible `VITE_PAYMONGO_PUBLIC_KEY` is built into the static
+  frontend image; only the public key belongs there. Secret PayMongo keys stay
+  in `.env.production` for the API.
+- Routine update: pull the intended Git revision, then run the `docker compose
+  ... up -d --build` command above. Keep a database backup and verify
+  `/up` and payment/realtime flows after the update.

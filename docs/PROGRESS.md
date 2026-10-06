@@ -1,5 +1,12 @@
 # Project Progress — Tourism Management Portal
 
+## Tourist Order Rating Persistence — COMPLETE & VERIFIED (2026-10-06)
+
+- **Fix:** tourist ratings are accepted at the canonical `delivered` and `completed` states. The order update and associated review upsert run in a transaction with an order row lock, while a unique nullable `reviews.order_id` prevents duplicate order reviews. Both the order and review persist `delivery_rating`.
+- **Schema:** migration adds nullable `reviews.order_id` with a foreign key/unique constraint and nullable `reviews.delivery_rating`. The migration ran through the test suite's fresh test database; no production/VPS database has been migrated.
+- **Regression:** `TouristConfirmRatingPersistenceTest` — **6 passed / 35 assertions**; full Laravel suite — **564 passed / 3,097 assertions / 0 failures / 2 skipped**. The prepaid regression fixture now creates the existing paid GCash payment it asserts remains unchanged after rating.
+- **Deployment status:** VPS deployment is still pending; Docker Compose and Caddy configuration have not been executed or validated on a Docker host.
+
 ## Order → Rider Ping Delivery — Tested End-to-End at Both Layers — COMPLETE (2026-09-25)
 
 Requested: verify that a rider actually receives the order ping (dispatch) and fix it if the rider does not. The dispatch-reliability diagnosis (AGENTS.md §20) blamed eligibility + retry lifecycle, NOT the Socket.IO transport — this phase converts that claim into a real test at both halves of the contract.

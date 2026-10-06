@@ -3,20 +3,21 @@ set -euo pipefail
 
 cd /var/www/html
 
-# A persistent APP_KEY is recommended via Railway env. If absent (first deploy),
-# generate one so the app can boot; save it back to the environment afterward.
+# APP_KEY must be provided as a persistent deployment secret. Generating a new
+# key on each container creation invalidates sessions and encrypted data.
 if [ -z "${APP_KEY:-}" ]; then
-  php artisan key:generate --force --no-interaction || true
+  echo "[start-container] APP_KEY is required; set a persistent production key."
+  exit 1
 fi
 
 # Refresh Laravel's package manifest (build step runs --no-scripts on purpose).
-php artisan package:discover --ansi || true
+php artisan package:discover --ansi
 
 # Local-storage uploads are served at /storage via the storage:link symlink.
-php artisan storage:link --no-interaction || true
+php artisan storage:link --no-interaction
 
 # Wait for the MySQL service to accept connections, then apply migrations.
-# Railway brings the database up in parallel with this container, so retry.
+# The database may start alongside this container, so retry before failing.
 DB_READY=0
 for i in $(seq 1 30); do
   if php -r 'try {
@@ -34,14 +35,15 @@ for i in $(seq 1 30); do
   sleep 5
 done
 
-if [ "$DB_READY" = "1" ]; then
-  php artisan migrate --force --no-interaction || echo "[start-container] migrate failed — check DB credentials"
-else
-  echo "[start-container] Database never became reachable; starting services anyway."
+if [ "$DB_READY" != "1" ]; then
+  echo "[start-container] Database never became reachable; refusing to start application services."
+  exit 1
 fi
 
+php artisan migrate --force --no-interaction
+
 # Fresh caches/clear any stale build artifacts.
-php artisan config:clear || true
-php artisan route:clear || true
+php artisan config:clear
+php artisan route:clear
 
 exec supervisord -n -c /etc/supervisor/supervisord.conf

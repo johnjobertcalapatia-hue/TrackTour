@@ -10,9 +10,11 @@ class Review extends Model
     protected $fillable = [
         'business_id',
         'user_id',
+        'order_id',
         'rating',
         'food_rating',
         'service_rating',
+        'delivery_rating',
         'cleanliness_rating',
         'atmosphere_rating',
         'value_rating',
@@ -29,6 +31,7 @@ class Review extends Model
             'rating' => 'integer',
             'food_rating' => 'integer',
             'service_rating' => 'integer',
+            'delivery_rating' => 'integer',
             'cleanliness_rating' => 'integer',
             'atmosphere_rating' => 'integer',
             'value_rating' => 'integer',
@@ -43,6 +46,11 @@ class Review extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function order(): BelongsTo
+    {
+        return $this->belongsTo(Order::class);
     }
 
     public function getAverageDimensionalRating(): ?float

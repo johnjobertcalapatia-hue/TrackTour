@@ -18,6 +18,7 @@ use App\Services\TouristService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 
 
 class FoodController extends Controller
@@ -541,7 +542,7 @@ class FoodController extends Controller
             abort(403);
         }
 
-        if ($order->status !== 'delivered') {
+        if (! in_array($order->status, ['delivered', 'completed'], true)) {
             if ($request->expectsJson()) {
                 return $this->errorResponse('You can only rate completed orders.', 422);
             }
@@ -556,21 +557,39 @@ class FoodController extends Controller
             'review' => 'nullable|string|max:1000',
         ]);
 
-        $order->update([
-            'rating' => $validated['rating'],
-            'review' => $validated['review'],
-        ]);
+        $saved = DB::transaction(function () use ($order, $validated) {
+            $lockedOrder = Order::query()->lockForUpdate()->findOrFail($order->id);
 
-        Review::create([
-            'business_id' => $order->business_id,
-            'user_id' => Auth::id(),
-            'rating' => $validated['rating'],
-            'food_rating' => $validated['food_rating'] ?? null,
-            'service_rating' => $validated['service_rating'] ?? null,
-            'delivery_rating' => $validated['delivery_rating'] ?? null,
-            'review' => $validated['review'] ?? null,
-            'status' => 'pending',
-        ]);
+            if (! in_array($lockedOrder->status, ['delivered', 'completed'], true)) {
+                return false;
+            }
+
+            $lockedOrder->update([
+                'rating' => $validated['rating'],
+                'delivery_rating' => $validated['delivery_rating'] ?? null,
+                'review' => $validated['review'] ?? null,
+            ]);
+
+            Review::updateOrCreate(
+                ['order_id' => $lockedOrder->id],
+                [
+                    'business_id' => $lockedOrder->business_id,
+                    'user_id' => Auth::id(),
+                    'rating' => $validated['rating'],
+                    'food_rating' => $validated['food_rating'] ?? null,
+                    'service_rating' => $validated['service_rating'] ?? null,
+                    'delivery_rating' => $validated['delivery_rating'] ?? null,
+                    'review' => $validated['review'] ?? null,
+                    'status' => 'pending',
+                ]
+            );
+
+            return true;
+        });
+
+        if (! $saved) {
+            return $this->errorResponse('You can only rate completed orders.', 422);
+        }
 
         if ($request->expectsJson()) {
             return $this->successResponse(null, 'Thank you for your review!');

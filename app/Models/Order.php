@@ -167,6 +167,11 @@ class Order extends Model
         return $this->hasOne(Delivery::class);
     }
 
+    public function review(): HasOne
+    {
+        return $this->hasOne(Review::class);
+    }
+
     /** The single delivery trip that fulfills this order. */
     public function activeDelivery(): ?Delivery
     {
