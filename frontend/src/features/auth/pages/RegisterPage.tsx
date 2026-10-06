@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { useForm } from 'react-hook-form'
+import { useForm, type FieldErrors } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { useAuthStore } from '@/features/auth/services/auth-store'
@@ -209,6 +209,41 @@ export default function RegisterPage() {
     'tourism-input w-full px-4 py-3 text-sm'
   const labelClasses = 'block text-sm font-medium text-[#17201A] mb-1'
 
+  const fieldStep: Record<string, number> =
+    role === 'business_owner'
+      ? {
+          first_name: 1, middle_name: 1, last_name: 1, date_of_birth: 1, sex: 1,
+          nationality: 1, email: 1, mobile_number: 1,
+          municipality_id: 2, barangay: 2, house_no_street: 2,
+          government_id_type: 3, government_id_number: 3,
+          password: 4, password_confirmation: 4,
+        }
+      : role === 'rider'
+        ? {
+            name: 1, email: 1, mobile_number: 1,
+            municipality_id: 2, barangay: 2, house_no_street: 2,
+            vehicle_type: 3, plate_number: 3, license_number: 3,
+            password: 5, password_confirmation: 5,
+          }
+        : {}
+
+  const firstFieldError = (errors: FieldErrors<FormData>) => {
+    for (const [key, value] of Object.entries(errors)) {
+      const message = value?.message
+      if (typeof message === 'string' && message) return { field: key, message }
+    }
+    return null
+  }
+
+  const onInvalid = (errors: FieldErrors<FormData>) => {
+    const first = firstFieldError(errors)
+    if (role !== 'tourist' && first?.field) {
+      const targetStep = fieldStep[first.field]
+      if (targetStep && targetStep !== step) setStep(targetStep)
+    }
+    setError(first?.message || 'Please complete all required fields.')
+  }
+
   const onSubmit = async (data: FormData) => {
     setError('')
     try {
@@ -238,7 +273,11 @@ export default function RegisterPage() {
 
       const user = await registerUser(fd as unknown as Record<string, unknown>)
       clearDraft()
-      navigate(resolvePostAuthDestination(user.role))
+      if (user.role === 'business_owner') {
+        navigate('/business-owner/account-status', { state: { registered: true } })
+      } else {
+        navigate(resolvePostAuthDestination(user.role))
+      }
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { message?: string; errors?: Record<string, string[]> } } }
       if (axiosErr.response?.data?.errors) {
@@ -403,8 +442,8 @@ export default function RegisterPage() {
                   <option value="passport">Passport</option>
                   <option value="drivers_license">Driver&apos;s License</option>
                   <option value="national_id">National ID</option>
-                  <option value="sss">SSS ID</option>
-                  <option value="philhealth">PhilHealth ID</option>
+                  <option value="sss_id">SSS ID</option>
+                  <option value="philhealth_id">PhilHealth ID</option>
                   <option value="postal_id">Postal ID</option>
                   <option value="voters_id">Voter&apos;s ID</option>
                 </select>
@@ -824,7 +863,7 @@ export default function RegisterPage() {
 
         {error && <Alert type="error" message={error} onDismiss={() => setError('')} />}
 
-        <form onSubmit={form.handleSubmit(onSubmit)}>
+        <form onSubmit={form.handleSubmit(onSubmit, onInvalid)}>
           {renderStep()}
 
           {role !== 'tourist' && (

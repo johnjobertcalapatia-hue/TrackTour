@@ -61,6 +61,15 @@ class BookingController extends Controller
         return response()->json(compact('business', 'offerings'));
     }
 
+    public function detail(Request $request, int $id)
+    {
+        $booking = Booking::with('business')
+            ->where('customer_email', Auth::user()->email)
+            ->findOrFail($id);
+
+        return $this->successResponse(compact('booking'));
+    }
+
     public function store(CreateBookingRequest $request, Business $business)
     {
         $validated = $request->validated();

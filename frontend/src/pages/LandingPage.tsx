@@ -1160,7 +1160,7 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
                           vehicle: selectedVehicle,
                         }))
                       }
-                      navigate('/login', { state: { from: '/tourist/transport' } })
+                      navigate('/tourist/transport')
                     }}
                     className="mt-1 w-full py-2.5 rounded-xl bg-[#087F3F] text-white text-xs font-semibold hover:bg-[#056B35] transition-colors flex items-center justify-center gap-2"
                   >

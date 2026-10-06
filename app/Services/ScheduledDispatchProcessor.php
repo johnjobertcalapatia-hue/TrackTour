@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Delivery;
+use App\Models\Order;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -41,6 +42,12 @@ class ScheduledDispatchProcessor
      * Dispatch is scheduled as soon as an order enters `waiting_restaurant` and
      * remains schedulable for `accepted` / `preparing` / `ready` orders when the
      * initial offer could not be created immediately.
+     *
+     * Transport (ride-hailing) orders never pass through the restaurant statuses:
+     * they live at `pending` while waiting for a rider. orderIsDispatchable()
+     * therefore additionally accepts a transport order in `pending`, otherwise a
+     * ride that misses the instantaneous checkout dispatch could never be
+     * re-offered by the scheduler.
      */
     public const DISPATCHABLE_ORDER_STATUSES = ['waiting_restaurant', 'accepted', 'preparing', 'ready'];
 
@@ -75,7 +82,13 @@ class ScheduledDispatchProcessor
         return Delivery::query()
             ->leftJoin('orders', 'orders.id', '=', 'deliveries.order_id')
             ->whereHas('order', function ($q) {
-                $q->whereIn('status', self::DISPATCHABLE_ORDER_STATUSES);
+                $q->where(function ($order) {
+                    $order->whereIn('status', self::DISPATCHABLE_ORDER_STATUSES)
+                        // Transport rides stay at 'pending' while awaiting a rider.
+                        ->orWhere(fn ($transport) => $transport
+                            ->where('order_type', 'transport')
+                            ->where('status', 'pending'));
+                });
             })
             ->where(function ($q) use ($claimTimeout) {
                 $q->where('dispatch_status', 'scheduled')
@@ -138,7 +151,7 @@ class ScheduledDispatchProcessor
             $originStatus = $delivery->dispatch_status;
 
             $order = $delivery->order;
-            if (! $order || ! in_array($order->status, self::DISPATCHABLE_ORDER_STATUSES, true)) {
+            if (! $order || ! $this->orderIsDispatchable($order)) {
                 // Order is no longer eligible (cancelled/rejected/etc.): never dispatch it.
                 return false;
             }
@@ -180,9 +193,13 @@ class ScheduledDispatchProcessor
             try {
                 // Hand off to the existing dispatch pipeline (eligibility, COD
                 // credit, nearest-rider ordering and BookingDispatchLog offer).
+                // The service type is derived from the order so a transport
+                // (ride-hailing) delivery polls its own rider cohort — hard-coding
+                // 'food' here would never offer a transport ride to anyone.
+                $serviceType = $order->order_type === 'transport' ? 'transport' : 'food';
                 $rider = $this->nearestRiderService->dispatchToNearest(
                     $delivery,
-                    'food',
+                    $serviceType,
                     $order->business?->municipality_id,
                 );
             } catch (\Throwable $e) {
@@ -218,5 +235,21 @@ class ScheduledDispatchProcessor
 
             return true;
         });
+    }
+
+    /**
+     * Is this order still eligible for a scheduled dispatch?
+     *
+     * Food/group orders qualify through the restaurant lifecycle statuses.
+     * Transport (ride-hailing) orders never leave `pending` while awaiting a
+     * rider, so a pending transport order is dispatchable by its own rule.
+     */
+    private function orderIsDispatchable(Order $order): bool
+    {
+        if (in_array($order->status, self::DISPATCHABLE_ORDER_STATUSES, true)) {
+            return true;
+        }
+
+        return $order->order_type === 'transport' && $order->status === 'pending';
     }
 }

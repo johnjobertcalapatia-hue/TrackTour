@@ -67,8 +67,12 @@ class RiderController extends Controller
     {
         $user = $request->user();
 
-        if ($user->riderDetail?->rider_status === 'busy') {
-            return $this->errorResponse('Cannot switch service while on an active delivery.', 409);
+        // The rider must stay on their current service for the WHOLE trip.
+        // The authoritative guard is the actual delivery/trip row, not just
+        // the rider_status flag, so a status/trip drift can never let a rider
+        // switch service mid-trip.
+        if ($user->riderDetail?->rider_status === 'busy' || $this->hasActiveTrip($user)) {
+            return $this->errorResponse('Cannot switch service while on an active delivery or trip.', 409);
         }
 
         $hasPendingRequest = BookingDispatchLog::where('rider_id', $user->id)
@@ -128,9 +132,12 @@ class RiderController extends Controller
         $user = $request->user();
         $currentStatus = $user->riderDetail?->rider_status;
 
-        // Prevent toggling if rider is on an active delivery
-        if ($currentStatus === User::RIDER_STATUS_BUSY) {
-            return $this->errorResponse('You are currently on a delivery. Complete it before going offline.', 409);
+        // Prevent toggling while the rider is bound to an active trip. The
+        // authoritative guard is the actual delivery row in an in-trip status
+        // (or the rider stuck marked busy), so a rider can never go offline
+        // mid-delivery or mid-ride — they must remain online for the whole trip.
+        if ($currentStatus === User::RIDER_STATUS_BUSY || $this->hasActiveTrip($user)) {
+            return $this->errorResponse('You are currently on a delivery or trip. Complete it before going offline.', 409);
         }
 
         if ($currentStatus === User::RIDER_STATUS_OFFLINE) {
@@ -156,6 +163,17 @@ class RiderController extends Controller
             UserResource::make($user->fresh()->load('riderDetail')),
             "You are now {$label}."
         );
+    }
+
+    /**
+     * Does the rider hold a delivery/trip that is still on the road?
+     *
+     * Delegates to the canonical DeliveryService row check so the trip-chain
+     * definition never drifts between controllers.
+     */
+    private function hasActiveTrip(User $user): bool
+    {
+        return $this->deliveryService->riderHasActiveTrip($user);
     }
 
     public function toggleAvailable(Request $request): JsonResponse

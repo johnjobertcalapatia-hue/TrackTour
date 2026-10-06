@@ -1,0 +1,66 @@
+# Build context is the repo root. The backend image only needs the Laravel app
+# (composer.json/lock, artisan, app/, config/, database/, public/, resources/,
+# routes/, storage/, plus the Dockerfile.socket image also needs package.json
+# and the socket-*.js helpers).
+
+.git
+.github
+.agents
+.history
+.obsidian
+.vscode
+.idea
+.nova
+
+# Frontend and Node/PHP dependencies — install these inside the images.
+frontend/
+node_modules/
+vendor/
+
+# Local dev / tooling / docs that must never ship in the image.
+docs/
+*.md
+.env
+.env.*
+auth.json
+storage/logs/*
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/views/*
+tmp_*
+debug_*
+check_*
+clear_test_data.php
+create_test_data.php
+phpunit.xml
+.phpunit.result.cache
+.phpunit.cache/
+
+# Test harness.
+tests/
+
+# Local data files and debug screenshots.
+track_tour_db.sql
+*.png
+*.pdf
+*.html
+*.csv
+*.sql
+Untitled*
+sample-food-menu.csv
+sample-menu-categories.csv
+recommendation.md
+flow.md
+Ride-Hailing-Fix-Checkpoint.pdf
+ride_checkpoint.html
+
+# Local uploads/videos — re-created at runtime, never baked into the image.
+storage/app/public/
+public/assets/
+
+# Local storage symlink — recreated with artisan storage:link at start.
+public/storage
+
+# Baked config/environment files are provided by Railway at runtime, never
+# copied from a developer's machine.
+.env.production

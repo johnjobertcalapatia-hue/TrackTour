@@ -1,13 +1,15 @@
 import { useState } from 'react'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { get, put } from '@/shared/services/api'
+import { get, post, put } from '@/shared/services/api'
+import { useAuthStore } from '@/features/auth/services/auth-store'
 import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { ArrowLeft, ChevronRight, DollarSign, History, Map as MapIcon, MessageSquare, Save, User } from 'lucide-react'
+import { ArrowLeft, Camera, ChevronRight, DollarSign, History, Map as MapIcon, MessageSquare, Save, User } from 'lucide-react'
+import { toAssetUrl, getInitials } from '@/shared/utils'
 
 const settingsLinks = [
   { to: '/rider/profile', icon: User, title: 'Profile', description: 'Manage your account information' },
@@ -25,7 +27,7 @@ const schema = z.object({
   barangay: z.string().min(1, 'Barangay is required'),
 })
 
-type FormData = z.infer<typeof schema>
+type ProfileFormValues = z.infer<typeof schema>
 
 interface RiderProfile {
   id: number
@@ -36,13 +38,18 @@ interface RiderProfile {
   barangay: string
   role: string
   account_status: string
+  profile_photo?: string | null
 }
 
 export default function RiderProfile() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [photoFile, setPhotoFile] = useState<File | null>(null)
+  const [photoPreview, setPhotoPreview] = useState<string>('')
   const location = useLocation()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const fetchUser = useAuthStore((s) => s.fetchUser)
   const isSettingsPage = location.pathname === '/rider/settings'
 
   const handleBack = () => {
@@ -55,7 +62,7 @@ export default function RiderProfile() {
     queryFn: () => get<RiderProfile>('/rider/profile'),
   })
 
-  const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
+  const { register, handleSubmit, formState: { errors } } = useForm<ProfileFormValues>({
     resolver: zodResolver(schema),
     values: profile ? {
       name: profile.name,
@@ -67,10 +74,38 @@ export default function RiderProfile() {
   })
 
   const mutation = useMutation({
-    mutationFn: (data: FormData) => put('/rider/profile', data),
+    mutationFn: (data: ProfileFormValues) => put('/rider/profile', data),
     onSuccess: () => setSuccess('Profile updated successfully.'),
     onError: (err: any) => setError(err.response?.data?.message || 'Failed to update profile.'),
   })
+
+  const photoMutation = useMutation({
+    mutationFn: (formData: FormData) => post('/rider/profile/photo', formData),
+    onSuccess: () => {
+      setPhotoFile(null)
+      setPhotoPreview('')
+      setSuccess('Profile photo updated successfully.')
+      queryClient.invalidateQueries({ queryKey: ['rider-profile'] })
+      void fetchUser()
+    },
+    onError: (err: any) => setError(err.response?.data?.message || 'Failed to update profile photo.'),
+  })
+
+  const handlePhotoFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setPhotoFile(file)
+    setPhotoPreview(URL.createObjectURL(file))
+  }
+
+  const uploadPhoto = () => {
+    if (!photoFile) return
+    const fd = new FormData()
+    fd.append('photo', photoFile)
+    photoMutation.mutate(fd)
+  }
+
+  const avatarSrc = photoPreview || toAssetUrl(profile?.profile_photo)
 
   if (isLoading) return <DashboardSkeleton />
 
@@ -102,6 +137,44 @@ export default function RiderProfile() {
       <form onSubmit={handleSubmit((data) => mutation.mutate(data))} className="space-y-6">
         {!isSettingsPage && <div className="bg-white rounded-2xl border border-[#E5E9E7] p-6 space-y-4">
           <h2 className="text-lg font-semibold text-[#17201B]">Personal Information</h2>
+
+          <div className="flex items-center gap-4">
+            <div className="relative shrink-0">
+              <div className="w-20 h-20 rounded-full overflow-hidden bg-[#E9F7EF] flex items-center justify-center border border-[#D7E2DC]">
+                {avatarSrc ? (
+                  <img src={avatarSrc} alt={profile?.name} className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-xl font-bold text-[#087F3F]">{getInitials(profile?.name)}</span>
+                )}
+              </div>
+              <label htmlFor="profile-photo" className="absolute bottom-0 right-0 flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-emerald-600 text-white shadow-md transition hover:bg-emerald-700">
+                <Camera className="h-3.5 w-3.5" />
+                <span className="sr-only">Upload profile photo</span>
+              </label>
+              <input
+                id="profile-photo"
+                type="file"
+                accept="image/*"
+                className="sr-only"
+                onChange={handlePhotoFile}
+              />
+            </div>
+
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-[#17201B]">Profile Photo</p>
+              <p className="mt-0.5 text-xs text-[#6B7280]">Upload a photo of yourself so tourists can recognize you.</p>
+              {photoPreview && (
+                <button
+                  type="button"
+                  onClick={uploadPhoto}
+                  disabled={photoMutation.isPending}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {photoMutation.isPending ? 'Uploading...' : 'Save photo'}
+                </button>
+              )}
+            </div>
+          </div>
 
           <div>
             <label className="block text-sm font-medium text-[#4B5563] mb-1">Full Name</label>

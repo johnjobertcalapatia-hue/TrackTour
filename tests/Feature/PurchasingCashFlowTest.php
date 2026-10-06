@@ -25,8 +25,10 @@ use Tests\TestCase;
  * Professor purchasing-cash COD flow:
  *
  *   Tourist → multi-restaurant COD order → ONE delivery → rider accepts
- *     → Tourism Office issues purchasing cash (amount = rider_financed_amount)
- *     → rider confirms receipt → buys/collects food at each restaurant
+ *     → purchasing cash AUTO-ISSUED (rider already holds the Tourism Office
+ *       float, so no office action / no waiting; amount = rider_financed_amount)
+ *     → rider confirms receipt → buys/collects food at each restaurant in
+ *       preparation-time order (shortest prep first, last pickup = drop-off origin)
  *     → ALL COLLECTED gate on picked_up
  *     → delivery → tourist pays cash → settle-cod → settlement → completed
  *
@@ -42,6 +44,7 @@ class PurchasingCashFlowTest extends TestCase
     private User $riderA;
     private User $riderB;
     private User $admin;
+    private User $tourist;
     private Business $restaurantA;
     private Business $restaurantB;
     private GroupOrderService $groupService;
@@ -99,6 +102,13 @@ class PurchasingCashFlowTest extends TestCase
             'email' => 'tourism-office@example.com',
             'password' => Hash::make('Password123!'),
             'role' => 'bansud_tourism_office',
+            'account_status' => 'approved',
+        ]);
+
+        $this->tourist = User::create([
+            'email' => 'tourist-purchasing@example.com',
+            'password' => Hash::make('Password123!'),
+            'role' => 'tourist',
             'account_status' => 'approved',
         ]);
 
@@ -190,7 +200,7 @@ class PurchasingCashFlowTest extends TestCase
         return $rider;
     }
 
-    private function makeOffering(Business $business, string $name, float $price): Offering
+    private function makeOffering(Business $business, string $name, float $price, ?int $prepTime = null): Offering
     {
         return Offering::create([
             'business_id' => $business->id,
@@ -198,6 +208,7 @@ class PurchasingCashFlowTest extends TestCase
             'price' => $price,
             'is_available' => true,
             'status' => 'available',
+            'preparation_time' => $prepTime,
         ]);
     }
 
@@ -224,7 +235,7 @@ class PurchasingCashFlowTest extends TestCase
         $pizza = $this->makeOffering($this->restaurantB, 'Pizza', 400.00);
         $pasta = $this->makeOffering($this->restaurantB, 'Pasta', 250.00);
 
-        $group = $this->groupService->createGroup($this->owner, $this->basePayload([
+        $group = $this->groupService->createGroup($this->tourist, $this->basePayload([
             ['business_id' => $this->restaurantA->id, 'items' => [
                 ['offering_id' => $burger->id, 'quantity' => 1, 'notes' => null],
                 ['offering_id' => $fries->id, 'quantity' => 1, 'notes' => null],
@@ -284,37 +295,166 @@ class PurchasingCashFlowTest extends TestCase
         // Idempotent: re-running initialization does not duplicate rows.
         app(\App\Services\PurchasingCashService::class)->initializeForDelivery($delivery);
         $this->assertCount(2, CodPurchase::where('delivery_id', $delivery->id)->get());
+
+        // The Tourism Office pre-funds the rider's float, so the per-delivery
+        // purchasing cash is auto-issued at acceptance — no waiting, no admin.
+        $delivery->refresh();
+        $this->assertEquals((float) $financed, (float) $delivery->purchasing_cash, 'Auto-issued cash = rider_financed_amount.');
+        $this->assertNotNull($delivery->purchasing_cash_issued_at, 'Purchasing cash is auto-issued at acceptance.');
+        $this->assertNull($delivery->purchasing_cash_issued_by, 'Auto-issuance records no acting officer.');
+
+        $autoLog = ActivityLog::where('action', 'purchasing_cash.auto_issued')->latest('id')->first();
+        $this->assertNotNull($autoLog, 'Auto-issuance is written to the audit trail.');
     }
 
-    public function test_admin_issues_purchasing_cash_and_records_audit_trail(): void
+    public function test_purchasing_cash_is_auto_issued_and_admin_re_issue_is_refused(): void
     {
         [, , $delivery, $financed] = $this->createTwoRestaurantCodOrder();
+
         $this->acceptDelivery($delivery);
 
         $issueUrl = '/api/admin/deliveries/' . $delivery->id . '/issue-purchasing-cash';
 
+        // Only the Tourism Office may invoke the admin issue endpoint.
         $this->be($this->riderA);
         $this->postJson($issueUrl)->assertStatus(403);
 
+        // Already auto-issued at acceptance: a manual office re-issue is refused,
+        // there is no double cash and no second issuance record.
         $this->be($this->admin);
-        $response = $this->postJson($issueUrl);
-        $response->assertOk();
-        $this->assertEquals((float) $financed, (float) $response->json('data.purchasing_cash'));
-        $response->assertJsonPath('data.purchases_count', 2);
+        $this->postJson($issueUrl)->assertStatus(422);
 
         $delivery->refresh();
-        $this->assertEquals((float) $financed, (float) $delivery->purchasing_cash);
         $this->assertNotNull($delivery->purchasing_cash_issued_at);
-        $this->assertSame($this->admin->id, $delivery->purchasing_cash_issued_by);
+        $this->assertEquals((float) $financed, (float) $delivery->purchasing_cash);
+        $this->assertCount(1, ActivityLog::where('action', 'purchasing_cash.auto_issued')->get());
+        $this->assertCount(0, ActivityLog::where('action', 'purchasing_cash.issued')->get());
+    }
 
-        $log = ActivityLog::where('action', 'purchasing_cash.issued')->latest('id')->first();
-        $this->assertNotNull($log, 'Audit trail records the issuance.');
-        $this->assertSame($this->admin->id, $log->user_id);
-        $this->assertStringContainsString((string) $financed, $log->description);
+    public function test_purchases_are_ordered_by_preparation_time_with_origin_and_dropoff(): void
+    {
+        $this->restaurantA->update(['address' => 'Restaurant A St']);
+        $this->restaurantB->update(['address' => 'Restaurant B St']);
 
-        // Duplicate issuance is rejected (no silent overwrite / double cash).
-        $this->postJson($issueUrl)->assertStatus(422);
-        $this->assertCount(1, ActivityLog::where('action', 'purchasing_cash.issued')->get());
+        // Restaurant A items prep in 5 & 10 min; Restaurant B in 20 & 25 min.
+        $burger = $this->makeOffering($this->restaurantA, 'Burger', 120.00, 5);
+        $fries = $this->makeOffering($this->restaurantA, 'Fries', 80.00, 10);
+        $pizza = $this->makeOffering($this->restaurantB, 'Pizza', 400.00, 20);
+        $pasta = $this->makeOffering($this->restaurantB, 'Pasta', 250.00, 25);
+
+        $group = $this->groupService->createGroup($this->owner, $this->basePayload([
+            ['business_id' => $this->restaurantA->id, 'items' => [
+                ['offering_id' => $burger->id, 'quantity' => 1, 'notes' => null],
+                ['offering_id' => $fries->id, 'quantity' => 1, 'notes' => null],
+            ]],
+            ['business_id' => $this->restaurantB->id, 'items' => [
+                ['offering_id' => $pizza->id, 'quantity' => 1, 'notes' => null],
+                ['offering_id' => $pasta->id, 'quantity' => 1, 'notes' => null],
+            ]],
+        ]));
+
+        $delivery = $group->fresh()->delivery;
+        $this->acceptDelivery($delivery);
+
+        $list = $this->be($this->riderA)
+            ->getJson('/api/rider/deliveries/' . $delivery->id . '/purchases')
+            ->assertOk()
+            ->json('data');
+
+        $this->assertNotNull($list['purchasing_cash_issued_at'], 'Cash auto-issued at acceptance.');
+        $this->assertCount(2, $list['purchases']);
+
+        // Fastest prep is picked up first: Restaurant A (10 min) before B (25 min).
+        $first = $list['purchases'][0];
+        $second = $list['purchases'][1];
+
+        $this->assertSame($this->restaurantA->id, $first['business_id']);
+        $this->assertSame(1, $first['sequence']);
+        $this->assertSame(10, $first['preparation_time']);
+        $this->assertEquals((float) $this->restaurantA->latitude, (float) $first['pickup_lat']);
+        $this->assertEquals((float) $this->restaurantA->longitude, (float) $first['pickup_lng']);
+        $this->assertSame('Restaurant A St', $first['pickup_address']);
+
+        $this->assertSame($this->restaurantB->id, $second['business_id']);
+        $this->assertSame(2, $second['sequence']);
+        $this->assertSame(25, $second['preparation_time']);
+
+        // The LAST restaurant (longest prep) is the drop-off route origin.
+        $origin = $list['pickup_origin'];
+        $this->assertSame($this->restaurantB->id, $origin['business_id']);
+        $this->assertSame('Restaurant B', $origin['business_name']);
+        $this->assertEquals((float) $this->restaurantB->latitude, (float) $origin['latitude']);
+        $this->assertEquals((float) $this->restaurantB->longitude, (float) $origin['longitude']);
+
+        // The drop-off point is the tourist destination + address.
+        $this->assertEquals(12.6, (float) $list['dropoff']['latitude']);
+        $this->assertEquals(121.4, (float) $list['dropoff']['longitude']);
+        $this->assertSame('123 Test St', $list['dropoff']['address']);
+    }
+
+    public function test_purchases_include_the_order_items_to_pick_up_per_restaurant(): void
+    {
+        $this->makeOffering($this->restaurantA, 'Cheeseburger', 120.00, 5);
+        $this->makeOffering($this->restaurantA, 'Large Fries', 80.00, 10);
+        $this->makeOffering($this->restaurantA, 'Soda', 50.00, 5);
+        $this->makeOffering($this->restaurantB, 'Family Pizza', 490.00, 20);
+
+        $group = $this->groupService->createGroup($this->owner, $this->basePayload([
+            ['business_id' => $this->restaurantA->id, 'items' => [
+                ['offering_id' => Offering::where('name', 'Cheeseburger')->value('id'), 'quantity' => 2, 'notes' => null],
+                ['offering_id' => Offering::where('name', 'Large Fries')->value('id'), 'quantity' => 1, 'notes' => 'No salt'],
+                ['offering_id' => Offering::where('name', 'Soda')->value('id'), 'quantity' => 3, 'notes' => null],
+            ]],
+            ['business_id' => $this->restaurantB->id, 'items' => [
+                ['offering_id' => Offering::where('name', 'Family Pizza')->value('id'), 'quantity' => 1, 'notes' => 'Extra cheese'],
+            ]],
+        ]));
+
+        $delivery = $group->fresh()->delivery;
+        $this->acceptDelivery($delivery);
+
+        $list = $this->be($this->riderA)
+            ->getJson('/api/rider/deliveries/' . $delivery->id . '/purchases')
+            ->assertOk()
+            ->json('data');
+
+        $this->assertCount(2, $list['purchases']);
+
+        $stopsByBusiness = collect($list['purchases'])->keyBy('business_id');
+
+        // Restaurant A stop carries its own items — with correct quantities
+        // and any line notes.
+        $stopA = $stopsByBusiness[$this->restaurantA->id];
+        $this->assertSame(
+            [
+                ['product_name' => 'Cheeseburger', 'quantity' => 2],
+                ['product_name' => 'Large Fries', 'quantity' => 1],
+                ['product_name' => 'Soda', 'quantity' => 3],
+            ],
+            collect($stopA['items'])
+                ->map(fn ($i) => ['product_name' => $i['product_name'], 'quantity' => $i['quantity']])
+                ->values()
+                ->all()
+        );
+        $this->assertContains('No salt', array_column($stopA['items'], 'notes'));
+        $this->assertContains('Cheeseburger', array_column($stopA['items'], 'product_name'));
+
+        // Restaurant B stop carries its own items — each stop is scoped to its
+        // restaurant, never a mix of both.
+        $stopB = $stopsByBusiness[$this->restaurantB->id];
+        $this->assertCount(1, $stopB['items']);
+        $this->assertSame('Family Pizza', $stopB['items'][0]['product_name']);
+        $this->assertSame(1, $stopB['items'][0]['quantity']);
+        $this->assertSame('Extra cheese', $stopB['items'][0]['notes']);
+
+        foreach ([$stopA, $stopB] as $stop) {
+            foreach ($stop['items'] as $item) {
+                $this->assertArrayHasKey('product_name', $item);
+                $this->assertArrayHasKey('quantity', $item);
+                $this->assertArrayHasKey('unit_price', $item);
+                $this->assertArrayHasKey('status', $item);
+            }
+        }
     }
 
     public function test_rider_confirms_receipt_and_marks_purchases_through_canonical_apis(): void
@@ -334,17 +474,8 @@ class PurchasingCashFlowTest extends TestCase
 
         $purchaseIds = collect($list['purchases'])->pluck('id');
 
-        // Cannot mark before the purchasing cash is issued.
-        $this->postJson($purchasesUrl . '/purchases/' . $purchaseIds[0] . '/mark', ['status' => 'purchased'])
-            ->assertStatus(422)
-            ->assertJsonFragment(['message' => 'Purchasing cash has not been issued yet.']);
-
-        // Tourism Office issues the cash.
-        $this->be($this->admin);
-        $this->postJson('/api/admin/deliveries/' . $delivery->id . '/issue-purchasing-cash')->assertOk();
-
-        // Rider confirms receipt.
-        $this->be($this->riderA);
+        // Cash is auto-issued at acceptance (rider holds the float): the rider
+        // can buy/collect without any office step. Rider confirms the receipt.
         $receipt = $this->postJson($purchasesUrl . '/purchasing-cash/receive');
         $receipt->assertOk();
         $this->assertNotNull($receipt->json('data.purchasing_cash_received_at'));
@@ -380,9 +511,7 @@ class PurchasingCashFlowTest extends TestCase
 
         $purchasesUrl = '/api/rider/deliveries/' . $delivery->id;
 
-        // Tourism Office issues + rider receives.
-        $this->be($this->admin);
-        $this->postJson('/api/admin/deliveries/' . $delivery->id . '/issue-purchasing-cash')->assertOk();
+        // Purchasing cash auto-issued at acceptance + rider confirms receipt.
         $this->be($this->riderA);
         $this->postJson($purchasesUrl . '/purchasing-cash/receive')->assertOk();
 
@@ -414,13 +543,10 @@ class PurchasingCashFlowTest extends TestCase
         // 1) Rider accepts the ONE shared delivery.
         $this->acceptDelivery($delivery);
 
-        // 2) Tourism Office issues the purchasing cash.
-        $this->be($this->admin);
-        $this->postJson('/api/admin/deliveries/' . $delivery->id . '/issue-purchasing-cash')->assertOk();
-
-        // 3) Rider receives and buys/collects food at BOTH restaurants.
+        // 2) Cash auto-issued at acceptance; rider confirms receipt.
         $this->be($this->riderA);
         $purchasesUrl = '/api/rider/deliveries/' . $delivery->id;
+        $this->assertNotNull($delivery->purchasing_cash_issued_at, 'Purchasing cash auto-issued at acceptance.');
         $this->postJson($purchasesUrl . '/purchasing-cash/receive')->assertOk();
 
         $delivery->refresh()->load('codPurchases');
@@ -432,11 +558,21 @@ class PurchasingCashFlowTest extends TestCase
             $this->postJson($purchasesUrl . '/purchases/' . $purchase->id . '/mark', ['status' => 'collected'])->assertOk();
         }
 
-        // 4) Leave after ALL COLLECTED, then deliver.
+        // 4) Leave after ALL COLLECTED, then deliver (P14 — the TOURIST confirms
+        //    receipt at the drop-off; the rider's own delivered is rejected).
         foreach (['arrived_pickup', 'picked_up', 'in_transit', 'arrived_destination'] as $status) {
             $this->patchJson($purchasesUrl . '/status', ['status' => $status])->assertOk();
         }
-        $this->patchJson($purchasesUrl . '/status', ['status' => 'delivered'])->assertOk();
+        $this->patchJson($purchasesUrl . '/status', ['status' => 'delivered'])
+            ->assertStatus(422)
+            ->assertJsonFragment(['message' => 'The tourist must confirm the delivery before it can be marked as delivered.']);
+
+        $this->be($this->tourist)
+            ->postJson('/api/tourist/food/order/' . $order->id . '/confirm-delivery')
+            ->assertOk()
+            ->assertJsonPath('data.new_status', 'delivered');
+
+        $this->be($this->riderA);
 
         $delivery->refresh();
         $this->assertSame('delivered', $delivery->status->value);

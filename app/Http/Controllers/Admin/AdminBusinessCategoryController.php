@@ -73,6 +73,7 @@ class AdminBusinessCategoryController extends Controller
             'has_expiration' => 'boolean',
             'validity_period' => 'nullable|integer|min:0',
             'description' => 'nullable|string|max:500',
+            'required_fields' => 'nullable|array',
             'sort_order' => 'nullable|integer|min:0',
         ]);
 
@@ -84,6 +85,7 @@ class AdminBusinessCategoryController extends Controller
             'has_expiration' => $validated['has_expiration'] ?? false,
             'validity_period' => $validated['validity_period'] ?? null,
             'description' => $validated['description'] ?? null,
+            'required_fields' => $validated['required_fields'] ?? ['document_number', 'issue_date', 'expiration_date'],
             'sort_order' => $validated['sort_order'] ?? 0,
             'is_active' => true,
         ]);

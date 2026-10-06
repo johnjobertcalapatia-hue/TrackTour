@@ -99,6 +99,59 @@ class BusinessOwnerApiTest extends TestCase
     }
 
     /**
+     * Ride-hailing orders have no owning restaurant (business_id = NULL).
+     * They must NEVER surface in a business owner's order list and a business
+     * owner must not be able to open a ride through the owner order detail.
+     */
+    public function test_transport_ride_orders_are_isolated_from_business_owner_orders(): void
+    {
+        Order::create([
+            'order_number' => 'ORD-FOOD001',
+            'business_id' => $this->business->id,
+            'customer_name' => 'Food Customer',
+            'customer_email' => 'food@example.com',
+            'order_type' => 'delivery',
+            'status' => 'pending',
+            'subtotal' => 250.00,
+            'total' => 250.00,
+        ]);
+
+        $ride = Order::create([
+            'order_number' => 'TRP-RIDE001',
+            'business_id' => null,
+            'user_id' => $this->owner->id,
+            'customer_name' => 'Ride Customer',
+            'customer_email' => 'ride@example.com',
+            'order_type' => 'transport',
+            'payment_method' => 'cash',
+            'status' => 'pending',
+            'subtotal' => 103.27,
+            'delivery_fee' => 0,
+            'total' => 103.27,
+        ]);
+
+        $ride->items()->create([
+            'product_name' => 'Ride: Motorcycle (1 pax)',
+            'quantity' => 1,
+            'unit_price' => 103.27,
+            'subtotal' => 103.27,
+        ]);
+
+        $response = $this->actingAs($this->owner, 'sanctum')
+            ->getJson('/api/business-owner/orders');
+
+        $response->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.order_number', 'ORD-FOOD001');
+
+        $this->actingAs($this->owner, 'sanctum')
+            ->getJson("/api/business-owner/orders/{$ride->id}")
+            ->assertStatus(403);
+
+        $this->assertNull($ride->fresh()->business_id);
+    }
+
+    /**
      * The Orders card list expands inline (no second request), so the index
      * payload must already carry the per-item detail the cards render:
      * name, qty, price, per-item preparation_time snapshot and item status.

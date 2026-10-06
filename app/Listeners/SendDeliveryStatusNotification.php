@@ -31,13 +31,39 @@ class SendDeliveryStatusNotification implements ShouldQueue
             'failed' => 'Delivery attempt failed.',
         ];
 
-        $message = $statusMessages[$event->newStatus]
-            ?? "Delivery status updated to: {$event->newStatus}.";
+        $rideMessages = [
+            'assigned' => 'Your driver is on the way to your pickup location.',
+            'en_route_pickup' => 'Your driver is on the way to your pickup location.',
+            'arrived_pickup' => 'Your driver has arrived at your pickup location.',
+            'picked_up' => 'Your ride is on its way to your destination.',
+            'in_transit' => 'Your ride is on its way to your destination.',
+            'arrived_destination' => 'You have arrived at your destination.',
+            'completed' => 'Your ride is complete.',
+        ];
 
         // One notification per fulfilled restaurant order (a group trip notifies
         // every restaurant whose order rides on the shared delivery).
         foreach ($orders as $order) {
             $customer = User::where('email', $order->customer_email)->first();
+
+            if ($order->order_type === 'transport') {
+                $rideMessage = $rideMessages[$event->newStatus]
+                    ?? "Ride status updated to: {$event->newStatus}.";
+
+                if ($customer) {
+                    Notification::create([
+                        'user_id' => $customer->id,
+                        'title' => 'Ride Status Updated',
+                        'message' => "Ride #{$order->order_number}: {$rideMessage}",
+                        'type' => 'ride_status_changed',
+                    ]);
+                }
+
+                continue;
+            }
+
+            $message = $statusMessages[$event->newStatus]
+                ?? "Delivery status updated to: {$event->newStatus}.";
 
             if ($customer) {
                 Notification::create([

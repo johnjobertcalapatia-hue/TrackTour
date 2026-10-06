@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Tourist;
 
+use App\Events\DeliveryStatusChanged;
 use App\Http\Controllers\Controller;
 use App\Models\Business;
 use App\Models\BusinessCategory;
@@ -11,8 +12,9 @@ use App\Models\Review;
 use App\Services\OrderService;
 use App\Services\OrderRefundService;
 use App\Services\DeliveryFeeService;
+use App\Services\OrderTrackingService;
+use App\Services\NearestRiderService;
 use App\Services\TouristService;
-use App\Services\TripTokenService;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
@@ -24,6 +26,7 @@ class FoodController extends Controller
         private TouristService $touristService,
         private OrderService $orderService,
         private DeliveryFeeService $deliveryFeeService,
+        private NearestRiderService $nearestRiderService,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -33,7 +36,7 @@ class FoodController extends Controller
 
         $query = Offering::query()
             ->where('is_available', true)
-            ->where('status', 'active')
+            ->where('status', 'available')
             ->whereHas('business', fn ($q) => $q->where('status', 'approved'))
             ->whereHas('business.category', function ($q) {
                 $q->where(function ($qq) {
@@ -93,7 +96,7 @@ class FoodController extends Controller
 
         $categories = Offering::query()
             ->where('is_available', true)
-            ->where('status', 'active')
+            ->where('status', 'available')
             ->whereHas('business', fn ($q) => $q->where('status', 'approved'))
             ->whereHas('category')
             ->whereHas('business.category', function ($q) {
@@ -246,7 +249,7 @@ class FoodController extends Controller
         }
 
         $firstOffering = Offering::findOrFail($validated['items'][0]['offering_id']);
-        $business = $validated['business_id']
+        $business = ($validated['business_id'] ?? null)
             ? Business::findOrFail($validated['business_id'])
             : $firstOffering->business;
 
@@ -259,6 +262,11 @@ class FoodController extends Controller
                 ? 'The restaurant is temporarily closed. Please try again later.'
                 : ($business->isOpenNow() ? 'The restaurant is currently not accepting orders.' : 'The restaurant is currently closed. '.$business->nextOpeningLabel().'.');
             return $this->errorResponse($message, 422);
+        }
+
+        if (! $business->acceptsPaymentMethod($validated['payment_method'])) {
+            $label = $validated['payment_method'] === 'cash' ? 'cash on delivery' : 'online payments';
+            return $this->errorResponse($business->business_name.' does not accept '.$label.' at the moment. Please choose another payment method.', 422);
         }
 
         $subtotal = 0;
@@ -412,43 +420,9 @@ class FoodController extends Controller
             'longitude' => (float) $riderLocation->longitude,
             'recorded_at' => $riderLocation->recorded_at?->toIso8601String(),
         ] : null;
-        $data['tracking'] = $this->orderTrackingBlock($order, $delivery);
+        $data['tracking'] = app(OrderTrackingService::class)->customerBlock($order, $delivery);
 
         return $this->successResponse($data);
-    }
-
-    /**
-     * P6: hand the authorized tourist an HMAC trip token so they can join the
-     * live socket trip room (socket-primary tracking). Null when there is no
-     * assigned rider yet or the order has reached a terminal state.
-     */
-    private function orderTrackingBlock(Order $order, ?\App\Models\Delivery $delivery): ?array
-    {
-        if (! $delivery || ! $delivery->rider_id) {
-            return null;
-        }
-
-        $terminalStatuses = ['delivered', 'completed', 'cancelled', 'cancelled_by_tourist', 'rejected', 'refunded'];
-        if (in_array($order->status, $terminalStatuses, true)) {
-            return null;
-        }
-
-        if (! $order->user_id) {
-            return null;
-        }
-
-        try {
-            $token = app(TripTokenService::class)->issue($delivery->id, 'customer', (int) $order->user_id);
-        } catch (\RuntimeException) {
-            return null;
-        }
-
-        return [
-            'delivery_id' => $delivery->id,
-            'room' => "trip:{$delivery->id}",
-            'token' => $token,
-            'role' => 'customer',
-        ];
     }
 
     public function cancelOrder(Request $request, Order $order)
@@ -604,6 +578,27 @@ class FoodController extends Controller
 
         return redirect()->route('tourist.food.order-status', $order)
             ->with('success', 'Thank you for your feedback!');
+    }
+
+    public function confirmDelivery(Request $request, Order $order): JsonResponse
+    {
+        if ($order->user_id && $order->user_id !== Auth::id()) {
+            abort(403);
+        }
+
+        try {
+            $result = $this->nearestRiderService->confirmDeliveryByTourist($order, Auth::id());
+        } catch (\InvalidArgumentException $exception) {
+            return $this->errorResponse($exception->getMessage(), 422);
+        }
+
+        $delivery = $order->activeDelivery()?->fresh()->load('order.business');
+
+        if ($delivery) {
+            DeliveryStatusChanged::dispatch($delivery, $result['old_status'], $result['new_status']);
+        }
+
+        return $this->successResponse($result, 'Delivery confirmed. Thank you!');
     }
 
 }

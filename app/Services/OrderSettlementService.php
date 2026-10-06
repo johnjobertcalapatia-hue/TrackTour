@@ -88,6 +88,12 @@ class OrderSettlementService
                 throw new \InvalidArgumentException('Only a completed order may be financially settled.');
             }
 
+            // Transport (ride-hailing) orders have no restaurant: the fare belongs
+            // to the ride, never to a restaurant wallet or restaurant settlement.
+            if ($lockedOrder->order_type === 'transport') {
+                return null;
+            }
+
             $existing = OrderSettlement::where('order_id', $lockedOrder->id)->first();
             if ($existing) {
                 return $existing;

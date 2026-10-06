@@ -1253,6 +1253,26 @@ class NearestRiderService
             ->notifyTripCompleted($delivery->id, $delivery->rider_id);
     }
 
+    /**
+     * Does this delivery trip need the TOURIST to confirm receipt at the
+     * drop-off before it may reach 'delivered'? Food deliveries always do (the
+     * rider may not mark food 'delivered' — the tourist must confirm they
+     * received their food at the destination). Standalone transport rides do
+     * NOT: the rider's own 'delivered' action is authoritative for those trips.
+     */
+    public function requiresTouristConfirmation(Delivery $delivery): bool
+    {
+        $order = $delivery->primaryOrder();
+
+        if ($order && strtolower((string) ($order->order_type ?? '')) === 'transport') {
+            return false;
+        }
+
+        // Anything else (group or standalone food delivery, no-order rides)
+        // goes through the tourist gate. Group deliveries are always food.
+        return $delivery->isGroup() || $order !== null;
+    }
+
     public function completeDelivery(Delivery $delivery, ?array $routeHistory = null): void
     {
         // Record the rider earning for non-COD deliveries. COD earnings are
@@ -1271,6 +1291,97 @@ class NearestRiderService
         // ephemeral trip state in the WebSocket engine and notify the live room.
         app(WebsocketNotifierService::class)
             ->notifyTripCompleted($delivery->id, $delivery->rider_id);
+    }
+
+    /**
+     * Tourist delivery-confirmation gate.
+     *
+     * A food delivery only reaches 'delivered' once the tourist confirms receipt
+     * at the drop-off (the rider may NOT mark food deliveries delivered). This is
+     * the shared authoritative transition used by the tourist confirm endpoint:
+     *
+     *     arrived_destination + tourist confirm
+     *         → COD: delivered (cash_due frozen; order stays delivered until the
+     *                rider settles the cash)
+     *         → prepaid: completed (delivery + order terminal together; earnings
+     *                recorded; rider released)
+     *
+     * Runs under a delivery row lock so a racing auto-cancel / restaurant-cancel
+     * can never be resurrected. Re-confirming an already terminal delivery is an
+     * idempotent no-op.
+     *
+     * @return array{success: bool, old_status: string, new_status: string}
+     *
+     * @throws \InvalidArgumentException
+     */
+    public function confirmDeliveryByTourist(Order $order, int $touristId): array
+    {
+        $delivery = $order->activeDelivery();
+
+        if (! $delivery) {
+            throw new \InvalidArgumentException('No delivery is assigned to this order.');
+        }
+
+        if (! $delivery->rider_id) {
+            throw new \InvalidArgumentException('Your order is not yet with a rider.');
+        }
+
+        if (! $this->requiresTouristConfirmation($delivery)) {
+            throw new \InvalidArgumentException('This trip does not require tourist confirmation.');
+        }
+
+        if ($delivery->order_id !== null && (int) $delivery->order_id !== (int) $order->id) {
+            throw new \InvalidArgumentException('This delivery does not belong to this order.');
+        }
+
+        return DB::transaction(function () use ($delivery, $touristId) {
+            $locked = Delivery::lockForUpdate()->find($delivery->id);
+
+            if (! $locked) {
+                throw new \InvalidArgumentException('Delivery not found.');
+            }
+
+            $currentStatus = $locked->status?->value ?? $locked->status;
+
+            // Terminal / cancelled races already committed: re-confirming is a
+            // harmless idempotent no-op that reports the true end state.
+            if (in_array($currentStatus, ['delivered', 'completed', 'cancelled'], true)) {
+                return ['success' => true, 'old_status' => $currentStatus, 'new_status' => $currentStatus];
+            }
+
+            if ($currentStatus !== 'arrived_destination') {
+                throw new \InvalidArgumentException('Your order has not arrived yet. Please confirm once the rider reaches you.');
+            }
+
+            $oldStatus = $currentStatus;
+
+            $locked->update([
+                'status' => 'delivered',
+                'delivered_at' => $locked->delivered_at ?? now(),
+                'delivery_confirmed_at' => now(),
+                'delivery_confirmed_by' => $touristId,
+            ]);
+
+            $finalStatus = 'delivered';
+
+            if ($this->isCodDelivery($locked)) {
+                // COD: freeze the cash snapshot and keep the rider busy until the
+                // cash settlement step (settle-cod) completes the delivery.
+                $this->markCodDelivered($locked);
+            } else {
+                // Prepaid: the delivery is complete once the tourist confirms
+                // receipt, so the order reaches the canonical 'completed' state too.
+                $this->completeDelivery($locked);
+                $locked->update(['status' => TripStatus::COMPLETED->value]);
+                $finalStatus = TripStatus::COMPLETED->value;
+                User::find($locked->rider_id)?->riderDetail()?->updateOrCreate(
+                    ['user_id' => $locked->rider_id],
+                    ['rider_status' => User::RIDER_STATUS_AVAILABLE, 'rider_status_updated_at' => now()]
+                );
+            }
+
+            return ['success' => true, 'old_status' => $oldStatus, 'new_status' => $finalStatus];
+        });
     }
 
     /**

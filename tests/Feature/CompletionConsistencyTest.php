@@ -130,18 +130,32 @@ class CompletionConsistencyTest extends TestCase
         return $this->rider->createToken('test')->plainTextToken;
     }
 
+    private function customerToken(): string
+    {
+        return $this->customer->createToken('test')->plainTextToken;
+    }
+
     public function test_prepaid_delivery_confirmation_completes_delivery_and_order(): void
     {
         $order = $this->makeOrder('gcash', 'TT-COMP-PREPAID');
         $delivery = $this->makeDelivery($order);
 
-        $response = $this->withHeader('Authorization', 'Bearer '.$this->riderToken())
-            ->patchJson('/api/rider/deliveries/'.$delivery->id.'/status', ['status' => 'delivered']);
+        // P14 — the rider cannot mark a food delivery delivered; the tourist
+        // confirms receipt at the drop-off, which completes the prepaid order.
+        $this->withHeader('Authorization', 'Bearer '.$this->riderToken())
+            ->patchJson('/api/rider/deliveries/'.$delivery->id.'/status', ['status' => 'delivered'])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'The tourist must confirm the delivery before it can be marked as delivered.');
 
-        $response->assertOk();
+        $this->withHeader('Authorization', 'Bearer '.$this->customerToken())
+            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
+            ->assertOk()
+            ->assertJsonPath('data.new_status', 'completed');
 
         $this->assertSame('completed', $delivery->fresh()->status->value ?? $delivery->fresh()->status,
             'Prepaid delivery reaches completed.');
+        $this->assertNotNull($delivery->fresh()->delivery_confirmed_at, 'Tourist confirmation is stamped.');
+        $this->assertSame((int) $this->customer->id, (int) $delivery->fresh()->delivery_confirmed_by);
         $this->assertSame('completed', $order->fresh()->status,
             'Prepaid ORDER reaches completed (no dangling delivered).');
         $this->assertNotNull($order->fresh()->completed_at, 'Order completed_at is stamped.');
@@ -158,12 +172,21 @@ class CompletionConsistencyTest extends TestCase
 
         // Confirm delivered: cash NOT collected yet, so the order must NOT be
         // terminal — it hangs on 'delivered' until the rider hands over cash.
+        // P14 — delivery is confirmed by the TOURIST, not the rider.
         $token = $this->riderToken();
         $this->withHeader('Authorization', 'Bearer '.$token)
             ->patchJson('/api/rider/deliveries/'.$delivery->id.'/status', ['status' => 'delivered'])
-            ->assertOk();
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'The tourist must confirm the delivery before it can be marked as delivered.');
+
+        $this->withHeader('Authorization', 'Bearer '.$this->customerToken())
+            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
+            ->assertOk()
+            ->assertJsonPath('data.new_status', 'delivered');
 
         $this->assertSame('delivered', $delivery->fresh()->status->value ?? $delivery->fresh()->status);
+        $this->assertNotNull($delivery->fresh()->delivery_confirmed_at);
+        $this->assertSame((int) $this->customer->id, (int) $delivery->fresh()->delivery_confirmed_by);
         $this->assertSame('delivered', $order->fresh()->status, 'Order stays delivered while cash is pending.');
         $this->assertNull($order->fresh()->completed_at);
         $this->assertSame((float) $order->total, (float) $delivery->fresh()->cash_due, 'Cash due snapshot frozen.');
@@ -190,8 +213,10 @@ class CompletionConsistencyTest extends TestCase
         $this->assertSame('available', $this->rider->fresh()->riderDetail->rider_status);
     }
 
-    public function test_business_owner_marking_order_completed_stamps_completed_at(): void
+    public function test_business_owner_cannot_mark_order_completed(): void
     {
+        // Business owners must not be able to set an order to completed;
+        // completion is reserved for the tourist/rider settlement flow.
         $order = $this->makeOrder('gcash', 'TT-COMP-BO');
         $order->update(['status' => 'preparing']);
         $this->makeDelivery($order);
@@ -200,9 +225,9 @@ class CompletionConsistencyTest extends TestCase
 
         $this->withHeader('Authorization', 'Bearer '.$token)
             ->patchJson('/api/business-owner/orders/'.$order->id.'/status', ['status' => 'completed'])
-            ->assertOk();
+            ->assertStatus(422);
 
-        $this->assertSame('completed', $order->fresh()->status);
-        $this->assertNotNull($order->fresh()->completed_at, 'completed_at stamped on manual completion.');
+        $this->assertNotSame('completed', $order->fresh()->status);
+        $this->assertNull($order->fresh()->completed_at, 'completed_at must not be stamped by a business owner.');
     }
 }

@@ -14,7 +14,7 @@ export default function TouristNotifications() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['tourist-notifications'],
-    queryFn: () => get<{ data: Notification[] }>('/tourist/notifications'),
+    queryFn: () => get<{ notifications: Notification[] }>('/tourist/notifications'),
   })
 
   const markReadMutation = useMutation({
@@ -29,7 +29,7 @@ export default function TouristNotifications() {
 
   if (isLoading) return <DashboardSkeleton />
 
-  const notifications = data?.data ?? []
+  const notifications = data?.notifications ?? []
   const unreadCount = notifications.filter((n) => !n.read_at).length
   const totalPages = Math.ceil(notifications.length / ITEMS_PER_PAGE)
   const paginated = notifications.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE)

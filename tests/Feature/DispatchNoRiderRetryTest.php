@@ -150,21 +150,21 @@ class DispatchNoRiderRetryTest extends TestCase
      * fresh GPS fix (< 5 min) recorded AT the pickup point (0 km <= 5 km) and
      * no active bindings (limit 2).
      */
-    private function makeEligibleRider(Business $business): User
+    private function makeEligibleRider(Business $business, string $service = 'food'): User
     {
         $rider = User::create([
-            'email' => 'rider-retry@example.com',
+            'email' => 'rider-retry-' . strtolower($service) . '-' . Str::random(6) . '@example.com',
             'password' => Hash::make('Password123!'),
             'role' => 'rider',
             'account_status' => 'approved',
             'rider_status' => 'available',
-            'current_service' => 'food',
+            'current_service' => $service,
         ]);
 
         RiderDetail::create([
             'user_id' => $rider->id,
             'rider_status' => 'available',
-            'current_service' => 'food',
+            'current_service' => $service,
         ]);
 
         RiderLocation::create([
@@ -308,5 +308,84 @@ class DispatchNoRiderRetryTest extends TestCase
         $this->assertEquals(1, $delivery->dispatch_attempts);
         $this->assertSame('no_rider_available', $delivery->dispatch_status);
         $this->assertTrue($delivery->dispatch_retry_at->isFuture());
+    }
+
+    public function test_parked_transport_delivery_is_retried_with_transport_rider_cohort(): void
+    {
+        // Transport (ride-hailing) orders stay at 'pending' while awaiting a
+        // rider and never pass through the restaurant statuses, so a ride that
+        // missed the instantaneous checkout dispatch must still be re-offered
+        // by the scheduler — to a rider on the TRANSPORT service only.
+        $business = $this->makeBusiness('Retry G');
+
+        $order = Order::create([
+            'order_number' => 'TRP-' . strtoupper(uniqid()),
+            // Canonical ride isolation: transport orders have no restaurant.
+            'business_id' => null,
+            'customer_name' => 'Rider',
+            'customer_email' => 'rider@example.com',
+            'customer_phone' => '09171234567',
+            'order_type' => 'transport',
+            'payment_method' => 'cash',
+            'payment_status' => 'pending',
+            'status' => 'pending',
+            'subtotal' => 150,
+            'delivery_fee' => 0,
+            'system_fee' => 0,
+            'total' => 150,
+            'delivery_latitude' => 12.52,
+            'delivery_longitude' => 121.32,
+        ]);
+
+        $delivery = Delivery::create([
+            'order_id' => $order->id,
+            'status' => 'waiting',
+            'dispatch_status' => 'no_rider_available',
+            'dispatch_retry_at' => now()->subMinute(),
+            'pickup_latitude' => $business->latitude,
+            'pickup_longitude' => $business->longitude,
+            'delivery_latitude' => 12.52,
+            'delivery_longitude' => 121.32,
+        ]);
+
+        // A food rider must NOT be offered a ride-hailing delivery.
+        $this->makeEligibleRider($business, 'food');
+        // The transport rider comes online after the ride was parked.
+        $transportRider = $this->makeEligibleRider($business, 'transport');
+
+        $this->assertSame(1, $this->processor->process());
+
+        $delivery->refresh();
+        $this->assertSame(
+            'notified',
+            $delivery->dispatch_status,
+            'An eligible transport rider receives the ride offer it never got at booking.'
+        );
+        $this->assertEquals(1, $delivery->dispatch_attempts);
+        $this->assertNull($delivery->dispatch_retry_at, 'The retry timestamp is cleared once an offer exists.');
+
+        $logs = BookingDispatchLog::where('delivery_id', $delivery->id)
+            ->where('response', 'pending')
+            ->get();
+        $this->assertCount(1, $logs, 'Only the transport rider is offered the ride.');
+        $this->assertSame($transportRider->id, $logs->first()->rider_id);
+        $this->assertNotSame('food', $transportRider->riderDetail->current_service);
+    }
+
+    public function test_pending_transport_order_does_not_break_food_retry_selection(): void
+    {
+        // The transport 'pending' rule must not leak into food selection: a
+        // food order parked at 'pending' stays undispatched (pending may still
+        // be awaiting payment), but a waiting_restaurant food order retries.
+        $business = $this->makeBusiness('Retry H');
+
+        $foodDelivery = $this->makeParkedDelivery($this->makeImmediateCashOrder($business));
+        $this->makeDueForRetry($foodDelivery);
+        $this->makeEligibleRider($business, 'food');
+
+        $this->assertSame(1, $this->processor->process());
+
+        $foodDelivery->refresh();
+        $this->assertSame('notified', $foodDelivery->dispatch_status);
     }
 }

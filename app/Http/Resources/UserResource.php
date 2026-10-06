@@ -23,7 +23,7 @@ class UserResource extends JsonResource
             'municipality' => $this->whenLoaded('municipality', fn () => $this->municipality->name),
             'first_name' => $profile?->first_name,
             'last_name' => $profile?->last_name,
-            'phone' => $profile?->phone,
+            'phone' => $profile?->mobile_number,
             'address' => $profile?->address,
             'profile_photo' => $profile?->avatar,
             'rider_status' => $this->whenLoaded('riderDetail', fn () => $this->riderDetail?->rider_status),

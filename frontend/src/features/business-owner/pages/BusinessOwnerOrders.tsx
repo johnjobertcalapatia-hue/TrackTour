@@ -1,14 +1,16 @@
-import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useCallback, useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { get } from '@/shared/services/api'
+import { get, patch } from '@/shared/services/api'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { PreparationCountdown } from '@/shared/components/PreparationCountdown'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
-import { formatCurrency, formatDateTime } from '@/shared/utils'
+import { deriveReadyAt, formatCurrency, formatDateTime, toAssetUrl } from '@/shared/utils'
 import { useBusinessOwnerStore } from '../services/business-owner-store'
+import { useBusinessSocketNotifier } from '@/shared/hooks/useBusinessSocketNotifier'
 import type { Order, OrderItem } from '@/shared/types'
 import {
+  Check,
   ChevronLeft,
   ChevronRight,
   ChevronDown,
@@ -19,6 +21,7 @@ import {
   MapPin,
   Phone,
   User,
+  UtensilsCrossed,
 } from 'lucide-react'
 
 const ITEMS_PER_PAGE = 8
@@ -78,29 +81,83 @@ function MetaRow({ label, children }: { label: string; children: React.ReactNode
   )
 }
 
+/** Per-item predicted readiness: each dish gets its own clock from its own
+ * preparation window (preparation_started_at + preparation_time), rather than
+ * sharing the order-level countdown. */
+function itemPredictedReadyAt(item: OrderItem): string | null {
+  if (item.status !== 'preparing') return null
+  if (!item.preparation_started_at || item.preparation_time == null) return null
+  return new Date(new Date(item.preparation_started_at).getTime() + item.preparation_time * 60_000).toISOString()
+}
+
 /** One stacked food-item card inside an expanded order (one column). */
-function ItemCard({ item }: { item: OrderItem }) {
+function ItemCard({ order, item }: { order: Order; item: OrderItem }) {
   const qty = Number(item.quantity ?? 0)
   const unit = Number(item.unit_price ?? 0)
   const lineTotal = Number(item.total_price ?? unit * qty)
+  const img = item.offering?.image || item.offering?.images?.[0]
+  const queryClient = useQueryClient()
+
+  const canPrepare = ['accepted', 'preparing'].includes(order.status)
+  const isItemReady = item.status === 'ready'
+  const itemReadyAt = useMemo(() => itemPredictedReadyAt(item), [item])
+
+  const markItemReady = useMutation({
+    mutationFn: () =>
+      patch(`/business-owner/orders/${order.id}/items/${item.id}/status`, { status: 'ready' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['bo-orders'] }),
+  })
 
   return (
     <div className={PANEL}>
-      <div className="flex items-start justify-between gap-3">
-        <p className="text-sm font-medium text-[#17201A] min-w-0">{item.product_name}</p>
-        <p className="text-sm font-semibold tabular-nums text-[#17201A] shrink-0">{formatCurrency(lineTotal)}</p>
-      </div>
-      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#647067]">
-        <span>Qty {qty} × {formatCurrency(unit)}</span>
-        {item.preparation_time != null && (
-          <span className="inline-flex items-center gap-1">
-            <Clock className="w-3 h-3" />
-            {item.preparation_time} min prep
-          </span>
-        )}
-      </div>
-      <div className="mt-2">
-        <StatusBadge status={item.status ?? 'pending'} />
+      <div className="flex items-start gap-3">
+        <div className="shrink-0">
+          {img ? (
+            <img
+              src={toAssetUrl(img)}
+              alt={item.product_name}
+              className="w-11 h-11 rounded-lg object-cover"
+            />
+          ) : (
+            <div className="w-11 h-11 bg-gradient-to-br from-[#E9F7EF] to-[#DDF4E6] rounded-lg flex items-center justify-center">
+              <UtensilsCrossed className="w-4 h-4 text-[#087F3F]/40" />
+            </div>
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-sm font-medium text-[#17201A] min-w-0">{item.product_name}</p>
+            <p className="text-sm font-semibold tabular-nums text-[#17201A] shrink-0">{formatCurrency(lineTotal)}</p>
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#647067]">
+            <span>Qty {qty} × {formatCurrency(unit)}</span>
+            {item.preparation_time != null && (
+              <span className="inline-flex items-center gap-1">
+                <Clock className="w-3 h-3" />
+                {item.preparation_time} min prep
+              </span>
+            )}
+          </div>
+          <div className="mt-2">
+            <StatusBadge status={item.status ?? 'pending'} />
+            {itemReadyAt && (
+              <span className="ml-2 inline-flex items-center gap-1 text-xs font-semibold text-[#16803C]">
+                <PreparationCountdown readyAt={itemReadyAt} className="font-mono" />
+              </span>
+            )}
+          </div>
+          {canPrepare && !isItemReady && (
+            <button
+              type="button"
+              onClick={() => markItemReady.mutate()}
+              disabled={markItemReady.isPending}
+              className="mt-2 inline-flex w-full sm:w-auto items-center justify-center gap-1.5 rounded-lg bg-[#16803C] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#126B32] disabled:opacity-50"
+            >
+              <Check className="w-3.5 h-3.5" />
+              {markItemReady.isPending ? 'Marking…' : 'Mark Ready for Pickup'}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -177,7 +234,7 @@ function OrderCard({ order }: { order: Order }) {
             <MetaRow label="Placed">{formatDateTime(order.created_at)}</MetaRow>
             {prepStarted && (
               <MetaRow label="Time Remaining">
-                <PreparationCountdown readyAt={order.predicted_ready_at} className="font-mono font-semibold text-[#16803C]" />
+                <PreparationCountdown readyAt={deriveReadyAt(order)} className="font-mono font-semibold text-[#16803C]" />
               </MetaRow>
             )}
             {!prepStarted && order.preparation_time != null && (
@@ -228,7 +285,7 @@ function OrderCard({ order }: { order: Order }) {
             ) : (
               <div className="space-y-2">
                 {items.map((item) => (
-                  <ItemCard key={item.id} item={item} />
+                  <ItemCard key={item.id} order={order} item={item} />
                 ))}
               </div>
             )}
@@ -279,6 +336,20 @@ export default function BusinessOwnerOrders() {
   const [page, setPage] = useState(1)
   const [statusFilter, setStatusFilter] = useState('all')
   const selectedBusinessId = useBusinessOwnerStore((s) => s.selectedBusinessId)
+  const queryClient = useQueryClient()
+
+  // P11.8 — live updates on the Orders page: when a rider accepts (order →
+  // preparing + countdown armed) or the countdown auto-fires at 00:00 (→
+  // ready), the authorized business room forwards the canonical
+  // order/delivery/delivery-assigned events and this page refetches instead of
+  // waiting for a manual refresh. HTTP is the recovery mechanism, and the
+  // notifier degrades silently when the socket/token is unavailable.
+  const { connection } = useBusinessSocketNotifier({
+    businessId: selectedBusinessId ?? null,
+    onStatusEvent: useCallback(() => {
+      queryClient.invalidateQueries({ queryKey: ['bo-orders'] })
+    }, [queryClient]),
+  })
 
   const { data, isLoading } = useQuery({
     queryKey: ['bo-orders', selectedBusinessId, statusFilter],
@@ -303,6 +374,12 @@ export default function BusinessOwnerOrders() {
       <div className="mb-8">
         <h1 className="text-2xl lg:text-3xl font-bold text-[#126B32]">Orders</h1>
         <p className="mt-1 text-sm text-[#647067]">Incoming orders start preparing automatically once a rider accepts</p>
+        {connection === 'connected' && (
+          <p className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-[#EAF6ED] px-2.5 py-1 text-[11px] font-medium text-[#16803C]">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#16803C] animate-pulse" />
+            Live
+          </p>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-2 mb-6">

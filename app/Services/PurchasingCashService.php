@@ -15,12 +15,18 @@ use InvalidArgumentException;
 /**
  * Purchasing-cash COD flow (professor model).
  *
- * After a rider accepts a COD delivery, the Tourism Office issues the rider
- * the cash needed to buy the food from every participating restaurant
- * (deliveries.purchasing_cash). The rider receives the cash, then works the
- * pickup route restaurant by restaurant, marking each cod_purchases stop
- * purchased → collected. The delivery cannot leave the pickup area (picked_up)
- * until every purchase stop is collected.
+ * The Tourism Office advances the rider a purchasing-cash float BEFORE the
+ * rider goes online, so the rider already holds the physical cash needed to
+ * buy the food from every participating restaurant. There is no per-delivery
+ * waiting step: as soon as a rider accepts a COD delivery the exact amount is
+ * auto-issued (deliveries.purchasing_cash / purchasing_cash_issued_at) —
+ * the system knows the amount deterministically (Σ purchase_amount) so the
+ * office never has to act in the middle of a trip.
+ *
+ * The rider then works the pickup route restaurant by restaurant in
+ * preparation-time order (shortest prep first), marking each cod_purchases
+ * stop purchased → collected. The delivery cannot leave the pickup area
+ * (picked_up) until every purchase stop is collected.
  *
  * Money invariants (AGENTS.md §5.3):
  *
@@ -31,6 +37,10 @@ use InvalidArgumentException;
  * Each purchase_amount uses the exact CodSettlementService allocation formula
  * (business subtotal + system-fee share), so the ledger always reconciles to
  * the authoritative settlement base. No rider wallet/credit is involved.
+ *
+ * The admin "issue purchasing cash" endpoint remains as an idempotency
+ * backstop / audit instrument; on auto-issued deliveries it correctly reports
+ * that the cash is already issued.
  */
 class PurchasingCashService
 {
@@ -38,7 +48,8 @@ class PurchasingCashService
     public const ISSUABLE_STATUSES = ['assigned', 'en_route_pickup', 'arrived_pickup'];
 
     /**
-     * Create the per-restaurant cod_purchases rows for a COD delivery.
+     * Create the per-restaurant cod_purchases rows for a COD delivery and
+     * auto-issue the purchasing cash.
      *
      * Idempotent: safe to call more than once (acceptance re-runs, double-tap,
      * race). Amounts are recomputed from the canonical order items with the
@@ -50,29 +61,69 @@ class PurchasingCashService
             return;
         }
 
-        if (CodPurchase::where('delivery_id', $delivery->id)->exists()) {
+        if (! CodPurchase::where('delivery_id', $delivery->id)->exists()) {
+            $allocations = $this->allocation($delivery);
+            if ($allocations->isEmpty()) {
+                return;
+            }
+
+            $createdAt = now();
+
+            foreach ($allocations as $businessId => $amount) {
+                CodPurchase::create([
+                    'purchase_number' => 'COD-PUR-' . Str::upper(Str::random(10)),
+                    'delivery_id' => $delivery->id,
+                    'order_id' => $delivery->primaryOrder()?->id ?? $delivery->order_id,
+                    'business_id' => $businessId,
+                    'purchase_amount' => $amount,
+                    'status' => CodPurchase::STATUS_PENDING,
+                    'created_at' => $createdAt,
+                    'updated_at' => $createdAt,
+                ]);
+            }
+        }
+
+        // The rider already holds the Tourism Office float (pre-funded before
+        // going online), so the per-delivery cash is issued implicitly with
+        // the assignment. Deterministic amount = Σ purchase_amount.
+        $this->autoIssue($delivery);
+    }
+
+    /**
+     * Implicitly stamp the delivery's purchasing-cash fields once, at the
+     * moment the cod_purchases ledger becomes available. Never overwrites an
+     * existing issuance; idempotent across acceptance re-runs.
+     */
+    private function autoIssue(Delivery $delivery): void
+    {
+        $fresh = Delivery::find($delivery->id);
+
+        if (! $fresh || $fresh->purchasing_cash_issued_at !== null) {
             return;
         }
 
-        $allocations = $this->allocation($delivery);
-        if ($allocations->isEmpty()) {
+        $rows = $fresh->codPurchases;
+        $total = round($rows->sum(fn (CodPurchase $p) => (float) $p->purchase_amount), 2);
+
+        if ($rows->isEmpty() || $total <= 0) {
             return;
         }
 
-        $createdAt = now();
+        $fresh->update([
+            'purchasing_cash' => $total,
+            'purchasing_cash_issued_at' => now(),
+        ]);
 
-        foreach ($allocations as $businessId => $amount) {
-            CodPurchase::create([
-                'purchase_number' => 'COD-PUR-' . Str::upper(Str::random(10)),
-                'delivery_id' => $delivery->id,
-                'order_id' => $delivery->primaryOrder()?->id ?? $delivery->order_id,
-                'business_id' => $businessId,
-                'purchase_amount' => $amount,
-                'status' => CodPurchase::STATUS_PENDING,
-                'created_at' => $createdAt,
-                'updated_at' => $createdAt,
-            ]);
-        }
+        ActivityLog::create([
+            'user_id' => null,
+            'action' => 'purchasing_cash.auto_issued',
+            'description' => sprintf(
+                'Purchasing cash ₱%s auto-issued for delivery #%s at acceptance (rider already holds the Tourism Office float; %d restaurant purchase stop(s)).',
+                number_format($total, 2),
+                (string) $fresh->id,
+                (int) $rows->count()
+            ),
+        ]);
     }
 
     /**
@@ -280,6 +331,183 @@ class PurchasingCashService
         }
 
         return $allocations;
+    }
+
+    /**
+     * Per-business preparation time (minutes) for a delivery, computed from
+     * the order-time item snapshots (order_items.preparation_time), grouped by
+     * the restaurant fulfilling each item. Used to order the pickup route:
+     * the restaurant that finishes preparing soonest is picked up first, and
+     * the last restaurant (longest prep) becomes the drop-off route origin.
+     *
+     * @return array<int, int> business_id => prep minutes (0 when unknown)
+     */
+    public function businessPrepTimes(Delivery $delivery): array
+    {
+        $map = [];
+
+        foreach ($delivery->childOrders() as $order) {
+            foreach ($order->items()->get() as $item) {
+                $businessId = (int) ($item->business_id ?: $order->business_id);
+                $prep = (int) ($item->preparation_time ?? 0);
+                $map[$businessId] = max($map[$businessId] ?? 0, $prep);
+            }
+        }
+
+        return $map;
+    }
+
+    /**
+     * The grouped pickup route for ANY delivery, COD or prepaid: every
+     * restaurant that fulfils items on this trip, in ascending preparation
+     * time (shortest prep picked up first), with the longest-prep restaurant
+     * exposed as the drop-off route origin and the tourist destination as the
+     * drop-off point. COD stops additionally carry their cod_purchases ledger
+     * row so the purchasing-cash flow and the ALL-COLLECTED gate keep working
+     * unchanged (see the full payload shape in RIDER_PICKUP_ROUTE fields).
+     *
+     * @return array<string, mixed>
+     */
+    public function pickupRoute(Delivery $delivery): array
+    {
+        return [
+            'delivery_id' => $delivery->id,
+            'is_cod' => $this->isCod($delivery),
+            'stops' => $this->routeStops($delivery)->map(function (array $entry) {
+                $purchase = $entry['cod_purchase'];
+
+                return [
+                    'business_id' => $entry['business_id'],
+                    'business_name' => $entry['business_name'],
+                    'sequence' => $entry['sequence'],
+                    'preparation_time' => $entry['preparation_time'],
+                    'pickup_lat' => $entry['pickup_latitude'],
+                    'pickup_lng' => $entry['pickup_longitude'],
+                    'pickup_address' => $entry['pickup_address'],
+                    'cod_purchase' => $purchase ? [
+                        'id' => $purchase->id,
+                        'purchase_number' => $purchase->purchase_number,
+                        'purchase_amount' => (float) $purchase->purchase_amount,
+                        'status' => $purchase->status,
+                        'purchased_at' => $purchase->purchased_at,
+                        'collected_at' => $purchase->collected_at,
+                    ] : null,
+                ];
+            })->values(),
+            'pickup_origin' => $this->pickupOrigin($delivery),
+            'dropoff' => [
+                'latitude' => $delivery->delivery_latitude !== null ? (float) $delivery->delivery_latitude : null,
+                'longitude' => $delivery->delivery_longitude !== null ? (float) $delivery->delivery_longitude : null,
+                'address' => $delivery->delivery_address,
+            ],
+        ];
+    }
+
+    /**
+     * Payment-agnostic per-restaurant pickup stops for a delivery, derived
+     * from the order-item snapshots (business_id + preparation_time), ordered
+     * by ascending preparation time (ties fall back to business id). This is
+     * the single canonical derivation for COD (which adds the cod_purchases
+     * ledger row per stop) AND prepaid multi-restaurant trips.
+     *
+     * @return Collection<int, array<string, mixed>>
+     */
+    public function routeStops(Delivery $delivery): Collection
+    {
+        $prepTimes = $this->businessPrepTimes($delivery);
+        $businesses = [];
+
+        foreach ($delivery->childOrders() as $order) {
+            $orderBusiness = $order->business;
+            foreach ($order->items()->with('business')->get() as $item) {
+                $businessId = (int) ($item->business_id ?: $order->business_id);
+                if ($businessId <= 0) {
+                    continue;
+                }
+                $businesses[$businessId] ??= $item->business ?? $orderBusiness;
+            }
+        }
+
+        if (empty($businesses)) {
+            return collect();
+        }
+
+        $orderedIds = collect(array_keys($businesses))
+            ->sortBy(fn (int $id) => [$prepTimes[$id] ?? 0, $id])
+            ->values();
+
+        $purchases = $this->isCod($delivery)
+            ? $delivery->codPurchases->keyBy(fn (CodPurchase $p) => (int) $p->business_id)
+            : collect();
+
+        $sequence = 0;
+
+        return $orderedIds->map(function (int $businessId) use (&$sequence, $prepTimes, $businesses, $purchases) {
+            $sequence++;
+            $business = $businesses[$businessId];
+
+            return [
+                'business_id' => $businessId,
+                'business_name' => $business->business_name ?? $business->name,
+                'sequence' => $sequence,
+                'preparation_time' => $prepTimes[$businessId] ?? 0,
+                'pickup_latitude' => $business->latitude !== null ? (float) $business->latitude : null,
+                'pickup_longitude' => $business->longitude !== null ? (float) $business->longitude : null,
+                'pickup_address' => $business->address,
+                'cod_purchase' => $purchases->get($businessId),
+            ];
+        });
+    }
+
+    /**
+     * Per-restaurant pickup stops ordered by ascending preparation time (the
+     * route the rider drives), each annotated with its sequence, prep time and
+     * restaurant pickup coordinates/address. COD-only: every stop carries its
+     * cod_purchases ledger row (the controller's cash-flow panel consumes it).
+     *
+     * @return Collection<int, array<string, mixed>>
+     */
+    public function pickupStops(Delivery $delivery): Collection
+    {
+        return $this->routeStops($delivery)
+            ->filter(fn (array $entry) => $entry['cod_purchase'] !== null)
+            ->map(function (array $entry) {
+                $purchase = $entry['cod_purchase'];
+
+                return [
+                    'stop' => $purchase,
+                    'sequence' => $entry['sequence'],
+                    'preparation_time' => $entry['preparation_time'],
+                    'pickup_latitude' => $entry['pickup_latitude'],
+                    'pickup_longitude' => $entry['pickup_longitude'],
+                    'pickup_address' => $entry['pickup_address'],
+                ];
+            })
+            ->values();
+    }
+
+    /**
+     * The LAST restaurant the rider picks up (longest preparation time). Per
+     * the route model this is the pickup point the drop-off route originates
+     * from. Works for COD and prepaid alike.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function pickupOrigin(Delivery $delivery): ?array
+    {
+        $entry = $this->routeStops($delivery)->last();
+
+        if (! $entry) {
+            return null;
+        }
+
+        return [
+            'business_id' => $entry['business_id'],
+            'business_name' => $entry['business_name'],
+            'latitude' => $entry['pickup_latitude'],
+            'longitude' => $entry['pickup_longitude'],
+            'address' => $entry['pickup_address'],
+        ];
     }
 
     private function isCod(Delivery $delivery): bool

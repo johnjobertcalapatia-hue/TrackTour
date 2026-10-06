@@ -137,6 +137,20 @@ class RiderMapController extends Controller
             $distance = 6371000 * 2 * atan2(sqrt($a), sqrt(1 - $a));
 
             if ($distance < 5) {
+                // No meaningful movement, but persist an elapsed-based checkpoint
+                // (LocationPersistenceService::shouldSave) when the last record is
+                // older than checkpoint_seconds. Without this, a stationary online
+                // rider can never refresh recorded_at via the heartbeat and silently
+                // ages out of COD/radar dispatch (cod_location_max_age_minutes).
+                if (($acc === null || $acc <= 50) && $this->persistence->shouldSave($riderId, $lat, $lng)) {
+                    RiderLocation::create([
+                        'rider_id' => $riderId,
+                        'latitude' => $lat,
+                        'longitude' => $lng,
+                        'recorded_at' => now(),
+                    ]);
+                }
+
                 return $this->successResponse([
                     'moved' => false,
                     'interval' => $this->getAdaptiveInterval($riderId, $lat, $lng, $spd),
@@ -396,6 +410,17 @@ class RiderMapController extends Controller
 
             $locked->update($updateData);
 
+            // P14 — tourist delivery-confirmation gate. Evaluated BEFORE the status
+            // write so a rejected rider 'delivered' never mutates the delivery.
+            if (
+                $newStatus === 'delivered'
+                && $this->dispatchService->requiresTouristConfirmation($locked)
+            ) {
+                return ['error' => 'tourist_confirmation_required'];
+            }
+
+            $locked->update($updateData);
+
             $finalStatus = $newStatus;
 
             if ($newStatus === 'delivered') {
@@ -422,6 +447,10 @@ class RiderMapController extends Controller
 
         if ($outcome['error'] === 'forbidden') {
             return $this->forbiddenResponse('Not assigned to this delivery.');
+        }
+
+        if (($outcome['error'] ?? null) === 'tourist_confirmation_required') {
+            return $this->errorResponse('The tourist must confirm the delivery before it can be marked as delivered.', 422);
         }
 
         // Emit the real-time event only after commit, so listeners never run

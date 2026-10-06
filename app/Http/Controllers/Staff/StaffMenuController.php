@@ -54,7 +54,7 @@ class StaffMenuController extends Controller
 
         $validated['business_id'] = $request->user()->staff?->business_id;
         $validated['offering_type'] = 'menu';
-        $validated['status'] = 'active';
+        $validated['status'] = 'available';
 
         $offering = Offering::create($validated);
 

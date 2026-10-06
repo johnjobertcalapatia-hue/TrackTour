@@ -37,10 +37,21 @@ export const useAuthStore = create<AuthState>((set) => ({
       } catch (error) {
         const status = axios.isAxiosError(error) ? error.response?.status : undefined
 
-        // 401 = token missing/expired/revoked server-side. Genuine logout.
+        // 401 = token missing/expired/revoked server-side. Genuine logout —
+        // unless a NEWER login already replaced the credential on disk while
+        // this in-flight /user was travelling (the stale-credential race the
+        // api interceptor guards against too). Then this 401 describes the
+        // OLD token and must not touch the fresh session. The interceptor may
+        // have already cleared the dead token above (on-disk null) — that is
+        // still the same (dead) session, so clear the memory too.
         if (status === 401) {
-          localStorage.removeItem('auth_token')
-          set({ user: null, loading: false })
+          const onDisk = localStorage.getItem('auth_token')
+          if (onDisk === token || onDisk === null) {
+            localStorage.removeItem('auth_token')
+            set({ user: null, loading: false })
+          } else {
+            set({ loading: false })
+          }
           return
         }
 

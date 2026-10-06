@@ -155,10 +155,14 @@ Ensure you have the following installed on your system:
    composer run dev
    ```
    This will spin up:
-   - **Laravel API:** `http://127.0.0.1:8000`
-   - **Vite Bundler:** `http://localhost:5173`
+   - **Laravel API:** `http://127.0.0.1:8000` (optional — the frontend does **not** use it)
+   - **Vite Bundler:** `http://localhost:3000`
    - **Background Queue Listener:** To handle async notifications.
    - **Laravel Pail:** To stream error/debug output in real-time.
+
+   > **Frontend API path:** the browser calls `/api` **relative to `localhost:3000`**; Vite proxies it to **XAMPP Apache** (`http://localhost/Capstone%20Project%201/public`), not to `:8000`. See `frontend/vite.config.ts` (the stale `vite.config.js` duplicate, which still pointed at `:8000`, was deleted on 2026-09-23). Apache must be running, otherwise API calls fail with `502`.
+   >
+   > **Do not "fix" slowness with `PHP_CLI_SERVER_WORKERS`** — on Windows the PHP built-in server ignores it (worker forking needs `fork()`), and it is single-threaded (~0.87 req/s), which was the root cause of false "Unable to change availability right now." errors.
 
 ---
 

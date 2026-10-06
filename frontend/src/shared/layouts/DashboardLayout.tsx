@@ -1,10 +1,13 @@
-import { Suspense, useState, useEffect, useCallback, useRef, cloneElement, isValidElement, type ReactNode } from 'react'
+import { Suspense, useContext, useState, useEffect, useCallback, useRef, cloneElement, isValidElement, type ReactNode } from 'react'
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '@/features/auth/services/auth-store'
 import { patch, post } from '@/shared/services/api'
+import { Skeleton } from '@/shared/components/Skeleton'
+import RiderOrderInfoSheet from '@/features/rider/components/RiderOrderInfoSheet'
+import { RiderActiveTripContext } from '@/features/rider/context/RiderActiveTripContext'
 import type { User as AppUser } from '@/shared/types'
-import { cn, getInitials } from '@/shared/utils'
+import { cn, getInitials, toAssetUrl } from '@/shared/utils'
 import { ChevronLeft, ChevronRight, ChevronDown, LogOut, Power, User, Settings, Star, Layers, MapPin, Activity, Zap, Bike, UtensilsCrossed, Check } from 'lucide-react'
 
 const bottomPanelActions = [
@@ -62,6 +65,9 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
   const setUser = useAuthStore((s) => s.setUser)
   const fetchUser = useAuthStore((s) => s.fetchUser)
   const logout = useAuthStore((s) => s.logout)
+  // null whenever this layout is rendered outside the /rider routes — every
+  // trip flag below therefore stays inert for the other roles.
+  const riderTrip = useContext(RiderActiveTripContext)
   const location = useLocation()
   const navigate = useNavigate()
   // Rider Settings (/rider/settings) is its own full content page, so the
@@ -96,6 +102,15 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
       setRiderOnline(user.rider_status === 'online' || user.rider_status === 'available' || user.rider_status === 'busy')
     }
   }, [roleLabel, user?.rider_status])
+
+  // The floating go-online chrome must mirror the AUTHORITATIVE trip state, not
+  // just the rider_status flag. A rider bound to a live delivery (or a
+  // delivered-but-unsettled COD) is mid-trip — exactly what the backend toggle
+  // guard rejects with 409 — so the button shows "On a trip", never a grey
+  // "Go Online", and cannot fire a toggle that is guaranteed to fail.
+  const riderInTrip = Boolean(riderTrip?.activeDelivery) || Boolean(riderTrip?.pendingSettlement)
+  const inTrip = riderInTrip || user?.rider_status === 'busy'
+  const effectivelyOnline = riderOnline || inTrip
 
   // Keep MySQL `rider_locations.recorded_at` fresh while the rider is online.
   //
@@ -418,10 +433,14 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
       if (currentUser) {
         setUser({ ...currentUser, rider_status: nextOnline ? 'available' : 'offline' })
       }
-      // Land on the map straight away. DashboardLayout stays mounted across
-      // /rider/* (it renders the Outlet), so the conflict banner still shows
-      // if the server later rejects this toggle.
-      navigate('/rider/map')
+      // Land on the map straight away — but ONLY when not already on it.
+      // A navigate() to the path you are already standing on pushes a duplicate
+      // history entry, and any path change re-keys the <Outlet> below (its key
+      // is `pathname + search`), which unmounts the whole page and empties the
+      // content area while the lazy map chunk suspends. DashboardLayout itself
+      // stays mounted across /rider/* (it renders the Outlet), so the conflict
+      // banner still shows if the server later rejects this toggle.
+      if (location.pathname !== '/rider/map') navigate('/rider/map')
       if (nextOnline) {
         window.dispatchEvent(new Event('rider-go-online'))
       }
@@ -441,8 +460,9 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
         setUser({ ...currentUser, rider_status: riderStatus as AppUser['rider_status'] })
       }
       setRiderOnline(online)
-      if (!optimistic) {
-        // Busy path never flipped above, so navigation still has to happen.
+      if (!optimistic && location.pathname !== '/rider/map') {
+        // Busy path never flipped above, so navigation still has to happen —
+        // same guard: never re-navigate onto the page we are already showing.
         navigate('/rider/map')
       }
       if (online) {
@@ -518,8 +538,12 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
               Signed in as
             </p>
             <div className="flex items-center gap-2.5 mt-1.5">
-              <div className={cn('w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0', admin ? 'bg-[#087F3F] text-white' : tourism ? 'bg-[#087F3F] text-white' : 'bg-white/70 backdrop-blur-md border border-white/50 text-primary')}>
-                {getInitials(user?.name)}
+              <div className={cn('w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 overflow-hidden', admin ? 'bg-[#087F3F] text-white' : tourism ? 'bg-[#087F3F] text-white' : 'bg-white/70 backdrop-blur-md border border-white/50 text-primary')}>
+                {toAssetUrl(user?.profile_photo) ? (
+                  <img src={toAssetUrl(user?.profile_photo)} alt={user?.name} className="w-full h-full object-cover" />
+                ) : (
+                  getInitials(user?.name)
+                )}
               </div>
               <div className="min-w-0">
                 <p className={cn('text-sm font-medium truncate', admin ? 'text-[#17201B]' : tourism ? 'text-[#17201B]' : 'text-ink-soft')}>{user?.name}</p>
@@ -596,7 +620,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
         )}
       >
         <header className={cn(
-          'relative z-[1200] h-16 shrink-0 flex items-center w-full px-4 sm:px-6 gap-4',
+          'relative z-40 h-16 shrink-0 flex items-center w-full px-4 sm:px-6 gap-4',
           bottomNavigation && 'max-w-[480px] mx-auto',
           !bottomNavigation && (tourism ? 'tourism-nav' : 'glass-nav')
         )}>
@@ -612,8 +636,12 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                   className="flex items-center gap-3 rounded-xl p-1.5 text-left transition hover:bg-black/5"
                 >
 <div className="flex flex-col items-center gap-1 mt-2">
-                      <div className={cn('w-11 h-11 rounded-full flex items-center justify-center text-base font-bold', tourism ? 'bg-[#087F3F] text-white' : 'bg-white/70 backdrop-blur-md border border-white/50 shadow-glass text-primary')}>
-                        {getInitials(user?.name)}
+                      <div className={cn('w-11 h-11 rounded-full flex items-center justify-center text-base font-bold overflow-hidden', tourism ? 'bg-[#087F3F] text-white' : 'bg-white/70 backdrop-blur-md border border-white/50 shadow-glass text-primary')}>
+                        {toAssetUrl(user?.profile_photo) ? (
+                          <img src={toAssetUrl(user?.profile_photo)} alt={user?.name} className="w-full h-full object-cover" />
+                        ) : (
+                          getInitials(user?.name)
+                        )}
                       </div>
                       {roleLabel === 'Rider' && (
                         <div className="flex items-center gap-1 bg-[#E9F7EF] rounded-full px-2 py-0.5">
@@ -656,9 +684,13 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
             ) : (
               <>
 <div className="flex flex-col items-center gap-1 mt-2">
-                    <div className={cn('w-11 h-11 rounded-full flex items-center justify-center text-base font-bold', tourism ? 'bg-[#087F3F] text-white' : 'bg-white/70 backdrop-blur-md border border-white/50 shadow-glass text-primary')}>
-                      {getInitials(user?.name)}
-                    </div>
+                    <div className={cn('w-11 h-11 rounded-full flex items-center justify-center text-base font-bold overflow-hidden', tourism ? 'bg-[#087F3F] text-white' : 'bg-white/70 backdrop-blur-md border border-white/50 shadow-glass text-primary')}>
+        {toAssetUrl(user?.profile_photo) ? (
+          <img src={toAssetUrl(user?.profile_photo)} alt={user?.name} className="w-full h-full object-cover" />
+        ) : (
+          getInitials(user?.name)
+        )}
+      </div>
                     {roleLabel === 'Rider' && (
                       <div className="flex items-center gap-0.5">
                         <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
@@ -688,7 +720,18 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                 ? 'pb-24'
                 : 'pb-5 sm:pb-6 lg:pb-6'
           )}>
-            <Suspense fallback={<div />}>
+            <Suspense
+              fallback={
+                // Deliberately not `<div />`: the keyed Outlet below unmounts
+                // the outgoing page the instant the path changes, so an empty
+                // fallback makes the whole content area go blank while the lazy
+                // route chunk loads — which reads as "the page just refreshed".
+                <div className="space-y-4" role="status" aria-label="Loading page">
+                  <Skeleton className="h-7 w-44" />
+                  <Skeleton className="h-[55vh] w-full rounded-[24px]" />
+                </div>
+              }
+            >
               <Outlet key={location.pathname + location.search} />
             </Suspense>
           </div>
@@ -704,47 +747,45 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
               {toggleError}
             </div>
           )}
-          <div className={cn('flex w-full', riderOnline ? 'justify-start' : 'justify-center')}>
+          <div className={cn('flex w-full', effectivelyOnline ? 'justify-start' : 'justify-center')}>
             <button
               type="button"
               onClick={toggleRiderAvailability}
-              disabled={toggling}
+              disabled={toggling || inTrip}
               aria-busy={toggling}
               className={cn(
                 'group flex items-center gap-2 shadow-lg transition-all duration-[1000ms] ease-[cubic-bezier(0.25,0.1,0.25,1)] disabled:cursor-wait disabled:opacity-60',
-                riderOnline
+                effectivelyOnline
                   ? 'h-12 w-12 justify-center rounded-full bg-[#16803C] text-white rider-circle-bounce'
                   : 'h-11 sm:h-12 rounded-full bg-[#17201B] px-4 sm:px-5 text-xs sm:text-sm font-semibold text-white border border-[#17201B] hover:bg-black'
               )}
             >
-              {riderOnline && (
+              {effectivelyOnline && (
                 <>
                   <span className="online-pulse-ring" aria-hidden="true" />
                   <span className="online-pulse-ring online-pulse-ring-delayed" aria-hidden="true" />
                 </>
               )}
               <Power className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 relative z-10 text-white" />
-              {!riderOnline && <span>Go Online</span>}
-              {riderOnline && (
+              {!effectivelyOnline && <span>Go Online</span>}
+              {effectivelyOnline && (
                 <span className="pointer-events-none absolute left-full ml-3 whitespace-nowrap rounded-lg bg-[#17201B] px-3 py-1.5 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100">
-                  Go Offline
+                  {inTrip ? 'On a trip — complete the delivery to go offline' : 'Go Offline'}
                 </span>
               )}
             </button>
           </div>
-          {/* Rider status readout — sits between the Go Online toggle and the
-              action grid. It mirrors `riderOnline`, which toggleRiderAvailability
-              only ever sets from the server's own rider_status response, so this
-              panel can never disagree with the button above it:
-                Go Online  → green panel, white text, pulsing white dot
-                Go Offline → white panel, gray text, fading gray dot */}
+          {/* Rider status readout — mirrors the button: it follows the online
+              state (server-confirmed via toggleRiderAvailability) AND the
+              authoritative trip state, so a mid-trip rider reads "On a trip",
+              never a misleading grey offline panel. */}
           <div
             role="status"
             aria-live="polite"
             aria-busy={toggling}
             className={cn(
               'flex w-full items-center justify-between gap-3 rounded-2xl border p-4 shadow-lg backdrop-blur-md transition-all duration-[1000ms] ease-[cubic-bezier(0.25,0.1,0.25,1)]',
-              riderOnline
+              effectivelyOnline
                 ? 'border-[#16803C] bg-[#16803C] text-white'
                 : 'border-[#E5E9E7] bg-white/95 text-[#6B7280]'
             )}
@@ -760,13 +801,13 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                   // animate-pulse is the fade: the dot breathes between full and
                   // ~30% opacity in BOTH states — white while online, gray while
                   // offline.
-                  riderOnline ? 'bg-white animate-pulse' : 'bg-[#9CA3AF] animate-pulse'
+                  effectivelyOnline ? 'bg-white animate-pulse' : 'bg-[#9CA3AF] animate-pulse'
                 )}
               />
-              {/* Tracks riderOnline directly: the toggle flips that optimistically
-                  at tap time, so withholding the label for the round trip would
-                  just re-hide the state we chose to show early. */}
-              {riderOnline ? 'Online' : 'Offline'}
+              {/* Tracks effectivelyOnline directly: the toggle flips that
+                  optimistically at tap time, so withholding the label for the
+                  round trip would just re-hide the state we chose to show early. */}
+              {inTrip ? 'On a trip' : effectivelyOnline ? 'Online' : 'Offline'}
             </span>
           </div>
           <div
@@ -816,7 +857,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                 )}
               </div>
             )}
-            <div className={cn('grid gap-2', riderOnline ? 'grid-cols-4' : 'grid-cols-3')}>
+            <div className={cn('grid gap-2', effectivelyOnline ? 'grid-cols-4' : 'grid-cols-3')}>
               {bottomPanelActions.map((action) => (
                 <button
                   key={action.label}
@@ -843,7 +884,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                   <span className="text-[11px] font-semibold leading-tight text-[#17201B]">{action.label}</span>
                 </button>
               ))}
-              {riderOnline && (
+              {effectivelyOnline && (
                 <button
                   type="button"
                   onClick={() => {
@@ -882,6 +923,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
             )}
             {bottomPanelSlot}
           </div>
+          <RiderOrderInfoSheet />
         </div>
       )}
       {bottomNavigation && roleLabel === 'Rider' && !riderSettingsPage && (
@@ -892,8 +934,12 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
             aria-expanded={profileMenuOpen}
             aria-haspopup="menu"
           >
-            <div className={cn('w-11 h-11 rounded-full flex items-center justify-center text-base font-bold', tourism ? 'bg-[#087F3F] text-white' : 'bg-white/70 backdrop-blur-md border border-white/50 shadow-glass text-primary')}>
-              {getInitials(user?.name)}
+            <div className={cn('w-11 h-11 rounded-full flex items-center justify-center text-base font-bold overflow-hidden', tourism ? 'bg-[#087F3F] text-white' : 'bg-white/70 backdrop-blur-md border border-white/50 shadow-glass text-primary')}>
+              {toAssetUrl(user?.profile_photo) ? (
+                <img src={toAssetUrl(user?.profile_photo)} alt={user?.name} className="w-full h-full object-cover" />
+              ) : (
+                getInitials(user?.name)
+              )}
             </div>
           </button>
           <div className="flex items-center gap-1 bg-[#E9F7EF] rounded-full px-2 py-0.5">

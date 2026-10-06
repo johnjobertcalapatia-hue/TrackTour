@@ -24,6 +24,7 @@ class ReadyToDeliveredOrderSyncTest extends TestCase
 
     private User $owner;
     private User $rider;
+    private User $customer;
     private Business $restaurant;
     private Order $order;
     private Delivery $delivery;
@@ -36,6 +37,13 @@ class ReadyToDeliveredOrderSyncTest extends TestCase
             'email' => 'owner-sync@example.com',
             'password' => Hash::make('Password123!'),
             'role' => 'business_owner',
+            'account_status' => 'approved',
+        ]);
+
+        $this->customer = User::create([
+            'email' => 'customer-sync@example.com',
+            'password' => Hash::make('Password123!'),
+            'role' => 'tourist',
             'account_status' => 'approved',
         ]);
 
@@ -74,6 +82,7 @@ class ReadyToDeliveredOrderSyncTest extends TestCase
         $this->order = Order::create([
             'order_number' => 'TT-SYNC-001',
             'business_id' => $this->restaurant->id,
+            'user_id' => $this->customer->id,
             'customer_name' => 'John Jobert Jasa Calapatia',
             'customer_email' => 'customer-sync@example.com',
             'order_type' => 'delivery',
@@ -117,10 +126,20 @@ class ReadyToDeliveredOrderSyncTest extends TestCase
         $this->patchStatus('arrived_destination');
         $this->assertSame('out_for_delivery', $this->order->fresh()->status);
 
-        // Rider marks delivered. This is a prepaid order, so the delivery is
-        // complete on confirmation and the order reaches 'completed' (the
-        // canonical terminal state), not a dangling 'delivered'.
-        $this->patchStatus('delivered');
+        // P14 — the rider cannot mark a food delivery delivered; the TOURIST must
+        // confirm receipt at the drop-off. This is a prepaid order, so the
+        // delivery is complete on confirmation and the order reaches 'completed'
+        // (the canonical terminal state), not a dangling 'delivered'.
+        $this->withHeader('Authorization', 'Bearer '.$this->rider->createToken('test')->plainTextToken)
+            ->patchJson('/api/rider/deliveries/'.$this->delivery->id.'/status', ['status' => 'delivered'])
+            ->assertStatus(422)
+            ->assertJson(['success' => false]);
+
+        $this->withHeader('Authorization', 'Bearer '.$this->customer->createToken('test')->plainTextToken)
+            ->postJson('/api/tourist/food/order/'.$this->order->id.'/confirm-delivery')
+            ->assertOk()
+            ->assertJson(['success' => true]);
+
         $this->assertSame('completed', $this->order->fresh()->status);
         $this->assertNotNull($this->order->fresh()->completed_at, 'completed_at set on delivery.');
     }
@@ -134,11 +153,18 @@ class ReadyToDeliveredOrderSyncTest extends TestCase
 
         event(new \App\Events\DeliveryStatusChanged($this->delivery->fresh(), 'picked_up', 'arrived_destination'));
         $this->assertSame('out_for_delivery', $this->order->fresh()->status);
+    }
 
-        $this->delivery->update(['status' => 'delivered', 'delivered_at' => now()]);
-        event(new \App\Events\DeliveryStatusChanged($this->delivery->fresh(), 'arrived_destination', 'delivered'));
-        $this->assertSame('delivered', $this->order->fresh()->status);
-        $this->assertNull($this->order->fresh()->completed_at, 'completed_at is reserved for the completed state.');
+    public function test_tourist_confirmation_event_syncs_prepaid_order_to_completed(): void
+    {
+        // P14 — the tourist confirm endpoint dispatches the final delivery state
+        // (prepaid -> 'completed'), and the sync listener keeps the order in
+        // lockstep so no dangling 'delivered' remains.
+        $this->delivery->update(['status' => 'completed', 'delivered_at' => now()]);
+
+        event(new \App\Events\DeliveryStatusChanged($this->delivery->fresh(), 'arrived_destination', 'completed'));
+        $this->assertSame('completed', $this->order->fresh()->status);
+        $this->assertNotNull($this->order->fresh()->completed_at, 'completed_at reserved for the completed state.');
     }
 
     private function patchStatus(string $status): void

@@ -20,7 +20,7 @@ class BusinessOwnerFoodController extends Controller
         ]);
 
         $validated['offering_type'] = 'food';
-        $validated['status'] = 'active';
+        $validated['status'] = 'available';
         $offering = $request->user()->businesses()->find($validated['business_id'])?->offerings()->create($validated);
         if (!$offering) {
             return $this->errorResponse('Business not found.', 404);

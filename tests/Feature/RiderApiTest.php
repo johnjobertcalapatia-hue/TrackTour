@@ -12,7 +12,9 @@ use App\Models\Order;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 class RiderApiTest extends TestCase
@@ -20,6 +22,13 @@ class RiderApiTest extends TestCase
     use RefreshDatabase;
 
     private User $rider;
+
+    private const PNG_1X1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+    protected function fakePng(string $name = 'avatar.png'): UploadedFile
+    {
+        return UploadedFile::fake()->createWithContent($name, base64_decode(self::PNG_1X1));
+    }
 
     protected function setUp(): void
     {
@@ -66,6 +75,77 @@ class RiderApiTest extends TestCase
                     'role' => 'rider',
                 ],
             ]);
+    }
+
+    public function test_rider_can_upload_profile_photo(): void
+    {
+        Storage::fake('public');
+
+        $response = $this->actingAs($this->rider, 'sanctum')
+            ->post('/api/rider/profile/photo', [
+                'photo' => $this->fakePng(),
+            ], ['Accept' => 'application/json']);
+
+        $response->assertOk()
+            ->assertJson([
+                'success' => true,
+            ]);
+
+        $photo = $response->json('data.profile_photo');
+        $this->assertNotNull($photo);
+        $this->assertStringStartsWith('profiles/', $photo);
+        Storage::disk('public')->assertExists($photo);
+    }
+
+    public function test_rider_profile_photo_requires_valid_image(): void
+    {
+        Storage::fake('public');
+
+        $response = $this->actingAs($this->rider, 'sanctum')
+            ->post('/api/rider/profile/photo', [
+                'photo' => UploadedFile::fake()->create('note.txt', 1, 'text/plain'),
+            ], ['Accept' => 'application/json']);
+
+        $response->assertStatus(422);
+        $this->assertNull($this->rider->profile()->first()->avatar ?? null);
+    }
+
+    public function test_rider_profile_photo_replaces_previous_avatar(): void
+    {
+        Storage::fake('public');
+
+        $profile = $this->rider->profile()->create(['avatar' => 'profiles/old-avatar.jpg']);
+        $oldPath = $profile->avatar;
+
+        $response = $this->actingAs($this->rider, 'sanctum')
+            ->post('/api/rider/profile/photo', [
+                'photo' => $this->fakePng(),
+            ], ['Accept' => 'application/json']);
+
+        $response->assertOk();
+        $newPhoto = $response->json('data.profile_photo');
+        $this->assertNotSame($oldPath, $newPhoto);
+        Storage::disk('public')->assertMissing($oldPath);
+        Storage::disk('public')->assertExists($newPhoto);
+    }
+
+    public function test_non_rider_cannot_upload_profile_photo(): void
+    {
+        Storage::fake('public');
+
+        $tourist = User::create([
+            'email' => 'tourist-upload@example.com',
+            'password' => Hash::make('Password123!'),
+            'role' => 'tourist',
+            'account_status' => 'approved',
+        ]);
+
+        $response = $this->actingAs($tourist, 'sanctum')
+            ->post('/api/rider/profile/photo', [
+                'photo' => $this->fakePng(),
+            ], ['Accept' => 'application/json']);
+
+        $response->assertStatus(403);
     }
 
     public function test_rider_can_get_earnings(): void

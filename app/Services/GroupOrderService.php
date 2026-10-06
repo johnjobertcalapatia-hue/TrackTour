@@ -40,6 +40,11 @@ class GroupOrderService
                 throw new InvalidArgumentException($business->business_name.' is '.$detail.'. Please remove its items before continuing.');
             }
 
+            if (! $business->acceptsPaymentMethod($payload['payment_method'] ?? 'gcash')) {
+                $label = ($payload['payment_method'] ?? 'gcash') === 'cash' ? 'cash on delivery' : 'online payments';
+                throw new InvalidArgumentException($business->business_name.' does not accept '.$label.' at the moment. Please remove its items or choose another payment method.');
+            }
+
             $businesses[$businessId] = $business;
 
             foreach ($restaurantGroup['items'] as $item) {

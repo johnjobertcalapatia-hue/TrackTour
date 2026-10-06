@@ -35,7 +35,6 @@ class DocumentOcrController extends Controller
         if (!$this->ocr->isAvailable()) {
             return $this->errorResponse(
                 'Tesseract OCR is not installed on the server. Please install Tesseract to use document extraction.',
-                null,
                 503
             );
         }
@@ -47,7 +46,6 @@ class DocumentOcrController extends Controller
         if ($file->getClientOriginalExtension() === 'pdf') {
             return $this->errorResponse(
                 'PDF OCR is not yet supported. Please upload an image file (JPG, PNG).',
-                null,
                 400
             );
         }
@@ -55,7 +53,6 @@ class DocumentOcrController extends Controller
         if (!in_array($file->getMimeType(), ['image/jpeg', 'image/png', 'image/gif', 'image/webp'])) {
             return $this->errorResponse(
                 'Unsupported image format. Please upload JPG, PNG, GIF, or WebP.',
-                null,
                 400
             );
         }

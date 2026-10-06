@@ -31,6 +31,20 @@ class SendOrderStatusNotification implements ShouldQueue
         $user = User::where('email', $order->customer_email)->first();
 
         if ($user) {
+            // Ride-hailing orders are finalized by the delivery lifecycle; the
+            // only order-status event a ride produces is a cancellation (tourist
+            // or driver initiated), so the wording is ride-aware.
+            if ($order->order_type === 'transport') {
+                Notification::create([
+                    'user_id' => $user->id,
+                    'title' => 'Ride Status Updated',
+                    'message' => "Ride #{$order->order_number}: Your ride has been cancelled.",
+                    'type' => 'ride_status_changed',
+                ]);
+
+                return;
+            }
+
             Notification::create([
                 'user_id' => $user->id,
                 'title' => 'Order Status Updated',

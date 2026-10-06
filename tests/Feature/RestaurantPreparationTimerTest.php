@@ -469,6 +469,32 @@ class RestaurantPreparationTimerTest extends TestCase
         $this->assertCount(1, $readyEvents, 'Due timers fire exactly once, even across repeated scheduler runs.');
     }
 
+    public function test_manual_start_preparing_arms_the_countdown(): void
+    {
+        $order = $this->createDirectOrder('Tochong Manok', 'accepted', null, itemMinutes: 15);
+
+        $this->assertNull($order->preparation_started_at, 'An accepted order has no prep clock yet.');
+        $this->assertNull($order->predicted_ready_at, 'No ready prediction before preparation starts.');
+
+        // The Orders detail "Start Preparing" action calls PATCH /orders/{id}/status
+        // with status=preparing. That manual transition must arm the same
+        // countdown the rider-acceptance path arms, or "Time Remaining" shows "—".
+        $this->patchJson(
+            "/api/business-owner/orders/{$order->id}/status",
+            ['status' => 'preparing'],
+            $this->authHeaders($this->ownerA)
+        )
+            ->assertOk()
+            ->assertJsonFragment(['preparation_time' => 15]);
+
+        $order->refresh();
+        $this->assertSame('preparing', $order->status);
+        $this->assertNotNull($order->preparation_started_at, 'Manual start stamps the preparation start.');
+        $this->assertNotNull($order->predicted_ready_at, 'Manual start arms the countdown deadline.');
+        $this->assertSame(15 * 60, (int) $order->predicted_preparation_seconds);
+        $this->assertSame(15, (int) $order->preparation_time, 'The snapshotted countdown length is exposed.');
+    }
+
     public function test_pickup_starts_without_rider_while_riderless_delivery_order_waits(): void
     {
         $pickup = $this->createDirectOrder('Lechon Kawali Pickup', 'waiting_restaurant', null, itemMinutes: 18);

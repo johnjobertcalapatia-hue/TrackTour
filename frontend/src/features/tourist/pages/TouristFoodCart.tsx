@@ -28,7 +28,6 @@ const DELIVERY_BASE_FARE = 40.00
 const DELIVERY_INCLUDED_KM = 2.00
 const DELIVERY_PER_KM = 15.00
 const DEFAULT_CENTER: [number, number] = [12.8667, 121.45]
-const CART_VERSION = 2
 
 interface DeliveryFeeData {
   delivery_fee: number
@@ -307,11 +306,13 @@ export default function TouristFoodCart() {
     },
     onError: (error: any) => {
       console.error('Order checkout failed:', error)
-      if (error?.response?.status === 401) {
-        logout()
-        navigate('/login', { replace: true })
-        return
-      }
+      // A 401 here must NOT wipe the session. The shared api interceptor routes
+      // a rejected credential through an authoritative /user revalidation and
+      // only a CONFIRMED dead token clears it (api.ts + AuthEventHandler). An
+      // instant logout+navigate here would boot a LIVE session on a
+      // stale-credential 401 (in-flight checkout carrying the pre-re-login
+      // token) — the exact auto-logout bug this file used to have. Show the
+      // server message; the canonical path decides if the session truly ended.
       const errors = error?.response?.data?.errors
       const msg = errors
         ? Object.values(errors).flat().join('. ')
@@ -778,14 +779,23 @@ export default function TouristFoodCart() {
             {/* Checkout Button */}
             <button
               onClick={() => {
-                if (!user) {
-                  setOrderError('Your session has expired. Please log in again.')
+                const authToken = localStorage.getItem('auth_token')
+                if (!user && !authToken) {
+                  // Genuine guest: save the pending order, then go to login.
+                  setOrderError('Please log in to place your order.')
                   savePendingAction({
                     type: 'food_order',
                     returnPath: '/tourist/food/cart',
                   })
                   logout()
                   navigate('/login', { replace: true })
+                  return
+                }
+                if (!user && authToken) {
+                  // A credential exists but the profile has not been confirmed
+                  // yet (transient boot /user failure). Block the checkout but
+                  // do NOT call logout() — that would destroy a live session.
+                  setOrderError('Your session is still loading. Please try again.')
                   return
                 }
                 setShowConfirm(true)

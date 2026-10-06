@@ -174,6 +174,27 @@ class BusinessOwnerBusinessManageController extends Controller
         );
     }
 
+    public function updatePaymentMethods(Request $request, Business $business): JsonResponse
+    {
+        if ($business->owner_id !== $request->user()->id) {
+            return $this->forbiddenResponse('You do not own this business.');
+        }
+
+        $validated = $request->validate([
+            'payment_methods' => ['required', 'array', 'min:1'],
+            'payment_methods.*' => ['required', 'string', 'in:cash,gcash,card'],
+        ]);
+
+        $business->update([
+            'payment_methods' => array_values(array_unique(array_map('strtolower', $validated['payment_methods']))),
+        ]);
+
+        return $this->successResponse(
+            BusinessResource::make($business->fresh()->load('category', 'municipality', 'barangay')),
+            'Payment methods updated successfully.'
+        );
+    }
+
     public function update(UpdateBusinessRequest $request, Business $business): JsonResponse
     {
         if ($business->owner_id !== $request->user()->id) {

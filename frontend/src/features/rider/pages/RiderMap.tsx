@@ -1,101 +1,56 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import { get, post, patch } from '@/shared/services/api'
-import { StatusBadge } from '@/shared/components/StatusBadge'
+import { get, post } from '@/shared/services/api'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { useAuthStore } from '@/features/auth/services/auth-store'
-import L from 'leaflet'
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
-import { Navigation, MapPin, Play, Truck, CheckCircle, Radio, DollarSign, Wallet, Package } from 'lucide-react'
+import L from 'leaflet'
+import { Navigation, MapPin, Truck, CheckCircle, Radio, DollarSign } from 'lucide-react'
 import { useRiderActiveTrip } from '@/features/rider/context/RiderActiveTripContext'
 import { useOsrmRoute } from '@/features/rider/hooks/useOsrmRoute'
+import { resolvePickupRoute } from '@/features/rider/pickup-route'
+import { riderMarkerIcon as motorcycleIcon, pickupMarkerIcon, destinationMarkerIcon } from '@/shared/utils/map-markers'
 
-const riderArrowSvg = `
-<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
-  <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-    <feDropShadow dx="0" dy="2" stdDeviation="2.5" flood-color="#000000" flood-opacity="0.4"/>
-  </filter>
-  <g filter="url(#shadow)">
-    <!-- Flat Outer Circle -->
-    <circle cx="22" cy="22" r="18" fill="#087F3F" stroke="#ffffff" stroke-width="3"/>
-    <!-- Arrow in Center -->
-    <path d="M 22 10 L 30 29 L 22 24 L 14 29 Z" fill="#ffffff"/>
-  </g>
-</svg>
-`.trim()
-
-const motorcycleIcon = L.icon({
-  iconUrl: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(riderArrowSvg)}`,
-  iconSize: [44, 44],
-  iconAnchor: [22, 22],
-  popupAnchor: [0, -22],
-})
-
-const pickupIcon = L.divIcon({
-  className: 'custom-pickup-marker',
-  html: `
-    <div style="
-      width: 36px;
-      height: 36px;
-      background: #D97706;
-      border: 2px solid #ffffff;
-      border-radius: 50%;
-      box-shadow: 0 3px 10px rgba(217, 119, 6, 0.4);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    ">
-      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/>
-        <circle cx="12" cy="10" r="3"/>
-      </svg>
-    </div>
-  `,
-  iconSize: [36, 36],
-  iconAnchor: [18, 18],
-  popupAnchor: [0, -18],
-})
-
-const deliveryDestIcon = L.divIcon({
-  className: 'custom-delivery-marker',
-  html: `
-    <div style="
-      width: 36px;
-      height: 36px;
-      background: #DC2626;
-      border: 2px solid #ffffff;
-      border-radius: 50%;
-      box-shadow: 0 3px 10px rgba(220, 38, 38, 0.4);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    ">
-      <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polygon points="12 2 19 21 12 17 5 21 12 2"/>
-      </svg>
-    </div>
-  `,
-  iconSize: [36, 36],
-  iconAnchor: [18, 18],
-  popupAnchor: [0, -18],
-})
-
-function haversineKm(lat1: number, lng1: number, lat2: number, lng2: number): number | null {
-  if (!Number.isFinite(lat1) || !Number.isFinite(lng1) || !Number.isFinite(lat2) || !Number.isFinite(lng2)) return null
-  const R = 6371
-  const dLat = ((lat2 - lat1) * Math.PI) / 180
-  const dLng = ((lng2 - lng1) * Math.PI) / 180
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-}
+const pickupIcon = pickupMarkerIcon
+const deliveryDestIcon = destinationMarkerIcon
 
 interface RiderLocation {
   latitude: number
   longitude: number
+}
+
+const stopNumberIcon = (n: number) =>
+  L.divIcon({
+    className: 'custom-pickup-marker',
+    html: `
+      <div style="
+        width: 30px;
+        height: 30px;
+        background: #D97706;
+        border: 2px solid #ffffff;
+        border-radius: 50%;
+        box-shadow: 0 3px 10px rgba(217, 119, 6, 0.4);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #ffffff;
+        font-size: 13px;
+        font-weight: 800;
+      ">${n}</div>
+    `,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+    popupAnchor: [0, -15],
+  })
+
+function formatEta(distanceKm: number | null, durationMin: number | null): string {
+  if (distanceKm == null && durationMin == null) return ''
+  const parts: string[] = []
+  if (durationMin != null) parts.push(`~${Math.max(1, Math.round(durationMin))} min`)
+  if (distanceKm != null) parts.push(`${distanceKm.toFixed(1)} km`)
+  return parts.join(' · ')
 }
 
 interface Delivery {
@@ -116,26 +71,6 @@ interface Delivery {
 interface LocationData {
   rider: RiderLocation
   deliveries: Delivery[]
-}
-
-interface PurchaseStop {
-  id: number
-  business_id: number
-  business_name: string | null
-  purchase_amount: number
-  status: 'pending' | 'purchased' | 'collected'
-  purchased_at?: string | null
-  collected_at?: string | null
-}
-
-interface PurchasesData {
-  delivery_id: number
-  is_cod: boolean
-  purchasing_cash: number | null
-  purchasing_cash_issued_at: string | null
-  purchasing_cash_received_at: string | null
-  fully_collected: boolean
-  purchases: PurchaseStop[]
 }
 
 function RecenterMap({ center }: { center: [number, number] }) {
@@ -174,7 +109,6 @@ function RecenterMap({ center }: { center: [number, number] }) {
 }
 
 export default function RiderMap() {
-  const queryClient = useQueryClient()
   const navigate = useNavigate()
   const user = useAuthStore((state) => state.user)
   const [riderPosition, setRiderPosition] = useState<[number, number]>([12.8667, 121.4500])
@@ -185,6 +119,7 @@ export default function RiderMap() {
     setRiderPosition: setTripRiderPosition,
     activeDelivery,
     tripState,
+    pickupStopsData,
   } = useRiderActiveTrip()
 
   const { data, isLoading } = useQuery({
@@ -210,40 +145,6 @@ export default function RiderMap() {
 
   const locationMutation = useMutation({
     mutationFn: (location: RiderLocation) => post('/rider/map/location', location),
-  })
-
-  const statusMutation = useMutation({
-    mutationFn: ({ id, status }: { id: number; status: string }) =>
-      patch(`/rider/deliveries/${id}/status`, { status }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rider-map-location'] }),
-  })
-
-  const isPickupStage = !!activeDelivery && ['assigned', 'arrived_pickup'].includes(activeDelivery.status)
-  const isFoodService = user?.current_service !== 'transport'
-
-  const { data: purchasesData } = useQuery({
-    queryKey: ['rider-delivery-purchases', activeDelivery?.id],
-    queryFn: async () => {
-      if (!activeDelivery) return null
-      return (await get<PurchasesData>(`/rider/deliveries/${activeDelivery.id}/purchases`)) ?? null
-    },
-    enabled: !!activeDelivery && isPickupStage && isFoodService,
-    refetchInterval: 10000,
-    staleTime: 5000,
-  })
-
-  const markPurchaseMutation = useMutation({
-    mutationFn: ({ purchaseId, status }: { purchaseId: number; status: 'purchased' | 'collected' }) =>
-      post(`/rider/deliveries/${activeDelivery!.id}/purchases/${purchaseId}/mark`, { status }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['rider-delivery-purchases', activeDelivery?.id] })
-      queryClient.invalidateQueries({ queryKey: ['rider-map-location'] })
-    },
-  })
-
-  const receiveCashMutation = useMutation({
-    mutationFn: () => post(`/rider/deliveries/${activeDelivery!.id}/purchasing-cash/receive`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rider-delivery-purchases', activeDelivery?.id] }),
   })
 
   const lastLocationSent = useRef(0)
@@ -307,75 +208,61 @@ export default function RiderMap() {
   const deliveries = data?.deliveries ?? []
   const isRideHailing = user?.current_service === 'transport'
 
-  const getStatusActions = (delivery: Delivery) => {
-    switch (delivery.status) {
-      case 'assigned':
-        return (
-          <button
-            onClick={() => statusMutation.mutate({ id: delivery.id, status: 'in_transit' })}
-            disabled={statusMutation.isPending}
-            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition"
-          >
-            <Play className="w-4 h-4" /> Start Delivery
-          </button>
-        )
-      case 'in_transit':
-        return (
-          <button
-            onClick={() => statusMutation.mutate({ id: delivery.id, status: 'picked_up' })}
-            disabled={statusMutation.isPending}
-            className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition"
-          >
-            <Truck className="w-4 h-4" /> Mark as Picked Up
-          </button>
-        )
-      case 'picked_up':
-        return (
-          <button
-            onClick={() => statusMutation.mutate({ id: delivery.id, status: 'delivered' })}
-            disabled={statusMutation.isPending}
-            className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition"
-          >
-            <CheckCircle className="w-4 h-4" /> Mark as Delivered
-          </button>
-        )
-      default:
-        return null
-    }
-  }
-
   const isPickupLeg = tripState === 'EN_ROUTE_TO_PICKUP' || tripState === 'ARRIVED_AT_PICKUP'
   const isDropLeg = tripState === 'OUT_FOR_DELIVERY' || tripState === 'ARRIVED_AT_DROP'
   const hasRouteLeg = !!activeDelivery && (isPickupLeg || isDropLeg)
 
-  const osrmOrigin: [number, number] | null = hasRouteLeg ? riderPosition : null
-  let osrmDest: [number, number] | null = null
-  if (isPickupLeg && activeDelivery?.pickup_lat && activeDelivery?.pickup_lng) {
-    osrmDest = [activeDelivery.pickup_lat, activeDelivery.pickup_lng]
-  } else if (isDropLeg && activeDelivery?.delivery_lat && activeDelivery?.delivery_lng) {
-    osrmDest = [activeDelivery.delivery_lat, activeDelivery.delivery_lng]
-  }
-  const osrmRoute = useOsrmRoute(hasRouteLeg ? osrmOrigin : null, osrmDest, hasRouteLeg)
+  const purchaseStops = pickupStopsData?.stops ?? []
+  const fullyCollected = pickupStopsData?.fully_collected ?? false
+  const allPurchasesCollected = fullyCollected
+  const pickupOrigin = pickupStopsData?.pickup_origin ?? null
+  const dropoff = pickupStopsData?.dropoff ?? null
 
-  const polylinePoints: [number, number][] = osrmRoute.length
-    ? osrmRoute
-    : (() => {
-        const points: [number, number][] = []
-        if (activeDelivery) {
-          if (isPickupLeg) {
-            points.push(riderPosition)
-            if (activeDelivery.pickup_lat && activeDelivery.pickup_lng) {
-              points.push([activeDelivery.pickup_lat, activeDelivery.pickup_lng])
-            }
-          } else if (isDropLeg) {
-            points.push(riderPosition)
-            if (activeDelivery.delivery_lat && activeDelivery.delivery_lng) {
-              points.push([activeDelivery.delivery_lat, activeDelivery.delivery_lng])
-            }
-          }
-        }
-        return points
-      })()
+  // Group-checkout routing (see resolvePickupRoute): the rider navigates to the
+  // NEXT unconsumed restaurant in drive order, not all of them at once. Only
+  // after every restaurant's food is collected does the route switch to the
+  // drop-off leg (last restaurant → tourist destination). Drop-off leg: the
+  // LAST restaurant picked up (longest prep) → destination.
+  const routeWaypoints = resolvePickupRoute({
+    rider: riderPosition,
+    isPickupLeg,
+    isDropLeg,
+    hasPickupStops: purchaseStops.length > 0,
+    allCollected: allPurchasesCollected,
+    stops: purchaseStops.map((stop) => ({
+      sequence: stop.sequence,
+      status: stop.status,
+      latitude: stop.pickup_lat,
+      longitude: stop.pickup_lng,
+    })),
+    finalPickup:
+      pickupOrigin?.latitude != null && pickupOrigin?.longitude != null
+        ? { latitude: pickupOrigin.latitude, longitude: pickupOrigin.longitude }
+        : null,
+    destination:
+      dropoff?.latitude != null && dropoff?.longitude != null
+        ? { latitude: dropoff.latitude, longitude: dropoff.longitude }
+        : null,
+    fallbackPickup:
+      activeDelivery?.pickup_lat != null && activeDelivery?.pickup_lng != null
+        ? { latitude: activeDelivery.pickup_lat, longitude: activeDelivery.pickup_lng }
+        : null,
+    fallbackDestination:
+      activeDelivery?.delivery_lat != null && activeDelivery?.delivery_lng != null
+        ? { latitude: activeDelivery.delivery_lat, longitude: activeDelivery.delivery_lng }
+        : null,
+  })
+
+  const osrmRoute = useOsrmRoute(hasRouteLeg ? routeWaypoints : null, hasRouteLeg)
+
+  const routeEtaLabel = formatEta(osrmRoute.distanceKm, osrmRoute.durationMin)
+
+  const polylinePoints: [number, number][] =
+    osrmRoute.points.length >= 2
+      ? osrmRoute.points
+      : routeWaypoints.length >= 2
+        ? routeWaypoints
+        : []
       
   const tripStatus = (() => {
     if (!activeDelivery) {
@@ -388,14 +275,18 @@ export default function RiderMap() {
       }
     }
     if (tripState === 'EN_ROUTE_TO_PICKUP') {
-      const dist =
-        activeDelivery.pickup_lat != null && activeDelivery.pickup_lng != null
-          ? haversineKm(riderPosition[0], riderPosition[1], activeDelivery.pickup_lat, activeDelivery.pickup_lng)
-          : null
+      const nextStop = purchaseStops.find((p) => p.status !== 'collected') ?? null
+      const parts: string[] = []
+      if (purchaseStops.length && nextStop) {
+        parts.push(`Stop ${nextStop.sequence}/${purchaseStops.length}`)
+      } else if (activeDelivery.business_name) {
+        parts.push(activeDelivery.business_name)
+      }
+      if (routeEtaLabel) parts.push(routeEtaLabel)
       return {
         icon: Navigation,
         title: 'Going to Pickup',
-        meta: activeDelivery.business_name ? ` · ${activeDelivery.business_name}` : dist != null ? ` · ${dist.toFixed(1)} km` : '',
+        meta: parts.length ? ` · ${parts.join(' · ')}` : '',
         tone: 'text-[#17202A]',
         accent: 'text-emerald-600',
       }
@@ -410,14 +301,15 @@ export default function RiderMap() {
       }
     }
     if (tripState === 'OUT_FOR_DELIVERY') {
-      const dist =
-        activeDelivery.delivery_lat != null && activeDelivery.delivery_lng != null
-          ? haversineKm(riderPosition[0], riderPosition[1], activeDelivery.delivery_lat, activeDelivery.delivery_lng)
-          : null
+      const rawLabel = dropoff?.address || activeDelivery.delivery_address || ''
+      const dropLabel = rawLabel ? (rawLabel.length > 28 ? `${rawLabel.slice(0, 27)}…` : rawLabel) : ''
+      const parts: string[] = []
+      if (dropLabel) parts.push(`→ ${dropLabel}`)
+      if (routeEtaLabel) parts.push(routeEtaLabel)
       return {
         icon: Truck,
         title: 'Delivering',
-        meta: dist != null ? ` ${dist.toFixed(1)} km` : '',
+        meta: parts.length ? ` ${parts.join(' · ')}` : '',
         tone: 'text-[#17202A]',
         accent: 'text-emerald-600',
       }
@@ -439,13 +331,6 @@ export default function RiderMap() {
       accent: 'text-emerald-600',
     }
   })()
-
-  const purchaseStops = purchasesData?.purchases ?? []
-  const purchasingCash = purchasesData?.purchasing_cash ?? null
-  const cashIssued = purchasesData?.purchasing_cash_issued_at != null
-  const cashReceived = purchasesData?.purchasing_cash_received_at != null
-  const collectedCount = purchaseStops.filter((p) => p.status === 'collected').length
-  const allPurchasesCollected = purchaseStops.length > 0 && collectedCount === purchaseStops.length
 
   if (isLoading) return <DashboardSkeleton />
 
@@ -497,6 +382,26 @@ export default function RiderMap() {
               )}
             </div>
           ))}
+
+          {purchaseStops.map((stop) =>
+            stop.pickup_lat != null && stop.pickup_lng != null ? (
+              <Marker
+                key={`stop-${stop.id}`}
+                position={[stop.pickup_lat, stop.pickup_lng]}
+                icon={stopNumberIcon(stop.sequence)}
+              >
+                <Popup>
+                  <div className="text-sm">
+                    <p className="font-semibold text-emerald-600">#{stop.sequence} {stop.business_name}</p>
+                    <p className="text-gray-500">{stop.pickup_address}</p>
+                    {stop.preparation_time != null && (
+                      <p className="text-gray-500">~{stop.preparation_time} min prep</p>
+                    )}
+                  </div>
+                </Popup>
+              </Marker>
+            ) : null
+          )}
 
           {polylinePoints.length >= 2 && (
             <Polyline
@@ -551,145 +456,6 @@ export default function RiderMap() {
           )}
         </div>
 
-      {isPickupStage && purchaseStops.length > 0 && (
-        <div className="absolute left-3 bottom-[calc(80px+env(safe-area-inset-bottom))] z-[1200] w-[330px] max-w-[calc(100%-1.5rem)] max-h-[46vh] overflow-y-auto rounded-2xl border border-[#E4E9E6] bg-white/95 p-3 sm:p-4 shadow-2xl backdrop-blur">
-          <div className="flex items-center gap-2">
-            <span className="w-8 h-8 shrink-0 rounded-full bg-[#E9F7EF] border border-[#D7E8DB] flex items-center justify-center">
-              <Wallet className="w-4 h-4 text-[#B45309]" />
-            </span>
-            <div className="flex-1">
-              <p className="text-xs font-bold text-[#17202A]">Purchasing Cash · {collectedCount}/{purchaseStops.length} collected</p>
-              <p className="text-[10px] text-[#6B7280] font-semibold">
-                Tourism Office funds the food · paid by tourist at delivery
-              </p>
-            </div>
-            {cashIssued && (
-              <span className="text-sm font-extrabold text-[#B45309]">
-                ₱{(purchasingCash ?? 0).toFixed(2)}
-              </span>
-            )}
-          </div>
-
-          {!cashIssued && (
-            <div className="mt-3 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2.5 text-xs font-medium text-amber-800">
-              Waiting for the Tourism Office to issue the purchasing cash…
-            </div>
-          )}
-
-          {cashIssued && !cashReceived && (
-            <button
-              type="button"
-              onClick={() => receiveCashMutation.mutate()}
-              disabled={receiveCashMutation.isPending}
-              className="mt-3 w-full inline-flex items-center justify-center gap-2 bg-[#B45309] hover:bg-amber-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition"
-            >
-              <Wallet className="w-4 h-4" />
-              {receiveCashMutation.isPending ? 'Confirming…' : `Confirm Cash Received (₱${(purchasingCash ?? 0).toFixed(2)})`}
-            </button>
-          )}
-
-          {cashIssued && cashReceived && !allPurchasesCollected && (
-            <p className="mt-3 rounded-xl bg-[#EAF6ED] border border-[#D7E8DB] px-3 py-2.5 text-xs font-semibold text-[#087F3F]">
-              Cash received — buy &amp; collect the food at every restaurant below.
-            </p>
-          )}
-
-          {cashIssued && (
-            <div className="mt-3 space-y-2">
-              {purchaseStops.map((stop) => (
-                <div key={stop.id} className="flex items-center gap-3 rounded-xl border border-[#E4E9E6] bg-[#FAFBFB] px-3 py-2.5">
-                  <span className={`w-8 h-8 shrink-0 rounded-full flex items-center justify-center ${
-                    stop.status === 'collected' ? 'bg-[#087F3F]/15' : stop.status === 'purchased' ? 'bg-amber-100' : 'bg-gray-100'
-                  }`}>
-                    {stop.status === 'collected'
-                      ? <CheckCircle className="w-4 h-4 text-[#087F3F]" />
-                      : <Package className={`w-4 h-4 ${stop.status === 'purchased' ? 'text-amber-600' : 'text-[#9CA3AF]'}`} />}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-semibold text-[#17202A] truncate">{stop.business_name || `Business #${stop.business_id}`}</p>
-                    <p className="text-[10px] text-[#6B7280] font-medium">₱{stop.purchase_amount.toFixed(2)}</p>
-                  </div>
-                  <div className="shrink-0 flex gap-1.5">
-                    {stop.status === 'pending' && (
-                      <button
-                        type="button"
-                        onClick={() => markPurchaseMutation.mutate({ purchaseId: stop.id, status: 'purchased' })}
-                        disabled={markPurchaseMutation.isPending}
-                        className="text-[11px] font-semibold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 px-2.5 py-1.5 rounded-lg transition"
-                      >
-                        Buy
-                      </button>
-                    )}
-                    {stop.status === 'purchased' && (
-                      <>
-                        <span className="text-[11px] font-semibold text-amber-700 self-center">Bought ✓</span>
-                        <button
-                          type="button"
-                          onClick={() => markPurchaseMutation.mutate({ purchaseId: stop.id, status: 'collected' })}
-                          disabled={markPurchaseMutation.isPending}
-                          className="text-[11px] font-semibold text-white bg-[#087F3F] hover:bg-emerald-700 disabled:opacity-50 px-2.5 py-1.5 rounded-lg transition"
-                        >
-                          Collect
-                        </button>
-                      </>
-                    )}
-                    {stop.status === 'collected' && (
-                      <span className="text-[11px] font-semibold text-[#087F3F] self-center">Collected ✓</span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {allPurchasesCollected && (
-            <div className="mt-3 rounded-xl bg-[#087F3F] px-3 py-2.5 text-xs font-bold text-white text-center">
-              All food collected — you can now leave for delivery.
-            </div>
-          )}
-        </div>
-      )}
-
-      {!activeDelivery && deliveries.length > 0 && (
-          <div className="fixed bottom-[calc(80px+env(safe-area-inset-bottom))] left-0 right-0 z-[1200] max-h-[35vh] sm:max-h-[40vh] overflow-y-auto rounded-t-2xl border-t border-[#E4E9E6] bg-white/95 p-3 sm:p-4 shadow-2xl backdrop-blur lg:p-5">
-            <div className="space-y-3">
-              {deliveries.map((d) => (
-                <div
-                  key={d.id}
-                  className={`bg-[#F5FBF7] border rounded-xl p-4 transition ${
-                    activeDelivery?.id === d.id ? 'border-[#249B57]/50' : 'border-[#E4E9E6]'
-                  }`}
-                >
-                  <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-                    <div className="flex-1 space-y-2">
-                      <div className="flex items-center gap-2 text-sm">
-                        <span className="font-medium text-[#17202A]">Order #{d.order_id}</span>
-                        <StatusBadge status={d.status} />
-                      </div>
-                      <div className="flex items-start gap-2 text-sm">
-                        <MapPin className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
-                        <div>
-                          <p className="text-xs text-gray-500">Pickup</p>
-                          <p className="text-[#68727C]">{d.pickup_address}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-start gap-2 text-sm">
-                        <MapPin className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-                        <div>
-                          <p className="text-xs text-gray-500">Delivery</p>
-                          <p className="text-[#68727C]">{d.delivery_address}</p>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="shrink-0">
-                      {getStatusActions(d)}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-      )}
     </div>
   )
 }

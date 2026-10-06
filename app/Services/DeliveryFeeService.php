@@ -37,14 +37,15 @@ class DeliveryFeeService
         }
 
         $distanceKm = round($route['distance_km'], 2);
-        $baseFare = (float) config('delivery.base_fare');
-        $includedKilometers = (float) config('delivery.included_kilometers', 2.00);
-        $distanceRate = (float) config('delivery.per_kilometer');
+        $fares = app(DeliveryFareSettings::class);
+        $baseFare = $fares->baseFare();
+        $includedKilometers = $fares->includedKilometers();
+        $distanceRate = $fares->perKilometer();
         $distanceCharge = round(max($distanceKm - $includedKilometers, 0) * $distanceRate, 2);
-        $serviceAdjustment = (float) config('delivery.service_adjustment');
-        $surgeMultiplier = (float) config('delivery.surge_multiplier');
+        $serviceAdjustment = $fares->serviceAdjustment();
+        $surgeMultiplier = $fares->surgeMultiplier();
         $calculatedFee = ($baseFare + $distanceCharge + $serviceAdjustment) * $surgeMultiplier;
-        $deliveryFee = round(max($calculatedFee, (float) config('delivery.minimum_fee')), 2);
+        $deliveryFee = round(max($calculatedFee, $fares->minimumFee()), 2);
 
         return [
             'business_id' => $business->id,
@@ -102,6 +103,55 @@ class DeliveryFeeService
                 'duration_minutes' => isset($route['duration'])
                     ? (int) ceil(((float) $route['duration']) / 60)
                     : null,
+            ];
+        } catch (ConnectionException) {
+            return null;
+        }
+    }
+
+    /**
+     * Full OSRM geometry (GeoJSON) for ride-hailing route preview.
+     *
+     * Returns the decoded polyline as [[lat, lng], ...] plus distance/duration,
+     * or null when the router is unreachable / returns no geometry. Callers are
+     * expected to fall back to a straight line (see TransportationService::getRoute).
+     */
+    public function routePolyline(float $fromLatitude, float $fromLongitude, float $toLatitude, float $toLongitude): ?array
+    {
+        $url = rtrim((string) config('delivery.routing_url'), '/')
+            ."/{$fromLongitude},{$fromLatitude};{$toLongitude},{$toLatitude}";
+
+        try {
+            $response = Http::timeout((int) config('delivery.routing_timeout', 5))
+                ->acceptJson()
+                ->get($url, ['overview' => 'full', 'geometries' => 'geojson']);
+
+            if (! $response->successful() || $response->json('code') !== 'Ok') {
+                return null;
+            }
+
+            $route = $response->json('routes.0');
+            if (! is_array($route) || ! isset($route['geometry']['coordinates']) || ! is_array($route['geometry']['coordinates'])) {
+                return null;
+            }
+
+            $polyline = [];
+            foreach ($route['geometry']['coordinates'] as $point) {
+                if (is_array($point) && isset($point[0], $point[1])) {
+                    $polyline[] = [(float) $point[1], (float) $point[0]];
+                }
+            }
+
+            if (count($polyline) < 2) {
+                return null;
+            }
+
+            return [
+                'distance_km' => ((float) $route['distance']) / 1000,
+                'duration_minutes' => isset($route['duration'])
+                    ? (int) ceil(((float) $route['duration']) / 60)
+                    : null,
+                'polyline' => $polyline,
             ];
         } catch (ConnectionException) {
             return null;

@@ -16,7 +16,8 @@ docs/
 │   ├── system-architecture.md     # High-level architecture, actors, and topology
 │   ├── backend-architecture.md    # Laravel 12 API, services, DB transactions, locking
 │   ├── frontend-architecture.md   # React, Vite, Tailwind, role dashboards, state
-│   └── realtime-architecture.md   # Node Socket.IO, HMAC trip tokens, GPS tracking
+│   ├── realtime-architecture.md   # Node Socket.IO, HMAC trip tokens, GPS tracking
+│   └── ride-hailing-ui-spec.md    # Screen-by-screen UI spec for the Transport ride feature
 │
 ├── business-rules/                # Authoritative domain rules & state invariants
 │   ├── food-delivery.md           # Group checkout, multi-vendor rules, preparation gating

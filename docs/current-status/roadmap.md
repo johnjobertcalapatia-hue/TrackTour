@@ -24,7 +24,7 @@ Tourism Office manages only through **monitor / verify / approve / audit / repor
 - [ ] Phase 1 — Foundation: dashboard, layout, RBAC, audit log, stats
 - [ ] Phase 2 — Rider management
 - [ ] Phase 3 — Rider operations monitoring
-- [ ] Phase 4 — Financial monitoring
+- [~] Phase 4 — Financial monitoring (**POS & SALES read-only sub-module complete 2026-09-24**: `/api/admin/pos/*` + `/admin/pos` page + `AdminPosSalesApiTest`; suite 440/2,336 ✓)
 - [ ] Phase 5 — Business management
 - [ ] Phase 6 — Tourism management
 - [ ] Phase 7 — Reports & audit

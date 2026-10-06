@@ -6,6 +6,9 @@ return [
     'per_kilometer' => (float) env('DELIVERY_PER_KILOMETER', 15.00),
     'minimum_fee' => (float) env('DELIVERY_MINIMUM_FEE', 40.00),
     'service_adjustment' => (float) env('DELIVERY_SERVICE_ADJUSTMENT', 0.00),
+    // Ride-hailing service fee (spec §7-10, ride-hailing plan Phase 3): shown
+    // in the fare breakdown when > 0 and NOT added to orders.total in MVP.
+    'service_fee' => (float) env('DELIVERY_SERVICE_FEE', 0.00),
     'surge_multiplier' => (float) env('DELIVERY_SURGE_MULTIPLIER', 1.00),
     'currency' => 'PHP',
     'routing_url' => env('DELIVERY_ROUTING_URL', 'https://router.project-osrm.org/route/v1/driving'),

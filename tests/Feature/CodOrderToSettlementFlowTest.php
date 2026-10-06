@@ -26,15 +26,14 @@ use Tests\TestCase;
 
 /**
  * The full COD flow over the canonical HTTP endpoints — order placed → dispatch
- * offer → rider accept (preparation gate) → restaurant ready → Tourism Office
- * purchasing cash → collection gate → trip progression → delivered → cash
- * settled → completed:
+ * offer → rider accept (preparation gate) → restaurant ready → purchasing cash
+ * (auto-issued at acceptance; rider already holds the Tourism Office float) →
+ * collection gate → trip progression → delivered → cash settled → completed:
  *
  *   Tourist  POST   /api/tourist/food/group-order
  *   Rider    GET    /api/rider/dispatch/offers
  *   Rider    PATCH  /api/rider/dispatch/accept
  *   Owner    PATCH  /api/business-owner/orders/{o}/items/{i}/status
- *   Admin    POST   /api/admin/deliveries/{d}/issue-purchasing-cash
  *   Rider    POST   /api/rider/deliveries/{d}/purchasing-cash/receive
  *   Rider    POST   /api/rider/deliveries/{d}/purchases/{p}/mark
  *   Rider    PATCH  /api/rider/deliveries/{d}/status
@@ -393,6 +392,17 @@ class CodOrderToSettlementFlowTest extends TestCase
             'Purchasing stops reconcile to the rider-financed settlement base.'
         );
 
+        // The rider already holds the Tourism Office float, so the purchasing
+        // cash is issued implicitly with the assignment — no office action,
+        // no waiting, and the amount equals the rider-financed settlement base.
+        $this->assertNotNull($delivery->purchasing_cash_issued_at, 'Purchasing cash auto-issued at acceptance.');
+        $this->assertNull($delivery->purchasing_cash_issued_by, 'Auto-issuance has no acting officer.');
+        $this->assertEquals(
+            (float) $order->rider_financed_amount,
+            (float) $delivery->purchasing_cash,
+            'Auto-issued purchasing cash = rider_financed_amount = settlement base.'
+        );
+
         // ---- 5. Wrong rider cannot advance the assigned delivery ----
         $this->be($this->riderB)
             ->patchJson($this->riderStatusUrl($delivery), ['status' => 'arrived_pickup'])
@@ -411,13 +421,10 @@ class CodOrderToSettlementFlowTest extends TestCase
         $this->assertSame('ready', $order->fresh()->status, 'All items ready → order ready.');
         $this->assertSame($this->riderA->id, $delivery->fresh()->rider_id, 'Restaurant work never rebinds the delivery (AGENTS §4.4).');
 
-        // ---- 7. Tourism Office issues purchasing cash; the rider receives it ----
-        $issue = $this->be($this->admin)
-            ->postJson("/api/admin/deliveries/{$delivery->id}/issue-purchasing-cash")
-            ->assertOk();
-
-        $this->assertEquals((float) $order->rider_financed_amount, (float) $issue->json('data.purchasing_cash'));
-        $this->assertSame(2, $issue->json('data.purchases_count'));
+        // ---- 7. Purchasing cash auto-issued at acceptance; the rider receives it ----
+        $this->assertNotNull($delivery->purchasing_cash_issued_at, 'Purchasing cash auto-issued at acceptance.');
+        $this->assertEquals((float) $order->rider_financed_amount, (float) $delivery->purchasing_cash);
+        $this->assertSame(2, $delivery->codPurchases()->count());
 
         $this->be($this->riderA)
             ->postJson("/api/rider/deliveries/{$delivery->id}/purchasing-cash/receive")
@@ -456,7 +463,7 @@ class CodOrderToSettlementFlowTest extends TestCase
             ->patchJson($this->riderStatusUrl($delivery), ['status' => 'arrived_destination'])
             ->assertOk();
 
-        // ---- 9. Settlement guard before delivery; then deliver (COD) ----
+        // ---- 9. Settlement guard before delivery; delivery is tourist-confirmed ----
         $cashDue = (float) $delivery->fresh()->cash_due;
         $this->assertGreaterThan(0, $cashDue);
 
@@ -465,13 +472,23 @@ class CodOrderToSettlementFlowTest extends TestCase
             ->assertStatus(422)
             ->assertJsonPath('message', 'Delivery must be marked as delivered before cash settlement.');
 
+        // P14 — the rider cannot mark a food delivery delivered; the tourist must
+        // confirm receipt at the drop-off.
         $this->be($this->riderA)
             ->patchJson($this->riderStatusUrl($delivery), ['status' => 'delivered'])
-            ->assertOk();
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'The tourist must confirm the delivery before it can be marked as delivered.');
+
+        $this->be($this->tourist)
+            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
+            ->assertOk()
+            ->assertJsonPath('data.new_status', 'delivered');
 
         $delivery->refresh();
         $this->assertSame('delivered', $delivery->status->value, 'COD stays delivered until cash is settled — never auto-completed.');
         $this->assertNotNull($delivery->delivered_at);
+        $this->assertNotNull($delivery->delivery_confirmed_at, 'Tourist confirmation is stamped.');
+        $this->assertSame((int) $this->tourist->id, (int) $delivery->delivery_confirmed_by);
         $this->assertSame('busy', $this->riderA->fresh()->riderDetail->rider_status, 'COD keeps the rider busy until cash is collected.');
         $this->assertSame('pending', $order->fresh()->payment_status, 'Still unpaid between delivery and cash settlement.');
         $this->assertNotSame('completed', $order->fresh()->status);
@@ -631,7 +648,12 @@ class CodOrderToSettlementFlowTest extends TestCase
 
         $this->assertSame('assigned', $delivery->status->value, 'Delivery never advanced.');
         $this->assertSame($this->riderA->id, $delivery->rider_id, 'Delivery still bound to Rider A.');
-        $this->assertNull($delivery->purchasing_cash_issued_at, 'No purchasing cash was issued.');
+        $this->assertNotNull($delivery->purchasing_cash_issued_at, 'Cash was auto-issued at acceptance (rider holds the float).');
+        $this->assertEquals(
+            (float) $order->rider_financed_amount,
+            (float) $delivery->purchasing_cash,
+            'Rejected attempts never re-issued or re-stamped the auto-issued amount.'
+        );
         $this->assertSame('preparing', $order->status, 'Order never advanced past preparing.');
         $this->assertSame('pending', $order->payment_status, 'Order still unpaid.');
         $this->assertSame(

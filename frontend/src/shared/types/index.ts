@@ -103,6 +103,11 @@ export interface OrderItem {
   preparation_started_at?: string | null
   ready_at?: string | null
   special_notes?: string | null
+  /** Source offering (loaded on BO/tourist endpoints) — carries the photo. */
+  offering?: {
+    image?: string | null
+    images?: string[]
+  } | null
 }
 
 export interface Order {
@@ -199,8 +204,17 @@ export interface Review {
 export interface Delivery {
   id: number
   order_id: number
+  order_type?: string | null
   rider_id: number | null
-  status: 'pending' | 'assigned' | 'picked_up' | 'delivered' | 'cancelled'
+  status:
+    | 'pending'
+    | 'assigned'
+    | 'arrived_pickup'
+    | 'picked_up'
+    | 'in_transit'
+    | 'arrived_destination'
+    | 'delivered'
+    | 'cancelled'
   is_cod?: boolean
   cash_due?: number | null
   cash_received?: number | null

@@ -10,6 +10,7 @@ use App\Http\Controllers\Admin\AdminLiveController;
 use App\Http\Controllers\Admin\AdminMapController;
 use App\Http\Controllers\Admin\AdminMunicipalityController;
 use App\Http\Controllers\Admin\AdminNotificationController;
+use App\Http\Controllers\Admin\AdminPosSalesController;
 use App\Http\Controllers\Admin\AdminReportController;
 use App\Http\Controllers\Admin\AdminRiderController;
 use App\Http\Controllers\Admin\AdminRoleController;
@@ -41,6 +42,7 @@ use App\Http\Controllers\BusinessOwner\BusinessOwnerExportController;
 use App\Http\Controllers\BusinessOwner\BusinessOwnerExpenseController;
 use App\Http\Controllers\BusinessOwnerOfferingCategoryController;
 use App\Http\Controllers\BusinessOwnerOrderController;
+use App\Http\Controllers\BusinessOwnerPaymentController;
 use App\Http\Controllers\BusinessOwnerPreparationController;
 use App\Http\Controllers\BusinessOwnerProfileController;
 use App\Http\Controllers\BusinessOwnerPromotionController;
@@ -55,6 +57,7 @@ use App\Http\Controllers\Rider\RiderPayoutController;
 use App\Http\Controllers\Rider\RiderMapController;
 use App\Http\Controllers\Rider\RiderProfileController;
 use App\Http\Controllers\Rider\RiderPurchasingController;
+use App\Http\Controllers\Rider\RiderPickupStopController;
 use App\Http\Controllers\StaffMenuController;
 use App\Http\Controllers\TourismOffice\BusinessOwnerApprovalController;
 use App\Http\Controllers\TourismOffice\LandingContentController;
@@ -75,6 +78,7 @@ use App\Http\Controllers\Tourist\NotificationController;
 use App\Http\Controllers\Tourist\ReviewController;
 use App\Http\Controllers\Tourist\TouristProfileController;
 use App\Http\Controllers\Tourist\TransportController;
+use App\Http\Controllers\Tourist\TransportLocationController;
 use App\Http\Controllers\Tourist\TouristController;
 use App\Http\Controllers\Tourist\TouristDestinationController;
 use App\Models\Municipality;
@@ -201,12 +205,14 @@ Route::middleware('token.only')->group(function () {
         Route::post('/food/order/{order}/cancel', [FoodController::class, 'cancelOrder']);
         Route::post('/food/order/{order}/cancel-item', [FoodController::class, 'cancelItem']);
         Route::post('/food/order/{order}/rate', [FoodController::class, 'rateOrder']);
+        Route::post('/food/order/{order}/confirm-delivery', [FoodController::class, 'confirmDelivery']);
 
         // Multi-restaurant group checkout
         Route::post('/food/group-order', [GroupOrderController::class, 'store']);
         Route::get('/food/group-order/{id}', [GroupOrderController::class, 'show']);
 
         // Bookings (index is public; show requires auth — business detail)
+        Route::get('/booking/{id}/detail', [BookingController::class, 'detail']);
         Route::get('/booking/{business}', [BookingController::class, 'show']);
         Route::post('/booking/{business}', [BookingController::class, 'store']);
         Route::post('/booking/{id}/cancel', [BookingController::class, 'cancel']);
@@ -214,10 +220,15 @@ Route::middleware('token.only')->group(function () {
         // Transport
         Route::get('/transport', [TransportController::class, 'index']);
         Route::post('/transport/estimate', [TransportController::class, 'estimate']);
+        Route::post('/transport/route', [TransportController::class, 'route']);
         Route::post('/transport/book', [TransportController::class, 'book']);
         Route::get('/transport/trip/{id}/status', [TransportController::class, 'tripStatus']);
         Route::post('/transport/trip/{id}/cancel', [TransportController::class, 'cancelTrip']);
         Route::post('/transport/trip/{id}/rate', [TransportController::class, 'rateTrip']);
+
+        // Transport — pickup & destination selection (local registry search)
+        Route::get('/transport/locations/search', [TransportLocationController::class, 'search']);
+        Route::get('/transport/locations/reverse-geocode', [TransportLocationController::class, 'reverseGeocode']);
 
         // Events (public — see public browse group above)
 
@@ -279,6 +290,9 @@ Route::middleware('token.only')->group(function () {
             Route::get('/businesses/{business}', [BusinessOwnerBusinessManageController::class, 'show']);
             Route::put('/businesses/{business}', [BusinessOwnerBusinessManageController::class, 'update']);
             Route::put('/businesses/{business}/hours', [BusinessOwnerBusinessManageController::class, 'updateHours']);
+            Route::put('/businesses/{business}/payment-methods', [BusinessOwnerBusinessManageController::class, 'updatePaymentMethods']);
+            Route::get('/businesses/{business}/payments', [BusinessOwnerPaymentController::class, 'index']);
+            Route::get('/businesses/{business}/payments/{order}', [BusinessOwnerPaymentController::class, 'show']);
             Route::get('/businesses/{business}/documents', [BusinessOwnerBusinessManageController::class, 'documents']);
             Route::post('/businesses/{business}/documents', [BusinessOwnerBusinessManageController::class, 'uploadDocument']);
             Route::delete('/businesses/{business}/documents/{businessDocument}', [BusinessOwnerBusinessManageController::class, 'deleteDocument']);
@@ -453,6 +467,7 @@ Route::middleware('token.only')->group(function () {
         Route::get('/dashboard', [RiderController::class, 'dashboard']);
         Route::get('/profile', [RiderProfileController::class, 'show']);
         Route::put('/profile', [RiderProfileController::class, 'update']);
+        Route::post('/profile/photo', [RiderProfileController::class, 'uploadPhoto']);
         Route::get('/earnings', [RiderController::class, 'earnings']);
         Route::get('/earnings/{delivery}', [RiderController::class, 'earning']);
         Route::post('/availability/toggle', [RiderController::class, 'toggleAvailability']);
@@ -462,8 +477,12 @@ Route::middleware('token.only')->group(function () {
         Route::get('/deliveries/active', [RiderDeliveryController::class, 'active']);
         Route::get('/deliveries/completed', [RiderDeliveryController::class, 'completed']);
         Route::patch('/deliveries/{delivery}/status', [RiderDeliveryController::class, 'updateStatus']);
+        Route::post('/deliveries/{delivery}/cancel-ride', [RiderDeliveryController::class, 'cancelRide']);
         Route::post('/deliveries/{delivery}/settle-cod', [RiderDeliveryController::class, 'settleCod']);
         Route::get('/deliveries/{delivery}/purchases', [RiderPurchasingController::class, 'purchases']);
+        Route::get('/deliveries/{delivery}/pickup-route', [RiderDeliveryController::class, 'pickupRoute']);
+        Route::get('/deliveries/{delivery}/pickup-stops', [RiderPickupStopController::class, 'index']);
+        Route::post('/deliveries/{delivery}/pickup-stops/{business}/confirm', [RiderPickupStopController::class, 'confirm']);
         Route::post('/deliveries/{delivery}/purchases/{purchase}/mark', [RiderPurchasingController::class, 'mark']);
         Route::post('/deliveries/{delivery}/purchasing-cash/receive', [RiderPurchasingController::class, 'confirmCashReceipt']);
         Route::get('/dispatch/pending-request', [RiderDispatchController::class, 'pendingRequest']);
@@ -537,6 +556,8 @@ Route::middleware('token.only')->group(function () {
 
         // Riders
         Route::get('/riders', [AdminRiderController::class, 'index']);
+        Route::get('/riders/fares', [AdminRiderController::class, 'fareSettings']);
+        Route::put('/riders/fares', [AdminRiderController::class, 'updateFareSettings']);
         Route::get('/riders/{rider}', [AdminRiderController::class, 'show']);
         Route::post('/riders/{rider}/approve', [AdminRiderController::class, 'approve']);
         Route::post('/riders/{rider}/reject', [AdminRiderController::class, 'reject']);
@@ -558,6 +579,13 @@ Route::middleware('token.only')->group(function () {
         Route::get('/reports/tourism', [AdminReportController::class, 'tourism']);
         Route::get('/reports/business', [AdminReportController::class, 'business']);
         Route::get('/reports/cod-settlements', [AdminReportController::class, 'codSettlements']);
+
+        // POS & Sales (read-only Tourism Office sales monitoring)
+        Route::get('/pos/sales', [AdminPosSalesController::class, 'sales']);
+        Route::get('/pos/sales/summary', [AdminPosSalesController::class, 'summary']);
+        Route::get('/pos/sales/transactions', [AdminPosSalesController::class, 'transactions']);
+        Route::get('/pos/sales/by-business', [AdminPosSalesController::class, 'byBusiness']);
+        Route::get('/pos/sales/trend', [AdminPosSalesController::class, 'trend']);
 
         // Audit Logs
         Route::get('/audit-logs', [AdminAuditLogController::class, 'index']);

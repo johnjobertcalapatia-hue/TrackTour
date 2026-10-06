@@ -52,7 +52,10 @@ export default function MyTrips() {
   )
 
   const filterByTab = (trips: TripItem[]) => {
-    if (activeTab === 'active') return trips.filter((t) => ['pending', 'rider_assigned', 'arriving', 'in_progress'].includes(t.status))
+    if (activeTab === 'active')
+      return trips.filter((t) =>
+        ['pending', 'rider_assigned', 'arriving', 'in_progress', 'searching', 'driver_arrived'].includes(t.status)
+      )
     if (activeTab === 'upcoming') return trips.filter((t) => ['ready_for_pickup', 'picked_up', 'out_for_delivery'].includes(t.status))
     return trips.filter((t) => ['delivered', 'completed', 'cancelled', 'cancelled_by_tourist', 'cancelled_by_rider'].includes(t.status))
   }
@@ -60,7 +63,7 @@ export default function MyTrips() {
   const filtered = filterByTab(allTrips)
 
   const handleView = (trip: TripItem) => {
-    if (trip.type === 'transport') navigate('/tourist/trips')
+    if (trip.type === 'transport') navigate(`/tourist/transport/tracking/${trip.id}`)
     else navigate(`/tourist/stays/${trip.id}`)
   }
 

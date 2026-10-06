@@ -206,6 +206,16 @@ class RideHailingAcceptanceTest extends TestCase
         ], $overrides));
     }
 
+    /**
+     * The authoritative fare the server derives for the canonical test
+     * coordinates/vehicle (client-supplied fare values are advisory only).
+     */
+    private function expectedMotorcycleFare(): float
+    {
+        return (float) app(TransportationService::class)
+            ->estimateFare(12.51, 121.31, 12.60, 121.40)['fares']['motorcycle']['fare'];
+    }
+
     private function makeFoodOrder(): Order
     {
         return Order::create([
@@ -291,12 +301,14 @@ class RideHailingAcceptanceTest extends TestCase
         $item = $order->items()->first();
         $this->assertNotNull($item, 'the ride order item must persist');
         $this->assertStringContainsString('Ride:', $item->product_name);
-        $this->assertEquals(150, (float) $item->unit_price);
+        $expectedFare = $this->expectedMotorcycleFare();
+        $this->assertEquals($expectedFare, (float) $item->unit_price);
+        $this->assertEquals($expectedFare, (float) $order->total);
 
         $delivery = $order->delivery;
         $this->assertNotNull($delivery, 'the ride delivery must persist');
         $this->assertSame('notified', $delivery->dispatch_status);
-        $this->assertEquals(60, (float) $delivery->rider_commission); // max(20, 150 * 0.4)
+        $this->assertEquals(round(max(20, $expectedFare * 0.4), 2), (float) $delivery->rider_commission);
     }
 
     // ---------- B ----------

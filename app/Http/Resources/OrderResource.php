@@ -37,25 +37,24 @@ class OrderResource extends JsonResource
             'delivery_longitude' => $this->delivery_longitude,
             'delivery_fee_calculated_at' => $this->delivery_fee_calculated_at,
             'delivery_distance_is_estimated' => $this->delivery_distance_is_estimated,
-            'delivery_fee_details' => $this->delivery_distance_km !== null ? [
-                'business_id' => $this->business_id,
-                'distance_km' => (float) $this->delivery_distance_km,
-                'base_fare' => (float) config('delivery.base_fare'),
-                'included_kilometers' => (float) config('delivery.included_kilometers', 2.00),
-                'distance_rate' => (float) config('delivery.per_kilometer'),
-                'distance_charge' => round(
-                    max(
-                        (float) $this->delivery_distance_km - (float) config('delivery.included_kilometers', 2.00),
-                        0
-                    ) * (float) config('delivery.per_kilometer'),
-                    2
-                ),
-                'service_adjustment' => (float) config('delivery.service_adjustment'),
-                'surge_multiplier' => (float) config('delivery.surge_multiplier'),
-                'delivery_fee' => (float) $this->delivery_fee,
-                'rider_tip' => (float) $this->rider_tip,
-                'is_estimated' => (bool) $this->delivery_distance_is_estimated,
-            ] : null,
+            'delivery_fee_details' => $this->delivery_distance_km !== null ? (function () {
+                $fares = app(\App\Services\DeliveryFareSettings::class);
+                $distanceKm = (float) $this->delivery_distance_km;
+
+                return [
+                    'business_id' => $this->business_id,
+                    'distance_km' => $distanceKm,
+                    'base_fare' => $fares->baseFare(),
+                    'included_kilometers' => $fares->includedKilometers(),
+                    'distance_rate' => $fares->perKilometer(),
+                    'distance_charge' => round(max($distanceKm - $fares->includedKilometers(), 0) * $fares->perKilometer(), 2),
+                    'service_adjustment' => $fares->serviceAdjustment(),
+                    'surge_multiplier' => $fares->surgeMultiplier(),
+                    'delivery_fee' => (float) $this->delivery_fee,
+                    'rider_tip' => (float) $this->rider_tip,
+                    'is_estimated' => (bool) $this->delivery_distance_is_estimated,
+                ];
+            })() : null,
             'discount' => $this->discount,
             'paid_amount' => $this->paid_amount,
             'payment_method' => $this->payment_method,

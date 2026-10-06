@@ -10,6 +10,7 @@ use App\Models\Delivery;
 use App\Models\User;
 use App\Services\DeliveryService;
 use App\Services\NearestRiderService;
+use App\Services\TransportationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -90,14 +91,29 @@ class RiderDeliveryController extends Controller
                 $updateData[$timestampField] = now();
             }
 
-            // Purchasing-cash gate: a COD delivery may not leave the pickup area
-            // until food from every restaurant has been bought AND collected.
+            // Pickup-sequence gate (AGENTS.md §4.2 / COD §5): a food delivery
+            // may not leave the pickup area until EVERY restaurant pickup stop
+            // has been confirmed — for COD that also means food bought AND
+            // collected; for prepaid group orders it means the per-restaurant
+            // "Confirm Item Pickup" sequence completed. Applies to picked_up
+            // AND any direct in_transit skip. Transport/item-less deliveries
+            // have no stops and are never blocked here.
             if (
-                $newStatus === 'picked_up'
-                && $this->dispatchService->isCodDelivery($locked)
-                && ! app(\App\Services\PurchasingCashService::class)->isFullyCollected($locked)
+                in_array($newStatus, ['picked_up', 'in_transit'], true)
+                && ! app(\App\Services\PickupSequenceService::class)->allConfirmed($locked)
             ) {
                 return ['error' => 'not_all_collected'];
+            }
+
+            // P14 — tourist delivery-confirmation gate. Evaluated BEFORE the
+            // status write so a rejected rider 'delivered' never mutates the
+            // delivery (food deliveries only reach 'delivered' when the TOURIST
+            // confirms receipt at the drop-off via POST /tourist/food/order/{order}/confirm-delivery).
+            if (
+                $newStatus === 'delivered'
+                && $this->dispatchService->requiresTouristConfirmation($locked)
+            ) {
+                return ['error' => 'tourist_confirmation_required'];
             }
 
             $locked->update($updateData);
@@ -145,6 +161,13 @@ class RiderDeliveryController extends Controller
             );
         }
 
+        if ($outcome['error'] === 'tourist_confirmation_required') {
+            return $this->errorResponse(
+                'The tourist must confirm the delivery before it can be marked as delivered.',
+                422
+            );
+        }
+
         // Emit the real-time event only after commit, so listeners never run
         // while the row lock is held. The event carries the delivery's ACTUAL
         // end state after the transition (prepaid confirmation completes the
@@ -156,6 +179,49 @@ class RiderDeliveryController extends Controller
             DeliveryResource::make($fresh),
             'Delivery status updated to ' . ucfirst(str_replace('_', ' ', $newStatus)) . '.'
         );
+    }
+
+    /**
+     * The grouped pickup route for an assigned delivery (COD or prepaid):
+     * every fulfilling restaurant in preparation-time order, the longest-prep
+     * restaurant as the drop-off origin, and the tourist destination as the
+     * drop-off point.
+     */
+    public function pickupRoute(Request $request, Delivery $delivery): JsonResponse
+    {
+        if ((int) $delivery->rider_id !== (int) $request->user()?->id) {
+            return $this->forbiddenResponse('You are not assigned to this delivery.');
+        }
+
+        $delivery->load('codPurchases');
+
+        return $this->successResponse(app(\App\Services\PurchasingCashService::class)->pickupRoute($delivery));
+    }
+
+    /**
+     * Driver-initiated cancellation of an accepted ride (Phase 6).
+     *
+     * Allowed only for transport rides while the driver is on the way to / at
+     * the pickup (assigned, en_route_pickup, arrived_pickup). After pickup the
+     * ride is governed by the delivery lifecycle and may not be cancelled here.
+     */
+    public function cancelRide(Request $request, Delivery $delivery): JsonResponse
+    {
+        if ((int) $delivery->rider_id !== (int) $request->user()?->id) {
+            return $this->forbiddenResponse('You are not assigned to this ride.');
+        }
+
+        try {
+            $result = app(TransportationService::class)->cancelRideByDriver(
+                $delivery,
+                $request->user(),
+                $request->input('reason'),
+            );
+        } catch (\InvalidArgumentException $exception) {
+            return $this->errorResponse($exception->getMessage(), 422);
+        }
+
+        return $this->successResponse($result, 'Ride cancelled. The tourist has been notified.');
     }
 
     /**

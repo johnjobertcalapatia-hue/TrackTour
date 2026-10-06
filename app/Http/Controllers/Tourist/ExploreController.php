@@ -140,12 +140,7 @@ class ExploreController extends Controller
                 $q->where('start_date', '>=', now())
                     ->orWhere('end_date', '>=', now());
             })
-                ->with([
-                    'municipality',
-                    'media' => fn ($q) => $q
-                        ->whereIn('type', ['Logo', 'Gallery'])
-                        ->orderBy('sort_order'),
-                ])
+                ->with('municipality')
                 ->orderBy('start_date')
                 ->take(6)
                 ->get();
@@ -265,7 +260,7 @@ class ExploreController extends Controller
                         ->orWhere('name', 'like', '%food hub%');
                 });
             })
-            ->whereHas('offerings', fn ($q) => $q->where('is_available', true)->where('status', 'active'))
+            ->whereHas('offerings', fn ($q) => $q->where('is_available', true)->where('status', 'available'))
             ->with('municipality')
             ->withAvg(['reviews' => fn ($q) => $q->where('status', 'approved')], 'rating')
             ->when($hasLocation, fn ($q) => $q->orderBy('distance_km'))
@@ -276,7 +271,7 @@ class ExploreController extends Controller
             $cover = $b->cover_photo;
             $firstOffering = $b->offerings()
                 ->where('is_available', true)
-                ->where('status', 'active')
+                ->where('status', 'available')
                 ->first();
             if (! $cover && $firstOffering) {
                 $cover = $firstOffering->image;
@@ -340,7 +335,7 @@ class ExploreController extends Controller
                             ->orWhere('name', 'like', '%food hub%');
                     });
                 })
-                ->whereHas('offerings', fn ($q) => $q->where('is_available', true)->where('status', 'active'))
+                ->whereHas('offerings', fn ($q) => $q->where('is_available', true)->where('status', 'available'))
                 ->count(),
             'stays' => Business::where('status', 'approved')
                 ->whereHas('category', function ($q) {
@@ -416,7 +411,7 @@ class ExploreController extends Controller
 
         $foodsQuery = Offering::query()
             ->where('is_available', true)
-            ->where('status', 'active')
+            ->where('status', 'available')
             ->whereHas('business', fn ($qb) => $qb->where('status', 'approved')->whereNotNull('latitude')->whereNotNull('longitude'))
             ->whereHas('business.category', function ($qb) {
                 $qb->where(function ($qq) {
@@ -558,7 +553,7 @@ class ExploreController extends Controller
         if ($isFood) {
             $items = Offering::query()
                 ->where('is_available', true)
-                ->where('status', 'active')
+                ->where('status', 'available')
                 ->whereHas('business', fn ($qb) => $qb->where('status', 'approved')->whereNotNull('latitude')->whereNotNull('longitude'))
                 ->whereHas('business.category', function ($qb) {
                     $qb->where(function ($qq) {
@@ -782,10 +777,11 @@ class ExploreController extends Controller
                 'municipality',
                 'media' => fn ($q) => $q->where('type', 'gallery')->orderBy('sort_order'),
             ])
-            ->get(['id', 'business_name', 'latitude', 'longitude', 'cover_photo', 'business_category_id', 'municipality_id', 'price_range', 'average_rating', 'review_count', 'popularity_score', 'services', 'facilities', 'opening_time', 'closing_time', 'business_hours', 'force_closed', 'created_at']);
+            ->get(['id', 'business_name', 'status', 'latitude', 'longitude', 'cover_photo', 'business_category_id', 'municipality_id', 'price_range', 'average_rating', 'review_count', 'popularity_score', 'services', 'facilities', 'opening_time', 'closing_time', 'business_hours', 'force_closed', 'created_at']);
 
         $menuByBusiness = Offering::whereIn('business_id', $businesses->pluck('id'))
             ->where('is_available', true)
+            ->where('status', 'available')
             ->with(['category'])
             ->orderByDesc('bestseller')
             ->orderBy('sort_order')

@@ -1,8 +1,28 @@
 # Known Issues
 
 ## Current Baseline
-- **PHPUnit**: 398 tests / 1,968 assertions / 0 failures / 7 skipped (391 passed)
+- **PHPUnit**: 401 tests / 2,131 assertions / 0 failures / 7 skipped (394 passed)
 - **Node.js Socket**: 45 tests (`npm run test:js`) — all passing
+
+## Activated Defects (audited 2026-09-24 — ride-hailing gap analysis)
+
+The tourist **transport (ride) flow was broken end-to-end** against the API. Items
+1–5 and 7 are **RESOLVED** by the ride-hailing Phase 1 integration fix
+(`docs/PROGRESS.md` → *Tourist Ride-Hailing — Phase 1*). Items 6, 8, and 9 are
+**still open** and are tracked as follow-up ride-hailing phases; they were out of
+scope for the integration fix. Reference: `docs/architecture/ride-hailing-rider-gap-analysis.md` §7.
+
+| # | Defect | Status | Evidence |
+|---|--------|--------|----------|
+| 1 | Ride booking 404s | RESOLVED | `frontend/src/features/tourist/components/BookRideSheet.tsx` now POSTs `/tourist/transport/book` (`routes/api.php:219`) |
+| 2 | Fare estimate always fails validation | RESOLVED | `BookRideSheet.tsx` now sends `destination_lat/destination_lng`; `TransportController::estimate` accepts them |
+| 3 | Booking payload incompatible | RESOLVED | `BookRideSheet.tsx` now sends the full canonical payload; `BookTransportRequest` matches |
+| 4 | Estimate shape mismatch | RESOLVED | `BookRideSheet.tsx` parses `fares[vehicle].fare_text` from `estimateFare()` |
+| 5 | Tracking screen is a stub | RESOLVED | `tourist/transport/trip/{id}/status` returns the rich snake_case contract; `TouristTransportTracking.tsx` consumes it |
+| 6 | Rider-side passenger verification impossible | OPEN | `ride_pin` is tourist-only (`TransportController::tracking`); never returned by `RiderDeliveryController`/`DeliveryResource` |
+| 7 | Booking trusts client fare | RESOLVED | `TransportationService::createRide()` now re-derives the authoritative fare/distance/duration server-side (spec §64); `BookTransportRequest.fare` is advisory-only |
+| 8 | Transport rides have no payment flow | OPEN | `payment_method` recorded, but no `Payment` row / PayMongo intent for non-cash; food COD settlement would mis-allocate against fake `business_id = 1` |
+| 9 | Rider rating is fake | OPEN | `RiderController.php:45` hard-codes `rating = 0` |
 
 ## Recently Reconciled
 
@@ -72,8 +92,12 @@ Frontend dead code:
 
 ## Deployment / Environment Notes
 
+- **The frontend's API path is XAMPP Apache, not `php artisan serve` (changed 2026-09-23).** The browser calls `/api` relative to `localhost:3000`; Vite proxies it to `http://localhost/Capstone%20Project%201/public`. **Apache must be running, or API calls fail with `502`.** Reason: `php -S` is single-threaded on Windows (~0.87 req/s) while the rider app's own polling (offers 4 s, GPS 3 s, map queries 10 s) demands ~1 req/s — the queue grew without bound, so requests blew axios' 30 s timeout and surfaced as a false **"Unable to change availability right now."** The endpoint itself was healthy (200 on both hops every time). With Apache: 30-concurrent burst fell **34,451 ms → 11,614 ms with 0 timeouts**, steady-state ~1.6 req/s > demand. `php artisan serve :8000` is now **redundant** (optional/revert path only).
+- **`PHP_CLI_SERVER_WORKERS` is a NO-OP on Windows** — do not try it as a slowness fix. PHP *receives* the variable (verified `getenv()` returns `4`) but the built-in server never forks (worker forking needs `fork()`): a 12-way burst measured **12,585 ms with it set vs 12,589 ms without**, 1 PID either way.
+- **`frontend/vite.config.js` is GONE (deleted 2026-09-23) — `vite.config.ts` is now the only config.** The duplicate was the trap: `.js` resolves first, so a corrected `.ts` was **silently ignored** while `.js` kept proxying to `:8000` (this cost a full misdiagnosis). It later drifted back to `:8000` a second time — re-introducing the single-threaded `php -S` path — so it was removed rather than kept "identical". *Observation:* on Vite 8.1.5 deleting the loaded config made the server re-resolve **in-process** (same PID; proxy target flipped `php -S` → Apache) with no manual restart. If a config edit ever appears to do nothing, restart Vite anyway.
 - `.env` secrets (PayMongo, Socket Bridge) appear placeholder-short — environment concern, not code bug.
 - Dev database **now has a `migrations` table** (reconciled — see PROGRESS "Development Database Migration Reconciliation"); `php artisan migrate` is safe. The old "no migrations table / tinker `Schema::table`" note is obsolete.
 - `BROADCAST_CONNECTION=log` means no WebSocket broadcast driver active.
 - **Scheduler requires a live runner on Windows** — nothing invokes `schedule:run` by itself. While `php artisan schedule:work` runs (currently an agent-session background shell), all per-minute tasks fire: `schedule:dispatch` (dispatch retries incl. the `no_rider_available` retry loop and the timed-out-offer re-offer cycle), `orders:advance-preparation` (promote eligible waiting orders + complete due preparation timers), plus the 30-min refund reconcile and daily/6-hourly tasks. After that session closes, time-based behavior stops until started persistently (Windows Task Scheduler → `php artisan schedule:run` every minute, or a dedicated console on `schedule:work`).
   - *Superseded:* the earlier `orders:auto-reject-waiting` (10-min paid `waiting_restaurant` cutoff) and `orders:auto-cancel-undelivered` entries were **deleted** with the Restaurant Order Redesign — riderless orders now wait indefinitely by design ("never auto-cancel"). Do not expect those commands to exist.
+- **OPEN — OPcache is disabled and Laravel's config/route caches don't exist; this is now the dominant per-request cost.** In `C:\xampp\php\php.ini` both `;zend_extension=opcache` and `;opcache.enable=1` are **commented out**, and `bootstrap/cache/` contains only `packages.php` + `services.php` (no `config.php`, no `routes.php`), so every request recompiles the framework and rebuilds config + routes. Measured 2026-09-23 direct to Apache: single `/api/user` **~0.8–1.0 s**; a bare Laravel 404 route **1,769 / 1,673 / 5,046 / 5,277 / 1,990 ms**. A 12-way burst through the Vite proxy measured **5,471 ms with the old `php -S` target and 5,552 ms with Apache — i.e. the transport was not the remaining bottleneck**, Laravel boot is. Fix = uncomment both opcache lines + restart Apache, then `php artisan config:cache && php artisan route:cache` (the latter must be re-run after every config/route edit). **Not applied — needs explicit approval** (system-level php.ini change + Apache restart, and it changes the config-edit workflow).

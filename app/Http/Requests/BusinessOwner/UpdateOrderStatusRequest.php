@@ -14,7 +14,7 @@ class UpdateOrderStatusRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'status' => ['required', 'in:preparing,ready,completed,cancelled'],
+            'status' => ['required', 'in:preparing,ready,cancelled'],
             'reason' => ['nullable', 'string', 'max:500'],
         ];
     }
@@ -23,7 +23,7 @@ class UpdateOrderStatusRequest extends FormRequest
     {
         return [
             'status.required' => '订单状态为必填项。',
-            'status.in' => '订单状态必须是待处理、已确认、准备中、已完成或已取消。',
+            'status.in' => '订单状态必须是准备中、已就绪或已取消。',
             'reason.max' => '原因不能超过500个字符。',
         ];
     }

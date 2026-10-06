@@ -2,6 +2,9 @@
 
 namespace App\Services;
 
+use App\Enums\TripStatus;
+use App\Models\Delivery;
+use App\Models\User;
 use App\Repositories\Contracts\DeliveryRepositoryInterface;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
@@ -11,6 +14,30 @@ class DeliveryService
     public function __construct(
         protected DeliveryRepositoryInterface $deliveryRepository,
     ) {}
+
+    /**
+     * Is the rider bound to a delivery/trip that is still on the road?
+     *
+     * The 'whole trip' spans every in-road TripStatus plus 'delivered' (a
+     * dropped-off trip is still owned by the rider until completed or
+     * cash-settled). Terminal/completed/cancelled trips never bind.
+     *
+     * This is the authoritative row-based guard — never the rider_status flag
+     * alone — shared by every controller that must keep a mid-trip rider bound.
+     */
+    public function riderHasActiveTrip(User $user): bool
+    {
+        $inTripStatuses = collect(TripStatus::cases())
+            ->filter(fn (TripStatus $status) => $status->isActive())
+            ->map(fn (TripStatus $status) => $status->value)
+            ->push(TripStatus::DELIVERED->value)
+            ->values()
+            ->all();
+
+        return Delivery::where('rider_id', $user->id)
+            ->whereIn('status', $inTripStatuses)
+            ->exists();
+    }
 
     public function getPendingDeliveries(int $riderId, int $limit = 20): Collection
     {

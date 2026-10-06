@@ -44,7 +44,7 @@ class RouteModelBindingTest extends TestCase
             'name' => 'Adobo Rice',
             'price' => 120.00,
             'is_available' => true,
-            'status' => 'active',
+            'status' => 'available',
             'offering_type' => 'menu',
         ]);
 
