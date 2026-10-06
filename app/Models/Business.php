@@ -373,6 +373,22 @@ class Business extends Model
     }
 
     /**
+     * Whether the business explicitly accepts the given order payment method
+     * (cash = COD, gcash/card = online). A null/empty payment_methods list
+     * means the business accepts all methods (backward compatible default).
+     */
+    public function acceptsPaymentMethod(string $method): bool
+    {
+        $accepted = array_values(array_filter((array) ($this->payment_methods ?? [])));
+
+        if (empty($accepted)) {
+            return true;
+        }
+
+        return in_array(strtolower($method), array_map('strtolower', $accepted), true);
+    }
+
+    /**
      * Whether the current Philippine local time falls inside today's periods.
      */
     public function isWithinScheduleNow(): bool

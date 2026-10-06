@@ -21,6 +21,7 @@ class UserProfile extends Model
         'barangay_id',
         'house_no_street',
         'zip_code',
+        'avatar',
     ];
 
     protected function casts(): array

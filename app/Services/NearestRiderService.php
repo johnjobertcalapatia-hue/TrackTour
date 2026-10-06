@@ -10,7 +10,6 @@ use App\Models\Delivery;
 use App\Models\Order;
 use App\Models\Payment;
 use App\Models\RiderEarning;
-use App\Models\RiderLocation;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
@@ -60,98 +59,11 @@ class NearestRiderService
             });
     }
 
-    public function __construct(
-        private FirebaseService $firebase
-    ) {}
+    public function __construct() {}
 
     public function findNearestAvailableRiders(float $pickupLat, float $pickupLng, string $serviceType = 'food', int $limit = 5, ?int $municipalityId = null): Collection
     {
         return $this->findNearestFromMySql($pickupLat, $pickupLng, $serviceType, $limit, $municipalityId);
-    }
-
-    protected function findNearestFromFirebase(float $pickupLat, float $pickupLng, string $serviceType = 'food', int $limit = 5, ?int $municipalityId = null): Collection
-    {
-        $firebaseRiders = $this->firebase->getOnlineRiders();
-        if (empty($firebaseRiders)) {
-            return collect();
-        }
-
-        $busyRiderIds = $this->getBusyRiderIds();
-        $recentRiderIds = RiderLocation::where('recorded_at', '>', now()->subMinutes(5))
-            ->distinct()->pluck('rider_id')->toArray();
-
-        $results = [];
-        foreach ($firebaseRiders as $riderId => $fbData) {
-            if (in_array($riderId, $busyRiderIds)) {
-                continue;
-            }
-            if (! in_array($riderId, $recentRiderIds)) {
-                continue;
-            }
-
-            $riderService = $fbData['svc'] ?? 'food';
-            if ($riderService !== $serviceType) {
-                continue;
-            }
-
-            $riderMunicipality = $fbData['mun'] ?? null;
-            if ($municipalityId !== null && $riderMunicipality !== null && (int) $riderMunicipality !== $municipalityId) {
-                continue;
-            }
-
-            $lat = $fbData['lat'] ?? null;
-            $lng = $fbData['lng'] ?? null;
-            if ($lat === null || $lng === null) {
-                continue;
-            }
-
-            $distance = $this->calculateDistance($pickupLat, $pickupLng, (float) $lat, (float) $lng);
-            if ($distance > self::MAX_DELIVERY_RADIUS_KM) {
-                continue;
-            }
-
-            $results[] = [
-                'rider_id' => $riderId,
-                'latitude' => $lat,
-                'longitude' => $lng,
-                'distance_km' => $distance,
-            ];
-        }
-
-        usort($results, fn ($a, $b) => $a['distance_km'] <=> $b['distance_km']);
-        $results = array_slice($results, 0, $limit);
-
-        if (empty($results)) {
-            return collect();
-        }
-
-        $riderIds = array_column($results, 'rider_id');
-        $distanceMap = [];
-        foreach ($results as $r) {
-            $distanceMap[$r['rider_id']] = $r['distance_km'];
-        }
-
-        $users = User::whereIn('id', $riderIds)
-            ->where('role', User::ROLE_RIDER)
-            ->where('account_status', User::ACCOUNT_STATUS_APPROVED)
-            ->whereHas('riderDetail', function ($q) use ($serviceType) {
-                $q->whereIn('rider_status', [
-                    User::RIDER_STATUS_ONLINE,
-                    User::RIDER_STATUS_AVAILABLE,
-                ])
-                    ->where('current_service', $serviceType);
-            })
-            ->with(['locations' => function ($q) {
-                $q->latest('recorded_at')->limit(1);
-            }])
-            ->get()
-            ->sortBy(fn ($u) => $distanceMap[$u->id]);
-
-        $users->each(function ($user) use ($distanceMap) {
-            $user->distance_km = $distanceMap[$user->id] ?? null;
-        });
-
-        return $users->values();
     }
 
     protected function findNearestFromMySql(float $pickupLat, float $pickupLng, string $serviceType = 'food', int $limit = 5, ?int $municipalityId = null): Collection
@@ -401,7 +313,35 @@ class NearestRiderService
             $locked->update([
                 'status' => TripStatus::CANCELLED->value,
                 'dispatch_status' => null,
+                // Observable terminal end of the dispatch cycle (master spec §49).
+                'dispatch_ended_at' => now(),
+                'dispatch_end_reason' => 'order_cancelled',
             ]);
+
+            // Stale-busy guard: cancellation must also release the rider state
+            // this delivery owns. Otherwise the rider stays 'busy' forever and
+            // every later POST /rider/availability/toggle answers 409 Conflict
+            // ("You are currently on a delivery") even though the delivery no
+            // longer exists operationally. The release runs INSIDE this
+            // transaction so the invariant is atomic with the cancellation.
+            //
+            // The release is conditional (never a blind 'available' write):
+            //  - only when the rider is still marked 'busy', and
+            //  - only when no OTHER non-terminal delivery keeps them occupied
+            //    (a COD delivery parked at 'delivered' until settle-cod counts
+            //    as occupying, so it is never released by this path).
+            // The accept path writes rider_id + rider_status='busy' in ONE
+            // transaction, so a concurrent accept either is already visible
+            // here (we skip the release) or commits after us and overwrites
+            // the rider back to 'busy'. Both orderings stay correct.
+            $riderId = $locked->rider_id;
+
+            if ($riderId !== null && $this->riderBusyStateOwnedBy($locked, $riderId)) {
+                User::find($riderId)?->riderDetail()?->updateOrCreate(
+                    ['user_id' => $riderId],
+                    ['rider_status' => User::RIDER_STATUS_AVAILABLE, 'rider_status_updated_at' => now()]
+                );
+            }
 
             return true;
         });
@@ -420,6 +360,28 @@ class NearestRiderService
                 // Real-time bridge unavailable; cancellation remains authoritative in the DB.
             }
         }
+    }
+
+    /**
+     * Does the delivery being cancelled still own the rider's 'busy' state?
+     *
+     * True only when the rider is marked 'busy' AND has no other delivery
+     * outside a terminal state (completed/cancelled). This is what keeps a
+     * genuinely occupied rider busy while releasing a rider whose only
+     * delivery just got cancelled.
+     */
+    private function riderBusyStateOwnedBy(Delivery $delivery, int $riderId): bool
+    {
+        $isBusy = User::find($riderId)?->riderDetail?->rider_status === User::RIDER_STATUS_BUSY;
+
+        if (! $isBusy) {
+            return false;
+        }
+
+        return ! Delivery::where('rider_id', $riderId)
+            ->where('id', '!=', $delivery->id)
+            ->whereNotIn('status', [TripStatus::COMPLETED->value, TripStatus::CANCELLED->value])
+            ->exists();
     }
 
     /**
@@ -492,10 +454,29 @@ class NearestRiderService
 
     public function dispatchToNearest(Delivery $delivery, string $serviceType = 'food', ?int $municipalityId = null): ?User
     {
+        // P3 (master spec §17/§19): ONE authoritative layer bounds every dispatch
+        // entry point — scheduler retry, decline/timeout re-offer, dispatch-on-ready
+        // — by the 60-minute cycle deadline. On expiry the delivery terminally
+        // fails with an observable reason instead of retrying forever.
+        if ($this->dispatchCycleExpired($delivery)) {
+            $this->failDispatch($delivery, $this->terminalEndReason($delivery));
+
+            return null;
+        }
+
         $pickupLat = $delivery->pickup_latitude;
         $pickupLng = $delivery->pickup_longitude;
 
         if (! $pickupLat || ! $pickupLng) {
+            // No silent dead end (master spec §19): an undeliverable pickup parks
+            // with a retry; the attempt cap / cycle deadline later records
+            // dispatch_end_reason='invalid_pickup_coordinates'.
+            Log::warning('[COD Dispatch] exclusion_reason=invalid_pickup_coordinates', [
+                'delivery_id' => $delivery->id,
+                'order_id' => $delivery->order_id,
+            ]);
+            $this->parkForRetry($delivery);
+
             return null;
         }
 
@@ -515,11 +496,28 @@ class NearestRiderService
             }
         }
 
-        $alreadyDispatchedRiderIds = BookingDispatchLog::where('delivery_id', $delivery->id)
-            ->pluck('rider_id')
-            ->toArray();
+        $isCod = $this->isCodDelivery($delivery);
 
-        $nearestRiders = $this->isCodDelivery($delivery)
+        $priorOffers = BookingDispatchLog::where('delivery_id', $delivery->id)
+            ->get(['rider_id', 'response']);
+
+        $alreadyDispatchedRiderIds = $priorOffers->pluck('rider_id')->all();
+
+        // A TIMED-OUT offer is not a claim: the rider never answered (missed
+        // ping, closed app, dropped socket), so that rider must become
+        // offerable again on the next cycle. Without reopening it, a single
+        // missed ping permanently excluded the rider from this delivery —
+        // UNIQUE(delivery_id, rider_id) forbids a second row, so there was no
+        // path back and a delivery whose only candidate timed out dead-ended.
+        // Declined / pending / accepted offers still block: a decline is an
+        // answer, and an active or accepted offer must never be disturbed
+        // (offer state machine + one-active-delivery rule unchanged).
+        $reofferableRiderIds = $priorOffers
+            ->filter(fn (BookingDispatchLog $offer) => $offer->response === 'timeout')
+            ->pluck('rider_id')
+            ->all();
+
+        $nearestRiders = $isCod
             ? $this->findNearestEligibleCodRiders($delivery, (float) $pickupLat, (float) $pickupLng, $serviceType, 5, $municipalityId)
             : $this->findNearestAvailableRiders((float) $pickupLat, (float) $pickupLng, $serviceType, 5, $municipalityId);
 
@@ -528,6 +526,19 @@ class NearestRiderService
             'count' => $nearestRiders->count(),
             'ids' => $nearestRiders->pluck('id')->all(),
         ]);
+
+        // P3 diagnostics (master spec §57/§58): make "eligible riders = 0"
+        // explain itself instead of being an opaque empty count.
+        Log::info(sprintf(
+            '[COD Dispatch] delivery=%d eligible riders=%d riders=[%s]',
+            $delivery->id,
+            $nearestRiders->count(),
+            implode(',', $nearestRiders->pluck('id')->all())
+        ));
+
+        if ($nearestRiders->isEmpty() && $isCod) {
+            $this->logCodExclusionDiagnostics($delivery, (float) $pickupLat, (float) $pickupLng, $serviceType, $municipalityId);
+        }
 
         // Simultaneous-offer dispatch: ping EVERY eligible nearest rider (up to
         // the limit), not just the closest one. Each ping is a dedicated offer
@@ -538,7 +549,10 @@ class NearestRiderService
         $offersMade = false;
 
         foreach ($nearestRiders as $rider) {
-            if (in_array($rider->id, $alreadyDispatchedRiderIds)) {
+            if (
+                in_array($rider->id, $alreadyDispatchedRiderIds)
+                && ! in_array($rider->id, $reofferableRiderIds)
+            ) {
                 continue;
             }
 
@@ -548,13 +562,22 @@ class NearestRiderService
                 (float) ($rider->locations->first()?->longitude ?? 0)
             );
 
-            BookingDispatchLog::create([
-                'delivery_id' => $delivery->id,
-                'rider_id' => $rider->id,
-                'distance_km' => $distance,
-                'response' => 'pending',
-                'dispatched_at' => now(),
-            ]);
+            // updateOrCreate, not create: a rider whose previous offer TIMED
+            // OUT has a row already (UNIQUE delivery/rider), so the reopen is
+            // an UPDATE back to 'pending'. Every other prior response is
+            // filtered out above and can never reach here.
+            BookingDispatchLog::updateOrCreate(
+                [
+                    'delivery_id' => $delivery->id,
+                    'rider_id' => $rider->id,
+                ],
+                [
+                    'distance_km' => $distance,
+                    'response' => 'pending',
+                    'dispatched_at' => now(),
+                    'responded_at' => null,
+                ]
+            );
 
             $expiresAt = now()->addSeconds(self::DISPATCH_TIMEOUT_SECONDS);
 
@@ -563,37 +586,8 @@ class NearestRiderService
                 'dispatch_expires_at' => $expiresAt,
             ]);
 
-            if (config('firebase.dispatch_enabled') && $this->firebase->isConfigured()) {
-                $this->firebase->createRiderRequest($rider->id, $delivery->id, [
-                    'deliveryId' => $delivery->id,
-                    'orderId' => $delivery->order_id,
-                    'serviceType' => $serviceType,
-                    'pickupAddress' => $delivery->pickup_address,
-                    'pickupLatitude' => $delivery->pickup_latitude,
-                    'pickupLongitude' => $delivery->pickup_longitude,
-                    'deliveryAddress' => $delivery->delivery_address,
-                    'deliveryLatitude' => $delivery->delivery_latitude,
-                    'deliveryLongitude' => $delivery->delivery_longitude,
-                    'businessName' => $delivery->primaryOrder()?->business?->name,
-                    'riderCommission' => $delivery->rider_commission,
-                    'distanceKm' => $distance,
-                    'status' => 'pending',
-                    'expiresAt' => $expiresAt->timestamp,
-                    'dispatchedAt' => now()->timestamp,
-                    'createdAt' => now()->timestamp,
-                ]);
-
-                $this->firebase->createBookingRequest($delivery->id, [
-                    'riderId' => $rider->id,
-                    'serviceType' => $serviceType,
-                    'touristId' => $delivery->primaryOrder()?->customer_email,
-                    'status' => 'pending',
-                    'createdAt' => now()->timestamp,
-                ]);
-            }
-
             // Real-time WebSocket ping: notify the socket engine so the selected
-            // rider gets an instant order_received_ping (no Firebase write needed).
+            // rider gets an instant order_received_ping over the socket bridge.
             app(WebsocketNotifierService::class)->notifyDispatch([
                 'deliveryId' => $delivery->id,
                 'orderId' => $delivery->order_id,
@@ -625,11 +619,14 @@ class NearestRiderService
         $notifier = app(WebsocketNotifierService::class);
         $onlineRiders = $notifier->getOnlineRidersFromBridge();
         $busyRiderIds = $this->getBusyRiderIds();
+        $radarMaxAgeMs = ((int) config('delivery.radar_location_max_age_seconds', 120)) * 1000;
+        $nowMs = (int) floor(microtime(true) * 1000);
+        $radarExclusions = [];
 
         $candidates = [];
         foreach ($onlineRiders as $rider) {
             if (($rider['status'] ?? '') !== 'available') {
-                continue;
+                continue; // busy/offline radar entries are normal, not exclusions
             }
             $riderId = (int) ($rider['riderId'] ?? 0);
             $lat = (float) ($rider['lat'] ?? 0);
@@ -637,23 +634,56 @@ class NearestRiderService
             if ($riderId <= 0 || $lat === 0.0 || $lng === 0.0) {
                 continue;
             }
-            if (in_array($riderId, $alreadyDispatchedRiderIds, true)) {
+            if (
+                in_array($riderId, $alreadyDispatchedRiderIds, true)
+                && ! in_array($riderId, $reofferableRiderIds, true)
+            ) {
+                $radarExclusions[$riderId] = 'already_offered';
                 continue;
             }
-            if (in_array($riderId, $busyRiderIds, true)) {
+
+            // B2 (Option C, master spec §14): the live radar is the GPS freshness
+            // source, but only for riders who reported inside the freshness window
+            // (mirrors socket-validation.js LIMITS.radarStaleMs). A null updatedAt
+            // means the bridge never stamped one — treat as fresh; the entry still
+            // must pass every COD gate below on its LIVE coordinates.
+            $updatedAt = $rider['updatedAt'] ?? null;
+            if ($updatedAt !== null && ($nowMs - (int) $updatedAt) > $radarMaxAgeMs) {
+                $radarExclusions[$riderId] = 'radar_gps_stale';
                 continue;
             }
-            if ($this->isCodDelivery($delivery)) {
+
+            // B1 (master spec §10): the blanket busy exclusion IS the non-COD
+            // one-active-delivery rule (it mirrors findNearestFromMySql's
+            // whereNotIn(getBusyRiderIds)). COD must NOT use it here: the primary
+            // COD query applies no blanket exclusion, only the configured
+            // active-order limit — so a rider below the COD limit with one
+            // unsettled delivered COD must stay radar-eligible.
+            if (! $isCod && in_array($riderId, $busyRiderIds, true)) {
+                $radarExclusions[$riderId] = 'busy';
+                continue;
+            }
+
+            if ($isCod) {
                 $candidate = User::with('riderDetail')->find($riderId);
-                if (
-                    ! $candidate ||
-                    $candidate->account_status !== User::ACCOUNT_STATUS_APPROVED ||
-                    $candidate->riderDetail?->rider_status !== User::RIDER_STATUS_AVAILABLE ||
-                    $candidate->riderDetail?->current_service !== $serviceType ||
-                    $this->calculateDistance((float) $delivery->pickup_latitude, (float) $delivery->pickup_longitude, $lat, $lng) >
-                        (float) config('delivery.cod_max_pickup_distance_km', 5) ||
-                    ! $this->passesCodActiveOrderLimit($candidate)
-                ) {
+                $reason = null;
+                if (! $candidate) {
+                    $reason = 'not_found';
+                } elseif ($candidate->account_status !== User::ACCOUNT_STATUS_APPROVED) {
+                    $reason = 'not_approved';
+                } elseif ($candidate->riderDetail?->rider_status !== User::RIDER_STATUS_AVAILABLE) {
+                    $reason = 'not_available';
+                } elseif ($candidate->riderDetail?->current_service !== $serviceType) {
+                    $reason = 'wrong_service';
+                } elseif ($this->calculateDistance((float) $delivery->pickup_latitude, (float) $delivery->pickup_longitude, $lat, $lng) >
+                    (float) config('delivery.cod_max_pickup_distance_km', 5)) {
+                    $reason = 'too_far';
+                } elseif (! $this->passesCodActiveOrderLimit($candidate)) {
+                    $reason = 'active_order_limit';
+                }
+
+                if ($reason !== null) {
+                    $radarExclusions[$riderId] = $reason;
                     continue;
                 }
             }
@@ -667,6 +697,15 @@ class NearestRiderService
                     $lng
                 ),
             ];
+        }
+
+        if ($candidates === [] && $radarExclusions !== []) {
+            // P3 diagnostics (master spec §58): the radar saw riders but none
+            // qualified — say why instead of only logging "0 candidates".
+            Log::info('[COD Dispatch] radar exclusions', [
+                'delivery_id' => $delivery->id,
+                'exclusions' => $radarExclusions,
+            ]);
         }
 
         usort($candidates, fn ($a, $b) => $a['distance_km'] <=> $b['distance_km']);
@@ -736,11 +775,14 @@ class NearestRiderService
             'timeoutSeconds' => self::DISPATCH_TIMEOUT_SECONDS,
         ]);
 
-        $delivery->update(['dispatch_status' => 'no_rider_available']);
-
-        if ($this->firebase->isConfigured()) {
-            $this->firebase->updateBookingRequestStatus($delivery->id, 'no_rider_available');
-        }
+        // Schedule the retry NOW: `no_rider_available` used to be a terminal
+        // dead end (the scheduler only selected 'scheduled'/'dispatching', and
+        // dispatch-on-ready is gated on 'scheduled'), so a checkout-time
+        // failure meant the order could never receive a rider later. Parking
+        // dispatch_retry_at hands the delivery to the canonical
+        // ScheduledDispatchProcessor loop, which re-runs this same pipeline
+        // every retry_after_minutes until max_retries, then dispatch_failed.
+        $this->parkForRetry($delivery);
 
         return null;
     }
@@ -831,6 +873,9 @@ class NearestRiderService
                 'assigned_at' => now(),
                 'dispatch_status' => null,
                 'dispatch_expires_at' => null,
+                // Observable terminal end of the dispatch cycle (master spec §49).
+                'dispatch_ended_at' => now(),
+                'dispatch_end_reason' => 'rider_accepted',
             ]);
 
             User::where('id', $riderId)->first()?->riderDetail()?->updateOrCreate(
@@ -869,6 +914,21 @@ class NearestRiderService
             // Real-time bridge unavailable; dispatch still succeeds.
         }
 
+        // Rider acceptance is what unlocks the restaurant: transition the
+        // order(s) waiting_restaurant → PREPARING and start the preparation
+        // countdown (restaurant-defined menu prep time, snapshot-guarded).
+        // Must run BEFORE DeliveryAssigned so listeners observing the
+        // assignment already see the order preparing. Best effort: the
+        // orders:advance-preparation scheduler self-heals any failure.
+        try {
+            app(PreparationStartService::class)->startForDelivery(Delivery::findOrFail($delivery->id));
+        } catch (\Throwable $e) {
+            Log::warning('[Dispatch] Preparation start failed', [
+                'delivery_id' => $delivery->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
         // P11.5 — emit the canonical DeliveryAssigned event so the realtime
         // bridge can notify the restaurant/kitchen, tourist and assigned
         // rider rooms that an accepted rider now exists (preparation may
@@ -885,13 +945,6 @@ class NearestRiderService
             Log::warning('[Dispatch] DeliveryAssigned event failed', ['error' => $e->getMessage()]);
         }
 
-        if ($this->firebase->isConfigured()) {
-            $this->firebase->updateRiderRequestStatus($riderId, $deliveryId, 'accepted');
-            $this->firebase->updateBookingRequestStatus($deliveryId, 'accepted');
-            $riderMunicipalityId = User::where('id', $riderId)->value('municipality_id');
-            $this->firebase->setRiderStatus($riderId, 'busy', null, $riderMunicipalityId);
-        }
-
         return ['success' => true, 'message' => 'Delivery accepted!', 'assigned' => true];
     }
 
@@ -904,10 +957,6 @@ class NearestRiderService
     private function handleNonAcceptResponse(BookingDispatchLog $log, int $deliveryId, int $riderId, string $response): array
     {
         $log->update(['response' => $response, 'responded_at' => now()]);
-
-        if ($this->firebase->isConfigured()) {
-            $this->firebase->removeRiderRequest($riderId, $deliveryId);
-        }
 
         $delivery = Delivery::with('order.business')->find($deliveryId);
         $nextRider = null;
@@ -931,10 +980,6 @@ class NearestRiderService
     private function expireOffer(BookingDispatchLog $log, Delivery $delivery): array
     {
         $log->update(['response' => 'timeout', 'responded_at' => now()]);
-
-        if ($this->firebase->isConfigured()) {
-            $this->firebase->removeRiderRequest($log->rider_id, $delivery->id);
-        }
 
         $nextRider = $this->redispatchIfOffered($delivery);
 
@@ -1033,9 +1078,7 @@ class NearestRiderService
         foreach ($otherLogs as $otherLog) {
             $otherLog->update(['response' => 'cancelled', 'responded_at' => now()]);
 
-            if ($this->firebase->isConfigured()) {
-                $this->firebase->removeRiderRequest($riderId, $otherLog->delivery_id);
-            }
+            $this->notifyOfferCancelled($riderId, $otherLog->delivery_id, 'accepted_another_delivery');
 
             $this->notifyOfferCancelled($riderId, $otherLog->delivery_id, 'accepted_another_delivery');
 
@@ -1066,10 +1109,6 @@ class NearestRiderService
 
         foreach ($loserLogs as $loserLog) {
             $loserLog->update(['response' => 'cancelled', 'responded_at' => now()]);
-
-            if ($this->firebase->isConfigured()) {
-                $this->firebase->removeRiderRequest($loserLog->rider_id, $deliveryId);
-            }
 
             $this->notifyOfferCancelled($loserLog->rider_id, $deliveryId);
         }
@@ -1170,10 +1209,6 @@ class NearestRiderService
 
                 $log->update(['response' => 'timeout', 'responded_at' => now()]);
 
-                if ($this->firebase->isConfigured()) {
-                    $this->firebase->removeRiderRequest($log->rider_id, $log->delivery_id);
-                }
-
                 if (! $lockedDelivery || $lockedDelivery->rider_id !== null) {
                     return;
                 }
@@ -1190,7 +1225,14 @@ class NearestRiderService
                 if (in_array($lockedDelivery->dispatch_status, ['notified', 'waiting_for_rider'])) {
                     $nextRider = $this->redispatchIfOffered($lockedDelivery);
                     if (! $nextRider) {
-                        $lockedDelivery->update(['dispatch_status' => 'no_rider_available']);
+                        // Wave fully exhausted with no taker: park the retry so
+                        // the delivery re-enters the scheduler loop instead of
+                        // dying at no_rider_available forever (same reasoning
+                        // as the checkout-time failure above).
+                        $lockedDelivery->update([
+                            'dispatch_status' => 'no_rider_available',
+                            'dispatch_retry_at' => now()->addMinutes((int) config('delivery.scheduler.retry_after_minutes', 5)),
+                        ]);
                     }
                 }
             });
@@ -1213,6 +1255,26 @@ class NearestRiderService
             ->notifyTripCompleted($delivery->id, $delivery->rider_id);
     }
 
+    /**
+     * Does this delivery trip need the TOURIST to confirm receipt at the
+     * drop-off before it may reach 'delivered'? Food deliveries always do (the
+     * rider may not mark food 'delivered' — the tourist must confirm they
+     * received their food at the destination). Standalone transport rides do
+     * NOT: the rider's own 'delivered' action is authoritative for those trips.
+     */
+    public function requiresTouristConfirmation(Delivery $delivery): bool
+    {
+        $order = $delivery->primaryOrder();
+
+        if ($order && strtolower((string) ($order->order_type ?? '')) === 'transport') {
+            return false;
+        }
+
+        // Anything else (group or standalone food delivery, no-order rides)
+        // goes through the tourist gate. Group deliveries are always food.
+        return $delivery->isGroup() || $order !== null;
+    }
+
     public function completeDelivery(Delivery $delivery, ?array $routeHistory = null): void
     {
         // Record the rider earning for non-COD deliveries. COD earnings are
@@ -1231,6 +1293,97 @@ class NearestRiderService
         // ephemeral trip state in the WebSocket engine and notify the live room.
         app(WebsocketNotifierService::class)
             ->notifyTripCompleted($delivery->id, $delivery->rider_id);
+    }
+
+    /**
+     * Tourist delivery-confirmation gate.
+     *
+     * A food delivery only reaches 'delivered' once the tourist confirms receipt
+     * at the drop-off (the rider may NOT mark food deliveries delivered). This is
+     * the shared authoritative transition used by the tourist confirm endpoint:
+     *
+     *     arrived_destination + tourist confirm
+     *         → COD: delivered (cash_due frozen; order stays delivered until the
+     *                rider settles the cash)
+     *         → prepaid: completed (delivery + order terminal together; earnings
+     *                recorded; rider released)
+     *
+     * Runs under a delivery row lock so a racing auto-cancel / restaurant-cancel
+     * can never be resurrected. Re-confirming an already terminal delivery is an
+     * idempotent no-op.
+     *
+     * @return array{success: bool, old_status: string, new_status: string}
+     *
+     * @throws \InvalidArgumentException
+     */
+    public function confirmDeliveryByTourist(Order $order, int $touristId): array
+    {
+        $delivery = $order->activeDelivery();
+
+        if (! $delivery) {
+            throw new \InvalidArgumentException('No delivery is assigned to this order.');
+        }
+
+        if (! $delivery->rider_id) {
+            throw new \InvalidArgumentException('Your order is not yet with a rider.');
+        }
+
+        if (! $this->requiresTouristConfirmation($delivery)) {
+            throw new \InvalidArgumentException('This trip does not require tourist confirmation.');
+        }
+
+        if ($delivery->order_id !== null && (int) $delivery->order_id !== (int) $order->id) {
+            throw new \InvalidArgumentException('This delivery does not belong to this order.');
+        }
+
+        return DB::transaction(function () use ($delivery, $touristId) {
+            $locked = Delivery::lockForUpdate()->find($delivery->id);
+
+            if (! $locked) {
+                throw new \InvalidArgumentException('Delivery not found.');
+            }
+
+            $currentStatus = $locked->status?->value ?? $locked->status;
+
+            // Terminal / cancelled races already committed: re-confirming is a
+            // harmless idempotent no-op that reports the true end state.
+            if (in_array($currentStatus, ['delivered', 'completed', 'cancelled'], true)) {
+                return ['success' => true, 'old_status' => $currentStatus, 'new_status' => $currentStatus];
+            }
+
+            if ($currentStatus !== 'arrived_destination') {
+                throw new \InvalidArgumentException('Your order has not arrived yet. Please confirm once the rider reaches you.');
+            }
+
+            $oldStatus = $currentStatus;
+
+            $locked->update([
+                'status' => 'delivered',
+                'delivered_at' => $locked->delivered_at ?? now(),
+                'delivery_confirmed_at' => now(),
+                'delivery_confirmed_by' => $touristId,
+            ]);
+
+            $finalStatus = 'delivered';
+
+            if ($this->isCodDelivery($locked)) {
+                // COD: freeze the cash snapshot and keep the rider busy until the
+                // cash settlement step (settle-cod) completes the delivery.
+                $this->markCodDelivered($locked);
+            } else {
+                // Prepaid: the delivery is complete once the tourist confirms
+                // receipt, so the order reaches the canonical 'completed' state too.
+                $this->completeDelivery($locked);
+                $locked->update(['status' => TripStatus::COMPLETED->value]);
+                $finalStatus = TripStatus::COMPLETED->value;
+                User::find($locked->rider_id)?->riderDetail()?->updateOrCreate(
+                    ['user_id' => $locked->rider_id],
+                    ['rider_status' => User::RIDER_STATUS_AVAILABLE, 'rider_status_updated_at' => now()]
+                );
+            }
+
+            return ['success' => true, 'old_status' => $oldStatus, 'new_status' => $finalStatus];
+        });
     }
 
     /**
@@ -1436,6 +1589,204 @@ class NearestRiderService
                 'earned_at' => now(),
             ]
         );
+    }
+
+    // ------------------------------------------------------------------
+    // P3 (master spec §17/§19/§49): dispatch-cycle deadline, observable
+    // termination, and no-silent-dead-end parking. One authoritative layer
+    // (dispatchToNearest entry) enforces the deadline for EVERY caller:
+    // scheduler retry, decline/timeout re-offer, dispatch-on-ready.
+    // ------------------------------------------------------------------
+
+    /** Cycle anchor: checkout dispatch start, else schedule/creation time. */
+    private function dispatchCycleStartedAt(Delivery $delivery): Carbon
+    {
+        $anchor = $delivery->primaryOrder()?->dispatch_started_at
+            ?? $delivery->scheduled_at
+            ?? $delivery->created_at;
+
+        return $anchor ? Carbon::parse($anchor) : now();
+    }
+
+    /**
+     * The 60-minute cycle deadline derives from orders.dispatch_started_at.
+     * deliveries.dispatch_expires_at intentionally keeps its WAVE/offer-deadline
+     * semantics (offerExpiresAt(), AdminMapController) — it is overwritten by
+     * every wave and cannot also hold the whole-cycle deadline.
+     */
+    public function dispatchCycleDeadline(Delivery $delivery): Carbon
+    {
+        return $this->dispatchCycleStartedAt($delivery)
+            ->addMinutes((int) config('delivery.scheduler.dispatch_deadline_minutes', 60));
+    }
+
+    public function dispatchCycleExpired(Delivery $delivery): bool
+    {
+        if ($delivery->rider_id !== null) {
+            return false; // An accepted rider means the dispatch cycle SUCCEEDED.
+        }
+
+        return $this->dispatchCycleDeadline($delivery)->lte(now());
+    }
+
+    /** Terminal reason derived from the delivery's own state (master spec §49). */
+    public function terminalEndReason(Delivery $delivery): string
+    {
+        return (! $delivery->pickup_latitude || ! $delivery->pickup_longitude)
+            ? 'invalid_pickup_coordinates'
+            : 'no_rider_accepted';
+    }
+
+    /**
+     * Observable terminal failure: never retry again, record when and why.
+     * Guarded atomically so a racing accept can never be overwritten.
+     */
+    public function failDispatch(Delivery $delivery, string $reason): void
+    {
+        $updated = Delivery::query()
+            ->where('id', $delivery->id)
+            ->whereNull('rider_id')
+            ->where(function ($q) {
+                $q->whereNull('dispatch_status')
+                    ->orWhere('dispatch_status', '!=', 'dispatch_failed');
+            })
+            ->update([
+                'dispatch_status' => 'dispatch_failed',
+                'dispatch_failed_at' => $delivery->dispatch_failed_at ?? now(),
+                'dispatch_retry_at' => null,
+                'dispatch_ended_at' => now(),
+                'dispatch_end_reason' => $reason,
+            ]);
+
+        if ($updated > 0) {
+            Log::warning('[COD Dispatch] dispatch terminally failed', [
+                'delivery_id' => $delivery->id,
+                'reason' => $reason,
+            ]);
+        }
+
+        $delivery->refresh();
+    }
+
+    /**
+     * No silent dead end (master spec §19): hand the delivery to the canonical
+     * ScheduledDispatchProcessor loop, which re-runs the pipeline every
+     * retry_after_minutes until the attempt cap / cycle deadline, then
+     * terminates with dispatch_end_reason.
+     */
+    private function parkForRetry(Delivery $delivery): void
+    {
+        $delivery->update([
+            'dispatch_status' => 'no_rider_available',
+            'dispatch_retry_at' => now()->addMinutes((int) config('delivery.scheduler.retry_after_minutes', 5)),
+        ]);
+    }
+
+    /**
+     * P3 diagnostics (master spec §58): when the COD query finds nobody,
+     * explain WHY every otherwise-plausible rider was excluded. Observability
+     * only — never mutates eligibility. Evaluates gates in PHP (broadest query)
+     * so query-level filters cannot hide their reasons.
+     */
+    private function logCodExclusionDiagnostics(Delivery $delivery, float $pickupLat, float $pickupLng, string $serviceType, ?int $municipalityId): void
+    {
+        try {
+            $exclusions = [];
+            $riders = User::where('role', User::ROLE_RIDER)
+                ->with(['riderDetail', 'locations' => fn ($q) => $q->latest('recorded_at')->limit(1)])
+                ->get();
+
+            foreach ($riders as $rider) {
+                if ($rider->account_status !== User::ACCOUNT_STATUS_APPROVED) {
+                    $exclusions[$rider->id] = 'not_approved';
+                    continue;
+                }
+
+                if ($municipalityId !== null
+                    && $rider->municipality_id !== null
+                    && (int) $rider->municipality_id !== (int) $municipalityId) {
+                    $exclusions[$rider->id] = 'wrong_municipality';
+                    continue;
+                }
+
+                $detail = $rider->riderDetail;
+                if (! $detail) {
+                    $exclusions[$rider->id] = 'no_rider_detail';
+                    continue;
+                }
+
+                if ($detail->rider_status !== User::RIDER_STATUS_AVAILABLE) {
+                    $exclusions[$rider->id] = 'not_available(' . $detail->rider_status . ')';
+                    continue;
+                }
+
+                if ($detail->current_service !== $serviceType) {
+                    $exclusions[$rider->id] = 'wrong_service(' . $detail->current_service . ')';
+                    continue;
+                }
+
+                $location = $rider->locations->first();
+                if (! $location || ! $location->latitude || ! $location->longitude
+                    || (float) $location->latitude === 0.0 || (float) $location->longitude === 0.0) {
+                    $exclusions[$rider->id] = 'gps_missing';
+                    continue;
+                }
+
+                $ageMinutes = $location->recorded_at
+                    ? abs(now()->diffInMinutes($location->recorded_at))
+                    : PHP_INT_MAX;
+                if ($ageMinutes > (int) config('delivery.cod_location_max_age_minutes', 5)) {
+                    $exclusions[$rider->id] = 'gps_stale(' . round($ageMinutes, 1) . 'min)';
+                    continue;
+                }
+
+                $distance = $this->calculateDistance(
+                    $pickupLat,
+                    $pickupLng,
+                    (float) $location->latitude,
+                    (float) $location->longitude
+                );
+                if ($distance > (float) config('delivery.cod_max_pickup_distance_km', 5)) {
+                    $exclusions[$rider->id] = 'too_far(' . round($distance, 2) . 'km)';
+                    continue;
+                }
+
+                if (! $this->passesCodActiveOrderLimit($rider)) {
+                    $exclusions[$rider->id] = 'active_order_limit';
+                    continue;
+                }
+
+                $priorOffer = BookingDispatchLog::where('delivery_id', $delivery->id)
+                    ->where('rider_id', $rider->id)
+                    ->first();
+
+                // Only a NON-timed-out prior offer actually blocks (see the
+                // $reofferableRiderIds reopen in dispatchToNearest). Labeling a
+                // timed-out rider here would claim `already_offered` for someone
+                // the query would genuinely offer — a diagnostics lie.
+                if ($priorOffer && $priorOffer->response !== 'timeout') {
+                    $exclusions[$rider->id] = 'already_offered';
+                    continue;
+                }
+
+                // Passed every gate here but was not returned by the query —
+                // should not happen; surfaced so a query/gate drift is visible.
+                $exclusions[$rider->id] = 'unknown(passed gates in diagnostics)';
+            }
+
+            Log::info('[COD Dispatch] exclusion diagnostics', [
+                'delivery_id' => $delivery->id,
+                'pickup' => [$pickupLat, $pickupLng],
+                'exclusions' => $exclusions === []
+                    ? ['none' => 'no rider accounts exist for this role at all']
+                    : $exclusions,
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('[COD Dispatch] exclusion diagnostics failed', [
+                'delivery_id' => $delivery->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     private function getBusyRiderIds(): array

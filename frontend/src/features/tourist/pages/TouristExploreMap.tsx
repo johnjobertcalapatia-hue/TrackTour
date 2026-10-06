@@ -296,26 +296,6 @@ export default function TouristExploreMap() {
             })
           }
 
-          useEffect(() => {
-            if (!businesses.length) return
-            const stored = sessionStorage.getItem(PENDING_MAP_DESTINATION_KEY)
-            if (!stored) return
-
-            sessionStorage.removeItem(PENDING_MAP_DESTINATION_KEY)
-            try {
-              const pending = JSON.parse(stored) as { id?: number; latitude?: number; longitude?: number }
-              const attraction = pending.id != null
-                ? businesses.find((business) => business.id === pending.id)
-                : businesses.find((business) => business.latitude === pending.latitude && business.longitude === pending.longitude)
-
-              if (attraction) {
-                handleBusinessSelect(attraction)
-                handleDirections(attraction)
-              }
-            } catch {
-              sessionStorage.removeItem(PENDING_MAP_DESTINATION_KEY)
-            }
-          }, [businesses])
         })
         .catch(() => {})
     }
@@ -360,6 +340,27 @@ export default function TouristExploreMap() {
       if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current)
     }
   }, [])
+
+  useEffect(() => {
+    if (!businesses.length) return
+    const stored = sessionStorage.getItem(PENDING_MAP_DESTINATION_KEY)
+    if (!stored) return
+
+    sessionStorage.removeItem(PENDING_MAP_DESTINATION_KEY)
+    try {
+      const pending = JSON.parse(stored) as { id?: number; latitude?: number; longitude?: number }
+      const attraction = pending.id != null
+        ? businesses.find((business) => business.id === pending.id)
+        : businesses.find((business) => business.latitude === pending.latitude && business.longitude === pending.longitude)
+
+      if (attraction) {
+        handleBusinessSelect(attraction)
+        handleDirections(attraction)
+      }
+    } catch {
+      sessionStorage.removeItem(PENDING_MAP_DESTINATION_KEY)
+    }
+  }, [businesses])
 
   const getBusinessImages = (business: Business | null): string[] => {
     if (!business) return []
@@ -828,7 +829,7 @@ export default function TouristExploreMap() {
                         vehicle: selectedVehicle,
                       }))
                     }
-                    navigate('/login', { state: { from: '/tourist/transport' } })
+                    navigate('/tourist/transport')
                   }}
                   className="mt-1 w-full py-2.5 rounded-xl bg-[#087F3F] text-white text-xs font-semibold hover:bg-[#056B35] transition-colors flex items-center justify-center gap-2"
                 >

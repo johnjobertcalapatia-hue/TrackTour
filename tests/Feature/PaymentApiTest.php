@@ -584,10 +584,17 @@ class PaymentApiTest extends TestCase
             'status' => 'paid',
         ]);
 
+        // Pickup orders start cooking the moment they are paid. This order is
+        // order_type='pickup', so PaymentController::markPayablePaid() hands it
+        // straight to PreparationStartService, which gates on an accepted rider
+        // ONLY for delivery orders (a pickup has no rider). The order therefore
+        // lands in 'preparing', not 'waiting_restaurant' — waiting_restaurant
+        // is the delivery-only "Finding Rider" state. Test drift: this assertion
+        // predates the pickup branch (AGENTS.md §12).
         $this->assertDatabaseHas('orders', [
             'id' => $order->id,
             'payment_status' => 'paid',
-            'status' => 'waiting_restaurant',
+            'status' => 'preparing',
         ]);
     }
 

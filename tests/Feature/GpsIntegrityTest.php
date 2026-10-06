@@ -177,6 +177,73 @@ class GpsIntegrityTest extends TestCase
         $this->assertDatabaseCount('rider_locations', 0);
     }
 
+    public function test_stationary_heartbeat_checkpoint_refreshes_recorded_at(): void
+    {
+        $rider = $this->makeRider();
+        $this->be($rider);
+
+        // Last fix at the same position 61s ago (older than checkpoint_seconds).
+        RiderLocation::create([
+            'rider_id' => $rider->id,
+            'latitude' => 12.52,
+            'longitude' => 121.32,
+            'recorded_at' => now()->subSeconds(61),
+        ]);
+
+        $this->postJson('/api/rider/map/location', [
+            'latitude' => 12.52,
+            'longitude' => 121.32,
+        ])->assertOk()
+            ->assertJsonPath('data.moved', false);
+
+        // An elapsed-based checkpoint must be persisted so a stationary online
+        // rider does not age out of the gps_stale COD/radar eligibility gate.
+        $this->assertDatabaseCount('rider_locations', 2);
+    }
+
+    public function test_stationary_fix_within_checkpoint_window_does_not_write(): void
+    {
+        $rider = $this->makeRider();
+        $this->be($rider);
+
+        RiderLocation::create([
+            'rider_id' => $rider->id,
+            'latitude' => 12.52,
+            'longitude' => 121.32,
+            'recorded_at' => now()->subSeconds(30),
+        ]);
+
+        $this->postJson('/api/rider/map/location', [
+            'latitude' => 12.52,
+            'longitude' => 121.32,
+        ])->assertOk()
+            ->assertJsonPath('data.moved', false);
+
+        $this->assertDatabaseCount('rider_locations', 1);
+    }
+
+    public function test_stationary_low_accuracy_fix_does_not_write_checkpoint(): void
+    {
+        $rider = $this->makeRider();
+        $this->be($rider);
+
+        RiderLocation::create([
+            'rider_id' => $rider->id,
+            'latitude' => 12.52,
+            'longitude' => 121.32,
+            'recorded_at' => now()->subSeconds(61),
+        ]);
+
+        $this->postJson('/api/rider/map/location', [
+            'latitude' => 12.52,
+            'longitude' => 121.32,
+            'accuracy' => 80,
+        ])->assertOk()
+            ->assertJsonPath('data.moved', false);
+
+        $this->assertDatabaseCount('rider_locations', 1);
+    }
+
     public function test_implausible_jump_does_not_trigger_arrival(): void
     {
         $business = $this->makeBusiness();

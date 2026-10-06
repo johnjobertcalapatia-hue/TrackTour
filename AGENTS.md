@@ -1149,17 +1149,30 @@ before introducing a new behavior.
 Complete:
 
 ```text
-Admin Module Phase 1 — Foundation
+Dispatch Reliability P0–P3 — COMPLETE & VERIFIED (2026-09-23)
+    P0 — Operational recovery / scheduler running
+    P1 — B1 radar eligibility consistency (COD active-order policy on the radar path)
+    P2 — B2 live socket GPS freshness (radar entry ≤ 120 s = socket radarStaleMs)
+    P3 — 60-minute dispatch deadline, no silent dead ends,
+         observable dispatch_end_reason, §57/§58 diagnostics
 ```
 
-Starting regression checkpoint:
+Verified checkpoint (full record: docs/PROGRESS.md):
 
 ```text
-305 tests
-1,479 assertions
-0 failures
-2 skipped
-43/43 JS socket tests
+381 tests / 1,846 assertions / 0 failures / 7 skipped (Laravel)
+46/46 socket JS tests · frontend build clean
+protected regression suites: 56 passed / 454 assertions
+7 skipped = known environment skips (5 GD, 2 SQLite-only)
+migration 2026_09_23_000001 applied + write-probed
 ```
 
-Admin Phase 1 must establish the canonical Tourism Office governance surface: shared admin layout, RBAC gating on admin API routes, audit-trail recording, and read-only operational KPIs — while preserving the existing financial, dispatch, preparation-gate, payment, refund, payout, GPS, and realtime architecture (monitor/verify/approve/audit only).
+Next phase — deliberately deferred by decision:
+
+```text
+P4 — Pickup geofence
+P5 — Grouped pickup/routing
+P6 — Multi-rider wave policy
+```
+
+Dispatch reliability is finished; pickup/routing features (P4–P6) are the next phase. The original "rider never received the ping" failure was eligibility + retry lifecycle, NOT the Socket.IO transport — preserve that diagnosis for future ping reports. The Admin module plan (§15) is unchanged scope for a later track.

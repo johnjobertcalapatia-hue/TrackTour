@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { get, patch, post } from '@/shared/services/api'
+import { useAuthStore } from '@/features/auth/services/auth-store'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { formatDateTime, formatCurrency } from '@/shared/utils'
@@ -9,8 +10,10 @@ import { MapPin, Navigation, X, Banknote, Loader2 } from 'lucide-react'
 
 export default function RiderDeliveriesActive() {
   const queryClient = useQueryClient()
+  const fetchUser = useAuthStore((s) => s.fetchUser)
   const [settleDelivery, setSettleDelivery] = useState<Delivery | null>(null)
   const [cashReceived, setCashReceived] = useState('')
+  const [cancelRideDelivery, setCancelRideDelivery] = useState<Delivery | null>(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ['rider-deliveries-active'],
@@ -30,6 +33,20 @@ export default function RiderDeliveriesActive() {
       setSettleDelivery(null)
       setCashReceived('')
       queryClient.invalidateQueries({ queryKey: ['rider-deliveries-active'] })
+      // Settling the last COD delivery ends the trip on the backend —
+      // reconcile rider_status from the server instead of assuming it.
+      void fetchUser()
+    },
+  })
+
+  // Phase 6 — driver-cancelled handler: release an accepted ride BEFORE pickup.
+  const cancelRideMutation = useMutation({
+    mutationFn: (id: number) => post(`/rider/deliveries/${id}/cancel-ride`, { reason: 'Driver unavailable' }),
+    onSuccess: () => {
+      setCancelRideDelivery(null)
+      queryClient.invalidateQueries({ queryKey: ['rider-deliveries-active'] })
+      // The backend released rider_status — reconcile from the server.
+      void fetchUser()
     },
   })
 
@@ -90,20 +107,45 @@ export default function RiderDeliveriesActive() {
                 <div className="flex items-center gap-2">
                   {d.status === 'assigned' && (
                     <button
-                      onClick={() => updateMutation.mutate({ id: d.id, status: 'picked_up' })}
+                      onClick={() => updateMutation.mutate({ id: d.id, status: 'arrived_pickup' })}
+                      disabled={updateMutation.isPending}
+                      className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition"
+                    >
+                      Start Delivery
+                    </button>
+                  )}
+                  {d.status === 'arrived_pickup' && (
+                    <span className="text-xs text-[#9CA3AF] font-medium">
+                      Confirm pickup on the delivery map after all food is collected.
+                    </span>
+                  )}
+                  {d.status === 'picked_up' && (
+                    <button
+                      onClick={() => updateMutation.mutate({ id: d.id, status: 'arrived_destination' })}
                       disabled={updateMutation.isPending}
                       className="bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition"
                     >
-                      Mark Picked Up
+                      Arrived at Destination
                     </button>
                   )}
-                  {d.status === 'picked_up' && (
+                  {d.status === 'arrived_destination' && (
                     <button
                       onClick={() => updateMutation.mutate({ id: d.id, status: 'delivered' })}
                       disabled={updateMutation.isPending}
                       className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition"
                     >
                       Mark Delivered
+                    </button>
+                  )}
+                  {d.order_type === 'transport' && ['assigned', 'arrived_pickup'].includes(d.status) && (
+                    <button
+                      onClick={() => {
+                        setCancelRideDelivery(d)
+                      }}
+                      disabled={cancelRideMutation.isPending}
+                      className="border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50 px-4 py-2.5 rounded-xl text-sm font-semibold transition"
+                    >
+                      Cancel Ride
                     </button>
                   )}
                   {d.status === 'delivered' && d.is_cod && (
@@ -216,6 +258,74 @@ export default function RiderDeliveriesActive() {
                     <Banknote className="w-4 h-4" />
                     Confirm Cash Received
                   </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel Ride Confirmation Modal */}
+      {cancelRideDelivery && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="cancel-ride-title"
+        >
+          <div className="bg-white rounded-2xl border border-[#E5E9E7] shadow-2xl w-full max-w-sm overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-[#E5E9E7]">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-red-50 rounded-xl flex items-center justify-center">
+                  <X className="w-5 h-5 text-red-600" />
+                </div>
+                <div>
+                  <h3 id="cancel-ride-title" className="font-semibold text-[#17201B]">
+                    Cancel ride
+                  </h3>
+                  <p className="text-xs text-[#6B7280]">Ride #{cancelRideDelivery.order_id}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setCancelRideDelivery(null)}
+                aria-label="Close cancellation dialog"
+                className="text-[#9CA3AF] hover:text-[#374151] transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="px-5 py-5">
+              <p className="text-sm text-[#4B5563]">
+                Cancelling releases this ride back to the tourist. You will be notified when a new trip is
+                available.
+              </p>
+              {cancelRideMutation.isError && (
+                <div className="mt-4 text-sm text-red-600 bg-red-50 rounded-xl px-4 py-3">
+                  {(cancelRideMutation.error as Error)?.message ?? 'Cancellation failed. Please try again.'}
+                </div>
+              )}
+            </div>
+
+            <div className="px-5 py-4 border-t border-[#E5E9E7] flex gap-3">
+              <button
+                onClick={() => setCancelRideDelivery(null)}
+                className="flex-1 py-3 border border-[#E5E9E7] hover:bg-[#F8FAF9] text-[#374151] font-semibold rounded-xl transition"
+              >
+                Keep ride
+              </button>
+              <button
+                onClick={() => cancelRideMutation.mutate(cancelRideDelivery.id)}
+                disabled={cancelRideMutation.isPending}
+                className="flex-1 py-3 bg-red-600 hover:bg-red-700 disabled:bg-[#FECACA] disabled:cursor-not-allowed text-white font-bold rounded-xl transition flex items-center justify-center gap-2"
+              >
+                {cancelRideMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Cancelling...
+                  </>
+                ) : (
+                  'Cancel ride'
                 )}
               </button>
             </div>

@@ -24,7 +24,7 @@ Tourism Office manages only through **monitor / verify / approve / audit / repor
 - [ ] Phase 1 — Foundation: dashboard, layout, RBAC, audit log, stats
 - [ ] Phase 2 — Rider management
 - [ ] Phase 3 — Rider operations monitoring
-- [ ] Phase 4 — Financial monitoring
+- [~] Phase 4 — Financial monitoring (**POS & SALES read-only sub-module complete 2026-09-24**: `/api/admin/pos/*` + `/admin/pos` page + `AdminPosSalesApiTest`; suite 440/2,336 ✓)
 - [ ] Phase 5 — Business management
 - [ ] Phase 6 — Tourism management
 - [ ] Phase 7 — Reports & audit
@@ -37,6 +37,8 @@ Tourism Office manages only through **monitor / verify / approve / audit / repor
 | Payout transition atomicity (P11 recon #7) | Transactions + `lockForUpdate` on approve/markPaid/reject/cancel |
 | Admin system-fee / COD receivable reporting | Platform accounting of `system_fee` and COD receivables |
 | Dispatched-time vs accepted-time metrics parity | Cosmetic reporting divergence |
+| **P12.5 — Restaurant wallet foundation backfill** (planned, next small phase) | Idempotent `wallets:backfill` command heals approved restaurants missing a wallet (hook-only provisioning gap; caused the rider-14 delivered-but-unsettled ping block). Plan: `docs/current-status/wallet-backfill-plan.md` |
+| **Rider verification stages** (spec written; **all §5 decisions RESOLVED**) | Safety seminar + driving skills test + vehicle inspection as gates inside the existing admin approve→activate flow. §5.1: source-faithful 4 required docs (License R1/Code A, OR/CR, Barangay/Police Clearance, Medical Certificate — all expirable; NBI/drug-test dormant). §5.2: single append-only `rider_verifications` table, `type` discriminator (4 docs + 3 stages), type-scoped status vocab, JSON `metadata` for stage payloads, no backfill (DB probe: 0 files exist). §5.3: readiness enforced at approve / go-online / activate + dispatch eligibility via one shared gate (seeded riders re-onboard once through the new UI). §5.4: performance reports deferred to Admin Phase 3/7. §5.5: no transport status work. **Next: implementation phase** → migrations, models, gate service, endpoints, rider/admin UI, expiry command, tests, full suite, docs. Spec: `docs/architecture/rider-system-workflow-spec.md` |
 
 ### Priority Tier 2 — Features
 

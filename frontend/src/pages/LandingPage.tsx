@@ -333,15 +333,6 @@ function visitBusinessRoute(b: MapBusiness): string {
   return `/tourist/explore/${b.id}`
 }
 
-const DEFAULT_SPOTS: LandingSpot[] = [
-  { title: 'White Beach', location: 'Puerto Galera', rating: 4.8, category: 'Beach' },
-  { title: 'Tamaraw Falls', location: 'Puerto Galera', rating: 4.6, category: 'Nature' },
-  { title: 'Apo Reef', location: 'Sablayan', rating: 4.9, category: 'Diving' },
-  { title: 'Mt. Halcon', location: 'Baco', rating: 4.7, category: 'Adventure' },
-  { title: 'Bulalacao Beaches', location: 'Bulalacao', rating: 4.5, category: 'Beach' },
-  { title: 'Mangyan Village', location: 'Oriental Mindoro', rating: 4.3, category: 'Culture' },
-]
-
 interface MunicipalityLite {
   id: number
   name: string
@@ -357,11 +348,18 @@ interface LandingCategory {
   tab: string
 }
 
-interface LandingSpot {
+/**
+ * One row of the landing card grid, served live from the database by
+ * GET /api/landing/cards. `types` lists the filter tabs it belongs to.
+ */
+interface LandingCard {
+  key: string
+  types: string[]
   title: string
-  location: string
-  rating: number
+  location: string | null
   category: string
+  rating: number | null
+  image: string | null
 }
 
 interface LandingContent {
@@ -371,12 +369,20 @@ interface LandingContent {
   hero_subtitle: string
   hero_video: string
   categories: LandingCategory[]
-  spots: LandingSpot[]
 }
 
 const DISTRICT_2_MUNICIPALITIES = ['Bansud', 'Bongabong', 'Bulalacao', 'Gloria', 'Mansalay', 'Pinamalayan', 'Roxas']
 
 const TABS = ['All', 'Tourist Spots', 'Food', 'Businesses', 'Resorts']
+
+/** Filter-tab label → card `types` membership (null = every card). */
+const TAB_TYPE: Record<string, string | null> = {
+  All: null,
+  'Tourist Spots': 'spot',
+  Food: 'food',
+  Businesses: 'business',
+  Resorts: 'resort',
+}
 
 const PLACEHOLDER_COLORS = [
   'from-cyan-500 to-blue-600',
@@ -564,20 +570,33 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
     staleTime: 5 * 60 * 1000,
   })
 
+  // Card grid is served straight from the database (destinations +
+  // businesses), so refetch it on an interval instead of caching the old
+  // hardcoded spot list for the whole session.
+  const { data: cards = [], isPending: cardsPending } = useQuery({
+    queryKey: ['landing-cards'],
+    queryFn: () => get<LandingCard[]>('/landing/cards'),
+    staleTime: 30 * 1000,
+    refetchInterval: 30 * 1000,
+    refetchOnWindowFocus: true,
+  })
+
   const heroVideoSrc = (() => {
     const v = landingContent?.hero_video || '/assets/tracktour-web.mp4'
     return v.startsWith('/storage/') ? toAssetUrl(v) : v
   })()
 
   const categories = landingContent?.categories?.length ? landingContent.categories : DEFAULT_CATEGORIES
-  const spots = landingContent?.spots?.length ? landingContent.spots : DEFAULT_SPOTS
-  const filteredSpots = spots.filter((s) => {
+  const filteredSpots = cards.filter((card) => {
+    const tabType = TAB_TYPE[activeTab] ?? null
+    if (tabType && !card.types.includes(tabType)) return false
+
     const q = searchQuery.trim().toLowerCase()
     if (!q) return true
     return (
-      s.title.toLowerCase().includes(q) ||
-      s.location.toLowerCase().includes(q) ||
-      s.category.toLowerCase().includes(q)
+      card.title.toLowerCase().includes(q) ||
+      (card.location ?? '').toLowerCase().includes(q) ||
+      card.category.toLowerCase().includes(q)
     )
   })
 
@@ -636,7 +655,7 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
 
   return (
     <div className="min-h-screen tourism-bg tourism-bg-orbs text-[#17201A]">
-      <nav className="flex items-center justify-between px-6 py-2 max-w-7xl mx-auto tourism-nav">
+      <nav className="flex items-center justify-between px-6 py-2 w-full tourism-nav">
         <Link to="/" className="flex items-center gap-3">
           <ApplicationLogo className="w-12 h-12" />
           <span className="text-xl font-bold text-[#16803C]">TrackTour</span>
@@ -1141,7 +1160,7 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
                           vehicle: selectedVehicle,
                         }))
                       }
-                      navigate('/login', { state: { from: '/tourist/transport' } })
+                      navigate('/tourist/transport')
                     }}
                     className="mt-1 w-full py-2.5 rounded-xl bg-[#087F3F] text-white text-xs font-semibold hover:bg-[#056B35] transition-colors flex items-center justify-center gap-2"
                   >
@@ -1469,30 +1488,48 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
               </div>
 
               <div className="flex justify-center gap-[14px] flex-wrap">
-                {filteredSpots.length === 0 ? (
-                  <p className="text-[#68736D] text-sm py-10">No tourist spots match your search.</p>
+                {cardsPending ? (
+                  <p className="text-[#68736D] text-sm py-10">Loading places…</p>
+                ) : filteredSpots.length === 0 ? (
+                  <p className="text-[#68736D] text-sm py-10">
+                    {searchQuery.trim()
+                      ? 'No places match your search.'
+                      : `No ${activeTab === 'All' ? 'places' : activeTab.toLowerCase()} published yet.`}
+                  </p>
                 ) : filteredSpots.map((spot, i) => (
                   <div
-                    key={spot.title}
+                    key={spot.key}
                     className="w-[266px] min-h-[263px] rounded-[8px] border border-[#E2E8E3] bg-[#0c2a17] overflow-hidden relative hover:shadow-md transition-shadow"
                   >
-                    <div className={`absolute inset-0 bg-gradient-to-br ${PLACEHOLDER_COLORS[i % PLACEHOLDER_COLORS.length]}`}>
-                      <Compass className="absolute inset-0 m-auto w-10 h-10 text-white/40" />
-                    </div>
-                    <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent p-4 pt-16">
+                    {spot.image ? (
+                      <img
+                        src={toAssetUrl(spot.image)}
+                        alt={spot.title}
+                        loading="lazy"
+                        className="absolute inset-0 w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className={`absolute inset-0 bg-gradient-to-br ${PLACEHOLDER_COLORS[i % PLACEHOLDER_COLORS.length]}`}>
+                        <Compass className="absolute inset-0 m-auto w-10 h-10 text-white/40" />
+                      </div>
+                    )}
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent" />
+                    <div className="absolute inset-x-0 bottom-0 p-4 pt-16">
                       <h3 className="text-white font-bold text-lg leading-tight">{spot.title}</h3>
                       <p className="mt-1 flex items-center gap-1.5 text-sm text-gray-200">
-                        <MapPin className="w-3.5 h-3.5 text-emerald-300" />
-                        {spot.location}
+                        <MapPin className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+                        {spot.location ?? 'Oriental Mindoro'}
                       </p>
                     </div>
                     <span className="absolute top-3 left-3 px-2.5 py-1 rounded-full bg-white/90 text-[11px] font-semibold text-[#087F3F]">
                       {spot.category}
                     </span>
-                    <span className="absolute top-3 right-3 flex items-center gap-1 px-2 py-1 rounded-full bg-white/90 text-[11px] font-semibold text-[#17201B]">
-                      <Star className="w-3 h-3 text-[#B08600] fill-[#B08600]" />
-                      {spot.rating.toFixed(1)}
-                    </span>
+                    {spot.rating != null && (
+                      <span className="absolute top-3 right-3 flex items-center gap-1 px-2 py-1 rounded-full bg-white/90 text-[11px] font-semibold text-[#17201B]">
+                        <Star className="w-3 h-3 text-[#B08600] fill-[#B08600]" />
+                        {spot.rating.toFixed(1)}
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>

@@ -23,6 +23,7 @@ const schema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
   description: z.string().optional(),
   price: z.coerce.number().min(0, 'Price must be positive'),
+  preparation_time: z.coerce.number().min(0, 'Must be 0 or more').max(240, 'Max 240 minutes').optional().or(z.literal('')),
   offering_category_id: z.coerce.number().min(1, 'Category is required'),
   is_available: z.boolean(),
   is_featured: z.boolean(),
@@ -43,6 +44,7 @@ interface MenuItemDetail {
   description: string | null
   price: number
   compare_price: number | null
+  preparation_time: number | null
   offering_category_id: number | null
   is_available: boolean
   is_featured: boolean
@@ -91,6 +93,7 @@ export default function BusinessOwnerMenuEdit() {
         name: item.name,
         description: item.description ?? '',
         price: item.price,
+        preparation_time: item.preparation_time ?? '',
         offering_category_id: item.offering_category_id ?? 0,
         is_available: item.is_available,
         is_featured: item.is_featured,
@@ -183,6 +186,7 @@ export default function BusinessOwnerMenuEdit() {
         payload.append('name', data.name)
         if (data.description) payload.append('description', data.description)
         payload.append('price', String(data.price))
+        if (data.preparation_time) payload.append('preparation_time', String(data.preparation_time))
         payload.append('offering_category_id', String(data.offering_category_id))
         payload.append('is_available', data.is_available ? '1' : '0')
         payload.append('is_featured', data.is_featured ? '1' : '0')
@@ -259,6 +263,13 @@ export default function BusinessOwnerMenuEdit() {
               Price is set per variation below. The base price field is disabled.
             </div>
           )}
+
+          <div>
+            <label className="block text-sm font-medium text-[#4B5563] mb-1.5">Preparation Time (minutes)</label>
+            <input {...register('preparation_time')} type="number" min="0" max="240" placeholder="e.g. 30" className="w-full px-4 py-3 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition" />
+            <p className="text-xs text-[#647067] mt-1">How long the kitchen takes to prepare this dish. Drives the order preparation countdown.</p>
+            {errors.preparation_time && <p className="text-[#B91C1C] text-xs mt-1">{errors.preparation_time.message}</p>}
+          </div>
 
           <div>
             <label className="block text-sm font-medium text-[#4B5563] mb-1.5">Item Description</label>

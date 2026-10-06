@@ -45,7 +45,7 @@ class GroupOrderServiceTest extends TestCase
         // Open 24/7 so isAcceptingOrders() returns true regardless of the wall clock.
         $allDays = array_fill_keys(
             ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
-            [['open' => '00:00', 'close' => '23:59']]
+            [['open' => '00:00', 'close' => '23:59'], ['open' => '23:59', 'close' => '00:00']]
         );
 
         $this->restaurantA = Business::create([

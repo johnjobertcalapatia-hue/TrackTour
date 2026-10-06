@@ -8,6 +8,7 @@ import DashboardLayout from '@/shared/layouts/DashboardLayout'
 import TouristLayout from '@/shared/layouts/TouristLayout'
 import BusinessSwitcher from '@/features/business-owner/components/BusinessSwitcher'
 import { useBusinessOwnerStore } from '@/features/business-owner/services/business-owner-store'
+import { useAuthStore } from '@/features/auth/services/auth-store'
 import {
   LayoutDashboard, MapPin, Users, Building2, Tag, Map, Bike,
   UserCheck, Shield, FileBarChart, ScrollText, Bell, Settings, HardDrive,
@@ -16,7 +17,7 @@ import {
   Package, BookOpen, Percent, BarChart3, Activity, ShoppingCart, UserPlus,
   CircleAlert, Megaphone, FileText, Scan, Wallet, CreditCard,
   ChefHat, CalendarDays, BedDouble, Image, Home,
-  ClipboardCheck, DollarSign, UsersRound, Archive, Eye, Settings2
+  ClipboardCheck, DollarSign, UsersRound, Archive, Eye, Settings2, Store
 } from 'lucide-react'
 
 // Auth pages (not lazy — small, needed immediately)
@@ -60,6 +61,7 @@ const AdminRoles = lazy_(() => import('@/features/admin/pages/AdminRoles'))
 const AdminRiders = lazy_(() => import('@/features/admin/pages/AdminRiders'))
 const AdminRiderShow = lazy_(() => import('@/features/admin/pages/AdminRiderShow'))
 const AdminReports = lazy_(() => import('@/features/admin/pages/AdminReports'))
+const AdminPosSales = lazy_(() => import('@/features/admin/pages/AdminPosSales'))
 const AdminAuditLogs = lazy_(() => import('@/features/admin/pages/AdminAuditLogs'))
 const AdminNotifications = lazy_(() => import('@/features/admin/pages/AdminNotifications'))
 const AdminSystemConfig = lazy_(() => import('@/features/admin/pages/AdminSystemConfig'))
@@ -218,6 +220,9 @@ function SuspenseWrapper({ children }: { children: React.ReactNode }) {
 // Navigation section definitions
 const adminSections = [
   { items: [{ to: '/admin/dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" /> }] },
+  { label: 'Sales & POS', items: [
+    { to: '/admin/pos', label: 'POS & Sales', icon: <Store className="w-5 h-5" /> },
+  ]},
   { label: 'Live Operations', items: [
     { to: '/admin/live/map', label: 'Live Map', icon: <Map className="w-5 h-5" /> },
     { to: '/admin/live/deliveries', label: 'Deliveries', icon: <Package className="w-5 h-5" /> },
@@ -320,7 +325,7 @@ const businessOwnerCommonSections: CategorySubSection[] = [
   {
     label: 'Finance',
     items: [
-      { to: '/business-owner/settings?tab=payments', label: 'Payments', icon: <Wallet className="w-5 h-5" /> },
+      { to: '/business-owner/settings?tab=payments', label: 'Payment Tracking', icon: <CreditCard className="w-5 h-5" /> },
       { to: '/business-owner/expenses', label: 'Vendor & Expenses', icon: <CreditCard className="w-5 h-5" /> },
     ],
   },
@@ -332,6 +337,7 @@ const businessOwnerCommonSections: CategorySubSection[] = [
       { to: '/business-owner/settings?tab=hours', label: 'Operating Hours', icon: <Clock className="w-5 h-5" /> },
       { to: '/business-owner/settings?tab=visibility', label: 'Visibility', icon: <Eye className="w-5 h-5" /> },
       { to: '/business-owner/settings?tab=documents', label: 'Documents', icon: <FileText className="w-5 h-5" /> },
+      { to: '/business-owner/settings?tab=payment-methods', label: 'Payment Methods', icon: <Wallet className="w-5 h-5" /> },
     ],
   },
   {
@@ -474,6 +480,15 @@ function BusinessOwnerLayout() {
       }
     }
 
+    // Restaurant sales tools (POS & Sales, Kitchen Display System, Dispatch Hub)
+    // go directly below the Menu section in the restaurant sidebar.
+    const menuIdx = sections.findIndex((s) => s.label === 'Menu')
+    const restaurantSalesIdx = sections.findIndex((s) => s.label === 'Restaurant — Sales')
+    if (menuIdx !== -1 && restaurantSalesIdx !== -1 && restaurantSalesIdx > menuIdx) {
+      const [salesSection] = sections.splice(restaurantSalesIdx, 1)
+      sections.splice(menuIdx + 1, 0, salesSection)
+    }
+
     return sections
   }, [businesses, selectedBusinessId])
 
@@ -531,38 +546,41 @@ const tourismOfficeSections = [
 
 function AuthEventHandler() {
   const navigate = useNavigate()
+  const fetchUser = useAuthStore((s) => s.fetchUser)
 
   useEffect(() => {
     const handleLogout = () => {
+      // Fully terminate the in-memory session too: auth:logout is dispatched
+      // from the api interceptor for no-credential 401s (phantom session) where
+      // the store's `user` would otherwise linger after navigating away.
+      useAuthStore.setState({ user: null, loading: false })
       navigate('/login', { replace: true })
     }
     const handleRedirect = (e: Event) => {
       const path = (e as CustomEvent).detail
       if (path) navigate(path, { replace: true })
     }
+    const handleRevalidate = () => {
+      // A non-identity endpoint got a 401 while a token is still stored.
+      // Confirm against the authoritative /user endpoint before clearing the
+      // session. A valid token re-validates and nothing happens; a dead token
+      // is cleared inside fetchUser and ProtectedRoute sends the user to /login.
+      const store = useAuthStore.getState()
+      if (store.loading || !localStorage.getItem('auth_token')) return
+      void store.fetchUser()
+    }
 
     window.addEventListener('auth:logout', handleLogout)
     window.addEventListener('auth:redirect', handleRedirect)
+    window.addEventListener('auth:revalidate', handleRevalidate)
     return () => {
       window.removeEventListener('auth:logout', handleLogout)
       window.removeEventListener('auth:redirect', handleRedirect)
+      window.removeEventListener('auth:revalidate', handleRevalidate)
     }
-  }, [navigate])
+  }, [fetchUser, navigate])
 
   return null
-}
-
-function SessionTimeoutHandler() {
-  const { showWarning, countdown, resetTimer, handleLogout } = useSessionTimeout()
-
-  return (
-    <SessionTimeoutModal
-      show={showWarning}
-      countdown={countdown}
-      onStayLoggedIn={resetTimer}
-      onLogout={handleLogout}
-    />
-  )
 }
 
 export default function App() {
@@ -609,6 +627,7 @@ export default function App() {
             <Route path="riders" element={<AdminRiders />} />
             <Route path="riders/:id" element={<AdminRiderShow />} />
             <Route path="reports" element={<AdminReports />} />
+            <Route path="pos" element={<AdminPosSales />} />
             <Route path="audit-logs" element={<AdminAuditLogs />} />
             <Route path="notifications" element={<AdminNotifications />} />
             <Route path="system/config" element={<AdminSystemConfig />} />

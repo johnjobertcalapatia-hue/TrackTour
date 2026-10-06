@@ -6,10 +6,8 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\UserResource;
 use App\Models\BookingDispatchLog;
 use App\Models\Delivery;
-use App\Models\RiderLocation;
 use App\Models\User;
 use App\Services\DeliveryService;
-use App\Services\FirebaseService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -17,7 +15,6 @@ class RiderController extends Controller
 {
     public function __construct(
         private DeliveryService $deliveryService,
-        private FirebaseService $firebase
     ) {}
 
     public function dashboard(Request $request): JsonResponse
@@ -70,8 +67,12 @@ class RiderController extends Controller
     {
         $user = $request->user();
 
-        if ($user->riderDetail?->rider_status === 'busy') {
-            return $this->errorResponse('Cannot switch service while on an active delivery.', 409);
+        // The rider must stay on their current service for the WHOLE trip.
+        // The authoritative guard is the actual delivery/trip row, not just
+        // the rider_status flag, so a status/trip drift can never let a rider
+        // switch service mid-trip.
+        if ($user->riderDetail?->rider_status === 'busy' || $this->hasActiveTrip($user)) {
+            return $this->errorResponse('Cannot switch service while on an active delivery or trip.', 409);
         }
 
         $hasPendingRequest = BookingDispatchLog::where('rider_id', $user->id)
@@ -92,13 +93,37 @@ class RiderController extends Controller
             ['current_service' => $newService]
         );
 
-        if ($this->firebase->isConfigured()) {
-            $this->firebase->setRiderStatus($user->id, $user->riderDetail?->rider_status, $newService, $user->municipality_id);
-        }
-
         return $this->successResponse(
             UserResource::make($user->fresh()->load('riderDetail')),
             'Switched to ' . ($newService === 'food' ? 'Food Delivery' : 'Transportation') . ' mode.'
+        );
+    }
+
+    /**
+     * Persist the rider's Auto accept preference.
+     *
+     * This is state ONLY — it never accepts an offer by itself. Acceptance
+     * stays on the canonical atomic path (PATCH /rider/dispatch/accept →
+     * NearestRiderService::handleRiderResponse), which is what still enforces
+     * one active delivery per rider, offer expiry, and COD eligibility.
+     */
+    public function switchAutoAccept(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'auto_accept' => ['required', 'boolean'],
+        ]);
+
+        $user = $request->user();
+        $enabled = (bool) $validated['auto_accept'];
+
+        $user->riderDetail()->updateOrCreate(
+            ['user_id' => $user->id],
+            ['auto_accept' => $enabled]
+        );
+
+        return $this->successResponse(
+            UserResource::make($user->fresh()->load('riderDetail')),
+            $enabled ? 'Auto accept enabled.' : 'Auto accept disabled.'
         );
     }
 
@@ -107,9 +132,12 @@ class RiderController extends Controller
         $user = $request->user();
         $currentStatus = $user->riderDetail?->rider_status;
 
-        // Prevent toggling if rider is on an active delivery
-        if ($currentStatus === User::RIDER_STATUS_BUSY) {
-            return $this->errorResponse('You are currently on a delivery. Complete it before going offline.', 409);
+        // Prevent toggling while the rider is bound to an active trip. The
+        // authoritative guard is the actual delivery row in an in-trip status
+        // (or the rider stuck marked busy), so a rider can never go offline
+        // mid-delivery or mid-ride — they must remain online for the whole trip.
+        if ($currentStatus === User::RIDER_STATUS_BUSY || $this->hasActiveTrip($user)) {
+            return $this->errorResponse('You are currently on a delivery or trip. Complete it before going offline.', 409);
         }
 
         if ($currentStatus === User::RIDER_STATUS_OFFLINE) {
@@ -121,33 +149,11 @@ class RiderController extends Controller
                     'rider_status_updated_at' => now(),
                 ]
             );
-            if ($this->firebase->isConfigured()) {
-                $lastLocation = RiderLocation::where('rider_id', $user->id)
-                    ->latest('recorded_at')
-                    ->first();
-                if ($lastLocation) {
-                    $this->firebase->updateRiderLocation(
-                        $user->id,
-                        (float) $lastLocation->latitude,
-                        (float) $lastLocation->longitude,
-                        null,
-                        null,
-                        $user->riderDetail?->current_service,
-                        $user->municipality_id
-                    );
-                }
-                $this->firebase->setRiderStatus($user->id, User::RIDER_STATUS_AVAILABLE, $user->riderDetail?->current_service ?? 'food', $user->municipality_id);
-                $this->firebase->setOnlineStatus('riders', $user->id, true);
-            }
         } else {
             $user->riderDetail()->updateOrCreate(
                 ['user_id' => $user->id],
                 ['rider_status' => User::RIDER_STATUS_OFFLINE, 'rider_status_updated_at' => now()]
             );
-            if ($this->firebase->isConfigured()) {
-                $this->firebase->removeRider($user->id);
-                $this->firebase->setOnlineStatus('riders', $user->id, false);
-            }
         }
 
         $status = $user->fresh()->riderDetail?->rider_status;
@@ -159,6 +165,17 @@ class RiderController extends Controller
         );
     }
 
+    /**
+     * Does the rider hold a delivery/trip that is still on the road?
+     *
+     * Delegates to the canonical DeliveryService row check so the trip-chain
+     * definition never drifts between controllers.
+     */
+    private function hasActiveTrip(User $user): bool
+    {
+        return $this->deliveryService->riderHasActiveTrip($user);
+    }
+
     public function toggleAvailable(Request $request): JsonResponse
     {
         $user = $request->user();
@@ -168,9 +185,6 @@ class RiderController extends Controller
                 ['user_id' => $user->id],
                 ['rider_status' => User::RIDER_STATUS_AVAILABLE, 'rider_status_updated_at' => now()]
             );
-            if ($this->firebase->isConfigured()) {
-                $this->firebase->setRiderStatus($user->id, User::RIDER_STATUS_AVAILABLE, $user->riderDetail?->current_service, $user->municipality_id);
-            }
 
             return $this->successResponse(
                 UserResource::make($user->fresh()->load('riderDetail')),
@@ -183,9 +197,6 @@ class RiderController extends Controller
                 ['user_id' => $user->id],
                 ['rider_status' => User::RIDER_STATUS_ONLINE, 'rider_status_updated_at' => now()]
             );
-            if ($this->firebase->isConfigured()) {
-                $this->firebase->setRiderStatus($user->id, User::RIDER_STATUS_ONLINE, $user->riderDetail?->current_service, $user->municipality_id);
-            }
 
             return $this->successResponse(
                 UserResource::make($user->fresh()->load('riderDetail')),

@@ -5,6 +5,20 @@ import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { Heart, MapPin, Star, UtensilsCrossed } from 'lucide-react'
 import { categoryName } from '@/shared/utils'
 
+interface Favoritable {
+  id: number
+  name: string
+  category: { id: number; name: string } | null
+  municipality: { id: number; name: string } | null
+  cover_photo: string | null
+  average_rating: number | null
+}
+
+interface BackendFavorite {
+  id: number
+  favoritable: Favoritable
+}
+
 interface Favorite {
   id: number
   name: string
@@ -21,7 +35,7 @@ export default function TouristFavorites() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['tourist-favorites'],
-    queryFn: () => get<{ data: Favorite[] }>('/tourist/favorites'),
+    queryFn: () => get<{ favorites: BackendFavorite[] }>('/tourist/favorites'),
   })
 
   const removeMutation = useMutation({
@@ -31,7 +45,15 @@ export default function TouristFavorites() {
 
   if (isLoading) return <DashboardSkeleton />
 
-  const favorites = data?.data ?? []
+  const favorites: Favorite[] = (data?.favorites ?? []).map((fav) => ({
+    id: fav.favoritable?.id ?? fav.id,
+    name: fav.favoritable?.name ?? 'Saved item',
+    category: fav.favoritable?.category,
+    municipality: fav.favoritable?.municipality?.name ?? '',
+    cover_photo: fav.favoritable?.cover_photo,
+    rating: fav.favoritable?.average_rating,
+    is_open: false,
+  }))
 
   return (
     <div>

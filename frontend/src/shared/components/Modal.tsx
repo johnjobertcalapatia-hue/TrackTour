@@ -43,7 +43,7 @@ export function Modal({ show, onClose, maxWidth = '2xl', children }: ModalProps)
   if (!show) return null
 
   return (
-    <div className="fixed inset-0 overflow-y-auto px-4 py-6 sm:px-0 z-50">
+    <div className="fixed inset-0 overflow-y-auto px-4 py-6 sm:px-0 z-[1400]">
       <div className="fixed inset-0 transform transition-all" onClick={onClose}>
         <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-sm" />
       </div>

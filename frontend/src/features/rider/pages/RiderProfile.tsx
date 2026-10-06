@@ -4,11 +4,20 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { get, post, put } from '@/shared/services/api'
+import { useAuthStore } from '@/features/auth/services/auth-store'
 import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
-import { useAuthStore } from '@/features/auth/services/auth-store'
-import { useLocation, useNavigate } from 'react-router-dom'
-import { History, Save, DollarSign } from 'lucide-react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { ArrowLeft, Camera, ChevronRight, DollarSign, History, Map as MapIcon, MessageSquare, Save, User } from 'lucide-react'
+import { toAssetUrl, getInitials } from '@/shared/utils'
+
+const settingsLinks = [
+  { to: '/rider/profile', icon: User, title: 'Profile', description: 'Manage your account information' },
+  { to: '/rider/history', icon: History, title: 'History', description: 'View your completed deliveries and ride history' },
+  { to: '/rider/earnings', icon: DollarSign, title: 'Earnings', description: 'Track your delivery earnings and payouts' },
+  { to: '/rider/messages', icon: MessageSquare, title: 'Messages', description: 'Read conversations with tourists and restaurants' },
+  { to: '/rider/map', icon: MapIcon, title: 'Live Map', description: 'Open the map for your active trips' },
+]
 
 const schema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
@@ -18,7 +27,7 @@ const schema = z.object({
   barangay: z.string().min(1, 'Barangay is required'),
 })
 
-type FormData = z.infer<typeof schema>
+type ProfileFormValues = z.infer<typeof schema>
 
 interface RiderProfile {
   id: number
@@ -30,23 +39,31 @@ interface RiderProfile {
   role: string
   account_status: string
   current_service?: 'food' | 'transport' | null
+  profile_photo?: string | null
 }
 
 export default function RiderProfile() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
-  const setUser = useAuthStore((state) => state.setUser)
-  const queryClient = useQueryClient()
+  const [photoFile, setPhotoFile] = useState<File | null>(null)
+  const [photoPreview, setPhotoPreview] = useState<string>('')
   const location = useLocation()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const fetchUser = useAuthStore((s) => s.fetchUser)
   const isSettingsPage = location.pathname === '/rider/settings'
+
+  const handleBack = () => {
+    if (window.history.length > 1) navigate(-1)
+    else navigate('/rider/map')
+  }
 
   const { data: profile, isLoading } = useQuery({
     queryKey: ['rider-profile'],
     queryFn: () => get<RiderProfile>('/rider/profile'),
   })
 
-  const { register, handleSubmit, formState: { errors } } = useForm<FormData>({
+  const { register, handleSubmit, formState: { errors } } = useForm<ProfileFormValues>({
     resolver: zodResolver(schema),
     values: profile ? {
       name: profile.name,
@@ -58,27 +75,56 @@ export default function RiderProfile() {
   })
 
   const mutation = useMutation({
-    mutationFn: (data: FormData) => put('/rider/profile', data),
+    mutationFn: (data: ProfileFormValues) => put('/rider/profile', data),
     onSuccess: () => setSuccess('Profile updated successfully.'),
     onError: (err: any) => setError(err.response?.data?.message || 'Failed to update profile.'),
   })
 
-  const serviceMutation = useMutation({
-    mutationFn: (service: 'food' | 'transport') => post(`/rider/service`, { service }),
-    onSuccess: (_data, service) => {
-      const currentUser = useAuthStore.getState().user
-      if (currentUser) {
-        setUser({ ...currentUser, current_service: service })
-      }
+  const photoMutation = useMutation({
+    mutationFn: (formData: FormData) => post('/rider/profile/photo', formData),
+    onSuccess: () => {
+      setPhotoFile(null)
+      setPhotoPreview('')
+      setSuccess('Profile photo updated successfully.')
       queryClient.invalidateQueries({ queryKey: ['rider-profile'] })
+      void fetchUser()
     },
-    onError: (err: any) => setError(err.response?.data?.message || 'Failed to switch rider mode.'),
+    onError: (err: any) => setError(err.response?.data?.message || 'Failed to update profile photo.'),
   })
+
+  const handlePhotoFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setPhotoFile(file)
+    setPhotoPreview(URL.createObjectURL(file))
+  }
+
+  const uploadPhoto = () => {
+    if (!photoFile) return
+    const fd = new FormData()
+    fd.append('photo', photoFile)
+    photoMutation.mutate(fd)
+  }
+
+  const avatarSrc = photoPreview || toAssetUrl(profile?.profile_photo)
 
   if (isLoading) return <DashboardSkeleton />
 
   return (
     <div className="max-w-2xl mx-auto">
+      {isSettingsPage && (
+        <div className="mb-3 flex justify-start">
+          <button
+            type="button"
+            onClick={handleBack}
+            className="inline-flex items-center gap-2 rounded-xl border border-[#E5E9E7] bg-white px-3.5 py-2 text-sm font-semibold text-[#17201B] transition hover:bg-[#F3F8F5] hover:text-[#087F3F]"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back
+          </button>
+        </div>
+      )}
+
       <div className="mb-8">
         <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">{isSettingsPage ? 'Settings' : 'My Profile'}</h1>
         <p className="mt-1 text-sm text-[#6B7280]">
@@ -92,6 +138,44 @@ export default function RiderProfile() {
       <form onSubmit={handleSubmit((data) => mutation.mutate(data))} className="space-y-6">
         {!isSettingsPage && <div className="bg-white rounded-2xl border border-[#E5E9E7] p-6 space-y-4">
           <h2 className="text-lg font-semibold text-[#17201B]">Personal Information</h2>
+
+          <div className="flex items-center gap-4">
+            <div className="relative shrink-0">
+              <div className="w-20 h-20 rounded-full overflow-hidden bg-[#E9F7EF] flex items-center justify-center border border-[#D7E2DC]">
+                {avatarSrc ? (
+                  <img src={avatarSrc} alt={profile?.name} className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-xl font-bold text-[#087F3F]">{getInitials(profile?.name)}</span>
+                )}
+              </div>
+              <label htmlFor="profile-photo" className="absolute bottom-0 right-0 flex h-7 w-7 cursor-pointer items-center justify-center rounded-full bg-emerald-600 text-white shadow-md transition hover:bg-emerald-700">
+                <Camera className="h-3.5 w-3.5" />
+                <span className="sr-only">Upload profile photo</span>
+              </label>
+              <input
+                id="profile-photo"
+                type="file"
+                accept="image/*"
+                className="sr-only"
+                onChange={handlePhotoFile}
+              />
+            </div>
+
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-[#17201B]">Profile Photo</p>
+              <p className="mt-0.5 text-xs text-[#6B7280]">Upload a photo of yourself so tourists can recognize you.</p>
+              {photoPreview && (
+                <button
+                  type="button"
+                  onClick={uploadPhoto}
+                  disabled={photoMutation.isPending}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {photoMutation.isPending ? 'Uploading...' : 'Save photo'}
+                </button>
+              )}
+            </div>
+          </div>
 
           <div>
             <label className="block text-sm font-medium text-[#4B5563] mb-1">Full Name</label>
@@ -135,28 +219,28 @@ export default function RiderProfile() {
         </div>}
 
         {isSettingsPage && <div className="bg-white rounded-2xl border border-[#E5E9E7] p-6">
-          <h2 className="text-lg font-semibold text-[#17201B]">Rider Mode</h2>
-          <p className="mt-1 text-sm text-[#6B7280]">Choose which requests you want to receive.</p>
-          <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl bg-[#F3F8F5] p-1">
-            {([
-              { value: 'food' as const, label: 'Food Delivery' },
-              { value: 'transport' as const, label: 'Ride Hailing' },
-            ]).map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => serviceMutation.mutate(option.value)}
-                disabled={serviceMutation.isPending || profile?.current_service === option.value}
-                className={`rounded-lg px-3 py-2.5 text-sm font-semibold transition ${
-                  profile?.current_service === option.value
-                    ? 'bg-emerald-600 text-white'
-                    : 'text-[#6B7280] hover:bg-[#E5E9E7] hover:text-[#17201B]'
-                } disabled:cursor-not-allowed disabled:opacity-70`}
-              >
-                {option.label}
-              </button>
+          <h2 className="text-lg font-semibold text-[#17201B]">Settings</h2>
+          <p className="mt-1 text-sm text-[#6B7280]">Open a section to manage your rider account.</p>
+
+          <ul className="mt-4 divide-y divide-[#E5E9E7]">
+            {settingsLinks.map((item) => (
+              <li key={item.to}>
+                <Link
+                  to={item.to}
+                  className="group flex items-center gap-3 rounded-xl px-2 py-3 transition hover:bg-[#F3F8F5]"
+                >
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#E9F7EF] text-[#087F3F] transition group-hover:bg-emerald-600 group-hover:text-white">
+                    <item.icon className="h-5 w-5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-semibold text-[#17201B]">{item.title}</span>
+                    <span className="block truncate text-xs text-[#6B7280]">{item.description}</span>
+                  </span>
+                  <ChevronRight className="h-4 w-4 shrink-0 text-[#9CA3AF] transition group-hover:translate-x-0.5 group-hover:text-[#087F3F]" />
+                </Link>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>}
 
         {isSettingsPage && <div className="bg-white rounded-2xl border border-[#E5E9E7] p-6">

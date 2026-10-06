@@ -84,7 +84,7 @@ class RestaurantSubOrderItemsLifecycleTest extends TestCase
 
         $allDays = array_fill_keys(
             ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
-            [['open' => '00:00', 'close' => '23:59']]
+            [['open' => '00:00', 'close' => '23:59'], ['open' => '23:59', 'close' => '00:00']]
         );
 
         $this->restaurantA = Business::create([
@@ -114,10 +114,10 @@ class RestaurantSubOrderItemsLifecycleTest extends TestCase
         $this->riderA = $this->makeRider('rider-a@example.com', 'Rider A', $this->restaurantA);
         $this->riderB = $this->makeRider('rider-b@example.com', 'Rider B', $this->restaurantB);
 
-        $nearestRiderMock = new class(app(\App\Services\FirebaseService::class)) extends NearestRiderService {
-            public function __construct($firebase)
+        $nearestRiderMock = new class() extends NearestRiderService {
+            public function __construct()
             {
-                parent::__construct($firebase);
+                parent::__construct();
             }
 
             public function findNearestAvailableRiders(float $pickupLat, float $pickupLng, string $serviceType = 'food', int $limit = 5, ?int $municipalityId = null): Collection
@@ -283,15 +283,17 @@ public function test_one_order_item_readiness_gate_and_shared_delivery_rules(): 
         $this->assertFalse($unoffered['success'] ?? true, 'Rider without an offer cannot claim the shared trip.');
         $this->assertRiderAccepted($delivery->fresh(), $this->riderA);
 
-        // 4. Acceptance is a single order-level action once a rider is assigned.
+        // 4. Rider acceptance auto-started preparation for the whole shared
+        //    order. Restaurants have no accept action anymore — for either
+        //    owner the retired endpoint is simply gone (404).
         $this->postJson("/api/business-owner/orders/{$order->id}/accept", [], $this->authHeaders($this->ownerA))
-            ->assertOk();
+            ->assertStatus(404);
 
         $this->postJson("/api/business-owner/orders/{$order->id}/accept", [], $this->authHeaders($this->ownerB))
-            ->assertStatus(422, 'A second restaurant cannot accept the already-preparing canonical order.');
+            ->assertStatus(404, 'No restaurant accept action exists for any owner.');
 
         $order->refresh();
-        $this->assertSame('preparing', $order->status, 'Accepting auto-starts preparation for the whole shared order.');
+        $this->assertSame('preparing', $order->status, 'Rider acceptance auto-started preparation for the whole shared order.');
 
         $itemBurger = $order->items->firstWhere('product_name', 'Burger');
         $itemFries = $order->items->firstWhere('product_name', 'Fries');

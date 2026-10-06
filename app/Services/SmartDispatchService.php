@@ -173,10 +173,13 @@ class SmartDispatchService
     public function dispatchNow(Order $order, Delivery $delivery): void
     {
         $business = $order->business;
-        if (! $business?->latitude || ! $business?->longitude) {
-            return;
-        }
 
+        // P3 (master spec §17/§19): the cycle anchor must be recorded BEFORE
+        // any coordinate guard. A business without coordinates used to return
+        // here silently — no dispatch_started_at, no dispatchToNearest, no
+        // retry — stranding the delivery at 'waiting_for_rider' forever (a
+        // status the scheduler never selects). Invalid pickup coordinates are
+        // now parked/failed by dispatchToNearest with an observable reason.
         $order->update(['dispatch_started_at' => now()]);
 
         try {
@@ -194,7 +197,7 @@ class SmartDispatchService
                 $this->nearestRiderService->dispatchToNearest(
                     $lockedDelivery,
                     'food',
-                    $business->municipality_id,
+                    $business?->municipality_id,
                 );
             });
         } catch (\Exception $e) {

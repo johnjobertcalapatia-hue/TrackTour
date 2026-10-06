@@ -18,6 +18,7 @@ export default function RiderDispatchNotification() {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const user = useAuthStore((s) => s.user)
+  const fetchUser = useAuthStore((s) => s.fetchUser)
   const riderOnline = user?.rider_status === 'online' || user?.rider_status === 'available'
   const [offers, setOffers] = useState<RiderDeliveryRequestData[]>([])
   const [request, setRequest] = useState<RiderDeliveryRequestData | null>(null)
@@ -104,7 +105,10 @@ export default function RiderDispatchNotification() {
     isOnline: riderOnline,
     vehicleType: user?.current_service ?? 'food',
     onOrderPing: async () => {
+      // Master spec §57: browser-side ping/offer diagnostics.
+      console.log('[Rider] order_received_ping received — fetching dispatch offers')
       const live = await fetchOffers()
+      console.log('[Rider] dispatch offers received', live.length)
       setOffers(live)
       if (live.length >= 2) {
         setChoosing(true)
@@ -119,6 +123,18 @@ export default function RiderDispatchNotification() {
       if (delivery_id && hadIt) {
         showToast('Another rider claimed this delivery — the offer is no longer available.', 'error')
       }
+    },
+    // Reconnect recovery: Socket.IO is not authoritative — after any
+    // disconnect/server restart, re-sync the user (rider_status) over HTTP.
+    onConnect: () => {
+      void fetchUser()
+    },
+    // The backend cancelled our trip: it has already released rider_status,
+    // so reconcile the store and refresh the active-trip view together.
+    onTripCancelled: () => {
+      void fetchUser()
+      queryClient.invalidateQueries({ queryKey: ['rider-active-trip'] })
+      queryClient.invalidateQueries({ queryKey: ['rider-map-location'] })
     },
   })
 
@@ -145,6 +161,12 @@ export default function RiderDispatchNotification() {
   const acceptMutation = useMutation({
     mutationFn: (deliveryId: number) => patch('/rider/dispatch/accept', { delivery_id: deliveryId }),
     onSuccess: async () => {
+      // The backend sets rider_status='busy' atomically with the assignment,
+      // and the accept payload carries no rider_status — so reconcile the user
+      // from the server instead of assuming the new state locally. This is what
+      // stops the UI from offering "Go Offline" (and a guaranteed 409) while
+      // the rider is genuinely busy.
+      void fetchUser()
       setShowAccepted(true)
       resetToIdle()
       setOffers([])
@@ -155,15 +177,23 @@ export default function RiderDispatchNotification() {
       }, 900)
     },
     onError: (error) => {
-      const status = (error as { response?: { status?: number } }).response?.status
+      const err = error as { response?: { status?: number; data?: { message?: string } } }
+      const status = err.response?.status
+      const message = err.response?.data?.message
       setAcceptingId(null)
       if (status === 409) {
-        // Out-of-date accept: expired, already claimed, or already active.
-        showToast('This offer is no longer available — it may have been claimed already.', 'error')
+        // Conflict: expired, already claimed, or rider already on a trip.
+        showToast(message || 'This offer is no longer available — it may have been claimed already.', 'error')
         syncOffers()
         return
       }
-      showToast('Failed to accept the delivery. Please try again.', 'error')
+      if (status === 422) {
+        // Ineligibility (e.g. COD limit): the offer itself may still be fine,
+        // so keep it listed and just surface the backend's reason.
+        showToast(message || 'You are not eligible for this delivery.', 'error')
+        return
+      }
+      showToast(message || 'Failed to accept the delivery. Please try again.', 'error')
     },
   })
 
@@ -173,6 +203,48 @@ export default function RiderDispatchNotification() {
     setAcceptingId(deliveryId)
     acceptMutation.mutate(deliveryId)
   }
+
+  // Auto accept — while the rider's server-side preference (rider_details.
+  // auto_accept) is ON and they are online, take the FIRST ping that arrives
+  // (earliest dispatched_at) through the very same atomic accept endpoint the
+  // manual button uses, so every backend rule still applies unchanged: offer
+  // expiry, one active delivery per rider, COD eligibility, 409 conflicts.
+  //
+  // A delivery that was already auto-accept-attempted is remembered so a
+  // rejected attempt (409 claimed / 422 ineligible) degrades to the normal
+  // manual flow instead of looping on every 4s poll.
+  const autoAcceptTried = useRef<Set<number>>(new Set())
+  // react-query's `mutate` is identity-stable, so keeping it (and the boolean
+  // pending flag) as the deps stops this from re-running on every render.
+  const acceptDelivery = acceptMutation.mutate
+  const acceptPending = acceptMutation.isPending
+
+  useEffect(() => {
+    if (offers.length === 0) {
+      autoAcceptTried.current.clear()
+      return
+    }
+    if (!user?.auto_accept || !riderOnline) return
+    if (acceptPending || showAccepted) return
+
+    // Offers arrive ordered by dispatched_at ascending (first ping first);
+    // re-derive it here so the intent survives any future ordering change.
+    const firstPing = offers.reduce<RiderDeliveryRequestData | null>((earliest, offer) => {
+      if (!offer.delivery_id) return earliest
+      if (!earliest?.delivery_id) return offer
+      const candidate = Date.parse(offer.dispatched_at ?? '')
+      const current = Date.parse(earliest.dispatched_at ?? '')
+      if (Number.isNaN(candidate) || Number.isNaN(current)) return earliest
+      return candidate < current ? offer : earliest
+    }, null)
+
+    if (!firstPing?.delivery_id) return
+    if (autoAcceptTried.current.has(firstPing.delivery_id)) return
+
+    autoAcceptTried.current.add(firstPing.delivery_id)
+    setAcceptingId(firstPing.delivery_id)
+    acceptDelivery(firstPing.delivery_id)
+  }, [offers, user?.auto_accept, riderOnline, acceptPending, showAccepted, acceptDelivery])
 
   const declineMutation = useMutation({
     mutationFn: () => patch('/rider/dispatch/decline', { delivery_id: request?.delivery_id }),

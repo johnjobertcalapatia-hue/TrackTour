@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Delivery;
+use App\Models\Order;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
@@ -17,11 +18,15 @@ use Illuminate\Support\Facades\Log;
  *
  * Lifecycle:
  *   delivery.dispatch_status = 'scheduled'  (created by SmartDispatchService)
+ *       or 'no_rider_available' + dispatch_retry_at
+ *         (parked by a failed immediate/checkout dispatch — re-enters the loop
+ *          here instead of dying as a terminal state)
  *   delivery.scheduled_at <= now             (or dispatch_retry_at <= now)
  *   -> atomic claim ('dispatching' + attempts++)
  *   -> NearestRiderService::dispatchToNearest()
  *      - rider found            -> 'notified' (offer created)
- *      - no rider available     -> retry (back to 'scheduled' + dispatch_retry_at)
+ *      - no rider available     -> retry (back to the pre-claim state +
+ *                                  dispatch_retry_at)
  *                                  or 'dispatch_failed' once attempts are exhausted
  *
  * The atomic claim prevents two overlapping scheduler processes from dispatching
@@ -37,6 +42,12 @@ class ScheduledDispatchProcessor
      * Dispatch is scheduled as soon as an order enters `waiting_restaurant` and
      * remains schedulable for `accepted` / `preparing` / `ready` orders when the
      * initial offer could not be created immediately.
+     *
+     * Transport (ride-hailing) orders never pass through the restaurant statuses:
+     * they live at `pending` while waiting for a rider. orderIsDispatchable()
+     * therefore additionally accepts a transport order in `pending`, otherwise a
+     * ride that misses the instantaneous checkout dispatch could never be
+     * re-offered by the scheduler.
      */
     public const DISPATCHABLE_ORDER_STATUSES = ['waiting_restaurant', 'accepted', 'preparing', 'ready'];
 
@@ -59,15 +70,25 @@ class ScheduledDispatchProcessor
 
     /**
      * Deliveries that are due now: scheduled (initial or retry) with their due
-     * timestamp reached, plus stale 'dispatching' claims from a crashed worker.
+     * timestamp reached, plus stale 'dispatching' claims from a crashed worker,
+     * plus 'no_rider_available' deliveries whose retry time has arrived (or
+     * legacy rows that never carried a retry timestamp — the attempt cap bounds
+     * them to dispatch_failed, so they cannot loop forever).
      */
     private function dueDeliveryIds(): array
     {
         $claimTimeout = now()->subMinutes((int) config('delivery.scheduler.claim_timeout_minutes', 5));
 
         return Delivery::query()
+            ->leftJoin('orders', 'orders.id', '=', 'deliveries.order_id')
             ->whereHas('order', function ($q) {
-                $q->whereIn('status', self::DISPATCHABLE_ORDER_STATUSES);
+                $q->where(function ($order) {
+                    $order->whereIn('status', self::DISPATCHABLE_ORDER_STATUSES)
+                        // Transport rides stay at 'pending' while awaiting a rider.
+                        ->orWhere(fn ($transport) => $transport
+                            ->where('order_type', 'transport')
+                            ->where('status', 'pending'));
+                });
             })
             ->where(function ($q) use ($claimTimeout) {
                 $q->where('dispatch_status', 'scheduled')
@@ -79,12 +100,31 @@ class ScheduledDispatchProcessor
                         $due->whereNull('scheduled_at')
                             ->orWhere('scheduled_at', '<=', now());
                     })
+                    ->orWhere(function ($redispatch) {
+                        $redispatch->where('dispatch_status', 'no_rider_available')
+                            ->where(function ($retry) {
+                                $retry->whereNull('dispatch_retry_at')
+                                    ->orWhere('dispatch_retry_at', '<=', now());
+                            })
+                            ->where(function ($due) {
+                                $due->whereNull('scheduled_at')
+                                    ->orWhere('scheduled_at', '<=', now());
+                            });
+                    })
                     ->orWhere(function ($stale) use ($claimTimeout) {
+                        // Table-qualified: dueDeliveryIds() leftJoins `orders`,
+                        // and both tables have updated_at — the bare column is
+                        // ambiguous (SQLite rejects it outright, MySQL picks one).
                         $stale->where('dispatch_status', 'dispatching')
-                            ->where('updated_at', '<=', $claimTimeout);
+                            ->where('deliveries.updated_at', '<=', $claimTimeout);
                     });
             })
-            ->pluck('id')
+            // Priority dispatch (₱25/₱50/₱100 tip tiers): when several
+            // deliveries come due in the same wave, the higher priority tip
+            // claims a rider offer first; FIFO within the same tier.
+            ->orderByDesc(DB::raw('COALESCE(orders.rider_tip, 0)'))
+            ->orderBy('deliveries.scheduled_at')
+            ->pluck('deliveries.id')
             ->all();
     }
 
@@ -98,12 +138,20 @@ class ScheduledDispatchProcessor
             $delivery = Delivery::with('order.business')->lockForUpdate()->find($deliveryId);
 
             // Re-check under the row lock so an overlapping scheduler run skips us.
-            if (! $delivery || ! in_array($delivery->dispatch_status, ['scheduled', 'dispatching'], true)) {
+            // 'no_rider_available' is accepted here because a parked immediate
+            // failure was selected as due — it is claimed like any other retry.
+            if (! $delivery || ! in_array($delivery->dispatch_status, ['scheduled', 'dispatching', 'no_rider_available'], true)) {
                 return false;
             }
 
+            // Captured BEFORE the claim: after a failed attempt we restore this
+            // state so a delivery parked at 'no_rider_available' keeps showing
+            // the merchant-accurate "no rider" state while it stays in the
+            // retry loop (scheduled rows return to 'scheduled').
+            $originStatus = $delivery->dispatch_status;
+
             $order = $delivery->order;
-            if (! $order || ! in_array($order->status, self::DISPATCHABLE_ORDER_STATUSES, true)) {
+            if (! $order || ! $this->orderIsDispatchable($order)) {
                 // Order is no longer eligible (cancelled/rejected/etc.): never dispatch it.
                 return false;
             }
@@ -116,6 +164,20 @@ class ScheduledDispatchProcessor
 
             if ($delivery->scheduled_at !== null && $delivery->scheduled_at->isFuture()) {
                 return false; // Not due yet.
+            }
+
+            // P3 (master spec §54): the scheduler must never retry an expired
+            // dispatch — terminate it observably instead of claiming another
+            // attempt. dispatchToNearest enforces the same deadline for
+            // non-scheduler callers; this pre-claim check keeps attempt counts
+            // honest (no increment on an already-dead cycle).
+            if ($this->nearestRiderService->dispatchCycleExpired($delivery)) {
+                $this->nearestRiderService->failDispatch(
+                    $delivery,
+                    $this->nearestRiderService->terminalEndReason($delivery)
+                );
+
+                return true;
             }
 
             // Claim: this prevents a concurrent scheduler from double-offering.
@@ -131,9 +193,13 @@ class ScheduledDispatchProcessor
             try {
                 // Hand off to the existing dispatch pipeline (eligibility, COD
                 // credit, nearest-rider ordering and BookingDispatchLog offer).
+                // The service type is derived from the order so a transport
+                // (ride-hailing) delivery polls its own rider cohort — hard-coding
+                // 'food' here would never offer a transport ride to anyone.
+                $serviceType = $order->order_type === 'transport' ? 'transport' : 'food';
                 $rider = $this->nearestRiderService->dispatchToNearest(
                     $delivery,
-                    'food',
+                    $serviceType,
                     $order->business?->municipality_id,
                 );
             } catch (\Throwable $e) {
@@ -150,21 +216,40 @@ class ScheduledDispatchProcessor
                 return true;
             }
 
-            $maxAttempts = 1 + (int) config('delivery.scheduler.max_retries', 4);
+            $maxAttempts = 1 + (int) config('delivery.scheduler.max_retries', 11);
 
-            if ($attempt >= $maxAttempts) {
-                $delivery->update([
-                    'dispatch_status' => 'dispatch_failed',
-                    'dispatch_failed_at' => now(),
-                ]);
+            // Terminal when the attempt cap is reached OR the cycle deadline
+            // expired mid-backoff — always with an observable reason
+            // (master spec §19: no silent retry dead ends).
+            if ($attempt >= $maxAttempts || $this->nearestRiderService->dispatchCycleExpired($delivery)) {
+                $this->nearestRiderService->failDispatch(
+                    $delivery,
+                    $this->nearestRiderService->terminalEndReason($delivery)
+                );
             } else {
                 $delivery->update([
-                    'dispatch_status' => 'scheduled',
+                    'dispatch_status' => $originStatus === 'no_rider_available' ? 'no_rider_available' : 'scheduled',
                     'dispatch_retry_at' => now()->addMinutes((int) config('delivery.scheduler.retry_after_minutes', 5)),
                 ]);
             }
 
             return true;
         });
+    }
+
+    /**
+     * Is this order still eligible for a scheduled dispatch?
+     *
+     * Food/group orders qualify through the restaurant lifecycle statuses.
+     * Transport (ride-hailing) orders never leave `pending` while awaiting a
+     * rider, so a pending transport order is dispatchable by its own rule.
+     */
+    private function orderIsDispatchable(Order $order): bool
+    {
+        if (in_array($order->status, self::DISPATCHABLE_ORDER_STATUSES, true)) {
+            return true;
+        }
+
+        return $order->order_type === 'transport' && $order->status === 'pending';
     }
 }

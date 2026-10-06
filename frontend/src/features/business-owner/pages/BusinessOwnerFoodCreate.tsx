@@ -13,6 +13,10 @@ const schema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
   description: z.string().optional(),
   price: z.coerce.number().min(0, 'Price must be positive'),
+  preparation_time: z.preprocess(
+    (v) => (v === '' || v === null || v === undefined || Number.isNaN(Number(v)) ? undefined : Number(v)),
+    z.number().min(0, 'Must be 0 or more').max(240, 'Max 240 minutes').optional()
+  ),
   offering_category_id: z.coerce.number().min(1, 'Category is required'),
   business_id: z.coerce.number().min(1, 'Business is required'),
   is_available: z.boolean(),
@@ -94,11 +98,17 @@ export default function BusinessOwnerFoodCreate() {
             <textarea {...register('description')} rows={3} className="w-full px-4 py-3 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition resize-none" />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-[#4B5563] mb-1.5">Price (₱)</label>
               <input {...register('price')} type="number" step="0.01" className="w-full px-4 py-3 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition" />
               {errors.price && <p className="text-[#B91C1C] text-xs mt-1">{errors.price.message}</p>}
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-[#4B5563] mb-1.5">Preparation Time (minutes)</label>
+              <input {...register('preparation_time')} type="number" min="0" max="240" placeholder="e.g. 30" className="w-full px-4 py-3 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition" />
+              <p className="text-xs text-[#647067] mt-1">How long this dish takes to prepare. Used for the order countdown.</p>
+              {errors.preparation_time && <p className="text-[#B91C1C] text-xs mt-1">{errors.preparation_time.message}</p>}
             </div>
             <div>
               <label className="block text-sm font-medium text-[#4B5563] mb-1.5">Category</label>

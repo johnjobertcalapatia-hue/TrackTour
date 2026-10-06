@@ -31,6 +31,7 @@ use App\Repositories\Eloquent\UserRepository;
 use App\Services\AdminService;
 use App\Services\BookingService;
 use App\Services\BusinessService;
+use App\Services\DeliveryFareSettings;
 use App\Services\DeliveryService;
 use App\Services\NotificationService;
 use App\Services\OrderService;
@@ -66,6 +67,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(OrderService::class);
         $this->app->singleton(BookingService::class);
         $this->app->singleton(DeliveryService::class);
+        $this->app->singleton(DeliveryFareSettings::class);
         $this->app->singleton(StaffService::class);
         $this->app->singleton(TouristService::class);
         $this->app->singleton(AdminService::class);

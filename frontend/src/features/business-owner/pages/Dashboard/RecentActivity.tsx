@@ -8,9 +8,12 @@ export function RecentActivity({ data }: { data: DashboardData }) {
   const navigate = useNavigate()
   const { recent_orders: orders, recent_bookings: bookings } = data
 
+  const navigateTo = (a: { id: number; type: 'Order' | 'Booking' }) =>
+    a.type === 'Order' ? `/business-owner/orders/${a.id}` : `/business-owner/bookings/${a.id}`
+
   const activities = [
-    ...orders.map((o) => ({ key: `o-${o.id}`, type: 'Order' as const, ref: o.order_number, customer: o.customer_name, status: o.status, date: o.created_at, amount: o.total })),
-    ...bookings.map((b) => ({ key: `b-${b.id}`, type: 'Booking' as const, ref: b.booking_number, customer: b.customer_name, status: b.status, date: b.created_at, amount: b.total_amount })),
+    ...orders.map((o) => ({ key: `o-${o.id}`, id: o.id, type: 'Order' as const, ref: o.order_number, customer: o.customer_name, status: o.status, date: o.created_at, amount: o.total })),
+    ...bookings.map((b) => ({ key: `b-${b.id}`, id: b.id, type: 'Booking' as const, ref: b.booking_number, customer: b.customer_name, status: b.status, date: b.created_at, amount: b.total_amount })),
   ]
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
     .slice(0, 8)
@@ -42,7 +45,19 @@ export function RecentActivity({ data }: { data: DashboardData }) {
       ) : (
         <ul className="divide-y divide-[#E2E8E3]">
           {activities.map((a) => (
-            <li key={a.key} className="flex items-center gap-4 py-3">
+            <li
+              key={a.key}
+              onClick={() => navigate(navigateTo(a))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  navigate(navigateTo(a))
+                }
+              }}
+              role="button"
+              tabIndex={0}
+              className="flex items-center gap-4 py-3 cursor-pointer rounded-lg px-1 -mx-1 transition hover:bg-[#F6F8F4] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#16803C]/40"
+            >
               <div className="w-9 h-9 rounded-lg bg-[#EAF6ED] flex items-center justify-center shrink-0">
                 {a.type === 'Order' ? (
                   <Package className="w-4 h-4 text-[#16803C]" />

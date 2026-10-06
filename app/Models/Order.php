@@ -51,6 +51,8 @@ class Order extends Model
         'refunded_amount',
         'rating',
         'review',
+        'delivery_rating',
+        'rating_tags',
         'notes',
         'delivery_address',
         'cancelled_by',
@@ -73,6 +75,7 @@ class Order extends Model
         'actual_preparation_seconds',
         'prediction_error_seconds',
         'prediction_source',
+        'preparation_time',
         'dispatch_scheduled_at',
         'dispatch_started_at',
         'selected_rider_id',
@@ -114,9 +117,12 @@ class Order extends Model
             'rider_financed_amount' => 'decimal:2',
             'rider_delivery_earnings' => 'decimal:2',
             'refund_amount' => 'decimal:2',
+            'rating_tags' => 'array',
+            'delivery_rating' => 'integer',
             'predicted_preparation_seconds' => 'integer',
             'actual_preparation_seconds' => 'integer',
             'prediction_error_seconds' => 'integer',
+            'preparation_time' => 'integer',
             'rider_eta_seconds' => 'integer',
             'pickup_buffer_seconds' => 'integer',
         ];
@@ -262,9 +268,10 @@ class Order extends Model
      * - If all active items are 'ready' -> 'ready' (READY_FOR_PICKUP) & trigger smart dispatch.
      * - If at least one active item is actually 'preparing' -> 'preparing' (the kitchen is cooking).
      * - Otherwise, if at least one active item is 'accepted' -> 'accepted'. Merely-accepted or
-     *   still-pending items (e.g. siblings left by an acceptItem/rejectItem action) must NEVER
-     *   authorize 'preparing' on their own — a reject is a refusal, not a cooking action, and a
-     *   single item acceptance does not start the kitchen (P11.6).
+     *   still-pending items (e.g. a sibling rejected through the item-status endpoint, or one
+     *   accepted while another stays pending) must NEVER authorize 'preparing' on their own — a
+     *   reject is a refusal, not a cooking action, and a single item acceptance does not start
+     *   the kitchen (P11.6).
      */
     public function refreshStatusFromItems(): void
     {

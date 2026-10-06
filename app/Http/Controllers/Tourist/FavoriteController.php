@@ -16,7 +16,10 @@ class FavoriteController extends Controller
     public function index(Request $request)
     {
         $user = Auth::user();
-        $favorites = $user->favorites()->with('favoritable')->get();
+        $favorites = $user->favorites()->with([
+            'favoritable.category',
+            'favoritable.municipality',
+        ])->get();
 
         if ($request->expectsJson()) {
             return $this->successResponse(compact('favorites'));

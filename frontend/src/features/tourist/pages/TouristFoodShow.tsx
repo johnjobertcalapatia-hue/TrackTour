@@ -44,6 +44,7 @@ interface BusinessDetailResponse {
   business: BusinessDetail
   avgRating?: number
   reviews?: BusinessDetail['reviews']
+  isFavorited?: boolean
   menu_items?: FoodItem[]
 }
 
@@ -85,6 +86,7 @@ export default function TouristFoodShow() {
   const bizReviews = data?.reviews ?? business?.reviews ?? []
   const bizCategory = business?.category ? categoryName(business.category) : ''
   const bizMunicipality = business?.municipality && typeof business.municipality === 'object' ? business.municipality.name : (business?.municipality || '')
+  const isFavorited = data?.isFavorited ?? business?.is_favorited ?? false
 
   const favoriteMutation = useMutation({
     mutationFn: () => post('/tourist/favorites/toggle', { business_id: Number(id) }),
@@ -100,7 +102,7 @@ export default function TouristFoodShow() {
   }
   if (!business) return <div className="text-center py-20 text-gray-500">Restaurant not found.</div>
 
-  const menuItems = business.menu_items ?? []
+  const menuItems = data?.menu_items ?? business.menu_items ?? []
   const accepting = business.is_accepting_orders
   const openStatusLabel = business.open_status?.label ?? (business.is_open ? 'Open now' : 'Closed')
   const categories = ['All', ...new Set(menuItems.map((m) => m.category).filter(Boolean) as string[])]
@@ -141,7 +143,7 @@ export default function TouristFoodShow() {
         </button>
         <div className="flex gap-2">
           <button onClick={() => favoriteMutation.mutate()} className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center">
-            <Heart className={cn('w-5 h-5', business.is_favorited ? 'fill-red-500 text-red-500' : 'text-white/80')} />
+            <Heart className={cn('w-5 h-5', isFavorited ? 'fill-red-500 text-red-500' : 'text-white/80')} />
           </button>
           <button className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-md flex items-center justify-center">
             <Share2 className="w-5 h-5 text-white/80" />

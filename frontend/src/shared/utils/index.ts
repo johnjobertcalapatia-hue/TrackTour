@@ -37,7 +37,9 @@ export function capitalize(str: string | undefined | null): string {
 }
 
 const API_ORIGIN =
-  (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_ORIGIN || 'http://localhost:8000'
+  (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_ORIGIN ||
+  (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_URL ||
+  'http://localhost:8000'
 
 export function toAssetUrl(path: string | null | undefined): string {
   if (!path) return ''
@@ -105,4 +107,24 @@ export function getRoleDashboardPath(role: string): string {
     tourism_office: '/tourism-office/dashboard',
   }
   return routes[role] || '/unauthorized'
+}
+
+/**
+ * The prep countdown deadline whenever preparation has started.
+ *
+ * Prefers the server-authoritative `predicted_ready_at`, falling back to
+ * deriving the deadline from the preparation start + the snapshotted prep time
+ * so a manual "Start Preparing" transition (or any legacy/edge row) still
+ * shows a live "Time Remaining" instead of "—".
+ */
+export function deriveReadyAt(order: {
+  predicted_ready_at?: string | null
+  preparation_started_at?: string | null
+  preparation_time?: number | null
+}): string | null {
+  if (order.predicted_ready_at) return order.predicted_ready_at
+  if (!order.preparation_started_at) return null
+  const minutes = Number(order.preparation_time ?? 15)
+  if (!Number.isFinite(minutes) || minutes < 1) return null
+  return new Date(new Date(order.preparation_started_at).getTime() + minutes * 60_000).toISOString()
 }

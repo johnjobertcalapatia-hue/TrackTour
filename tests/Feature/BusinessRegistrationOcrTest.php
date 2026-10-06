@@ -7,6 +7,7 @@ use App\Models\Business;
 use App\Models\BusinessCategory;
 use App\Models\Municipality;
 use App\Models\RequiredDocument;
+use App\Models\TourismSetting;
 use App\Models\User;
 use App\Services\DocumentExtractor;
 use App\Services\OcrService;
@@ -77,6 +78,10 @@ class BusinessRegistrationOcrTest extends TestCase
 
     public function test_ocr_endpoint_extracts_document_data(): void
     {
+        if (! extension_loaded('gd')) {
+            $this->markTestSkipped('GD extension is required to create fake images.');
+        }
+
         $user = $this->createOwner();
         $file = $this->createTestImage("PERMIT NO: PMT-2026-00123\nBusiness Name: TEST RESTAURANT\nDate Issued: January 15, 2026\nExpiry Date: December 31, 2027");
 
@@ -100,6 +105,10 @@ class BusinessRegistrationOcrTest extends TestCase
 
     public function test_business_created_with_documents_and_ocr_data(): void
     {
+        if (! extension_loaded('gd')) {
+            $this->markTestSkipped('GD extension is required to create fake images.');
+        }
+
         $user = $this->createOwner();
         $category = BusinessCategory::where('name', 'Restaurant')->first();
         $municipality = Municipality::first();
@@ -176,6 +185,10 @@ class BusinessRegistrationOcrTest extends TestCase
 
     public function test_business_with_mismatched_ocr_data_gets_flagged(): void
     {
+        if (! extension_loaded('gd')) {
+            $this->markTestSkipped('GD extension is required to create fake images.');
+        }
+
         $user = $this->createOwner();
         $category = BusinessCategory::where('name', 'Restaurant')->first();
         $municipality = Municipality::first();
@@ -248,6 +261,10 @@ class BusinessRegistrationOcrTest extends TestCase
 
     public function test_ocr_endpoint_rejects_without_auth(): void
     {
+        if (! extension_loaded('gd')) {
+            $this->markTestSkipped('GD extension is required to create fake images.');
+        }
+
         $file = $this->createTestImage("PERMIT NO: TEST-001");
 
         $response = $this->postJson('/api/documents/extract', [
@@ -255,6 +272,82 @@ class BusinessRegistrationOcrTest extends TestCase
         ]);
 
         $response->assertStatus(401);
+    }
+
+    private function createRawDocument(string $mime, string $content): UploadedFile
+    {
+        $extensions = [
+            'image/png' => 'png',
+            'image/jpeg' => 'jpg',
+            'application/pdf' => 'pdf',
+        ];
+        $path = tempnam(sys_get_temp_dir(), 'ocr_doc_');
+        file_put_contents($path, $content);
+
+        return new UploadedFile(
+            $path,
+            'raw_document.' . $extensions[$mime],
+            $mime,
+            null,
+            true
+        );
+    }
+
+    private function createPdfFile(): UploadedFile
+    {
+        $pdf = "%PDF-1.4\n"
+            . "1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+            . "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+            . "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\n"
+            . "xref\n0 4\n0000000000 65535 f \n"
+            . "0000000009 00000 n \n0000000052 00000 n \n0000000101 00000 n \n"
+            . "trailer<</Size 4/Root 1 0 R>>\n"
+            . "startxref\n150\n%%EOF";
+
+        return $this->createRawDocument('application/pdf', $pdf);
+    }
+
+    public function test_ocr_endpoint_returns_503_when_tesseract_unavailable(): void
+    {
+        TourismSetting::updateOrCreate(['key' => 'ocr_enabled'], ['value' => '1']);
+
+        $ocr = $this->createMock(OcrService::class);
+        $ocr->method('isAvailable')->willReturn(false);
+        $this->app->instance(OcrService::class, $ocr);
+
+        $user = $this->createOwner();
+        $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=');
+        $file = $this->createRawDocument('image/png', $png);
+
+        $response = $this->actingAs($user)
+            ->postJson('/api/documents/extract', ['file' => $file]);
+
+        $response->assertStatus(503);
+        $response->assertJson([
+            'success' => false,
+            'message' => 'Tesseract OCR is not installed on the server. Please install Tesseract to use document extraction.',
+        ]);
+    }
+
+    public function test_ocr_endpoint_rejects_pdf_with_400_not_500(): void
+    {
+        TourismSetting::updateOrCreate(['key' => 'ocr_enabled'], ['value' => '1']);
+
+        $ocr = $this->createMock(OcrService::class);
+        $ocr->method('isAvailable')->willReturn(true);
+        $this->app->instance(OcrService::class, $ocr);
+
+        $user = $this->createOwner();
+        $file = $this->createPdfFile();
+
+        $response = $this->actingAs($user)
+            ->postJson('/api/documents/extract', ['file' => $file]);
+
+        $response->assertStatus(400);
+        $response->assertJson([
+            'success' => false,
+            'message' => 'PDF OCR is not yet supported. Please upload an image file (JPG, PNG).',
+        ]);
     }
 
     public function test_business_creation_rejects_without_required_fields(): void

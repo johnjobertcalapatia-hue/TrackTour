@@ -23,12 +23,49 @@ export const useAuthStore = create<AuthState>((set) => ({
       set({ user: null, loading: false })
       return
     }
-    try {
-      const data = await get<User>('/user')
-      set({ user: data, loading: false })
-    } catch {
-      localStorage.removeItem('auth_token')
-      set({ user: null, loading: false })
+
+    // Only a definitive auth rejection may end the session. Every other
+    // failure (axios timeout, network drop, 5xx) is transient and must leave
+    // the stored token and current user untouched — otherwise a single slow
+    // response logs the rider out of the app.
+    const maxAttempts = 3
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const data = await get<User>('/user')
+        set({ user: data, loading: false })
+        return
+      } catch (error) {
+        const status = axios.isAxiosError(error) ? error.response?.status : undefined
+
+        // 401 = token missing/expired/revoked server-side. Genuine logout —
+        // unless a NEWER login already replaced the credential on disk while
+        // this in-flight /user was travelling (the stale-credential race the
+        // api interceptor guards against too). Then this 401 describes the
+        // OLD token and must not touch the fresh session. The interceptor may
+        // have already cleared the dead token above (on-disk null) — that is
+        // still the same (dead) session, so clear the memory too.
+        if (status === 401) {
+          const onDisk = localStorage.getItem('auth_token')
+          if (onDisk === token || onDisk === null) {
+            localStorage.removeItem('auth_token')
+            set({ user: null, loading: false })
+          } else {
+            set({ loading: false })
+          }
+          return
+        }
+
+        // No response at all (timeout/network) or a server error: retry a few
+        // times, then keep the existing session rather than destroying it.
+        const transient = status === undefined || status >= 500
+        if (transient && attempt < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 250 * attempt))
+          continue
+        }
+
+        set({ loading: false })
+        return
+      }
     }
   },
 

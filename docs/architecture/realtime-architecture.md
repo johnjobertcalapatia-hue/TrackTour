@@ -37,7 +37,7 @@ This decoupled architecture separates high-frequency ephemeral telemetry (such a
                                    │            /event, /status
                                    │
                     ┌──────────────┴───────────────┐
-                    │      Laravel API (:8000)     │
+                    │   Laravel API (Apache :80)  │
                     │  `WebsocketNotifierService`  │
                     │      `TripTokenService`      │
                     │  `SocketTokenController`     │

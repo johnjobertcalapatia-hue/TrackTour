@@ -3,7 +3,23 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { get } from '@/shared/services/api'
 import { Search, Star, MapPin, Calendar, Heart } from 'lucide-react'
-import { categoryName, formatCurrency, cn } from '@/shared/utils'
+import { toAssetUrl, categoryName, formatCurrency, cn } from '@/shared/utils'
+
+interface BackendStaysPage {
+  data: BackendStay[]
+}
+
+interface BackendStay {
+  id: number
+  name: string
+  business_name?: string | null
+  cover_photo: string | null
+  average_rating: number | null
+  reviews_avg_rating?: number | null
+  municipality: { id: number; name: string } | null
+  category: { id: number; name: string } | null
+  is_open: boolean
+}
 
 interface Stay {
   id: number
@@ -32,7 +48,7 @@ export default function TouristStays() {
       const params = new URLSearchParams()
       if (search) params.set('search', search)
       if (filter !== 'All') params.set('filter', filter.toLowerCase())
-      return get<{ data: Stay[] }>(`/tourist/booking?${params.toString()}`)
+      return get<{ accommodations: BackendStaysPage; rentals: BackendStaysPage }>(`/tourist/booking?${params.toString()}`)
     },
   })
 
@@ -44,7 +60,20 @@ export default function TouristStays() {
     )
   }
 
-  const stays = data?.data ?? []
+  const stays: Stay[] = [
+    ...(data?.accommodations?.data ?? []),
+    ...(data?.rentals?.data ?? []),
+  ].map((b) => ({
+    id: b.id,
+    name: b.name ?? b.business_name ?? 'Stay',
+    cover_photo: toAssetUrl(b.cover_photo),
+    rating: b.reviews_avg_rating ?? b.average_rating,
+    municipality: b.municipality?.name ?? '',
+    starting_price: 0,
+    category: b.category,
+    is_open: b.is_open,
+    is_favorited: false,
+  }))
 
   return (
     <div className="space-y-4 px-4 pt-4 pb-4">

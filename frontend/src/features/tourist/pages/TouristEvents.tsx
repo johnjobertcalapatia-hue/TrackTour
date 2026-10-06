@@ -4,6 +4,17 @@ import { get } from '@/shared/services/api'
 import { toAssetUrl } from '@/shared/utils'
 import { Calendar, Star, Heart, ChevronDown, Search, MapPin, Clock, Tag } from 'lucide-react'
 
+interface BackendEvent {
+  id: number
+  name: string
+  description: string | null
+  location: string | null
+  image: string | null
+  start_date: string
+  end_date: string | null
+  municipality: { id: number; name: string } | null
+}
+
 interface Event {
   id: number
   name: string
@@ -44,12 +55,25 @@ export default function TouristEvents() {
 
   const { data: eventsData, isLoading } = useQuery({
     queryKey: ['tourist-events', selectedCategory, selectedSort, searchQuery],
-    queryFn: () => get<{ data: Event[] }>('/tourist/events', {
+    queryFn: () => get<{ events: BackendEvent[] }>('/tourist/events', {
       params: { category: selectedCategory, sort: selectedSort, search: searchQuery }
     }),
     staleTime: 60_000,
   })
-  const events = eventsData?.data ?? []
+  const events: Event[] = (eventsData?.events ?? []).map((e) => ({
+    id: e.id,
+    name: e.name,
+    description: e.description ?? '',
+    category: '',
+    image: e.image ?? '',
+    address: e.location ?? '',
+    municipality: e.municipality?.name ?? '',
+    event_date: e.start_date,
+    start_time: '',
+    end_time: '',
+    rating: 0,
+    review_count: 0,
+  }))
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr)

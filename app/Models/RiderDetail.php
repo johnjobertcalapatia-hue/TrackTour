@@ -28,6 +28,7 @@ class RiderDetail extends Model
         'rider_status',
         'rider_status_updated_at',
         'current_service',
+        'auto_accept',
         'active_order_limit',
     ];
 
@@ -35,6 +36,7 @@ class RiderDetail extends Model
         'vehicle_year' => 'integer',
         'license_expiry' => 'date',
         'rider_status_updated_at' => 'datetime',
+        'auto_accept' => 'boolean',
         'active_order_limit' => 'integer',
     ];
 

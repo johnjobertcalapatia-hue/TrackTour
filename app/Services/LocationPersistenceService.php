@@ -28,7 +28,7 @@ class LocationPersistenceService
             $longitude
         ));
 
-        $elapsed = now()->diffInSeconds($lastLocation->recorded_at);
+        $elapsed = abs(now()->diffInSeconds($lastLocation->recorded_at));
 
         $minDist = Config::get('tracking.min_distance', 5);
         $maxAge = Config::get('tracking.checkpoint_seconds', 60);

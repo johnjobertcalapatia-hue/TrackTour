@@ -3,8 +3,9 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { get, put, post, del } from '@/shared/services/api'
 import { useBusinessOwnerStore } from '@/features/business-owner/services/business-owner-store'
-import { toAssetUrl } from '@/shared/utils'
+import { formatCurrency, formatDate, formatDateTime, toAssetUrl } from '@/shared/utils'
 import { Alert } from '@/shared/components/Alert'
+import { Modal } from '@/shared/components/Modal'
 
 interface SwitcherBusiness {
   id: number
@@ -22,11 +23,11 @@ interface SwitcherData {
 import {
   ArrowLeft, Save, Building2, MapPin, Clock, Eye, FileText, Image as ImageIcon,
   Star, BarChart3, Settings, CreditCard, Users, Trash2, Upload, X, Plus,
-  AlertTriangle, Globe, Link2, Phone, Mail, Landmark, Archive, RotateCcw, Search, Filter,
+  AlertTriangle, Globe, Link2, Phone, Mail, Landmark, Archive, RotateCcw, Search, Filter, Receipt, Wallet,
 } from 'lucide-react'
 
 type Tab = 'general' | 'location' | 'hours' | 'visibility' | 'documents' | 'archive' | 'promotions'
-  | 'reviews' | 'analytics' | 'config' | 'staff' | 'payments' | 'danger'
+  | 'reviews' | 'analytics' | 'config' | 'staff' | 'payments' | 'payment-methods' | 'danger'
 
 interface BusinessData {
   id: number
@@ -86,12 +87,30 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'analytics', label: 'Analytics', icon: <BarChart3 className="w-4 h-4" /> },
   { key: 'config', label: 'Config', icon: <Settings className="w-4 h-4" /> },
   { key: 'staff', label: 'Staff', icon: <Users className="w-4 h-4" /> },
+  { key: 'payment-methods', label: 'Payment Methods', icon: <Wallet className="w-4 h-4" /> },
   { key: 'payments', label: 'Payments', icon: <CreditCard className="w-4 h-4" /> },
   { key: 'danger', label: 'Danger', icon: <AlertTriangle className="w-4 h-4" /> },
 ]
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
-const PAYMENT_OPTIONS = ['Cash', 'GCash', 'Maya', 'Credit Card', 'Debit Card', 'Bank Transfer']
+
+const TAB_TITLES: Record<Tab, string> = {
+  general: 'Business Settings',
+  location: 'Location',
+  hours: 'Operating Hours',
+  visibility: 'Visibility',
+  documents: 'Documents',
+  archive: 'Archive Vault',
+  promotions: 'Promotions',
+  reviews: 'Reviews',
+  analytics: 'Analytics',
+  config: 'Config',
+  staff: 'Staff',
+  payments: 'Payment Tracking',
+  'payment-methods': 'Payment Methods',
+  danger: 'Danger Zone',
+}
+
 const FACILITY_OPTIONS = ['WiFi', 'Parking', 'Air Conditioning', 'Outdoor Seating', 'Delivery', 'Takeout', 'Reservations', 'Live Music', 'TV/Screen', 'Private Room']
 const PRICE_RANGES = ['budget', 'affordable', 'mid_range', 'premium', 'luxury']
 
@@ -162,7 +181,7 @@ export default function BusinessOwnerSettings() {
   return (
     <div>
       <div className="mb-6">
-        <h1 className="text-2xl lg:text-3xl font-bold text-[#126B32]">Business Settings</h1>
+        <h1 className="text-2xl lg:text-3xl font-bold text-[#126B32]">{TAB_TITLES[activeTab]}</h1>
         <p className="mt-1 text-sm text-[#647067]">Configure your business preferences</p>
       </div>
 
@@ -201,8 +220,10 @@ export default function BusinessOwnerSettings() {
             {activeTab === 'visibility' && <VisibilitySection business={business} />}
             {activeTab === 'documents' && <DocumentsSection businessId={activeId} />}
             {activeTab === 'archive' && <ArchiveVaultSection />}
+            {activeTab === 'payment-methods' && <PaymentMethodsSection business={business} />}
+            {activeTab === 'payments' && <PaymentSettingsSection business={business} />}
             {activeTab === 'danger' && <DangerSection business={business} />}
-            {!['general', 'location', 'hours', 'visibility', 'documents', 'archive', 'danger'].includes(activeTab) && (
+            {!['general', 'location', 'hours', 'visibility', 'documents', 'archive', 'payment-methods', 'payments', 'danger'].includes(activeTab) && (
               <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-12 text-center">
                 <Settings className="w-10 h-10 text-[#647067] mx-auto mb-3" />
                 <p className="text-sm text-[#647067]">This section is coming soon.</p>
@@ -840,6 +861,494 @@ function ArchiveVaultSection() {
             </table>
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+/* ─── Payment Methods Section ────────────────────────────── */
+type PaymentOption = { key: string; label: string; desc: string; online: boolean }
+
+const PAYMENT_OPTION_DEFS: PaymentOption[] = [
+  { key: 'cash', label: 'Cash on Delivery', desc: 'Customer pays cash to the rider on delivery (or at pickup).', online: false },
+  { key: 'gcash', label: 'GCash (Online)', desc: 'Customer prepays online via GCash through PayMongo.', online: true },
+  { key: 'card', label: 'Card (Online)', desc: 'Customer prepays online via credit/debit card through PayMongo.', online: true },
+]
+
+interface PaymentRecord {
+  id: number
+  order_number: string
+  group_reference: string | null
+  customer_name: string | null
+  placed_at: string
+  payment_method: string
+  payment_label: string
+  payment_status: string
+  order_status: string
+  total: number
+  paid_amount: number
+  settlement_number: string | null
+  settlement_amount: number | null
+  settlement_status: string | null
+  settled_at: string | null
+}
+
+interface PaymentSummary {
+  orders_count: number
+  total_received: number
+  cash_count: number
+  cash_total: number
+  online_count: number
+  online_total: number
+  paid_count: number
+  settled_amount: number
+}
+
+interface PaymentsResponseMeta {
+  current_page: number
+  last_page: number
+  per_page: number
+  total: number
+  summary: PaymentSummary
+}
+
+interface PaymentDetailItem {
+  product_name: string
+  quantity: number
+  unit_price: number
+  subtotal: number
+  status: string
+}
+
+interface PaymentDetail {
+  id: number
+  order_number: string
+  group_reference: string | null
+  customer_name: string | null
+  customer_email: string | null
+  customer_phone: string | null
+  placed_at: string
+  order_type: string | null
+  delivery_speed: string | null
+  order_status: string
+  payment_method: string
+  payment_label: string
+  payment_status: string
+  items: PaymentDetailItem[]
+  totals: {
+    subtotal: number
+    delivery_fee: number
+    rider_tip: number
+    system_fee: number
+    discount: number
+    total: number
+    paid_amount: number
+    refunded_amount: number
+    refund_status: string | null
+  }
+  delivery: {
+    status: string
+    dispatch_status: string | null
+    address: string | null
+    rider_name: string | null
+    delivered_at: string | null
+  } | null
+  settlement: {
+    settlement_number: string
+    source: string
+    payment_method: string
+    settlement_base: number
+    restaurant_amount: number
+    platform_amount: number
+    status: string
+    settled_at: string | null
+  } | null
+}
+
+function paymentStatusStyles(status: string): string {
+  if (status === 'paid') return 'text-[#16803C] font-semibold'
+  if (status === 'refunded') return 'text-[#647067]'
+  return 'text-[#B45309]'
+}
+
+function PaymentTransactionModal({ businessId, record, onClose }: {
+  businessId: number | undefined
+  record: PaymentRecord
+  onClose: () => void
+}) {
+  const { data: d, isLoading } = useQuery({
+    queryKey: ['bo-payment-detail', businessId, record.id],
+    queryFn: () => get<PaymentDetail>(`/business-owner/businesses/${businessId}/payments/${record.id}`),
+    enabled: !!businessId,
+  })
+
+  return (
+    <Modal show onClose={onClose} maxWidth="2xl">
+      <div className="p-6 max-h-[85vh] overflow-y-auto">
+        <div className="flex items-start justify-between gap-4 mb-5">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 rounded-xl bg-[#16803C]/10">
+              <Receipt className="w-5 h-5 text-[#16803C]" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-[#17201A]">Transaction {record.order_number}</h3>
+              <p className="text-xs text-[#647067]">Payment record details</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 text-[#647067] hover:text-[#17201A] hover:bg-[#F1F4F1] rounded-lg transition">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {isLoading || !d ? (
+          <div className="py-12 text-center">
+            {isLoading ? (
+              <>
+                <div className="w-8 h-8 border-2 border-[#16803C] border-t-transparent rounded-full animate-spin mx-auto" />
+                <p className="text-sm text-[#647067] mt-3">Loading transaction...</p>
+              </>
+            ) : (
+              <p className="text-sm text-[#B91C1C]">Failed to load this transaction.</p>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${d.payment_method === 'cash' ? 'bg-[#FEF3C7] text-[#B45309]' : 'bg-[#EAF6ED] text-[#16803C]'}`}>
+                {d.payment_label}
+              </span>
+              <span className={`text-xs font-medium ${paymentStatusStyles(d.payment_status)}`}>
+                {d.payment_status === 'paid' ? 'Paid' : d.payment_status === 'refunded' ? 'Refunded' : 'Pending'}
+              </span>
+              <span className="text-xs text-[#647067] bg-[#F1F4F1] px-2.5 py-1 rounded-full">{d.order_status.replace(/_/g, ' ')}</span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="border border-[#E8ECE9] rounded-xl p-4">
+                <p className="text-[11px] font-semibold text-[#8A948E] uppercase tracking-wide mb-2">Order</p>
+                <p className="text-sm text-[#17201A]"><span className="text-[#8A948E]">Placed:</span> {formatDateTime(d.placed_at)}</p>
+                <p className="text-sm text-[#17201A] mt-1"><span className="text-[#8A948E]">Type:</span> {d.order_type === 'pickup' ? 'Pickup' : 'Delivery'}</p>
+                {d.delivery_speed && <p className="text-sm text-[#17201A] mt-1"><span className="text-[#8A948E]">Speed:</span> {d.delivery_speed}</p>}
+                {d.group_reference && <p className="text-sm text-[#17201A] mt-1"><span className="text-[#8A948E]">Group:</span> {d.group_reference}</p>}
+              </div>
+              <div className="border border-[#E8ECE9] rounded-xl p-4">
+                <p className="text-[11px] font-semibold text-[#8A948E] uppercase tracking-wide mb-2">Customer</p>
+                <p className="text-sm font-medium text-[#17201A]">{d.customer_name || '—'}</p>
+                {d.customer_email && <p className="text-xs text-[#647067] mt-0.5">{d.customer_email}</p>}
+                {d.customer_phone && <p className="text-xs text-[#647067]">{d.customer_phone}</p>}
+              </div>
+            </div>
+
+            {d.items.length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold text-[#8A948E] uppercase tracking-wide mb-2">Items from this business</p>
+                <div className="border border-[#E8ECE9] rounded-xl overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-xs text-[#647067] bg-[#F7FAF7]">
+                        <th className="px-4 py-2 font-medium">Item</th>
+                        <th className="px-4 py-2 font-medium">Qty</th>
+                        <th className="px-4 py-2 font-medium text-right">Unit price</th>
+                        <th className="px-4 py-2 font-medium text-right">Subtotal</th>
+                        <th className="px-4 py-2 font-medium text-right">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {d.items.map((item, i) => (
+                        <tr key={i} className="border-t border-[#F1F4F1]">
+                          <td className="px-4 py-2.5 font-medium text-[#17201A]">{item.product_name}</td>
+                          <td className="px-4 py-2.5 text-[#647067]">{item.quantity}</td>
+                          <td className="px-4 py-2.5 text-right text-[#647067]">{formatCurrency(item.unit_price)}</td>
+                          <td className="px-4 py-2.5 text-right font-semibold text-[#17201A]">{formatCurrency(item.subtotal)}</td>
+                          <td className="px-4 py-2.5 text-right text-xs text-[#647067]">{item.status.replace(/_/g, ' ')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="border border-[#E8ECE9] rounded-xl p-4">
+                <p className="text-[11px] font-semibold text-[#8A948E] uppercase tracking-wide mb-2">Amount</p>
+                <div className="space-y-1.5 text-sm">
+                  <div className="flex justify-between"><span className="text-[#647067]">Subtotal</span><span className="text-[#17201A]">{formatCurrency(d.totals.subtotal)}</span></div>
+                  {d.totals.delivery_fee > 0 && <div className="flex justify-between"><span className="text-[#647067]">Delivery fee</span><span className="text-[#17201A]">{formatCurrency(d.totals.delivery_fee)}</span></div>}
+                  {d.totals.rider_tip > 0 && <div className="flex justify-between"><span className="text-[#647067]">Rider tip</span><span className="text-[#17201A]">{formatCurrency(d.totals.rider_tip)}</span></div>}
+                  {d.totals.system_fee > 0 && <div className="flex justify-between"><span className="text-[#647067]">System fee</span><span className="text-[#17201A]">{formatCurrency(d.totals.system_fee)}</span></div>}
+                  {d.totals.discount > 0 && <div className="flex justify-between"><span className="text-[#647067]">Discount</span><span className="text-[#B45309]">−{formatCurrency(d.totals.discount)}</span></div>}
+                  <div className="flex justify-between border-t border-[#E8ECE9] pt-1.5"><span className="font-medium text-[#17201A]">Total</span><span className="font-bold text-[#17201A]">{formatCurrency(d.totals.total)}</span></div>
+                  <div className="flex justify-between"><span className="text-[#647067]">Paid amount</span><span className="font-semibold text-[#16803C]">{formatCurrency(d.totals.paid_amount)}</span></div>
+                  {d.totals.refunded_amount > 0 && (
+                    <div className="flex justify-between"><span className="text-[#647067]">Refunded{d.totals.refund_status ? ` (${d.totals.refund_status})` : ''}</span><span className="text-[#647067]">{formatCurrency(d.totals.refunded_amount)}</span></div>
+                  )}
+                </div>
+              </div>
+
+              <div className="border border-[#E8ECE9] rounded-xl p-4">
+                <p className="text-[11px] font-semibold text-[#8A948E] uppercase tracking-wide mb-2">Settlement</p>
+                {d.settlement ? (
+                  <div className="space-y-1.5 text-sm">
+                    <p className="text-xs text-[#647067]">#{d.settlement.settlement_number}</p>
+                    <div className="flex justify-between"><span className="text-[#647067]">Base</span><span className="text-[#17201A]">{formatCurrency(d.settlement.settlement_base)}</span></div>
+                    <div className="flex justify-between"><span className="text-[#647067]">Restaurant share</span><span className="font-semibold text-[#16803C]">{formatCurrency(d.settlement.restaurant_amount)}</span></div>
+                    <div className="flex justify-between"><span className="text-[#647067]">Platform share</span><span className="text-[#17201A]">{formatCurrency(d.settlement.platform_amount)}</span></div>
+                    {d.settlement.settled_at && <div className="flex justify-between"><span className="text-[#647067]">Settled</span><span className="text-[#17201A]">{formatDateTime(d.settlement.settled_at)}</span></div>}
+                  </div>
+                ) : (
+                  <p className="text-sm text-[#9CA3AF]">Not settled yet. This record appears here once the order's settlement is posted.</p>
+                )}
+              </div>
+            </div>
+
+            {d.delivery && (
+              <div className="border border-[#E8ECE9] rounded-xl p-4">
+                <p className="text-[11px] font-semibold text-[#8A948E] uppercase tracking-wide mb-2">Delivery</p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
+                  <p className="text-[#17201A]"><span className="text-[#8A948E]">Status:</span> {d.delivery.status.replace(/_/g, ' ')}</p>
+                  {d.delivery.dispatch_status && <p className="text-[#17201A]"><span className="text-[#8A948E]">Dispatch:</span> {d.delivery.dispatch_status.replace(/_/g, ' ')}</p>}
+                  {d.delivery.rider_name && <p className="text-[#17201A]"><span className="text-[#8A948E]">Rider:</span> {d.delivery.rider_name}</p>}
+                  {d.delivery.delivered_at && <p className="text-[#17201A]"><span className="text-[#8A948E]">Delivered:</span> {formatDateTime(d.delivery.delivered_at)}</p>}
+                  {d.delivery.address && <p className="text-[#17201A] sm:col-span-2"><span className="text-[#8A948E]">Address:</span> {d.delivery.address}</p>}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
+function PaymentMethodsSection({ business }: { business: BusinessData | undefined }) {
+  const queryClient = useQueryClient()
+  const [selected, setSelected] = useState<Record<string, boolean>>({})
+  const [feedback, setFeedback] = useState<{ key: number; type: 'success' | 'error'; msg: string } | null>(null)
+  const feedbackKey = useRef(0)
+
+  const pushFeedback = (type: 'success' | 'error', msg: string) => {
+    feedbackKey.current += 1
+    setFeedback({ key: feedbackKey.current, type, msg })
+  }
+
+  useEffect(() => {
+    const stored = business?.payment_methods
+    const enabled = Array.isArray(stored) && stored.length > 0 ? stored : PAYMENT_OPTION_DEFS.map(o => o.key)
+    const next: Record<string, boolean> = {}
+    PAYMENT_OPTION_DEFS.forEach(o => { next[o.key] = enabled.includes(o.key) })
+    setSelected(next)
+  }, [business])
+
+  const saveMutation = useMutation({
+    mutationFn: (payment_methods: string[]) =>
+      put(`/business-owner/businesses/${business?.id}/payment-methods`, { payment_methods }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['bo-business', business?.id] })
+      pushFeedback('success', 'Payment methods saved. Orders will only be accepted with the methods you enabled.')
+    },
+    onError: (err: unknown) => {
+      const msg =
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        'Failed to save payment methods. Please try again.'
+      pushFeedback('error', msg)
+    },
+  })
+
+  const toggle = (key: string) => setSelected(prev => ({ ...prev, [key]: !prev[key] }))
+
+  const enabledKeys = PAYMENT_OPTION_DEFS.map(o => o.key).filter(k => selected[k])
+  const saving = saveMutation.isPending
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-6">
+        <h2 className="text-sm font-semibold text-[#17201A] mb-1 flex items-center gap-2"><Wallet className="w-4 h-4 text-[#16803C]" /> Accepted Payment Methods</h2>
+        <p className="text-xs text-[#647067] mb-5">Choose which payment methods customers may use to order from this business. Every order is recorded with the payment method used to pay for it.</p>
+        {feedback && (
+          <Alert key={feedback.key} type={feedback.type} message={feedback.msg} onDismiss={() => setFeedback(null)} />
+        )}
+        <div className="space-y-3">
+          {PAYMENT_OPTION_DEFS.map(opt => (
+            <div key={opt.key} className={`flex items-center justify-between p-4 rounded-xl border transition ${selected[opt.key] ? 'border-[#16803C]/40 bg-[#EAF6ED]' : 'border-[#E2E8E3] bg-white'}`}>
+              <div>
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium text-[#17201A]">{opt.label}</p>
+                  {opt.online && <span className="text-xs text-[#16803C] bg-[#16803C]/10 px-2 py-0.5 rounded-full font-medium">Online</span>}
+                </div>
+                <p className="text-xs text-[#647067] mt-0.5">{opt.desc}</p>
+              </div>
+              <label className="relative inline-flex cursor-pointer shrink-0">
+                <input type="checkbox" checked={!!selected[opt.key]} onChange={() => toggle(opt.key)} className="sr-only peer" />
+                <div className="w-11 h-6 bg-gray-200 peer-focus:ring-2 peer-focus:ring-[#16803C]/25 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#16803C]" />
+              </label>
+            </div>
+          ))}
+        </div>
+        {enabledKeys.length === 0 && (
+          <p className="mt-3 text-xs text-[#B91C1C]">Enable at least one payment method so customers can place orders.</p>
+        )}
+        <div className="mt-5 flex justify-end">
+          <button
+            onClick={() => saveMutation.mutate(enabledKeys)}
+            disabled={saving || enabledKeys.length === 0}
+            className="inline-flex items-center gap-2 bg-[#16803C] hover:bg-[#126B32] text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-50"
+          >
+            <Save className="w-4 h-4" />{saving ? 'Saving...' : 'Save Payment Methods'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function PaymentSettingsSection({ business }: { business: BusinessData | undefined }) {
+  const [methodFilter, setMethodFilter] = useState<'all' | 'cash' | 'online'>('all')
+  const [viewing, setViewing] = useState<PaymentRecord | null>(null)
+
+  const paymentsQuery = useQuery({
+    queryKey: ['bo-payments', business?.id, methodFilter],
+    queryFn: () =>
+      get<{ data: { payments: PaymentRecord[] }; meta: PaymentsResponseMeta }>(
+        `/business-owner/businesses/${business?.id}/payments`,
+        { params: { perPage: '25', ...(methodFilter !== 'all' ? { payment_method: methodFilter } : {}) } }
+      ),
+    enabled: !!business?.id,
+  })
+
+  const records = paymentsQuery.data?.data?.payments ?? []
+  const summary = paymentsQuery.data?.meta?.summary
+  const total = paymentsQuery.data?.meta?.total
+  const isLoading = paymentsQuery.isLoading
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-6">
+        <h2 className="text-sm font-semibold text-[#17201A] mb-1 flex items-center gap-2"><BarChart3 className="w-4 h-4 text-[#16803C]" /> Payment Tracking</h2>
+        <p className="text-xs text-[#647067] mb-5">Every order placed with this business is recorded here with the payment method used, its payment status, and the amount received.</p>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+          <div className="border border-[#E8ECE9] rounded-xl p-4 bg-[#F7FAF7]">
+            <p className="text-xs text-[#647067] font-medium">Total Received</p>
+            <p className="text-lg font-bold text-[#17201A] mt-1">{formatCurrency(summary?.total_received ?? 0)}</p>
+            <p className="text-[11px] text-[#8A948E] mt-0.5">{summary?.orders_count ?? 0} order{(summary?.orders_count ?? 0) === 1 ? '' : 's'}</p>
+          </div>
+          <div className="border border-[#E8ECE9] rounded-xl p-4">
+            <p className="text-xs text-[#647067] font-medium">Cash on Delivery</p>
+            <p className="text-lg font-bold text-[#B45309] mt-1">{formatCurrency(summary?.cash_total ?? 0)}</p>
+            <p className="text-[11px] text-[#8A948E] mt-0.5">{summary?.cash_count ?? 0} COD order{(summary?.cash_count ?? 0) === 1 ? '' : 's'}</p>
+          </div>
+          <div className="border border-[#E8ECE9] rounded-xl p-4">
+            <p className="text-xs text-[#647067] font-medium">Online Payments</p>
+            <p className="text-lg font-bold text-[#16803C] mt-1">{formatCurrency(summary?.online_total ?? 0)}</p>
+            <p className="text-[11px] text-[#8A948E] mt-0.5">{summary?.online_count ?? 0} online order{(summary?.online_count ?? 0) === 1 ? '' : 's'}</p>
+          </div>
+          <div className="border border-[#E8ECE9] rounded-xl p-4">
+            <p className="text-xs text-[#647067] font-medium">Settled Earnings</p>
+            <p className="text-lg font-bold text-[#17201A] mt-1">{formatCurrency(summary?.settled_amount ?? 0)}</p>
+            <p className="text-[11px] text-[#8A948E] mt-0.5">Your share of settled orders</p>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="relative">
+            <Filter className="w-4 h-4 text-[#647067] absolute left-3 top-1/2 -translate-y-1/2" />
+            <select
+              value={methodFilter}
+              onChange={e => setMethodFilter(e.target.value as 'all' | 'cash' | 'online')}
+              className="bg-white border border-[#E2E8E3] rounded-xl py-2 pl-9 pr-4 text-sm text-[#17201A] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C]"
+            >
+              <option value="all">All payment methods</option>
+              <option value="cash">Cash on Delivery</option>
+              <option value="online">Online (GCash / Card)</option>
+            </select>
+          </div>
+          {isLoading ? (
+            <span className="text-xs text-[#647067]">Loading records...</span>
+          ) : (
+            <span className="text-xs text-[#647067]">{total ?? 0} record{(total ?? 0) === 1 ? '' : 's'}</span>
+          )}
+        </div>
+
+        {isLoading ? (
+          <div className="py-10 text-center">
+            <div className="w-8 h-8 border-2 border-[#16803C] border-t-transparent rounded-full animate-spin mx-auto" />
+            <p className="text-sm text-[#647067] mt-3">Loading payment records...</p>
+          </div>
+        ) : records.length === 0 ? (
+          <div className="border border-dashed border-[#E2E8E3] rounded-xl p-10 text-center">
+            <Receipt className="w-8 h-8 text-[#9CA3AF] mx-auto" />
+            <p className="text-sm font-medium text-[#17201A] mt-3">
+              {methodFilter === 'all' ? 'No payment records yet' : 'No records match this filter'}
+            </p>
+            <p className="text-xs text-[#647067] mt-1">
+              {methodFilter === 'all'
+                ? 'Payments appear here as soon as customers place orders with this business.'
+                : 'Try switching the payment method filter to show all records.'}
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto -mx-6 px-6">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-[#647067] border-b border-[#E8ECE9]">
+                  <th className="pb-2 pr-4 font-medium">Order</th>
+                  <th className="pb-2 pr-4 font-medium">Placed</th>
+                  <th className="pb-2 pr-4 font-medium">Customer</th>
+                  <th className="pb-2 pr-4 font-medium">Method</th>
+                  <th className="pb-2 pr-4 font-medium">Status</th>
+                  <th className="pb-2 pr-4 font-medium text-right">Amount</th>
+                  <th className="pb-2 pr-4 font-medium text-right">Settlement</th>
+                  <th className="pb-2 font-medium text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {records.map(r => (
+                  <tr key={r.id} className="border-b border-[#F1F4F1] last:border-0">
+                    <td className="py-3 pr-4">
+                      <p className="font-medium text-[#17201A]">{r.order_number}</p>
+                      {r.group_reference && <p className="text-[11px] text-[#8A948E]">Group {r.group_reference}</p>}
+                    </td>
+                    <td className="py-3 pr-4 text-[#647067] whitespace-nowrap">{formatDate(r.placed_at)}</td>
+                    <td className="py-3 pr-4 text-[#17201A]">{r.customer_name || '—'}</td>
+                    <td className="py-3 pr-4">
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${r.payment_method === 'cash' ? 'bg-[#FEF3C7] text-[#B45309]' : 'bg-[#EAF6ED] text-[#16803C]'}`}>
+                        {r.payment_label}
+                      </span>
+                    </td>
+                    <td className="py-3 pr-4">
+                      <span className={`text-xs font-medium ${paymentStatusStyles(r.payment_status)}`}>
+                        {r.payment_status === 'paid' ? 'Paid' : r.payment_status === 'refunded' ? 'Refunded' : 'Pending'}
+                      </span>
+                      <span className="text-[11px] text-[#8A948E] block">{r.order_status.replace(/_/g, ' ')}</span>
+                    </td>
+                    <td className="py-3 pr-4 text-right font-semibold text-[#17201A]">{formatCurrency(r.total)}</td>
+                    <td className="py-3 text-right">
+                      {r.settlement_amount !== null ? (
+                        <div>
+                          <p className="text-sm font-semibold text-[#16803C]">{formatCurrency(r.settlement_amount)}</p>
+                          <p className="text-[11px] text-[#8A948E]">{r.settlement_status || 'settled'}</p>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-[#9CA3AF]">Not settled</span>
+                      )}
+                    </td>
+                    <td className="py-3 text-right">
+                      <button
+                        onClick={() => setViewing(r)}
+                        className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#16803C] hover:text-[#126B32] hover:bg-[#EAF6ED] px-3 py-1.5 rounded-lg transition"
+                      >
+                        <Eye className="w-3.5 h-3.5" /> View
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+      {viewing && (
+        <PaymentTransactionModal businessId={business?.id} record={viewing} onClose={() => setViewing(null)} />
       )}
     </div>
   )

@@ -28,7 +28,6 @@ const DELIVERY_BASE_FARE = 40.00
 const DELIVERY_INCLUDED_KM = 2.00
 const DELIVERY_PER_KM = 15.00
 const DEFAULT_CENTER: [number, number] = [12.8667, 121.45]
-const CART_VERSION = 2
 
 interface DeliveryFeeData {
   delivery_fee: number
@@ -307,11 +306,13 @@ export default function TouristFoodCart() {
     },
     onError: (error: any) => {
       console.error('Order checkout failed:', error)
-      if (error?.response?.status === 401) {
-        logout()
-        navigate('/login', { replace: true })
-        return
-      }
+      // A 401 here must NOT wipe the session. The shared api interceptor routes
+      // a rejected credential through an authoritative /user revalidation and
+      // only a CONFIRMED dead token clears it (api.ts + AuthEventHandler). An
+      // instant logout+navigate here would boot a LIVE session on a
+      // stale-credential 401 (in-flight checkout carrying the pre-re-login
+      // token) — the exact auto-logout bug this file used to have. Show the
+      // server message; the canonical path decides if the session truly ended.
       const errors = error?.response?.data?.errors
       const msg = errors
         ? Object.values(errors).flat().join('. ')
@@ -483,32 +484,41 @@ export default function TouristFoodCart() {
                     <p className="flex items-center gap-1.5 text-sm font-semibold text-[#17201B]">
                       <Zap className="w-4 h-4 text-[#F4B400]" /> Fast Delivery
                     </p>
-                    <p className="text-xs text-[#6B7280] mt-1">Priority delivery with a ₱20–₱100 rider tip</p>
+                    <p className="text-xs text-[#6B7280] mt-1">Priority delivery with a ₱25 / ₱50 / ₱100 rider tip</p>
                   </button>
                 </div>
                 {deliverySpeed === 'fast' && (
                   <div className="mt-4">
-                    <label className="block text-sm font-medium text-[#17201B] mb-2" htmlFor="rider-tip">
-                      Rider tip <span className="text-red-500">*</span>
+                    <label className="block text-sm font-medium text-[#17201B] mb-2">
+                      Priority tip <span className="text-red-500">*</span>
                     </label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-[#6B7280]">₱</span>
-                      <input
-                        id="rider-tip"
-                        type="number"
-                        min="20"
-                        max="100"
-                        step="1"
-                        value={riderTip}
-                        onChange={(e) => setRiderTip(e.target.value)}
-                        placeholder="Enter tip amount (₱20–₱100)"
-                        className="w-full pl-8 pr-4 py-2.5 bg-white border border-[#E5E9E7] rounded-xl text-sm text-[#17201B] placeholder-[#6B7280] focus:ring-2 focus:ring-[#F4B400]/40 focus:border-[#F4B400] outline-none transition"
-                      />
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { value: '25', label: '₱25', sub: 'Priority' },
+                        { value: '50', label: '₱50', sub: 'Higher priority' },
+                        { value: '100', label: '₱100', sub: 'Fastest' },
+                      ].map((tier) => (
+                        <button
+                          key={tier.value}
+                          type="button"
+                          onClick={() => setRiderTip(tier.value)}
+                          className={`p-2.5 rounded-xl border-2 text-center transition ${
+                            riderTip === tier.value
+                              ? 'border-[#F4B400] bg-[#F4B400]/10'
+                              : 'border-[#E5E9E7] hover:border-[#F4B400]/50'
+                          }`}
+                        >
+                          <p className="text-sm font-semibold text-[#17201B]">{tier.label}</p>
+                          <p className="text-[11px] text-[#6B7280] mt-0.5">{tier.sub}</p>
+                        </button>
+                      ))}
                     </div>
-                    {riderTip !== '' && riderTipAmount < 20 && (
-                      <p className="text-xs text-red-600 mt-1.5">Minimum tip amount is ₱20.</p>
+                    {riderTip === '' && (
+                      <p className="text-xs text-red-600 mt-1.5">Select a priority tip to continue.</p>
                     )}
-                    <p className="text-[11px] text-[#9CA3AF] mt-1.5">The tip is added to your total and given to the rider.</p>
+                    <p className="text-[11px] text-[#9CA3AF] mt-1.5">
+                      Added to your total and given to the rider. Higher tips get higher rider-matching priority, and may reduce preparation time if the restaurant offers priority preparation.
+                    </p>
                   </div>
                 )}
               </div>
@@ -769,14 +779,23 @@ export default function TouristFoodCart() {
             {/* Checkout Button */}
             <button
               onClick={() => {
-                if (!user) {
-                  setOrderError('Your session has expired. Please log in again.')
+                const authToken = localStorage.getItem('auth_token')
+                if (!user && !authToken) {
+                  // Genuine guest: save the pending order, then go to login.
+                  setOrderError('Please log in to place your order.')
                   savePendingAction({
                     type: 'food_order',
                     returnPath: '/tourist/food/cart',
                   })
                   logout()
                   navigate('/login', { replace: true })
+                  return
+                }
+                if (!user && authToken) {
+                  // A credential exists but the profile has not been confirmed
+                  // yet (transient boot /user failure). Block the checkout but
+                  // do NOT call logout() — that would destroy a live session.
+                  setOrderError('Your session is still loading. Please try again.')
                   return
                 }
                 setShowConfirm(true)

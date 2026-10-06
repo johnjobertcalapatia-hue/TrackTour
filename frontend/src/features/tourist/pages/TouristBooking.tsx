@@ -16,12 +16,12 @@ export default function TouristBooking() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['tourist-bookings'],
-    queryFn: () => get<{ data: Booking[] }>('/tourist/booking'),
+    queryFn: () => get<{ bookings: { data: Booking[] } }>('/tourist/history', { params: { tab: 'bookings' } }),
   })
 
   if (isLoading) return <DashboardSkeleton />
 
-  const bookings = data?.data ?? []
+  const bookings = data?.bookings?.data ?? []
   const totalPages = Math.ceil(bookings.length / ITEMS_PER_PAGE)
   const paginated = bookings.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE)
 

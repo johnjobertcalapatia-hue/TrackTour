@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\TourismOffice;
 
 use App\Http\Controllers\Controller;
+use App\Models\Business;
 use App\Models\TourismSetting;
+use App\Models\TouristDestination;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
@@ -34,11 +36,107 @@ class LandingContentController extends Controller
     ];
 
     /**
+     * Landing filter-tab membership by business category name. A combined
+     * hotel/restaurant is listed under both Food and Resorts; anything not
+     * matched here falls back to the Businesses tab.
+     */
+    private const CARD_TABS_BY_CATEGORY = [
+        'spot' => ['tourist attraction', 'nature', 'beach', 'park', 'historical'],
+        'food' => ['restaurant', 'café', 'cafe', 'food hub', 'food hub / food park', 'bakery', 'fast food', 'food', 'hotel & restaurant combination'],
+        'resort' => ['hotel', 'resort', 'hotel & restaurant combination', 'homestay', 'camping site'],
+    ];
+
+    /**
      * Public landing page content used by guests without auth.
      */
     public function content(): JsonResponse
     {
         return $this->successResponse($this->contentData(), 'Landing content retrieved successfully.');
+    }
+
+    /**
+     * Public landing page card feed, read straight from the database on every
+     * request so the filter tabs (All / Tourist Spots / Food / Businesses /
+     * Resorts) always render current rows instead of a hardcoded list.
+     *
+     * Cards are active tourist destinations first, then approved businesses,
+     * each newest first. `types` holds the tabs a card belongs to.
+     */
+    public function cards(Request $request): JsonResponse
+    {
+        $limit = (int) $request->query('limit', 0);
+        $limit = $limit > 0 ? min($limit, 500) : 200;
+
+        $destinations = TouristDestination::query()
+            ->where('status', 'active')
+            ->with(['category:id,name', 'municipality:id,name'])
+            ->orderByDesc('created_at')
+            ->get()
+            ->map(fn (TouristDestination $destination) => $this->destinationCard($destination));
+
+        $businesses = Business::query()
+            ->where('status', 'approved')
+            ->with([
+                'category:id,name',
+                'municipality:id,name',
+                'details',
+                'media' => fn ($query) => $query->whereIn('type', ['Logo', 'Gallery', 'logo', 'gallery'])->orderBy('sort_order'),
+            ])
+            ->orderByDesc('created_at')
+            ->get()
+            ->map(fn (Business $business) => $this->businessCard($business));
+
+        return $this->successResponse(
+            $destinations->concat($businesses)->take($limit)->values(),
+            'Landing cards retrieved successfully.'
+        );
+    }
+
+    private function destinationCard(TouristDestination $destination): array
+    {
+        return [
+            'key' => 'spot-'.$destination->id,
+            'types' => ['spot'],
+            'title' => $destination->name,
+            'location' => $destination->municipality?->name ?: $destination->address,
+            'category' => $destination->category?->name ?: 'Tourist Spot',
+            // Destinations carry no rating column; ratings only exist for
+            // reviewed businesses, so the card simply omits the star.
+            'rating' => null,
+            'image' => collect($destination->images ?? [])->filter()->first(),
+        ];
+    }
+
+    private function businessCard(Business $business): array
+    {
+        $categoryName = $business->category?->name;
+        $types = $this->cardTabs($categoryName);
+        $details = $business->details->mapWithKeys(fn ($detail) => [$detail->field_name => $detail->field_value]);
+        $rating = (float) ($business->average_rating ?? 0);
+
+        return [
+            'key' => 'biz-'.$business->id,
+            'types' => $types,
+            'title' => $business->business_name,
+            'location' => $business->municipality?->name ?: $business->address,
+            'category' => (($types[0] === 'spot' ? ($details['attraction_type'] ?? null) : null) ?: $categoryName ?: 'Business'),
+            'rating' => $rating > 0 ? round($rating, 1) : null,
+            'image' => $business->cover_photo ?: $business->media->first()?->file_path,
+        ];
+    }
+
+    private function cardTabs(?string $categoryName): array
+    {
+        $normalized = mb_strtolower(trim((string) $categoryName));
+        $tabs = [];
+
+        foreach (self::CARD_TABS_BY_CATEGORY as $tab => $categoryNames) {
+            if (in_array($normalized, $categoryNames, true)) {
+                $tabs[] = $tab;
+            }
+        }
+
+        return $tabs ?: ['business'];
     }
 
     /**

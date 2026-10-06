@@ -169,14 +169,15 @@ class PurchasingCashService
 
     /**
      * Mark one restaurant purchase stop. Only the assigned rider may perform
-     * this, and only after the purchasing cash has been issued.
+     * this after the Tourism Office issues the cash and the rider confirms
+     * receipt.
      *
      * @throws InvalidArgumentException
      */
     public function markPurchase(Delivery $delivery, int $purchaseId, int $riderId, string $status): void
     {
         $this->assertRiderOwnership($delivery, $riderId);
-        $this->assertIssued($delivery);
+        $this->assertCashReceived($delivery);
 
         if (! in_array($status, [CodPurchase::STATUS_PURCHASED, CodPurchase::STATUS_COLLECTED], true)) {
             throw new InvalidArgumentException('Invalid purchase status. Use purchased or collected.');
@@ -282,6 +283,183 @@ class PurchasingCashService
         return $allocations;
     }
 
+    /**
+     * Per-business preparation time (minutes) for a delivery, computed from
+     * the order-time item snapshots (order_items.preparation_time), grouped by
+     * the restaurant fulfilling each item. Used to order the pickup route:
+     * the restaurant that finishes preparing soonest is picked up first, and
+     * the last restaurant (longest prep) becomes the drop-off route origin.
+     *
+     * @return array<int, int> business_id => prep minutes (0 when unknown)
+     */
+    public function businessPrepTimes(Delivery $delivery): array
+    {
+        $map = [];
+
+        foreach ($delivery->childOrders() as $order) {
+            foreach ($order->items()->get() as $item) {
+                $businessId = (int) ($item->business_id ?: $order->business_id);
+                $prep = (int) ($item->preparation_time ?? 0);
+                $map[$businessId] = max($map[$businessId] ?? 0, $prep);
+            }
+        }
+
+        return $map;
+    }
+
+    /**
+     * The grouped pickup route for ANY delivery, COD or prepaid: every
+     * restaurant that fulfils items on this trip, in ascending preparation
+     * time (shortest prep picked up first), with the longest-prep restaurant
+     * exposed as the drop-off route origin and the tourist destination as the
+     * drop-off point. COD stops additionally carry their cod_purchases ledger
+     * row so the purchasing-cash flow and the ALL-COLLECTED gate keep working
+     * unchanged (see the full payload shape in RIDER_PICKUP_ROUTE fields).
+     *
+     * @return array<string, mixed>
+     */
+    public function pickupRoute(Delivery $delivery): array
+    {
+        return [
+            'delivery_id' => $delivery->id,
+            'is_cod' => $this->isCod($delivery),
+            'stops' => $this->routeStops($delivery)->map(function (array $entry) {
+                $purchase = $entry['cod_purchase'];
+
+                return [
+                    'business_id' => $entry['business_id'],
+                    'business_name' => $entry['business_name'],
+                    'sequence' => $entry['sequence'],
+                    'preparation_time' => $entry['preparation_time'],
+                    'pickup_lat' => $entry['pickup_latitude'],
+                    'pickup_lng' => $entry['pickup_longitude'],
+                    'pickup_address' => $entry['pickup_address'],
+                    'cod_purchase' => $purchase ? [
+                        'id' => $purchase->id,
+                        'purchase_number' => $purchase->purchase_number,
+                        'purchase_amount' => (float) $purchase->purchase_amount,
+                        'status' => $purchase->status,
+                        'purchased_at' => $purchase->purchased_at,
+                        'collected_at' => $purchase->collected_at,
+                    ] : null,
+                ];
+            })->values(),
+            'pickup_origin' => $this->pickupOrigin($delivery),
+            'dropoff' => [
+                'latitude' => $delivery->delivery_latitude !== null ? (float) $delivery->delivery_latitude : null,
+                'longitude' => $delivery->delivery_longitude !== null ? (float) $delivery->delivery_longitude : null,
+                'address' => $delivery->delivery_address,
+            ],
+        ];
+    }
+
+    /**
+     * Payment-agnostic per-restaurant pickup stops for a delivery, derived
+     * from the order-item snapshots (business_id + preparation_time), ordered
+     * by ascending preparation time (ties fall back to business id). This is
+     * the single canonical derivation for COD (which adds the cod_purchases
+     * ledger row per stop) AND prepaid multi-restaurant trips.
+     *
+     * @return Collection<int, array<string, mixed>>
+     */
+    public function routeStops(Delivery $delivery): Collection
+    {
+        $prepTimes = $this->businessPrepTimes($delivery);
+        $businesses = [];
+
+        foreach ($delivery->childOrders() as $order) {
+            $orderBusiness = $order->business;
+            foreach ($order->items()->with('business')->get() as $item) {
+                $businessId = (int) ($item->business_id ?: $order->business_id);
+                if ($businessId <= 0) {
+                    continue;
+                }
+                $businesses[$businessId] ??= $item->business ?? $orderBusiness;
+            }
+        }
+
+        if (empty($businesses)) {
+            return collect();
+        }
+
+        $orderedIds = collect(array_keys($businesses))
+            ->sortBy(fn (int $id) => [$prepTimes[$id] ?? 0, $id])
+            ->values();
+
+        $purchases = $this->isCod($delivery)
+            ? $delivery->codPurchases->keyBy(fn (CodPurchase $p) => (int) $p->business_id)
+            : collect();
+
+        $sequence = 0;
+
+        return $orderedIds->map(function (int $businessId) use (&$sequence, $prepTimes, $businesses, $purchases) {
+            $sequence++;
+            $business = $businesses[$businessId];
+
+            return [
+                'business_id' => $businessId,
+                'business_name' => $business->business_name ?? $business->name,
+                'sequence' => $sequence,
+                'preparation_time' => $prepTimes[$businessId] ?? 0,
+                'pickup_latitude' => $business->latitude !== null ? (float) $business->latitude : null,
+                'pickup_longitude' => $business->longitude !== null ? (float) $business->longitude : null,
+                'pickup_address' => $business->address,
+                'cod_purchase' => $purchases->get($businessId),
+            ];
+        });
+    }
+
+    /**
+     * Per-restaurant pickup stops ordered by ascending preparation time (the
+     * route the rider drives), each annotated with its sequence, prep time and
+     * restaurant pickup coordinates/address. COD-only: every stop carries its
+     * cod_purchases ledger row (the controller's cash-flow panel consumes it).
+     *
+     * @return Collection<int, array<string, mixed>>
+     */
+    public function pickupStops(Delivery $delivery): Collection
+    {
+        return $this->routeStops($delivery)
+            ->filter(fn (array $entry) => $entry['cod_purchase'] !== null)
+            ->map(function (array $entry) {
+                $purchase = $entry['cod_purchase'];
+
+                return [
+                    'stop' => $purchase,
+                    'sequence' => $entry['sequence'],
+                    'preparation_time' => $entry['preparation_time'],
+                    'pickup_latitude' => $entry['pickup_latitude'],
+                    'pickup_longitude' => $entry['pickup_longitude'],
+                    'pickup_address' => $entry['pickup_address'],
+                ];
+            })
+            ->values();
+    }
+
+    /**
+     * The LAST restaurant the rider picks up (longest preparation time). Per
+     * the route model this is the pickup point the drop-off route originates
+     * from. Works for COD and prepaid alike.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function pickupOrigin(Delivery $delivery): ?array
+    {
+        $entry = $this->routeStops($delivery)->last();
+
+        if (! $entry) {
+            return null;
+        }
+
+        return [
+            'business_id' => $entry['business_id'],
+            'business_name' => $entry['business_name'],
+            'latitude' => $entry['pickup_latitude'],
+            'longitude' => $entry['pickup_longitude'],
+            'address' => $entry['pickup_address'],
+        ];
+    }
+
     private function isCod(Delivery $delivery): bool
     {
         return app(NearestRiderService::class)->isCodDelivery($delivery);
@@ -291,6 +469,15 @@ class PurchasingCashService
     {
         if ($delivery->purchasing_cash_issued_at === null) {
             throw new InvalidArgumentException('Purchasing cash has not been issued yet.');
+        }
+    }
+
+    public function assertCashReceived(Delivery $delivery): void
+    {
+        $this->assertIssued($delivery);
+
+        if ($delivery->purchasing_cash_received_at === null) {
+            throw new InvalidArgumentException('Confirm receipt of the purchasing cash before purchasing food.');
         }
     }
 

@@ -62,7 +62,7 @@ class GroupedOrderDeliveryLifecycleTest extends TestCase
 
         $allDays = array_fill_keys(
             ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
-            [['open' => '00:00', 'close' => '23:59']]
+            [['open' => '00:00', 'close' => '23:59'], ['open' => '23:59', 'close' => '00:00']]
         );
 
         $this->restaurantA = Business::create([
@@ -92,10 +92,10 @@ class GroupedOrderDeliveryLifecycleTest extends TestCase
         $this->riderA = $this->makeRider('ridera-flow@example.com', 'Rider A');
         $this->riderB = $this->makeRider('riderb-flow@example.com', 'Rider B');
 
-        $nearestRiderMock = new class(app(\App\Services\FirebaseService::class)) extends NearestRiderService {
-            public function __construct($firebase)
+        $nearestRiderMock = new class() extends NearestRiderService {
+            public function __construct()
             {
-                parent::__construct($firebase);
+                parent::__construct();
             }
 
             public function findNearestAvailableRiders(float $pickupLat, float $pickupLng, string $serviceType = 'food', int $limit = 5, ?int $municipalityId = null): Collection

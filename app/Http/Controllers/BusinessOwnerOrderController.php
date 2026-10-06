@@ -5,20 +5,15 @@ namespace App\Http\Controllers;
 use App\Http\Requests\BusinessOwner\UpdateOrderStatusRequest;
 use App\Events\OrderStatusChanged;
 use App\Http\Resources\OrderResource;
-use App\Models\Delivery;
 use App\Models\Order;
 use App\Models\OrderItem;
-use App\Models\Payment;
 use App\Models\User;
-use App\Services\NearestRiderService;
-use App\Services\OrderRefundService;
 use App\Services\OrderService;
-use App\Services\PaymongoService;
 use App\Services\PreparationPredictionService;
+use App\Services\PreparationStartService;
 use App\Services\SmartDispatchService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class BusinessOwnerOrderController extends Controller
@@ -37,7 +32,7 @@ class BusinessOwnerOrderController extends Controller
                 $query->whereIn('business_id', $businessIds)
                     ->orWhereHas('items', fn ($items) => $items->whereIn('business_id', $businessIds));
             })
-            ->with('business', 'items', 'delivery.rider.profile', 'groupOrder')
+            ->with('business', 'items.offering', 'delivery.rider.profile', 'groupOrder')
             ->when($filters['status'] ?? null, fn ($q, $s) => $q->where('status', $s))
             ->when($filters['business_id'] ?? null, fn ($q, $id) => $q->where('business_id', $id))
             ->latest()
@@ -54,7 +49,7 @@ class BusinessOwnerOrderController extends Controller
             return $this->forbiddenResponse('You do not own this business.');
         }
 
-        $order->load('items', 'business', 'delivery.rider.profile', 'groupOrder');
+        $order->load('items.offering', 'business', 'delivery.rider.profile', 'groupOrder');
 
         return $this->successResponse(OrderResource::make($order));
     }
@@ -77,17 +72,29 @@ class BusinessOwnerOrderController extends Controller
             return $this->errorResponse('This delivery order cannot be prepared until a rider has accepted the delivery.', 422);
         }
 
-        $order->update([
+        $orderData = [
             'status' => $validated['status'],
             'cancellation_reason' => $validated['cancellation_reason'] ?? $validated['reason'] ?? null,
             'cancelled_by' => in_array($validated['status'], ['cancelled', 'rejected']) ? $request->user()->id : null,
             'cancelled_at' => in_array($validated['status'], ['cancelled', 'rejected']) ? now() : null,
-            'completed_at' => match ($validated['status']) {
-                'completed' => $order->completed_at ?? now(),
-                'cancelled' => null,
-                default => $order->completed_at,
-            },
-        ]);
+            'completed_at' => $validated['status'] === 'cancelled' ? null : $order->completed_at,
+        ];
+
+        // The countdown must be armed whenever an order enters 'preparing' —
+        // including the manual "Start Preparing" transition — or the Order
+        // detail "Time Remaining" would render "—" (no predicted_ready_at).
+        // The genuine rider-acceptance path arms it via PreparationStartService.
+        if ($validated['status'] === 'preparing' && ! $order->predicted_ready_at) {
+            $minutes = app(PreparationStartService::class)->effectivePreparationMinutes($order);
+            $orderData = array_merge($orderData, [
+                'preparation_started_at' => $order->preparation_started_at ?? now(),
+                'predicted_ready_at' => now()->addMinutes($minutes),
+                'predicted_preparation_seconds' => $minutes * 60,
+                'preparation_time' => $minutes,
+            ]);
+        }
+
+        $order->update($orderData);
 
         OrderStatusChanged::dispatch(
             $order->fresh(),
@@ -109,7 +116,7 @@ class BusinessOwnerOrderController extends Controller
         }
 
         return $this->successResponse(
-            OrderResource::make($order->fresh()->load('business', 'items', 'delivery.rider.profile')),
+            OrderResource::make($order->fresh()->load('business', 'items.offering', 'delivery.rider.profile')),
             "Order {$validated['status']} successfully."
         );
     }
@@ -300,7 +307,7 @@ class BusinessOwnerOrderController extends Controller
         );
 
         return $this->successResponse(
-            OrderResource::make($order->fresh()->load('business', 'items', 'delivery.rider.profile')),
+            OrderResource::make($order->fresh()->load('business', 'items.offering', 'delivery.rider.profile')),
             'Rider assigned successfully.'
         );
     }
@@ -320,7 +327,8 @@ class BusinessOwnerOrderController extends Controller
 
     /**
      * POST /business-owner/orders/{order}/start-preparation
-     * Restaurant signals they are starting to prepare food.
+     * Manual recovery path: normally PreparationStartService starts this
+     * automatically the moment a rider accepts (or immediately for pickup).
      */
     public function startPreparation(Request $request, Order $order): JsonResponse
     {
@@ -336,37 +344,24 @@ class BusinessOwnerOrderController extends Controller
             return $this->errorResponse('Order has already been marked ready.', 422);
         }
 
-        $previousStatus = (string) $order->status;
+        // Canonical transition (waiting → preparing + countdown). No-op when
+        // the order already left waiting_restaurant (e.g. manually assigned).
+        if (app(\App\Services\PreparationStartService::class)->startForOrder($order)) {
+            $fresh = $order->fresh();
 
-        $order->items()
-            ->whereIn('status', ['pending', 'accepted'])
-            ->update([
-                'status' => 'preparing',
-                'preparation_started_at' => now(),
-            ]);
+            return $this->successResponse(
+                OrderResource::make($fresh->load('business', 'items.offering')),
+                'Preparation started. Estimated ready: '.($fresh->predicted_ready_at?->format('g:i A') ?? '—'),
+            );
+        }
 
-        $order->update([
-            'status' => 'preparing',
-            'preparation_started_at' => now(),
-        ]);
-
-        OrderStatusChanged::dispatch(
-            $order->fresh(),
-            $previousStatus,
-            'preparing',
-            $request->user(),
-        );
-
-        // Calculate predicted ready time
-        $predictedReadyAt = $order->predicted_preparation_seconds
-            ? now()->addSeconds($order->predicted_preparation_seconds)
-            : now()->addMinutes(15); // Fallback
-
-        $order->update(['predicted_ready_at' => $predictedReadyAt]);
+        if ($order->status !== 'preparing') {
+            return $this->errorResponse('Order cannot start preparation in its current status.', 422);
+        }
 
         return $this->successResponse(
-            OrderResource::make($order->fresh()->load('business', 'items')),
-            'Preparation started. Estimated ready: '.$predictedReadyAt->format('g:i A'),
+            OrderResource::make($order->fresh()->load('business', 'items.offering')),
+            'Preparation already started. Estimated ready: '.($order->predicted_ready_at?->format('g:i A') ?? '—'),
         );
     }
 
@@ -436,7 +431,7 @@ class BusinessOwnerOrderController extends Controller
         }
 
         return $this->successResponse(
-            OrderResource::make($order->fresh()->load('business', 'items', 'delivery.rider.profile')),
+            OrderResource::make($order->fresh()->load('business', 'items.offering', 'delivery.rider.profile')),
             'Food is ready for pickup.',
         );
     }
@@ -689,7 +684,7 @@ class BusinessOwnerOrderController extends Controller
     /**
      * PATCH /business-owner/orders/{order}/items/{item}/status
      * Update preparation status for an individual food item.
-     * Item statuses: pending, accepted, preparing, ready, cancelled, rejected.
+     * Item statuses: pending, accepted, preparing, ready.
      * Enforces the rule:
      * A restaurant sub-order cannot become READY_FOR_PICKUP until ALL active items are ready.
      */
@@ -704,8 +699,7 @@ class BusinessOwnerOrderController extends Controller
         }
 
         $validated = $request->validate([
-            'status' => 'required|string|in:pending,accepted,preparing,ready,cancelled,rejected',
-            'reason' => 'nullable|string|max:500',
+            'status' => 'required|string|in:pending,accepted,preparing,ready',
         ]);
 
         if ($this->requiresAcceptedRider($order) && in_array($validated['status'], ['preparing', 'ready'], true)) {
@@ -732,15 +726,6 @@ class BusinessOwnerOrderController extends Controller
                 $data['preparation_started_at'] = now();
             }
             $data['ready_at'] = now();
-        } elseif (in_array($status, ['cancelled', 'rejected'], true)) {
-            $data['cancelled_at'] = now();
-            $data['cancelled_by'] = $request->user()->id;
-            $data['cancelled_quantity'] = $item->quantity;
-            $data['cancellation_reason'] = $validated['reason'] ?? 'Cancelled by restaurant';
-            if ($status === 'rejected') {
-                $data['rejection_reason'] = $validated['reason'] ?? 'Rejected by restaurant';
-                $data['rejected_by'] = $request->user()->id;
-            }
         }
 
         $item->update($data);
@@ -749,7 +734,7 @@ class BusinessOwnerOrderController extends Controller
         $this->refreshOrderStatus($order);
 
         return $this->successResponse(
-            OrderResource::make($order->fresh()->load('business', 'items', 'delivery.rider.profile')),
+            OrderResource::make($order->fresh()->load('business', 'items.offering', 'delivery.rider.profile')),
             "Item {$item->product_name} status updated to {$status}."
         );
     }

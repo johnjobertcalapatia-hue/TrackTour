@@ -31,13 +31,16 @@ use Tests\TestCase;
  *
  *     NO ACCEPTED RIDER  ⇒  NO PREPARATION
  *
- * A delivery order may only be accepted / prepared / marked ready once the
- * delivery is dispatcheing and a rider has ACCEPTED it. Every prep-reaching
- * endpoint must reject with 422 until rider acceptance, and authorize
- * immediately afterwards:
+ * A delivery order may only be prepared / marked ready once the delivery is
+ * dispatched and a rider has ACCEPTED it. The restaurant has NO accept or
+ * reject action anymore: rider acceptance itself performs
+ * waiting_restaurant → preparing (with the countdown timer), and the timer
+ * auto-completes to ready at 00:00. Every prep-reaching endpoint must reject
+ * with 422 until rider acceptance, then stay authorized afterwards:
  *
  *     tourist places order → restaurant order created → rider offer
- *         → rider accepts → restaurant prepares → ready → pickup → delivered
+ *         → rider accepts → preparation starts automatically → ready
+ *         → pickup → delivered
  *
  * Also covered: group orders resolve the gate through their single shared
  * delivery (never per-restaurant), permanent binding of a delivery to its
@@ -95,7 +98,7 @@ class RiderAcceptanceGateTest extends TestCase
 
         $allDays = array_fill_keys(
             ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
-            [['open' => '00:00', 'close' => '23:59']]
+            [['open' => '00:00', 'close' => '23:59'], ['open' => '23:59', 'close' => '00:00']]
         );
 
         $this->restaurantA = Business::create([
@@ -124,10 +127,10 @@ class RiderAcceptanceGateTest extends TestCase
         // Faithful NearestRiderService mock: determinstic (lowest id first),
         // but - like the real service - never re-offers a delivery to a rider
         // who was already offered it (UNIQUE (delivery_id, rider_id) backstop).
-        $nearestRiderMock = new class(app(\App\Services\FirebaseService::class)) extends NearestRiderService {
-            public function __construct($firebase)
+        $nearestRiderMock = new class() extends NearestRiderService {
+            public function __construct()
             {
-                parent::__construct($firebase);
+                parent::__construct();
             }
 
             public function findNearestAvailableRiders(float $pickupLat, float $pickupLng, string $serviceType = 'food', int $limit = 5, ?int $municipalityId = null): Collection
@@ -315,10 +318,8 @@ class RiderAcceptanceGateTest extends TestCase
         $this->assertNull($order->activeDelivery()->rider_id, 'No rider accepted yet.');
 
         // No accepted rider → every prep-reaching endpoint returns 422.
-        $this->postJson("/api/business-owner/orders/{$order->id}/accept", [], $this->authHeaders($this->ownerA))
-            ->assertStatus(422);
-        $this->postJson("/api/business-owner/orders/{$order->id}/accept-all", [], $this->authHeaders($this->ownerA))
-            ->assertStatus(422);
+        // (The restaurant accept/accept-all endpoints no longer exist at all —
+        // they are covered as 404s in RestaurantPreparationTimerTest.)
         $this->postJson("/api/business-owner/orders/{$order->id}/start-preparation", [], $this->authHeaders($this->ownerA))
             ->assertStatus(422);
         $this->postJson("/api/business-owner/orders/{$order->id}/mark-ready", [], $this->authHeaders($this->ownerA))
@@ -336,11 +337,10 @@ class RiderAcceptanceGateTest extends TestCase
 
         $this->assertSame('waiting_restaurant', $order->fresh()->status, 'Order untouched by blocked preparation attempts.');
 
-        // Rider accepts → restaurant is immediately authorized to prepare.
+        // Rider accepts → preparation starts automatically (no restaurant call).
         $this->assertRiderAccepted($order->activeDelivery(), $this->riderA);
+        $this->assertSame('preparing', $order->fresh()->status, 'Rider acceptance auto-started preparation.');
 
-        $this->postJson("/api/business-owner/orders/{$order->id}/accept", [], $this->authHeaders($this->ownerA))
-            ->assertOk();
         $this->postJson("/api/business-owner/orders/{$order->id}/start-preparation", [], $this->authHeaders($this->ownerA))
             ->assertOk();
         $this->postJson("/api/business-owner/orders/{$order->id}/mark-ready", [], $this->authHeaders($this->ownerA))
@@ -353,31 +353,31 @@ class RiderAcceptanceGateTest extends TestCase
             ->assertOk();
     }
 
-    public function test_rider_gate_also_blocks_preparing_when_order_is_accepted_but_has_no_rider(): void
+    /**
+     * The retired restaurant Accept flow used to be the only way an order
+     * reached 'accepted' WITHOUT a rider. That path no longer exists: while
+     * an order sits in 'Finding Rider' (waiting_restaurant) no manual status
+     * update can move it toward preparation, and rider acceptance performs
+     * the transition itself.
+     */
+    public function test_manual_status_paths_cannot_leave_finding_rider_without_a_rider(): void
     {
         $order = $this->createOrder();
         $item = $order->items->first();
 
-        // Owner accepts individual items (not preparation); order moves to
-        // 'accepted' without a rider. The rider gate must still stop preparing.
-        $this->postJson("/api/business-owner/orders/{$order->id}/items/{$item->id}/accept", [], $this->authHeaders($this->ownerA))
-            ->assertOk();
-        $this->assertSame('accepted', $order->fresh()->status);
-        $this->assertNull($order->fresh()->activeDelivery()->rider_id);
-
+        $this->patchJson("/api/business-owner/orders/{$order->id}/status", ['status' => 'accepted'], $this->authHeaders($this->ownerA))
+            ->assertStatus(422);
         $this->patchJson("/api/business-owner/orders/{$order->id}/status", ['status' => 'preparing'], $this->authHeaders($this->ownerA))
             ->assertStatus(422);
         $this->patchJson("/api/business-owner/orders/{$order->id}/items/{$item->id}/status", ['status' => 'preparing'], $this->authHeaders($this->ownerA))
             ->assertStatus(422);
-        $this->patchJson("/api/business-owner/kitchen/orders/{$order->id}/status", ['status' => 'preparing'], $this->authHeaders($this->ownerA))
-            ->assertStatus(422);
-        $this->patchJson("/api/staff/orders/{$order->id}/status", ['status' => 'preparing'], $this->authHeaders($this->staffA))
-            ->assertStatus(422);
 
-        // Once a rider accepts, preparing becomes legal.
+        $this->assertSame('waiting_restaurant', $order->fresh()->status, 'Finding-Rider orders cannot be advanced manually.');
+        $this->assertNull($order->fresh()->activeDelivery()->rider_id);
+
+        // Rider acceptance performs the transition itself — no restaurant call.
         $this->assertRiderAccepted($order->activeDelivery(), $this->riderA);
-        $this->patchJson("/api/business-owner/orders/{$order->id}/status", ['status' => 'preparing'], $this->authHeaders($this->ownerA))
-            ->assertOk();
+        $this->assertSame('preparing', $order->fresh()->status, 'Rider acceptance auto-starts preparation.');
     }
 
     public function test_only_the_offered_rider_can_claim_a_delivery(): void
@@ -510,21 +510,24 @@ class RiderAcceptanceGateTest extends TestCase
             ->assertStatus(422);
         $this->postJson("/api/business-owner/orders/{$order->id}/mark-ready", [], $this->authHeaders($this->ownerA))
             ->assertStatus(422);
+        // The retired accept-all endpoint is gone entirely — 404, not 422.
+        // It cannot touch order state, so the gate above (start-preparation
+        // / mark-ready → 422) is what actually keeps preparation blocked.
         $this->postJson("/api/business-owner/orders/{$order->id}/accept-all", [], $this->authHeaders($this->ownerA))
-            ->assertStatus(422);
+            ->assertStatus(404);
 
         $this->assertSame('waiting_restaurant', $order->fresh()->status, 'Restaurant remains unable to prepare.');
     }
 
     /**
-     * Regression (realtime/business-rules audit): a multi-item delivery order
-     * with NO accepted rider must never enter 'preparing' when the owner
-     * accepts just one of several pending items. The shared item-status
-     * recalculation (Order::refreshStatusFromItems rule 3) used to flip the
-     * whole order to 'preparing' because the sibling item stayed 'pending'
-     * — an invalid, preparation-authorizing state.
+     * Regression (updated for the restaurant order redesign): the old
+     * item-accept endpoint could flip a multi-item delivery order into
+     * 'preparing' with NO accepted rider via Order::refreshStatusFromItems
+     * rule 3 (sibling item still 'pending'). The endpoint no longer exists —
+     * it returns 404 and cannot touch item or order state at all — so the
+     * premature-preparing defect it guarded is now structurally impossible.
      */
-    public function test_multi_item_accept_without_rider_never_causes_preparing(): void
+    public function test_removed_item_accept_endpoint_never_causes_preparing(): void
     {
         Event::fake([OrderStatusChanged::class]);
 
@@ -539,7 +542,7 @@ class RiderAcceptanceGateTest extends TestCase
         // Listener contract for OrderStatusChanged: an event fake also
         // disables the bridge/notifier listeners — irrelevant to this test.
         $this->postJson("/api/business-owner/orders/{$order->id}/items/{$item1->id}/accept", [], $this->authHeaders($this->ownerA))
-            ->assertOk();
+            ->assertStatus(404);
 
         Event::assertNotDispatched(OrderStatusChanged::class, function (OrderStatusChanged $event) {
             return $event->newStatus === 'preparing';
@@ -547,22 +550,23 @@ class RiderAcceptanceGateTest extends TestCase
 
         $item1->refresh();
         $item2->refresh();
-        $this->assertSame('accepted', $item1->status, 'Item-level acceptance is still allowed before rider assignment.');
+        $this->assertSame('pending', $item1->status, 'Removed endpoint cannot touch item state.');
         $this->assertSame('pending', $item2->status, 'Sibling item stays pending.');
 
         $order->refresh();
         $this->assertNotSame('preparing', $order->status, 'Order must never enter preparing without an accepted rider.');
-        $this->assertSame('accepted', $order->status);
+        $this->assertSame('waiting_restaurant', $order->status);
         $this->assertNull($order->activeDelivery()->rider_id);
     }
 
     /**
-     * Regression: rejecting one of several pending items on a delivery order
-     * with NO accepted rider must also never flip the order to 'preparing'
-     * (sibling items remain pending). Rejection itself stays allowed before
-     * rider assignment — the invariant is the order final state.
+     * Regression (updated for the restaurant order redesign): the old
+     * item-reject endpoint (per-dish out-of-stock refund flow) must never
+     * flip the order to 'preparing'. The endpoint was removed with the
+     * accept/reject retirement — it now returns 404 and cannot touch item
+     * or order state in any order status.
      */
-    public function test_multi_item_reject_without_rider_never_causes_preparing(): void
+    public function test_removed_item_reject_endpoint_never_causes_preparing(): void
     {
         Event::fake([OrderStatusChanged::class]);
 
@@ -578,7 +582,7 @@ class RiderAcceptanceGateTest extends TestCase
             "/api/business-owner/orders/{$order->id}/items/{$item1->id}/reject",
             ['reason' => 'Item unavailable'],
             $this->authHeaders($this->ownerA)
-        )->assertOk();
+        )->assertStatus(404);
 
         Event::assertNotDispatched(OrderStatusChanged::class, function (OrderStatusChanged $event) {
             return $event->newStatus === 'preparing';
@@ -586,21 +590,21 @@ class RiderAcceptanceGateTest extends TestCase
 
         $item1->refresh();
         $item2->refresh();
-        $this->assertSame('rejected', $item1->status, 'Item rejection still allowed before rider assignment.');
+        $this->assertSame('pending', $item1->status, 'Removed endpoint cannot touch item state.');
         $this->assertSame('pending', $item2->status, 'Sibling item stays pending.');
 
         $order->refresh();
-        $this->assertNotSame('preparing', $order->status, 'Rejection must never cause a preparing transition without a rider.');
-        $this->assertSame('waiting_restaurant', $order->status);
+        $this->assertSame('waiting_restaurant', $order->status, 'Rejection can never cause a preparing transition.');
         $this->assertNull($order->activeDelivery()->rider_id);
     }
 
     /**
-     * Sanity: once a rider HAS accepted the delivery, the multi-item item
-     * workflow proceeds exactly as before — accepting an item is allowed and
-     * the shared recalculation may move the order into 'preparing'.
+     * Sanity: once a rider HAS accepted, preparation is already running and
+     * the remaining per-item workflow (mark ready) proceeds normally on top
+     * of it — one item ready keeps the order preparing, all items ready
+     * completes it.
      */
-    public function test_multi_item_item_workflow_works_normally_after_rider_accepts(): void
+    public function test_multi_item_workflow_proceeds_after_rider_acceptance(): void
     {
         $order = $this->createMultiItemOrder();
         $item1 = $order->items->first();
@@ -608,29 +612,32 @@ class RiderAcceptanceGateTest extends TestCase
 
         $this->assertRiderAccepted($order->activeDelivery(), $this->riderA);
 
-        $this->postJson("/api/business-owner/orders/{$order->id}/items/{$item1->id}/accept", [], $this->authHeaders($this->ownerA))
-            ->assertOk();
-        $this->postJson("/api/business-owner/orders/{$order->id}/items/{$item2->id}/accept", [], $this->authHeaders($this->ownerA))
-            ->assertOk();
+        $order->refresh();
+        $this->assertSame('preparing', $order->status, 'Rider acceptance auto-started preparation.');
+        $this->assertSame('preparing', $order->items->firstWhere('id', $item1->id)->status);
+        $this->assertSame('preparing', $order->items->firstWhere('id', $item2->id)->status);
 
-        $item1->refresh();
-        $item2->refresh();
-        $this->assertSame('accepted', $item1->status);
-        $this->assertSame('accepted', $item2->status);
+        $this->patchJson("/api/business-owner/orders/{$order->id}/items/{$item1->id}/status", ['status' => 'ready'], $this->authHeaders($this->ownerA))
+            ->assertOk();
 
         $order->refresh();
+        $this->assertSame('preparing', $order->status, 'Sibling item is still cooking.');
         $this->assertTrue($order->hasAcceptedRider(), 'Rider remains bound to the delivery.');
-        $this->assertNotSame('waiting_restaurant', $order->status, 'Item workflow progressed after rider acceptance.');
         $this->assertNotSame('cancelled', $order->status);
+
+        $this->patchJson("/api/business-owner/orders/{$order->id}/items/{$item2->id}/status", ['status' => 'ready'], $this->authHeaders($this->ownerA))
+            ->assertOk();
+
+        $this->assertSame('ready', $order->refresh()->status, 'All items ready completes the order.');
     }
 
     /**
-     * P11.6 regression (WITH an accepted rider): accepting one of several
-     * pending items must NOT flip the whole sub-order to 'preparing'.
-     * 'preparing' means the kitchen is actively cooking; a merely-accepted
-     * item with siblings still pending is an accepted order, not preparation.
+     * Restaurant-order redesign regression: rider acceptance is the ONLY
+     * event that may perform waiting_restaurant → preparing, and it performs
+     * it exactly once. (The removed item-accept endpoint could previously
+     * reach order states through partial item acceptance.)
      */
-    public function test_multi_item_accept_with_accepted_rider_stays_accepted_until_actually_preparing(): void
+    public function test_rider_acceptance_is_the_single_trigger_for_the_preparing_transition(): void
     {
         Event::fake([OrderStatusChanged::class]);
 
@@ -638,107 +645,65 @@ class RiderAcceptanceGateTest extends TestCase
         $item1 = $order->items->first();
         $item2 = $order->items->last();
 
-        $this->assertRiderAccepted($order->activeDelivery(), $this->riderA);
+        $this->assertNull($order->activeDelivery()->rider_id, 'No rider accepted yet.');
         $this->assertSame('waiting_restaurant', $order->status);
 
+        // Nothing may start preparation before the rider accepts.
         $this->postJson("/api/business-owner/orders/{$order->id}/items/{$item1->id}/accept", [], $this->authHeaders($this->ownerA))
-            ->assertOk();
-
+            ->assertStatus(404);
         Event::assertNotDispatched(OrderStatusChanged::class, fn (OrderStatusChanged $event) => $event->newStatus === 'preparing');
 
-        $order->refresh();
-        $this->assertSame('accepted', $order->status, 'Accepting one item with pending siblings stays accepted, never preparing.');
-        $this->assertSame('accepted', $order->items->firstWhere('id', $item1->id)->status);
-        $this->assertSame('pending', $order->items->firstWhere('id', $item2->id)->status);
-
-        // The kitchen then actually starts the second item — and ONLY then does
-        // the sub-order legitimately become 'preparing'.
-        $this->patchJson("/api/business-owner/orders/{$order->id}/items/{$item2->id}/status", ['status' => 'preparing'], $this->authHeaders($this->ownerA))
-            ->assertOk();
-
-        $order->refresh();
-        $this->assertSame('preparing', $order->status, 'Real preparation starts only when an item is actually being prepared.');
-    }
-
-    /**
-     * P11.6 regression (WITH an accepted rider): rejecting one of several
-     * pending items must NEVER flip the sub-order to 'preparing'. A rejection
-     * is a refusal, not a cooking action — the order stays waiting_restaurant.
-     */
-    public function test_multi_item_reject_with_accepted_rider_never_causes_preparing(): void
-    {
-        Event::fake([OrderStatusChanged::class]);
-
-        $order = $this->createMultiItemOrder();
-        $item1 = $order->items->first();
-        $item2 = $order->items->last();
-
-        $this->assertRiderAccepted($order->activeDelivery(), $this->riderA);
-        $this->assertSame('waiting_restaurant', $order->status);
-
-        $this->postJson(
-            "/api/business-owner/orders/{$order->id}/items/{$item1->id}/reject",
-            ['reason' => 'Item unavailable'],
-            $this->authHeaders($this->ownerA)
-        )->assertOk();
-
-        Event::assertNotDispatched(OrderStatusChanged::class, fn (OrderStatusChanged $event) => $event->newStatus === 'preparing');
-
-        $order->refresh();
-        $this->assertSame('waiting_restaurant', $order->status, 'Rejecting an item must never authorize preparation.');
-        $this->assertSame('rejected', $order->items->firstWhere('id', $item1->id)->status);
-        $this->assertSame('pending', $order->items->firstWhere('id', $item2->id)->status);
-    }
-
-    /**
-     * P11.6: accepting a single item of a COD delivery order must NOT stamp
-     * payment_status='paid'. COD is paid only when the rider settles the cash
-     * at delivery; 'paid' requires an actually-captured online payment.
-     */
-    public function test_cod_item_accept_keeps_payment_pending(): void
-    {
-        $order = $this->createMultiItemOrder();
-        $item1 = $order->items->first();
-
+        // Rider accepts → exactly ONE waiting → preparing transition.
         $this->assertRiderAccepted($order->activeDelivery(), $this->riderA);
 
-        $this->postJson("/api/business-owner/orders/{$order->id}/items/{$item1->id}/accept", [], $this->authHeaders($this->ownerA))
-            ->assertOk();
+        $preparingEvents = Event::dispatched(
+            OrderStatusChanged::class,
+            fn (OrderStatusChanged $event) => $event->newStatus === 'preparing'
+        );
+        $this->assertCount(1, $preparingEvents, 'Rider acceptance performs the single preparing transition.');
 
         $order->refresh();
-        $this->assertSame('pending', $order->payment_status, 'COD order is not paid just because an item was accepted.');
-        $this->assertSame('accepted', $order->status);
-    }
-
-    /**
-     * P11.6: acceptAll on a COD delivery order must ALSO not stamp
-     * payment_status='paid' (same reasoning as the item-accept path).
-     */
-    public function test_cod_accept_all_keeps_payment_pending(): void
-    {
-        $order = $this->createMultiItemOrder();
-
-        $this->assertRiderAccepted($order->activeDelivery(), $this->riderA);
-
-        $this->postJson("/api/business-owner/orders/{$order->id}/accept-all", [], $this->authHeaders($this->ownerA))
-            ->assertOk();
-
-        $order->refresh();
-        $this->assertSame('pending', $order->payment_status, 'COD order is not paid just because all items were accepted.');
         $this->assertSame('preparing', $order->status);
+        $this->assertSame('preparing', $order->items->firstWhere('id', $item1->id)->status, 'Item workflow starts with preparation.');
+        $this->assertSame('preparing', $order->items->firstWhere('id', $item2->id)->status);
+    }
+
+    // test_multi_item_reject_with_accepted_rider_never_causes_preparing was
+    // retired with the restaurant order redesign: the item-reject endpoint no
+    // longer exists (404 — see test_removed_item_reject_endpoint_never_causes_
+    // preparing), and with rider acceptance auto-starting preparation the
+    // 'reject keeps waiting_restaurant' scenario cannot be constructed anymore.
+
+    /**
+     * P11.6 invariant carried onto the new canonical path: starting
+     * preparation (now triggered by rider acceptance) must NOT stamp
+     * payment_status='paid'. COD is paid only when the rider settles the
+     * cash at delivery; 'paid' requires an actually-captured online payment.
+     * (The former acceptAll variant was retired with the accept-all
+     * endpoint — this single canonical path now covers both.)
+     */
+    public function test_rider_acceptance_starting_preparation_keeps_cod_payment_pending(): void
+    {
+        $order = $this->createMultiItemOrder();
+
+        $this->assertRiderAccepted($order->activeDelivery(), $this->riderA);
+
+        $order->refresh();
+        $this->assertSame('preparing', $order->status, 'Rider acceptance auto-started preparation.');
+        $this->assertSame('pending', $order->payment_status, 'COD order is not paid just because preparation started.');
     }
 
     /**
      * P11.6 positive control: when an AUTHORIZED online payment exists, the
-     * item-accept path still captures it ('paid') exactly like acceptOrder —
-     * the payment_status conditioning must not break the prepaid flow.
+     * preparation-start path (now triggered by rider acceptance) captures it
+     * ('paid') exactly like the removed accept endpoints did — the
+     * payment_status conditioning must not break the prepaid flow.
      */
-    public function test_prepaid_item_accept_captures_authorized_payment(): void
+    public function test_prepaid_rider_acceptance_captures_authorized_payment(): void
     {
         $order = $this->createMultiItemOrder();
-        $item1 = $order->items->first();
 
-        Payment::create([
+        $payment = Payment::create([
             'payable_type' => Order::class,
             'payable_id' => $order->id,
             'user_id' => $order->user_id,
@@ -753,10 +718,9 @@ class RiderAcceptanceGateTest extends TestCase
 
         $this->assertRiderAccepted($order->activeDelivery(), $this->riderA);
 
-        $this->postJson("/api/business-owner/orders/{$order->id}/items/{$item1->id}/accept", [], $this->authHeaders($this->ownerA))
-            ->assertOk();
-
         $order->refresh();
-        $this->assertSame('paid', $order->payment_status, 'Prepaid order becomes paid when an authorized payment is captured.');
+        $this->assertSame('preparing', $order->status, 'Rider acceptance auto-started preparation.');
+        $this->assertSame('paid', $order->payment_status, 'Prepaid order becomes paid when preparation starts.');
+        $this->assertSame('paid', $payment->fresh()->status, 'The authorized payment row is captured.');
     }
 }

@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { get } from '@/shared/services/api';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '@/features/auth/services/auth-store';
 import { DashboardSkeleton } from '@/shared/components/Skeleton';
 import {
@@ -24,6 +24,8 @@ interface AccountStatusData {
 
 export default function BusinessOwnerAccountStatus() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const registeredJustNow = Boolean((location.state as { registered?: boolean } | null)?.registered);
   const logout = useAuthStore((s) => s.logout);
   const user = useAuthStore((s) => s.user);
 
@@ -103,6 +105,16 @@ export default function BusinessOwnerAccountStatus() {
         </Link>
 
         <h1 className="text-2xl lg:text-3xl font-bold text-[#126B32] mb-6">Account Status</h1>
+
+        {registeredJustNow && status === 'pending_review' && (
+          <div className="mb-6 p-4 rounded-xl bg-emerald-50 border border-emerald-200">
+            <p className="text-sm font-semibold text-emerald-800 mb-1">Registration submitted</p>
+            <p className="text-sm text-emerald-700">
+              Your business owner account was created and is now waiting for approval. You will be
+              notified once the tourism office finishes reviewing your application.
+            </p>
+          </div>
+        )}
 
         <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-6 sm:p-8">
           <div className={`p-6 rounded-xl border ${display.bgColor} ${display.borderColor} mb-6`}>

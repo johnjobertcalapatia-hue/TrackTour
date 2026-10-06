@@ -40,6 +40,11 @@ class GroupOrderService
                 throw new InvalidArgumentException($business->business_name.' is '.$detail.'. Please remove its items before continuing.');
             }
 
+            if (! $business->acceptsPaymentMethod($payload['payment_method'] ?? 'gcash')) {
+                $label = ($payload['payment_method'] ?? 'gcash') === 'cash' ? 'cash on delivery' : 'online payments';
+                throw new InvalidArgumentException($business->business_name.' does not accept '.$label.' at the moment. Please remove its items or choose another payment method.');
+            }
+
             $businesses[$businessId] = $business;
 
             foreach ($restaurantGroup['items'] as $item) {
@@ -62,6 +67,9 @@ class GroupOrderService
                     'quantity' => $qty,
                     'unit_price' => $offering->price,
                     'subtotal' => $itemSubtotal,
+                    // Snapshot the menu's preparation time so later menu edits
+                    // never change this order's countdown (spec §16).
+                    'preparation_time' => $offering->preparation_time,
                     'notes' => $item['notes'] ?? null,
                 ];
             }
@@ -147,6 +155,17 @@ class GroupOrderService
             // creation; restaurant sub-orders never spawn their own delivery.
             if ($orderType === 'delivery' && $group->payment_method === 'cash') {
                 app(SmartDispatchService::class)->scheduleGroupDispatch($group->fresh());
+            } elseif ($group->payment_method === 'cash') {
+                // Pickup groups need no rider: start preparation immediately.
+                // Delivery groups start when a rider accepts the shared trip.
+                try {
+                    app(PreparationStartService::class)->startForOrder($order->fresh());
+                } catch (\Exception $e) {
+                    \Illuminate\Support\Facades\Log::warning('Preparation start after group placement failed', [
+                        'group_order_id' => $group->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
             }
 
             return $group->fresh();

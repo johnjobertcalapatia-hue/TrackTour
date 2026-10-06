@@ -4,9 +4,11 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Http\Resources\UserResource;
+use App\Models\ActivityLog;
 use App\Models\RiderReview;
 use App\Models\User;
 use App\Notifications\RiderAccountStatusChanged;
+use App\Services\DeliveryFareSettings;
 use App\Services\UserService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -15,8 +17,53 @@ use Illuminate\Support\Facades\Auth;
 class AdminRiderController extends Controller
 {
     public function __construct(
-        private UserService $userService
+        private UserService $userService,
+        private DeliveryFareSettings $fareSettings
     ) {}
+
+    public function fareSettings(): JsonResponse
+    {
+        return $this->successResponse($this->fareSettings->all());
+    }
+
+    public function updateFareSettings(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'base_fare' => ['required', 'numeric', 'min:0', 'max:100000'],
+            'included_kilometers' => ['required', 'numeric', 'min:0', 'max:1000'],
+            'per_kilometer' => ['required', 'numeric', 'min:0', 'max:100000'],
+            'minimum_fee' => ['required', 'numeric', 'min:0', 'max:100000'],
+            'service_adjustment' => ['required', 'numeric', 'min:0', 'max:100000'],
+            'surge_multiplier' => ['required', 'numeric', 'min:0', 'max:100'],
+        ]);
+
+        $before = $this->fareSettings->all();
+        $after = $this->fareSettings->save($validated);
+
+        $changes = [];
+        foreach ($after as $key => $value) {
+            if ((float) $value !== (float) ($before[$key] ?? 0)) {
+                $changes[] = sprintf(
+                    '%s: %s → %s',
+                    $key,
+                    number_format((float) ($before[$key] ?? 0), 2),
+                    number_format((float) $value, 2)
+                );
+            }
+        }
+
+        ActivityLog::create([
+            'user_id' => Auth::id(),
+            'action' => 'rider_fare_settings.updated',
+            'description' => $changes !== []
+                ? 'Delivery fare settings updated (' . implode(', ', $changes) . ').'
+                : 'Delivery fare settings updated (values unchanged).',
+            'ip_address' => $request->ip(),
+            'user_agent' => $request->userAgent(),
+        ]);
+
+        return $this->successResponse($after, 'Delivery fare settings updated successfully.');
+    }
 
     public function index(Request $request): JsonResponse
     {

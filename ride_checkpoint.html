@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @page {
+    margin: 20mm 16mm 18mm 16mm;
+    @bottom-center {
+      content: "TrackTour - Ride Hailing Fix - Page " counter(page) " of " counter(pages);
+      font-size: 7.5pt;
+      color: #6b7280;
+    }
+  }
+  body {
+    font-family: Helvetica, Arial, sans-serif;
+    font-size: 9.5pt;
+    line-height: 1.5;
+    color: #17201A;
+    margin: 0;
+  }
+  .bar {
+    background-color: #16a34a;
+    color: #ffffff;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+  }
+  .bar h1 { font-size: 17pt; margin: 0 0 3px 0; color: #ffffff; }
+  .bar .sub { font-size: 9pt; color: #dcfce7; }
+  h2 {
+    font-size: 11.5pt;
+    color: #16a34a;
+    border-bottom: 1px solid #E5E9E7;
+    padding-bottom: 3px;
+    margin: 18px 0 8px 0;
+  }
+  h3 { font-size: 10pt; margin: 12px 0 4px 0; color: #17201A; }
+  p { margin: 5px 0; }
+  .meta {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 6px;
+  }
+  .meta td {
+    font-size: 8.5pt;
+    padding: 3px 8px;
+    border: 1px solid #E5E9E7;
+    background-color: #f9fafb;
+  }
+  .meta td.k { width: 22%; font-weight: bold; color: #6b7280; }
+  .quote {
+    border-left: 4px solid #16a34a;
+    background-color: #f0fdf4;
+    padding: 9px 12px;
+    margin: 8px 0;
+    font-size: 9.5pt;
+  }
+  table.data {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 8px 0;
+    font-size: 9pt;
+  }
+  table.data th {
+    background-color: #17201A;
+    color: #ffffff;
+    text-align: left;
+    padding: 5px 7px;
+    border: 1px solid #17201A;
+    font-size: 8.5pt;
+  }
+  table.data td {
+    padding: 5px 7px;
+    border: 1px solid #E5E9E7;
+    vertical-align: top;
+  }
+  table.data tr.alt td { background-color: #f9fafb; }
+  .decision {
+    margin: 0 0 9px 0;
+    page-break-inside: avoid;
+  }
+  .decision .dtitle {
+    font-weight: bold;
+    color: #16a34a;
+    font-size: 10pt;
+  }
+  .code {
+    font-family: Courier, monospace;
+    font-size: 8.5pt;
+    background-color: #f3f4f6;
+    padding: 1px 4px;
+    border: 1px solid #E5E9E7;
+  }
+  pre.block {
+    font-family: Courier, monospace;
+    font-size: 8.5pt;
+    background-color: #f3f4f6;
+    border: 1px solid #E5E9E7;
+    border-left: 3px solid #16a34a;
+    padding: 7px 9px;
+    margin: 6px 0;
+    white-space: pre-wrap;
+  }
+  ol.actions { margin: 6px 0 6px 0; padding-left: 18px; }
+  ol.actions li { margin-bottom: 7px; }
+  .flag {
+    background-color: #fef2f2;
+    border: 1px solid #fecaca;
+    padding: 8px 11px;
+    margin: 8px 0;
+  }
+  .flag b { color: #b91c1c; }
+  .ok { color: #15803d; font-weight: bold; }
+  .small { font-size: 8.5pt; color: #6b7280; }
+  .pb { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <h1>Ride Hailing Creation &amp; Service-Gating Fix</h1>
+  <div class="sub">Finalized decisions and immediate actions</div>
+</div>
+
+<table class="meta">
+  <tr><td class="k">Project</td><td>TrackTour - Tourism promotion &amp; food delivery, Bansud, Oriental Mindoro</td></tr>
+  <tr><td class="k">Subsystem</td><td>Transportation / Ride Hailing dispatch and acceptance</td></tr>
+  <tr><td class="k">Date</td><td>23 September 2026</td></tr>
+  <tr><td class="k">Scope</td><td>Backend only. Two defects in <span class="code">TransportationService::createRide()</span> plus one dependent consumer.</td></tr>
+  <tr><td class="k">Outcome</td><td><span class="ok">Targeted and full regression suites pass with zero failures.</span></td></tr>
+</table>
+
+<h2>1. Checkpoint Statement (finalized)</h2>
+
+<div class="quote">
+  Ride Hailing creation and service-gating defects fixed. Ride creation now persists
+  required order-item fields correctly, rides use <b>order_type = transport</b>, and
+  transport acceptance / re-offering follows the correct service type. Targeted and
+  full regression suites pass with zero failures. Ride business ownership remains a
+  separate deferred issue.
+</div>
+
+<h2>2. Defects Found</h2>
+
+<h3>Defect 1 - Ride creation never persisted</h3>
+<p>
+  The ride order item was created with <span class="code">description</span> and
+  <span class="code">price</span>, but neither is in
+  <span class="code">OrderItem::$fillable</span>, so mass assignment silently dropped
+  both. The required <span class="code">product_name</span> and
+  <span class="code">unit_price</span> columns (both NOT NULL) were never supplied.
+</p>
+<pre class="block">SQLSTATE[HY000]: General error: 1364
+Field 'product_name' doesn't have a default value</pre>
+<p>
+  Every ride booking failed with a 500. Because <span class="code">createRide()</span>
+  ran unguarded with no transaction, the parent <span class="code">orders</span> row
+  committed before the item insert threw, leaving an orphaned order.
+</p>
+
+<h3>Defect 2 - Wrong service type</h3>
+<p>The ride was stored as <span class="code">order_type = delivery</span> instead of <span class="code">order_type = transport</span>.</p>
+<p>
+  Both the accept gate and the re-offer path derive the gated service from that column:
+</p>
+<pre class="block">$serviceType = $order_type === 'transport' ? 'transport' : 'food';
+return $rider_detail-&gt;current_service === $serviceType;</pre>
+<p>Consequences:</p>
+<ul>
+  <li>A ride-hailing rider accepting a non-COD ride resolved to <b>ineligible</b>.</li>
+  <li>Rejected / expired rides were re-offered to <b>food</b> riders.</li>
+  <li><span class="code">TransportController::index</span> and <span class="code">HistoryController</span> filter on <span class="code">order_type = 'transport'</span>, so rides never appeared in transport history and instead showed under food.</li>
+  <li>The COD branch of the gate skips the service check entirely, so cash rides behaved differently from GCash / Maya / Card rides. The column fix makes both branches agree.</li>
+</ul>
+
+<h2 class="pb">3. Finalized Decisions</h2>
+
+<div class="decision">
+  <div class="dtitle">D1 - Rides persist with order_type = transport</div>
+  This is the canonical discriminator. It is the value every existing consumer already
+  expected; writing <span class="code">'delivery'</span> was the defect, not the readers.
+</div>
+
+<div class="decision">
+  <div class="dtitle">D2 - Order items use the real column names</div>
+  <span class="code">product_name</span> and <span class="code">unit_price</span>.
+  The previous keys were not fillable and were dropped without error.
+</div>
+
+<div class="decision">
+  <div class="dtitle">D3 - Order + item + delivery commit atomically</div>
+  Wrapped in a single <span class="code">DB::transaction</span> so a partial failure can
+  no longer leave an orphaned <span class="code">orders</span> row.
+  <span class="code">dispatchToNearest($delivery, 'transport')</span> stays outside the
+  transaction and is unchanged.
+</div>
+
+<div class="decision">
+  <div class="dtitle">D4 - Auto-cancel coverage widened, not narrowed</div>
+  <span class="code">AutoCancelUndeliveredOrder</span> now uses
+  <span class="code">whereIn('order_type', ['delivery', 'transport'])</span>. Rides only
+  inherited this protection because they were mislabeled; the fix must not silently drop it.
+</div>
+
+<div class="decision">
+  <div class="dtitle">D5 - No schema change and no data migration</div>
+  <span class="code">SHOW CREATE TABLE orders</span> confirms
+  <span class="code">order_type varchar(255) NOT NULL DEFAULT 'pickup'</span>. The text
+  "delivery, pickup, dine_in" is a column comment, not an enum or CHECK constraint, so
+  <span class="code">'transport'</span> stores without DDL. The development database holds
+  <b>0</b> <span class="code">TRP-%</span> rides, confirmed before and after a rolled-back
+  live probe, so there is no legacy data to backfill.
+</div>
+
+<div class="decision">
+  <div class="dtitle">D6 - Service gating was not weakened</div>
+  Verified unchanged: the <span class="code">dispatchToNearest()</span> candidate filter,
+  the accept-time service gate, the COD acceptance branch,
+  <span class="code">SmartDispatchService::scheduleDispatch()</span> (its
+  <span class="code">order_type !== 'delivery'</span> early-return now correctly skips
+  rides, which already dispatch directly and would otherwise have been re-dispatched to
+  food riders after payment), the <span class="code">PaymentController</span>
+  post-payment dispatch hook, <span class="code">OrderRefundService</span> (rides carry
+  <span class="code">delivery_fee = 0</span>), and the kitchen / preparation gates.
+</div>
+
+<div class="decision">
+  <div class="dtitle">D7 - Ride business ownership stays deferred</div>
+  <span class="code">createRide()</span> hardcodes
+  <span class="code">business_id = 1</span> and creates items without a
+  <span class="code">business_id</span>. This is <b>not</b> part of the service-gating fix
+  and must not be mixed into this change unless the intended ride-ownership model is
+  decided first.
+</div>
+
+<h2>4. Verification</h2>
+
+<table class="data">
+  <tr>
+    <th style="width:34%">Run</th>
+    <th style="width:16%">Tests</th>
+    <th style="width:16%">Assertions</th>
+    <th style="width:12%">Failures</th>
+    <th>Notes</th>
+  </tr>
+  <tr>
+    <td>Targeted<br><span class="small">RideHailingAcceptanceTest</span></td>
+    <td>5 passed</td>
+    <td>25</td>
+    <td class="ok">0</td>
+    <td class="small">Real dispatch wave + real atomic accept transaction</td>
+  </tr>
+  <tr class="alt">
+    <td>Full Laravel suite</td>
+    <td>359 total<br>352 passed / 7 skipped</td>
+    <td>1,711</td>
+    <td class="ok">0</td>
+    <td class="small">244.77s</td>
+  </tr>
+</table>
+
+<p>
+  &Delta; vs the previous working-tree checkpoint
+  (354 tests / 1,686 assertions / 0 failures / 7 skipped) =
+  <b>+5 tests / +25 assertions</b> = exactly
+  <span class="code">RideHailingAcceptanceTest</span>. <b>Zero regressions.</b>
+</p>
+
+<p>
+  The 7 skips are the same known environment skips: 4 GD-guarded OCR tests,
+  <span class="code">OfferingManagementTest</span> GD,
+  <span class="code">TouristApiTest</span> SQLite HAVING, and
+  <span class="code">RepositoryTest</span> Haversine.
+</p>
+
+<h3>Coverage delivered by the new tests</h3>
+<ul>
+  <li>Ride persists as <span class="code">transport</span> with a valid item + delivery and reaches <span class="code">notified</span>.</li>
+  <li><b>A transport rider is offered AND accepts a GCash ride</b> (the reported defect).</li>
+  <li>A food rider is offered nothing, and a forged offer is refused at the accept gate.</li>
+  <li>A transport rider is still refused a food delivery (gating not weakened).</li>
+  <li>The ride lists under the transport history tab and never the food tab.</li>
+</ul>
+
+<h2 class="pb">5. Immediate Actions</h2>
+
+<ol class="actions">
+  <li>
+    <b>Record the checkpoint</b> using the statement in Section 1.
+    <span class="code">docs/PROGRESS.md</span> already carries the full entry with root
+    causes, fixes, test list, regression numbers and database verification.
+  </li>
+  <li>
+    <b>Adopt the new baseline:</b> 359 tests / 1,711 assertions / 0 failures / 7 skipped
+    for the next change.
+  </li>
+  <li>
+    <b>Keep business ownership out of this commit.</b> Do not include any
+    <span class="code">business_id</span> change. Open a separate decision for the
+    ride-ownership model first, then implement it on its own.
+  </li>
+  <li>
+    <b>Manual device QA:</b> set Service Types to Ride Hailing, book a ride, confirm the
+    ping arrives, accept it, and confirm a Food Delivery rider receives no ride ping.
+    Repeat with Service Types set to Food Delivery.
+  </li>
+  <li>
+    <b>Commit the four touched artifacts as one checkpoint:</b>
+    <span class="code">app/Services/TransportationService.php</span>,
+    <span class="code">app/Console/Commands/AutoCancelUndeliveredOrder.php</span>,
+    <span class="code">tests/Feature/RideHailingAcceptanceTest.php</span>,
+    <span class="code">docs/PROGRESS.md</span>.
+  </li>
+  <li>
+    <b>Reconcile stale checkpoint numbers in AGENTS.md</b>, which still documents
+    305 tests / 1,479 assertions against an actual pre-change working-tree baseline of
+    354 / 1,686.
+  </li>
+</ol>
+
+<div class="flag">
+  <b>Do not regress:</b> COD settlement, credit-free COD eligibility, the rider
+  acceptance gate, <span class="code">SmartDispatchService</span>, payment idempotency,
+  the refund processor, rider payout architecture, GPS token security and the existing
+  Socket.IO infrastructure were all left untouched by this change.
+</div>
+
+<h2>6. Files Changed</h2>
+
+<table class="data">
+  <tr>
+    <th style="width:44%">File</th>
+    <th>Change</th>
+  </tr>
+  <tr>
+    <td><span class="code">app/Services/TransportationService.php</span></td>
+    <td><span class="code">order_type =&gt; 'transport'</span>; item fields corrected to <span class="code">product_name</span> / <span class="code">unit_price</span>; order + item + delivery wrapped in one transaction.</td>
+  </tr>
+  <tr class="alt">
+    <td><span class="code">app/Console/Commands/AutoCancelUndeliveredOrder.php</span></td>
+    <td>Query widened to <span class="code">whereIn('order_type', ['delivery','transport'])</span> to preserve ride auto-cancel coverage.</td>
+  </tr>
+  <tr>
+    <td><span class="code">tests/Feature/RideHailingAcceptanceTest.php</span></td>
+    <td>New - 5 tests / 25 assertions covering creation, dispatch, acceptance, gating in both directions, and history tabbing.</td>
+  </tr>
+  <tr class="alt">
+    <td><span class="code">docs/PROGRESS.md</span></td>
+    <td>Checkpoint entry: root causes, decisions, test evidence, database verification, deferred item.</td>
+  </tr>
+</table>
+
+<p class="small" style="margin-top:14px;">
+  Generated 23 September 2026 for the TrackTour engineering record.
+  Regression evidence: 359 tests, 1,711 assertions, 0 failures, 7 skipped.
+</p>
+
+</body>
+</html>

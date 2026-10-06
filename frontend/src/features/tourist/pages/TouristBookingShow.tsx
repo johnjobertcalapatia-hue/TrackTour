@@ -10,9 +10,11 @@ import { ArrowLeft, Calendar, MapPin, User, FileText, Smartphone } from 'lucide-
 import type { Booking } from '@/shared/types'
 
 interface BookingDetail extends Booking {
-  business_name: string
-  business_address: string
-  notes: string | null
+  business: {
+    id: number
+    business_name: string
+    address: string | null
+  } | null
 }
 
 export default function TouristBookingShow() {
@@ -20,10 +22,12 @@ export default function TouristBookingShow() {
   const navigate = useNavigate()
   const [isRedirecting, setIsRedirecting] = useState(false)
 
-  const { data: booking, isLoading } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['tourist-booking', id],
-    queryFn: () => get<BookingDetail>(`/tourist/booking/${id}`),
+    queryFn: () => get<{ booking: BookingDetail }>(`/tourist/booking/${id}/detail`),
   })
+
+  const booking = data?.booking
 
   const handlePayWithGCash = async () => {
     if (!booking) return
@@ -74,8 +78,8 @@ export default function TouristBookingShow() {
             <MapPin className="w-4 h-4 text-gray-400" />
             <div>
               <p className="text-xs text-gray-500">Business</p>
-              <p className="text-gray-100">{booking.business_name}</p>
-              <p className="text-xs text-gray-500">{booking.business_address}</p>
+              <p className="text-gray-100">{booking.business?.business_name ?? 'Business'}</p>
+              <p className="text-xs text-gray-500">{booking.business?.address ?? ''}</p>
             </div>
           </div>
 

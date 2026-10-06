@@ -10,7 +10,15 @@ export function useRequireAuth() {
 
   const requireAuth = useCallback(
     (action?: PendingAction): boolean => {
+      // A credential may be present but the profile still unconfirmed (transient
+      // boot /user failure, ProtectedRoute holding the spinner). Bouncing to
+      // /login there LOOKS like an auto-logout of a live session — so only send
+      // a genuine guest (no credential at all) to the login page.
+      const hasToken = !!localStorage.getItem('auth_token')
       if (loading || !user) {
+        if (hasToken) {
+          return false
+        }
         if (action) {
           savePendingAction({
             ...action,

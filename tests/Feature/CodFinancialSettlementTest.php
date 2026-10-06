@@ -19,7 +19,6 @@ use App\Models\RiderEarning;
 use App\Models\RiderLocation;
 use App\Models\User;
 use App\Services\CodSettlementService;
-use App\Services\FirebaseService;
 use App\Services\GroupOrderService;
 use App\Services\NearestRiderService;
 use App\Services\OrderSettlementService;
@@ -89,7 +88,7 @@ class CodFinancialSettlementTest extends TestCase
 
         $allDays = array_fill_keys(
             ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
-            [['open' => '00:00', 'close' => '23:59']]
+            [['open' => '00:00', 'close' => '23:59'], ['open' => '23:59', 'close' => '00:00']]
         );
 
         $this->restaurantA = Business::create([
@@ -119,11 +118,11 @@ class CodFinancialSettlementTest extends TestCase
         $this->riderA = $this->makeRider('ridera-cod-fin@example.com', 'Rider A', 10000);
         $this->riderB = $this->makeRider('riderb-cod-fin@example.com', 'Rider B', 10000);
 
-        $nearestRiderMock = new class(app(FirebaseService::class)) extends NearestRiderService
+        $nearestRiderMock = new class() extends NearestRiderService
         {
-            public function __construct($firebase)
+            public function __construct()
             {
-                parent::__construct($firebase);
+                parent::__construct();
             }
 
             public function findNearestAvailableRiders(float $pickupLat, float $pickupLng, string $serviceType = 'food', int $limit = 5, ?int $municipalityId = null): Collection

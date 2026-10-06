@@ -27,8 +27,10 @@ class AutoCancelUndeliveredOrder extends Command
 
         // Active delivery orders that still have an active trip and were assigned
         // (or accepted) more than $minutes ago without being delivered. Group
-        // children ride on the group's single delivery (4.4).
-        $orders = Order::where('order_type', 'delivery')
+        // children ride on the group's single delivery (4.4). Transport rides are
+        // included: they carry order_type 'transport' and are equally stuck when
+        // no rider ever completes them.
+        $orders = Order::whereIn('order_type', ['delivery', 'transport'])
             ->where('payment_status', 'paid')
             ->where(function ($q) {
                 $q->whereHas('delivery', function ($q2) {

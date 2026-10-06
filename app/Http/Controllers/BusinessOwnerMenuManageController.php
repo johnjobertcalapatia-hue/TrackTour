@@ -65,7 +65,7 @@ class BusinessOwnerMenuManageController extends Controller
         }
 
         $validated['offering_type'] = 'menu';
-        $validated['status'] = 'active';
+        $validated['status'] = 'available';
         $validated['bestseller'] = $request->boolean('is_featured');
         unset($validated['is_featured']);
         $offering = Offering::create($validated);

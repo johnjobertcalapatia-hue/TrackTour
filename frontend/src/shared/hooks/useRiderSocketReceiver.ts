@@ -6,12 +6,20 @@ import { useEffect, useRef } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import { SOCKET_BASE_URL } from '@/shared/services/socket'
 
+// Must stay comfortably BELOW socket-validation.js LIMITS.radarStaleMs
+// (120 000 ms) so a stationary-but-online rider never ages out of the radar.
+const RADAR_REFRESH_MS = 60_000
+
 interface UseRiderSocketReceiverOptions {
   riderId: number | null
   isOnline: boolean
   vehicleType?: string
   onOrderPing?: (payload: { deliveryId: string; restaurantName: string; timeoutSeconds: number; distanceKm: number }) => void
   onOfferCancelled?: (payload: { delivery_id?: number; reason?: string }) => void
+  /** Fires on every (re)connect so callers can reconcile state after a network drop. */
+  onConnect?: () => void
+  /** Backend cancelled the rider's trip (order cancelled, dispatch released, …). */
+  onTripCancelled?: (payload: { delivery_id?: number; reason?: string }) => void
 }
 
 export function useRiderSocketReceiver({
@@ -20,6 +28,8 @@ export function useRiderSocketReceiver({
   vehicleType = 'food',
   onOrderPing,
   onOfferCancelled,
+  onConnect,
+  onTripCancelled,
 }: UseRiderSocketReceiverOptions) {
   const socketRef = useRef<Socket | null>(null)
   const onOrderPingRef = useRef(onOrderPing)
@@ -27,6 +37,12 @@ export function useRiderSocketReceiver({
 
   const onOfferCancelledRef = useRef(onOfferCancelled)
   onOfferCancelledRef.current = onOfferCancelled
+
+  const onConnectRef = useRef(onConnect)
+  onConnectRef.current = onConnect
+
+  const onTripCancelledRef = useRef(onTripCancelled)
+  onTripCancelledRef.current = onTripCancelled
 
   // Keep the latest values available to the connection handler without re-creating it.
   const onlineRef = useRef({ riderId, isOnline, vehicleType })
@@ -72,14 +88,22 @@ export function useRiderSocketReceiver({
     const socket = io(SOCKET_BASE_URL, {
       transports: ['polling', 'websocket'],
       reconnection: true,
-      reconnectionAttempts: 3,
+      // A rider must never silently drop off the radar after a network blip:
+      // the previous budget of 3 attempts (×2 s) exhausted in ~6 s, after
+      // which the socket stayed dark until a full page reload — so the rider
+      // simply stopped existing for dispatch. Retry indefinitely with backoff.
+      reconnectionAttempts: Infinity,
       reconnectionDelay: 2000,
+      reconnectionDelayMax: 30000,
     })
     socketRef.current = socket
 
     socket.on('connect', () => {
       console.log('[socket] connected', socket.id, 'transport=', socket.io.engine.transport.name)
       register(socket)
+      // Fires on first connect AND every reconnect: the server may have
+      // restarted / state moved while we were dark — reconcile via the caller.
+      onConnectRef.current?.()
     })
 
     socket.on('connect_error', (err) => {
@@ -104,6 +128,13 @@ export function useRiderSocketReceiver({
       onOfferCancelledRef.current?.(payload ?? {})
     })
 
+    socket.on('trip_cancelled', (payload) => {
+      // Authoritative backend decision that the rider's trip is over: the
+      // backend has already released rider_status. Reconcile the UI from it.
+      console.log('[socket] trip_cancelled received:', payload?.delivery_id, payload?.reason)
+      onTripCancelledRef.current?.(payload ?? {})
+    })
+
     socket.on('driver_registration_rejected', (data) => {
       console.warn('[socket] driver registration rejected:', data?.reason)
     })
@@ -122,4 +153,27 @@ export function useRiderSocketReceiver({
       register(socketRef.current)
     }
   }, [riderId, isOnline, vehicleType])
+
+  // Keep the RAM radar entry fresh while the rider stays online.
+  //
+  // `driver_go_online` is the ONLY thing that stamps `updatedAt` for an idle
+  // rider: `rider_location_update` is ownership-gated to the rider already
+  // assigned to a trip, so a rider with no delivery can never refresh it.
+  // `isRadarEntryEligible()` drops entries after LIMITS.radarStaleMs (120 s),
+  // and Laravel's radar fallback applies the same window — so without this
+  // re-registration every online-but-parked rider aged out after 2 minutes and
+  // was excluded as `radar_gps_stale`, which is why no offer was ever created.
+  useEffect(() => {
+    if (!riderId || !isOnline) return
+
+    const refresh = () => {
+      const socket = socketRef.current
+      if (socket?.connected) register(socket)
+    }
+
+    refresh()
+    const id = window.setInterval(refresh, RADAR_REFRESH_MS)
+    return () => window.clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [riderId, isOnline])
 }

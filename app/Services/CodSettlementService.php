@@ -95,8 +95,15 @@ class CodSettlementService
      * Record one restaurant allocation per business represented by the order's
      * items. The delivery, cash payment, and rider earning remain singular.
      */
-    public function recordAllocations(Delivery $delivery, Order $order, int $riderId): Collection
-    {
+     public function recordAllocations(Delivery $delivery, Order $order, int $riderId): Collection
+     {
+         // Transport (ride-hailing) orders have no restaurant: the ride fare is
+         // never allocated to a restaurant / Tourism Office split, so no
+         // CodSettlement is booked and no restaurant wallet is touched.
+        if ($order->order_type === 'transport') {
+            return new Collection;
+        }
+
         $items = $order->items()->get();
         $groups = $items->groupBy(fn ($item) => $item->business_id ?: $order->business_id);
         $orderSubtotal = max(0.01, (float) $order->subtotal);

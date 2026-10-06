@@ -1,9 +1,13 @@
+import { useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { get, patch, post } from '@/shared/services/api'
+import { get, patch } from '@/shared/services/api'
 import { StatusBadge } from '@/shared/components/StatusBadge'
+import { PreparationCountdown } from '@/shared/components/PreparationCountdown'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
-import { formatCurrency, formatDateTime } from '@/shared/utils'
+import { deriveReadyAt, formatCurrency, formatDateTime } from '@/shared/utils'
+import { useBusinessOwnerStore } from '../services/business-owner-store'
+import { useBusinessSocketNotifier } from '@/shared/hooks/useBusinessSocketNotifier'
 import { ArrowLeft, User, Mail, Phone, Building2, Truck, Clock, MapPin, FileText, CheckCircle, XCircle } from 'lucide-react'
 
 interface OrderItem {
@@ -12,8 +16,11 @@ interface OrderItem {
   product_name?: string
   quantity: number
   unit_price: number
-  subtotal: number
+  subtotal?: number
+  total_price?: number
   status?: string
+  preparation_time?: number | null
+  preparation_started_at?: string | null
 }
 
 interface OrderDetail {
@@ -38,6 +45,12 @@ interface OrderDetail {
   group_order_id?: number | null
   group_reference_number?: string | null
   group_paid?: boolean
+  rider_tip?: number | string | null
+  delivery_speed?: string | null
+  preparation_time?: number | null
+  preparation_started_at?: string | null
+  predicted_ready_at?: string | null
+  food_ready_at?: string | null
   items: OrderItem[]
   delivery?: {
     id: number
@@ -59,14 +72,32 @@ const ORDER_TRANSITIONS: Record<string, { next: string; label: string; color: st
   preparing: [
     { next: 'ready', label: 'Ready for Pickup', color: 'bg-[#16803C] hover:bg-[#126B32] text-white' },
   ],
-  ready: [
-    { next: 'completed', label: 'Complete', color: 'bg-[#16803C] hover:bg-[#126B32] text-white' },
-  ],
+}
+
+/** Per-item predicted readiness — the dish's own clock from its own
+ * preparation window, independent of the order-level countdown. */
+function itemPredictedReadyAt(item: OrderItem): string | null {
+  if (item.status !== 'preparing') return null
+  if (!item.preparation_started_at || item.preparation_time == null) return null
+  return new Date(new Date(item.preparation_started_at).getTime() + item.preparation_time * 60_000).toISOString()
 }
 
 export default function BusinessOwnerOrderShow() {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
+  const selectedBusinessId = useBusinessOwnerStore((s) => s.selectedBusinessId)
+
+  // P11.8 — live updates on the order detail page: rider acceptance (→
+  // preparing + countdown) and the timer reaching 00:00 (→ ready, items →
+  // ready) arrive on the authorized business room and trigger an immediate
+  // refetch. HTTP remains the fallback when no socket/token is available.
+  const { connection } = useBusinessSocketNotifier({
+    businessId: selectedBusinessId ?? null,
+    onStatusEvent: useCallback(() => {
+      queryClient.invalidateQueries({ queryKey: ['bo-order', id] })
+      queryClient.invalidateQueries({ queryKey: ['bo-orders'] })
+    }, [queryClient, id]),
+  })
 
   const { data: order, isLoading } = useQuery({
     queryKey: ['bo-order', id],
@@ -75,22 +106,6 @@ export default function BusinessOwnerOrderShow() {
 
   const statusMutation = useMutation({
     mutationFn: (status: string) => patch(`/business-owner/orders/${id}/status`, { status }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['bo-order', id] })
-      queryClient.invalidateQueries({ queryKey: ['bo-orders'] })
-    },
-  })
-
-  const acceptMutation = useMutation({
-    mutationFn: () => post(`/business-owner/orders/${id}/accept`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['bo-order', id] })
-      queryClient.invalidateQueries({ queryKey: ['bo-orders'] })
-    },
-  })
-
-  const rejectMutation = useMutation({
-    mutationFn: () => post(`/business-owner/orders/${id}/reject`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['bo-order', id] })
       queryClient.invalidateQueries({ queryKey: ['bo-orders'] })
@@ -111,6 +126,13 @@ export default function BusinessOwnerOrderShow() {
 
   const transitions = ORDER_TRANSITIONS[order.status] || []
 
+  const readyAt = deriveReadyAt(order)
+  const postPrep = ['ready', 'picked_up', 'in_transit', 'out_for_delivery', 'arrived_destination', 'delivered', 'completed', 'cancelled', 'cancelled_by_tourist', 'rejected']
+  const prepStarted = Boolean(order.preparation_started_at) && !postPrep.includes(order.status)
+  const readyItems = (order.items ?? []).filter(
+    (item) => !['cancelled', 'rejected'].includes(item.status ?? '')
+  )
+
   return (
     <div>
       <Link to="/business-owner/orders" className="inline-flex items-center gap-2 text-sm text-[#647067] hover:text-[#17201A] mb-6 transition">
@@ -121,6 +143,12 @@ export default function BusinessOwnerOrderShow() {
         <div className="flex items-center gap-3 mb-2 flex-wrap">
           <h1 className="text-2xl lg:text-3xl font-bold text-[#126B32]">{order.order_number}</h1>
           <StatusBadge status={order.status} size="md" />
+          {connection === 'connected' && (
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-[#EAF6ED] px-2.5 py-1 text-[11px] font-medium text-[#16803C]">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#16803C] animate-pulse" />
+              Live
+            </span>
+          )}
           {order.group_reference_number && (
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200">
               Part of {order.group_reference_number}
@@ -221,6 +249,7 @@ export default function BusinessOwnerOrderShow() {
                     const isReady = item.status === 'ready'
                     const isPreparing = item.status === 'preparing'
                     const isPending = item.status === 'pending' || !item.status
+                    const itemTimer = itemPredictedReadyAt(item)
                     return (
                       <tr key={item.id} className="hover:bg-[#F6F8F4] transition-colors">
                         <td className="px-6 py-3 font-medium text-[#17201A]">{item.product_name || item.offering_name}</td>
@@ -235,6 +264,11 @@ export default function BusinessOwnerOrderShow() {
                               <Clock className="w-3 h-3" /> Preparing
                             </span>
                           )}
+                          {itemTimer && (
+                            <div className="mt-1.5 font-mono text-xs font-semibold text-[#16803C]">
+                              <PreparationCountdown readyAt={itemTimer} />
+                            </div>
+                          )}
                           {isPending && (
                             <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#647067] bg-gray-100 px-2.5 py-1 rounded-full">
                               <Clock className="w-3 h-3" /> Pending
@@ -248,7 +282,7 @@ export default function BusinessOwnerOrderShow() {
                         </td>
                         <td className="px-6 py-3 text-center text-[#4B5563]">{item.quantity}</td>
                         <td className="px-6 py-3 text-right text-[#4B5563]">{formatCurrency(item.unit_price)}</td>
-                        <td className="px-6 py-3 text-right font-medium text-[#17201A]">{formatCurrency(item.subtotal)}</td>
+                        <td className="px-6 py-3 text-right font-medium text-[#17201A]">{formatCurrency(item.total_price ?? item.subtotal)}</td>
                         {['accepted', 'preparing'].includes(order.status) && (
                           <td className="px-6 py-3 text-center">
                             {!isReady ? (
@@ -340,36 +374,96 @@ export default function BusinessOwnerOrderShow() {
         </div>
 
         <div className="space-y-6">
+          {/* Preparation countdown (starts when a rider accepts) */}
+          <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-6">
+            <h2 className="text-lg font-semibold text-[#17201A] mb-4">Food Preparation</h2>
+            <div className="space-y-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-[#647067]">Preparation Time</span>
+                <span className="text-[#17201A] font-medium">
+                  {order.preparation_time ? `${order.preparation_time} minutes` : '—'}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-[#647067]">Time Remaining</span>
+                {prepStarted && readyAt ? (
+                  <PreparationCountdown
+                    readyAt={readyAt}
+                    className="font-mono text-lg font-bold text-[#16803C]"
+                  />
+                ) : (
+                  <span className="text-[#9CA3AF]">—</span>
+                )}
+              </div>
+              {prepStarted && readyAt && (
+                <div className="flex justify-between">
+                  <span className="text-[#647067]">Estimated Ready</span>
+                  <span className="text-[#17201A]">{formatDateTime(readyAt)}</span>
+                </div>
+              )}
+              {readyItems.length > 0 && (
+                <div className="border-t border-[#E2E8E3] pt-3">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-[#647067] mb-2">Item Readiness</p>
+                  <div className="space-y-2">
+                    {readyItems.map((item) => {
+                      const isReadyItem = item.status === 'ready'
+                      const isPreparingItem = item.status === 'preparing'
+                      const isPendingItem = item.status === 'pending' || !item.status
+                      const itemTimer = itemPredictedReadyAt(item)
+                      return (
+                        <div key={item.id} className="flex items-center justify-between gap-3">
+                          <p className="text-sm font-medium text-[#17201A] truncate">
+                            {item.quantity}× {item.product_name || item.offering_name}
+                          </p>
+                          {isReadyItem && (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#087F3F] bg-[#E9F7EF] px-2 py-0.5 rounded-full shrink-0">
+                              <CheckCircle className="w-3 h-3" /> Ready
+                            </span>
+                          )}
+                          {isPreparingItem && (
+                            <span className="shrink-0 text-right">
+                              {itemTimer ? (
+                                <PreparationCountdown readyAt={itemTimer} className="font-mono text-xs font-semibold text-[#16803C]" />
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
+                                  <Clock className="w-3 h-3" /> Preparing
+                                </span>
+                              )}
+                            </span>
+                          )}
+                          {isPendingItem && (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#647067] bg-gray-100 px-2 py-0.5 rounded-full shrink-0">
+                              <Clock className="w-3 h-3" /> Pending
+                            </span>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+            {order.status === 'waiting_restaurant' && (
+              <p className="text-xs text-[#647067] mt-4">
+                Finding a rider — the preparation timer starts automatically once a rider accepts this delivery.
+              </p>
+            )}
+            {prepStarted && (
+              <p className="text-xs text-[#647067] mt-4">
+                The order becomes Ready automatically when the timer reaches 00:00.
+              </p>
+            )}
+          </div>
+
           <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-6">
             <h2 className="text-lg font-semibold text-[#17201A] mb-4">Actions</h2>
 
-            {/* Waiting for restaurant - Accept/Reject */}
-            {order.status === 'waiting_restaurant' && (
-              <div className="space-y-3">
-                <button
-                  onClick={() => acceptMutation.mutate()}
-                  disabled={acceptMutation.isPending}
-                  className="w-full px-4 py-2.5 rounded-xl text-sm font-semibold bg-[#16803C] hover:bg-[#126B32] text-white transition disabled:opacity-50 inline-flex items-center justify-center gap-2"
-                >
-                  <CheckCircle className="w-4 h-4" />
-                  {acceptMutation.isPending ? 'Accepting...' : 'Accept Order'}
-                </button>
-                <button
-                  onClick={() => rejectMutation.mutate()}
-                  disabled={rejectMutation.isPending}
-                  className="w-full px-4 py-2.5 rounded-xl text-sm font-semibold border border-red-200 text-red-600 hover:bg-red-50 transition disabled:opacity-50 inline-flex items-center justify-center gap-2"
-                >
-                  <XCircle className="w-4 h-4" />
-                  {rejectMutation.isPending ? 'Rejecting...' : 'Reject Order'}
-                </button>
-                <p className="text-xs text-[#647067] text-center mt-2">
-                  The customer has paid. Accept to start preparing, or reject to cancel and refund.
-                </p>
-              </div>
-            )}
-
-            {/* Standard transitions */}
-            {order.status !== 'waiting_restaurant' && (
+            {/* Finding rider: no restaurant action exists in this state */}
+            {order.status === 'waiting_restaurant' ? (
+              <p className="text-sm text-[#647067]">
+                No action needed — the system is dispatching this order to nearby riders. Preparation starts as soon as a rider accepts.
+              </p>
+            ) : (
               transitions.length > 0 ? (
                 <div className="space-y-3">
                   {transitions.map((t) => (

@@ -8,7 +8,7 @@ use App\Http\Requests\Auth\RegisterRequest;
 use App\Http\Resources\UserResource;
 use App\Models\Barangay;
 use App\Models\User;
-use App\Services\FirebaseService;
+use App\Services\DeliveryService;
 use App\Services\UserService;
 use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\JsonResponse;
@@ -21,7 +21,7 @@ class AuthController extends Controller
 {
     public function __construct(
         private UserService $userService,
-        private FirebaseService $firebase,
+        private DeliveryService $deliveryService,
     ) {}
 
     public function register(RegisterRequest $request): JsonResponse
@@ -151,17 +151,19 @@ class AuthController extends Controller
 
         if ($user) {
             if ($user->role === User::ROLE_RIDER) {
-                $user->riderDetail()->updateOrCreate(
-                    ['user_id' => $user->id],
-                    [
-                        'rider_status' => User::RIDER_STATUS_OFFLINE,
-                        'rider_status_updated_at' => now(),
-                    ]
-                );
-
-                if ($this->firebase->isConfigured()) {
-                    $this->firebase->removeRider($user->id);
-                    $this->firebase->setOnlineStatus('riders', $user->id, false);
+                // A mid-trip rider must stay online for the WHOLE trip (the
+                // toggle's own guard already enforces this). Logging out must
+                // never clobber that state: a rider dropped to 'offline' while
+                // still bound to a live delivery then logs back in to a grey
+                // "Go Online" button whose tap is rejected by the trip guard.
+                if (! $this->deliveryService->riderHasActiveTrip($user)) {
+                    $user->riderDetail()->updateOrCreate(
+                        ['user_id' => $user->id],
+                        [
+                            'rider_status' => User::RIDER_STATUS_OFFLINE,
+                            'rider_status_updated_at' => now(),
+                        ]
+                    );
                 }
             }
 

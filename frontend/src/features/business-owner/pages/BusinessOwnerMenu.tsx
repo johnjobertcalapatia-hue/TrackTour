@@ -372,7 +372,10 @@ export default function BusinessOwnerMenu() {
             className="inline-flex items-center gap-2 bg-white hover:bg-[#F3F8F4] text-[#16803C] border border-[#D7E8DB] px-4 py-2.5 rounded-xl text-sm font-medium transition">
             <Download className="w-4 h-4" /> Export Menu
           </button>
-
+          <button onClick={() => navigate('/business-owner/menu/create')}
+            className="inline-flex items-center gap-2 bg-[#16803C] hover:bg-[#126B32] text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition">
+            <Plus className="w-4 h-4" /> Create Menu Item
+          </button>
         </div>
       </div>
 

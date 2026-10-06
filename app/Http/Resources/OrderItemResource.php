@@ -18,6 +18,7 @@ class OrderItemResource extends JsonResource
             'quantity' => $this->quantity,
             'unit_price' => $this->unit_price,
             'total_price' => $this->subtotal,
+            'preparation_time' => $this->preparation_time,
             'special_notes' => $this->notes,
             'status' => $this->status ?? 'pending',
             'accepted_at' => $this->accepted_at,

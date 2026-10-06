@@ -321,6 +321,15 @@ io.on("connection", (socket) => {
 function startDispatchChallenge({ deliveryId, restaurantName, restaurantLat, restaurantLng, timeoutSeconds = 45, preferredRiderId = null }) {
   console.log(`[Dispatch Received] ${JSON.stringify({ deliveryId, restaurantName, restaurantLat, restaurantLng, preferredRiderId })}`);
   let targetRider = null;
+  // Declared at FUNCTION scope on purpose: the trip record stored below lives
+  // outside the `if (!targetRider)` block and must always be able to reference
+  // it. When this was block-scoped inside that if, any dispatch that honored a
+  // preferred rider (block skipped) or found a non-empty radar reached
+  // activeTrips.set() with no binding in scope, threw
+  // "ReferenceError: eligibleRiders is not defined", and the bridge answered
+  // 500 BEFORE ever emitting order_received_ping — silently killing the
+  // realtime ping whenever a rider was actually online.
+  let eligibleRiders = [];
 
   // The Laravel bridge is authoritative: when it names a preferred rider it has
   // already vetted status, service type, credit and distance at dispatch time.
@@ -348,7 +357,7 @@ function startDispatchChallenge({ deliveryId, restaurantName, restaurantLat, res
   }
 
   if (!targetRider) {
-    const eligibleRiders = scanEligibleRiders(restaurantLat, restaurantLng);
+    eligibleRiders = scanEligibleRiders(restaurantLat, restaurantLng);
     console.log(`[Dispatch] eligible socket riders for ${deliveryId}: ${eligibleRiders.map((r) => `${r.riderId}@${r.distanceKm.toFixed(2)}km`).join(', ') || 'NONE'}`);
 
     if (eligibleRiders.length === 0) {

@@ -58,17 +58,15 @@ class DeliveryOfferConcurrencyTest extends TestCase
             'account_status' => 'approved',
         ]);
 
-        config(['firebase.dispatch_enabled' => false]);
-
         // Real dispatch + real accept, but the SQLite-unsafe candidate finders
         // are replaced with a controllable candidate collection so the
         // multi-ping wave and the accept transaction run unmocked.
-        $this->app->instance(NearestRiderService::class, new class(app(\App\Services\FirebaseService::class)) extends NearestRiderService {
+        $this->app->instance(NearestRiderService::class, new class() extends NearestRiderService {
             public Collection $candidates;
 
-            public function __construct($firebase)
+            public function __construct()
             {
-                parent::__construct($firebase);
+                parent::__construct();
                 $this->candidates = collect();
             }
 
@@ -469,7 +467,23 @@ class DeliveryOfferConcurrencyTest extends TestCase
         $this->assertFalse($result['success']);
         $this->assertTrue($result['timeout']);
         $this->assertTrue($result['conflict']);
-        $this->assertSame('timeout', $this->pendingLogs($delivery, $riderA)->first()->response);
+
+        // Reconciled (AGENTS §12 — test drifted from the authoritative rule).
+        //
+        // This previously asserted A stayed 'timeout'. A timed-out offer means
+        // the rider NEVER ANSWERED (missed ping, closed app, dropped socket),
+        // so once the wave is exhausted the same rider is offerable again: the
+        // re-dispatch reopens A's own row back to 'pending'. Keeping A
+        // permanently excluded was an artifact of filtering on `response =
+        // ANY` in alreadyDispatchedRiderIds — and because UNIQUE(delivery_id,
+        // rider_id) forbids a second row, it left a single-candidate delivery
+        // with NO re-offer path at all (the verified missed-ping failure).
+        //
+        // The documented rule that IS preserved: live offers are left alone
+        // (redispatchIfOffered only runs once no 'pending' offer remains), and
+        // a DECLINE is still never re-offered — see
+        // test_rider_decline_reoffers_delivery_to_next_eligible_rider.
+        $this->assertSame('pending', $this->pendingLogs($delivery, $riderA)->first()->response);
 
         // The delivery was re-offered to a fresh rider once the wave was empty.
         $this->assertNull($delivery->fresh()->rider_id);

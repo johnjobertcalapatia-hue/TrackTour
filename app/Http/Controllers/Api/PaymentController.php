@@ -57,29 +57,47 @@ class PaymentController extends Controller
             $amount = (int) round($order->total * 100);
             $description = 'Track-Tour Order #'.$order->order_number;
             $referenceNumber = $order->order_number;
-            $lineItems = [
-                [
-                    'name' => 'Food Subtotal',
-                    'amount' => (int) round($order->subtotal * 100),
-                    'currency' => 'PHP',
-                    'quantity' => 1,
-                ],
-            ];
-            if ((float) $order->delivery_fee > 0) {
-                $lineItems[] = [
-                    'name' => 'Delivery Fee',
-                    'amount' => (int) round($order->delivery_fee * 100),
-                    'currency' => 'PHP',
-                    'quantity' => 1,
+
+            if ($order->order_type === 'transport') {
+                // A ride has a single fare component: subtotal === total === fare.
+                $lineItems = [
+                    [
+                        'name' => 'Ride Fare',
+                        'amount' => $amount,
+                        'currency' => 'PHP',
+                        'quantity' => 1,
+                    ],
                 ];
-            }
-            if ((float) $order->rider_tip > 0) {
-                $lineItems[] = [
-                    'name' => 'Rider Tip',
-                    'amount' => (int) round($order->rider_tip * 100),
-                    'currency' => 'PHP',
-                    'quantity' => 1,
+
+                // A cancelled ride owes nothing: never open a new checkout.
+                if ($order->status === 'cancelled') {
+                    return $this->errorResponse('This ride was cancelled and can no longer be paid.', 422);
+                }
+            } else {
+                $lineItems = [
+                    [
+                        'name' => 'Food Subtotal',
+                        'amount' => (int) round($order->subtotal * 100),
+                        'currency' => 'PHP',
+                        'quantity' => 1,
+                    ],
                 ];
+                if ((float) $order->delivery_fee > 0) {
+                    $lineItems[] = [
+                        'name' => 'Delivery Fee',
+                        'amount' => (int) round($order->delivery_fee * 100),
+                        'currency' => 'PHP',
+                        'quantity' => 1,
+                    ];
+                }
+                if ((float) $order->rider_tip > 0) {
+                    $lineItems[] = [
+                        'name' => 'Rider Tip',
+                        'amount' => (int) round($order->rider_tip * 100),
+                        'currency' => 'PHP',
+                        'quantity' => 1,
+                    ];
+                }
             }
             $existing = Payment::where('payable_type', Order::class)
                 ->where('payable_id', $order->id)
@@ -820,6 +838,20 @@ class PaymentController extends Controller
             return;
         }
 
+        // Transport rides are finalized by the delivery lifecycle, never by
+        // payment. Record only the paid state: never flip status to
+        // waiting_restaurant, never start preparation/dispatch fan-out, and
+        // never resurrect a cancelled ride into an active food flow.
+        if ($payable instanceof Order && $payable->order_type === 'transport') {
+            $payable->update([
+                'paid_amount' => $payment->amount,
+                'payment_method' => $payment->method,
+                'payment_status' => 'paid',
+            ]);
+
+            return;
+        }
+
         if ($payable instanceof Order && ! in_array($payable->status, ['accepted', 'preparing', 'ready', 'completed'])) {
             $payable->update([
                 'paid_amount' => $payment->amount,
@@ -832,12 +864,22 @@ class PaymentController extends Controller
 
             // Dispatch immediately: riders are offered the trip before the
             // restaurant starts preparing. Preparation is gated on the rider's
-            // acceptance (see BusinessOwnerOrderController).
+            // acceptance (see PreparationStartService).
             if ($payable->order_type === 'delivery') {
                 try {
                     app(\App\Services\SmartDispatchService::class)->scheduleDispatch($payable->fresh());
                 } catch (\Exception $e) {
                     Log::warning('Dispatch after payment failed', [
+                        'order_id' => $payable->id,
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+            } else {
+                // Pickup food orders need no rider: paid → preparation starts.
+                try {
+                    app(\App\Services\PreparationStartService::class)->startForOrder($payable->fresh());
+                } catch (\Exception $e) {
+                    Log::warning('Preparation start after payment failed', [
                         'order_id' => $payable->id,
                         'error' => $e->getMessage(),
                     ]);
@@ -876,6 +918,18 @@ class PaymentController extends Controller
                         'group_order_id' => $payable->id,
                         'error' => $e->getMessage(),
                     ]);
+                }
+            } else {
+                // Pickup groups need no rider: paid → preparation starts.
+                foreach ($orders as $childOrder) {
+                    try {
+                        app(\App\Services\PreparationStartService::class)->startForOrder($childOrder->fresh());
+                    } catch (\Exception $e) {
+                        Log::warning('Preparation start after group payment failed', [
+                            'order_id' => $childOrder->id,
+                            'error' => $e->getMessage(),
+                        ]);
+                    }
                 }
             }
 

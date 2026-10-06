@@ -51,7 +51,6 @@ class BusinessOwnerGuideController extends Controller
                 'id' => $guide->id,
                 'name' => $guide->name,
                 'email' => $guide->email,
-                'firebase_uid' => $guide->firebase_uid,
                 'rider_status' => $guide->riderDetail?->rider_status,
                 'current_service' => $guide->riderDetail?->current_service,
                 'vehicle_type' => $guide->riderDetail?->vehicle_type,

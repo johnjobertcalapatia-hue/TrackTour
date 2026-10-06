@@ -88,7 +88,7 @@ class RealtimeCompletenessTest extends TestCase
 
         $allDays = array_fill_keys(
             ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
-            [['open' => '00:00', 'close' => '23:59']]
+            [['open' => '00:00', 'close' => '23:59'], ['open' => '23:59', 'close' => '00:00']]
         );
 
         $this->restaurantA = Business::create([
@@ -110,10 +110,10 @@ class RealtimeCompletenessTest extends TestCase
 
         // Faithful NearestRiderService mock: deterministic (lowest id first),
         // never re-offers to a rider already offered the delivery.
-        $nearestRiderMock = new class(app(\App\Services\FirebaseService::class)) extends NearestRiderService {
-            public function __construct($firebase)
+        $nearestRiderMock = new class() extends NearestRiderService {
+            public function __construct()
             {
-                parent::__construct($firebase);
+                parent::__construct();
             }
 
             public function findNearestAvailableRiders(float $pickupLat, float $pickupLng, string $serviceType = 'food', int $limit = 5, ?int $municipalityId = null): Collection
@@ -324,10 +324,9 @@ class RealtimeCompletenessTest extends TestCase
 
         $this->assertRiderAccepted($delivery, $this->riderA);
 
-        // Authoritative restaurant transition: accept → auto-starts preparing.
-        $this->postJson("/api/business-owner/orders/{$order->id}/accept", [], $this->authHeaders($this->ownerA))
-            ->assertOk();
-        $this->assertSame('preparing', $order->fresh()->status);
+        // Authoritative transition: rider acceptance auto-started preparing
+        // (the restaurant has no accept action anymore).
+        $this->assertSame('preparing', $order->fresh()->status, 'Rider acceptance auto-started preparation.');
 
         // Ready reaches the rider + kitchen so pickup can start without a refresh.
         $this->postJson("/api/business-owner/orders/{$order->id}/mark-ready", [], $this->authHeaders($this->ownerA))
@@ -395,9 +394,9 @@ class RealtimeCompletenessTest extends TestCase
             'The assignment must be anchored on the primary restaurant audience only.'
         );
 
-        // The single accepted rider gates the shared order.
-        $this->postJson("/api/business-owner/orders/{$orderA->id}/accept", [], $this->authHeaders($this->ownerA))
-            ->assertOk();
+        // The single accepted rider already gated the shared order into
+        // preparing (no restaurant accept action exists anymore).
+        $this->assertSame('preparing', $orderA->fresh()->status, 'Rider acceptance auto-started the shared order.');
 
         // Status events fan to both business rooms, the shared trip, and rider.
         $statusEvents = $this->bridgeEvents(fn ($req) => $req['eventName'] === 'order.status.changed');
@@ -452,41 +451,12 @@ class RealtimeCompletenessTest extends TestCase
         $this->assertSame(1, $cancels, 'Duplicate cancellation must not re-bridge trip_cancelled.');
     }
 
-    public function test_business_reject_cancels_delivery_and_dispatches_rejected_event(): void
-    {
-        $burger = Offering::create(['business_id' => $this->restaurantA->id, 'name' => 'Burger', 'price' => 120.00, 'is_available' => true, 'status' => 'available']);
-
-        $group = $this->groupService->createGroup($this->customer, [
-            'order_type' => 'delivery',
-            'delivery_latitude' => 12.55, 'delivery_longitude' => 121.35,
-            'delivery_address' => 'Beachfront Resort, Bansud',
-            'customer_phone' => '09170001122',
-            'payment_method' => 'cash', 'rider_tip' => 0,
-            'restaurants' => [
-                ['business_id' => $this->restaurantA->id, 'items' => [['offering_id' => $burger->id, 'quantity' => 1]]],
-            ],
-        ]);
-
-        $order = $group->orders()->where('business_id', $this->restaurantA->id)->first();
-
-        $this->postJson("/api/business-owner/orders/{$order->id}/reject", ['reason' => 'Out of stock'], $this->authHeaders($this->ownerA))
-            ->assertOk();
-        $this->assertSame('rejected', $order->fresh()->status);
-        $this->assertSame('cancelled', $order->fresh()->activeDelivery()?->status->value, 'Delivery cancelled alongside the rejection.');
-
-        Http::assertSent(fn (HttpRequest $req) => str_ends_with((string) $req->url(), '/trip/cancel'));
-
-        $this->assertTrue(
-            $this->bridgeEvents(fn ($req) =>
-                $req['eventName'] === 'order.status.changed'
-                && $req['data']['order_id'] === $order->id
-                && $req['data']['new_status'] === 'rejected'
-                && in_array('business:'.$this->restaurantA->id, $req['rooms'], true)
-                && in_array('user:'.$this->customer->id, $req['rooms'], true),
-            )->count() === 1,
-            'Rejection must bridge exactly one order.status.changed (rejected).'
-        );
-    }
+    // test_business_reject_cancels_delivery_and_dispatches_rejected_event was
+    // retired with the restaurant order redesign: the business-level reject
+    // endpoint no longer exists (restaurants never reject orders — orders
+    // without a rider wait indefinitely). Remaining 'rejected'/cancellation
+    // producers are covered by test_cancellation_bridges_trip_cancel_and_order_status
+    // and the cancellation path tests.
 
     public function test_socket_room_tokens_are_authorized_per_role(): void
     {

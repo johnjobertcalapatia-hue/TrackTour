@@ -11,6 +11,7 @@ class DeliveryResource extends JsonResource
     {
         return [
             'id' => $this->id,
+            'order_type' => $this->primaryOrder()?->order_type,
             'order' => new OrderResource($this->whenLoaded('order')),
             'rider' => new UserResource($this->whenLoaded('rider')),
             'status' => $this->status?->value ?? $this->status,

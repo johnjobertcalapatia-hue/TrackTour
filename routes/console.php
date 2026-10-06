@@ -1,7 +1,7 @@
 <?php
 
+use App\Console\Commands\AdvancePreparationOrders;
 use App\Console\Commands\AutoCancelUndeliveredOrder;
-use App\Console\Commands\AutoRejectWaitingOrder;
 use App\Console\Commands\CheckExpiredDocuments;
 use App\Console\Commands\CleanupRiderLocations;
 use App\Console\Commands\DispatchScheduledDeliveries;
@@ -22,9 +22,13 @@ Schedule::command(CheckExpiredDocuments::class)
     ->everySixHours()
     ->description('Suspend businesses with expired documents and reinstate renewed ones');
 
-Schedule::command(AutoRejectWaitingOrder::class)
+// Never auto-cancel: orders that never find a rider wait indefinitely by
+// decision (the former AutoRejectWaitingOrder 10-minute auto-reject was
+// removed with the restaurant accept/reject flow). This command only starts
+// eligible preparations and flips due timers PREPARING → READY at 00:00.
+Schedule::command(AdvancePreparationOrders::class)
     ->everyMinute()
-    ->description('Auto-reject and refund paid orders where the restaurant did not respond within 10 minutes');
+    ->description('Start preparation for rider-accepted orders and complete due preparation timers');
 
 Schedule::command(AutoCancelUndeliveredOrder::class)
     ->everyMinute()

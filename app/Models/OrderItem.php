@@ -25,6 +25,7 @@ class OrderItem extends Model
         'quantity',
         'unit_price',
         'subtotal',
+        'preparation_time',
         'notes',
         'status',
         'accepted_at',
@@ -41,6 +42,7 @@ class OrderItem extends Model
     protected function casts(): array
     {
         return [
+            'preparation_time' => 'integer',
             'accepted_at' => 'datetime',
             'preparation_started_at' => 'datetime',
             'ready_at' => 'datetime',
