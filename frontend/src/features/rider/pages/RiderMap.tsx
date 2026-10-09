@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { get, patch, post } from '@/shared/services/api'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
+import { StatusBadge } from '@/shared/components/StatusBadge'
 import { useAuthStore } from '@/features/auth/services/auth-store'
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -173,6 +174,46 @@ export default function RiderMap() {
       patch(`/rider/deliveries/${id}/status`, { status }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rider-map-location'] }),
   })
+
+  const getStatusActions = (delivery: Delivery) => {
+    switch (delivery.status) {
+      case 'assigned':
+        return (
+          <button
+            type="button"
+            onClick={() => statusMutation.mutate({ id: delivery.id, status: 'arrived_pickup' })}
+            disabled={statusMutation.isPending}
+            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition"
+          >
+            <Play className="w-4 h-4" /> Start Delivery
+          </button>
+        )
+      case 'picked_up':
+        return (
+          <button
+            type="button"
+            onClick={() => statusMutation.mutate({ id: delivery.id, status: 'arrived_destination' })}
+            disabled={statusMutation.isPending}
+            className="inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition"
+          >
+            <Truck className="w-4 h-4" /> Arrived at Destination
+          </button>
+        )
+      case 'arrived_destination':
+        return (
+          <button
+            type="button"
+            onClick={() => statusMutation.mutate({ id: delivery.id, status: 'delivered' })}
+            disabled={statusMutation.isPending}
+            className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition"
+          >
+            <CheckCircle className="w-4 h-4" /> Mark Delivered
+          </button>
+        )
+      default:
+        return null
+    }
+  }
 
   const isPickupStage = !!activeDelivery && ['assigned', 'arrived_pickup'].includes(activeDelivery.status)
   const isFoodService = user?.current_service !== 'transport'
@@ -623,9 +664,7 @@ export default function RiderMap() {
               {deliveries.map((d) => (
                 <div
                   key={d.id}
-                  className={`bg-[#F5FBF7] border rounded-xl p-4 transition ${
-                    activeDelivery?.id === d.id ? 'border-[#249B57]/50' : 'border-[#E4E9E6]'
-                  }`}
+                  className="bg-[#F5FBF7] border rounded-xl p-4 transition border-[#E4E9E6]"
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                     <div className="flex-1 space-y-2">
