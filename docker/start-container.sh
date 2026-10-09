@@ -3,12 +3,25 @@ set -euo pipefail
 
 cd /var/www/html
 
+# Render injects PORT for public web services. Keep the local Compose default
+# at 80 while allowing the same image to serve Render's assigned port.
+PORT="${PORT:-80}"
+if ! [[ "$PORT" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65535 )); then
+  echo "[start-container] PORT must be a valid TCP port number."
+  exit 1
+fi
+sed -i "s/^Listen 80$/Listen ${PORT}/" /etc/apache2/ports.conf
+sed -i "s#<VirtualHost \\*:80>#<VirtualHost *:${PORT}>#" /etc/apache2/sites-available/000-default.conf
+
 # APP_KEY must be provided as a persistent deployment secret. Generating a new
 # key on each container creation invalidates sessions and encrypted data.
 if [ -z "${APP_KEY:-}" ]; then
   echo "[start-container] APP_KEY is required; set a persistent production key."
   exit 1
 fi
+
+mkdir -p storage/app/public storage/app/private
+chown www-data:www-data storage/app/public storage/app/private
 
 # Refresh Laravel's package manifest (build step runs --no-scripts on purpose).
 php artisan package:discover --ansi

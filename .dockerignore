@@ -19,9 +19,17 @@ vendor/
 deploy/
 compose.vps.yaml
 Caddyfile
+bootstrap/cache/*.php
 
 # Local dev / tooling / docs that must never ship in the image.
 docs/
+00-project/
+01-architecture/
+02-business-rules/
+03-decisions/
+04-current-state/
+05-testing/
+06-ui-ux/
 *.md
 .env
 .env.*
@@ -33,6 +41,11 @@ storage/framework/views/*
 tmp_*
 debug_*
 check_*
+_db_check.php
+_schema_check.php
+_final_check.php
+make_checkpoint_pdf.php
+test_cookies.txt
 clear_test_data.php
 create_test_data.php
 phpunit.xml

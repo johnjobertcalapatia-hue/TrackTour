@@ -23,6 +23,7 @@ use App\Http\Controllers\Api\PaymentController;
 use App\Http\Controllers\Api\StaffDashboardApiController;
 use App\Http\Controllers\Api\SocketTokenController;
 use App\Http\Controllers\Api\TripTrackingController;
+use App\Http\Controllers\Api\VerificationDocumentController;
 use App\Http\Controllers\Auth\OtpController;
 use App\Http\Controllers\BusinessOwnerBookingController;
 use App\Http\Controllers\BusinessRegistrationController;
@@ -162,6 +163,12 @@ Route::middleware('token.only')->group(function () {
 
     // Realtime socket room token (user:{id}) for the Zero-DB socket engine.
     Route::get('/socket/user-token', [SocketTokenController::class, 'userToken']);
+    Route::get('/business-documents/{businessDocument}/file', [VerificationDocumentController::class, 'business'])
+        ->name('api.business-documents.file');
+    Route::get('/users/{kyc}/verification-documents/{document}', [VerificationDocumentController::class, 'kyc'])
+        ->name('api.user-kyc.file');
+    Route::get('/rider-details/{riderDetail}/verification-documents/{document}', [VerificationDocumentController::class, 'rider'])
+        ->name('api.rider-documents.file');
 
     // Form Drafts
     Route::get('/drafts', [FormDraftController::class, 'index']);

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Http\Resources\BusinessDocumentResource;
 use App\Http\Resources\BusinessResource;
 use App\Models\Business;
 use App\Models\BusinessCategory;
@@ -37,7 +38,7 @@ class AdminBusinessController extends Controller
             'municipality',
             'barangay',
             'category',
-            'documents',
+            'documents.requiredDocument',
             'media',
             'statusLogs' => fn ($q) => $q->latest()->limit(10),
         ]);
@@ -138,6 +139,6 @@ class AdminBusinessController extends Controller
 
         $document->load('requiredDocument');
 
-        return $this->successResponse($document, 'Document status updated.');
+        return $this->successResponse(BusinessDocumentResource::make($document), 'Document status updated.');
     }
 }

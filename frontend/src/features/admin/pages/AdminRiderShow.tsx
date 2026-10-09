@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { get, post } from '@/shared/services/api'
+import { apiErrorMessage, get, openAuthenticatedDocument, post } from '@/shared/services/api'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { Modal } from '@/shared/components/Modal'
@@ -39,7 +39,7 @@ interface RiderDetail {
   license_number: string | null
   license_expiry: string | null
   registration_number: string | null
-  documents?: { id: number; name: string; file_url: string; verification_status: string }[]
+  documents?: { name: string; file_url: string }[]
   review_history?: { id: number; status: string; remarks: string; created_at: string; performed_by: string }[]
 }
 
@@ -222,14 +222,20 @@ export default function AdminRiderShow() {
               <div className="space-y-3">
                 {rider.documents.map((doc) => (
                   <div
-                    key={doc.id}
+                    key={doc.name}
                     className="flex items-center justify-between p-3 bg-[#F3F8F4] rounded-xl border border-[#E2E8E3]"
                   >
                     <div className="flex items-center gap-3">
                       <FileText className="w-4 h-4 text-[#6B7280]" />
                       <span className="text-[#17201A] text-sm">{doc.name}</span>
                     </div>
-                    <StatusBadge status={doc.verification_status} />
+                    <button
+                      type="button"
+                      onClick={() => void openAuthenticatedDocument(doc.file_url).catch((error: unknown) => window.alert(apiErrorMessage(error, 'Unable to open this document.')))}
+                      className="text-sm text-[#16803C] hover:text-[#126B32]"
+                    >
+                      View
+                    </button>
                   </div>
                 ))}
               </div>

@@ -5,6 +5,9 @@
 
     RewriteEngine On
 
+    # Verification documents are served only through authenticated API routes.
+    RewriteRule ^storage/(?:ids|riders|businesses/documents)(?:/|$) - [F,END]
+
     # Handle Authorization Header
     RewriteCond %{HTTP:Authorization} .
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]

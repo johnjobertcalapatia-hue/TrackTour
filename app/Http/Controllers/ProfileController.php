@@ -37,9 +37,9 @@ class ProfileController extends Controller
                 if ($request->hasFile($field)) {
                     $kyc = $user->kyc;
                     if ($kyc && $kyc->$field) {
-                        Storage::disk('public')->delete($kyc->$field);
+                        Storage::disk('local')->delete($kyc->$field);
                     }
-                    $path = $request->file($field)->store('ids', 'public');
+                    $path = $request->file($field)->store('ids', 'local');
                     if ($kyc) {
                         $kyc->update([$field => $path]);
                     }

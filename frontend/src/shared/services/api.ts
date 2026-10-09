@@ -188,4 +188,23 @@ export async function del<T>(url: string, config?: AxiosRequestConfig): Promise<
   return unwrap<T>(response)
 }
 
+export async function openAuthenticatedDocument(url: string): Promise<void> {
+  const preview = window.open('', '_blank')
+  if (!preview) {
+    throw new Error('Allow pop-ups to view this document.')
+  }
+  preview.opener = null
+
+  try {
+    const response = await api.get<Blob>(url, { responseType: 'blob' })
+    const contentType = response.headers['content-type'] ?? response.data.type
+    const objectUrl = URL.createObjectURL(new Blob([response.data], { type: contentType }))
+    preview.location.href = objectUrl
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000)
+  } catch (error) {
+    preview.close()
+    throw error
+  }
+}
+
 export default api

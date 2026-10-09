@@ -37,6 +37,22 @@ class UserResource extends JsonResource
                 $this->relationLoaded('riderDetail'),
                 fn () => (bool) ($this->riderDetail?->auto_accept ?? false)
             ),
+            'documents' => $this->whenLoaded('riderDetail', function () {
+                if (! $this->riderDetail) {
+                    return [];
+                }
+
+                return collect([
+                    'drivers_license_front' => ['Driver license (front)', 'drivers-license-front'],
+                    'drivers_license_back' => ['Driver license (back)', 'drivers-license-back'],
+                    'or_cr_image' => ['Vehicle registration', 'vehicle-registration'],
+                    'nbi_clearance' => ['NBI clearance', 'nbi-clearance'],
+                ])->filter(fn ($details, $field) => filled($this->riderDetail->getAttribute($field)))
+                    ->map(fn ($details) => [
+                        'name' => $details[0],
+                        'file_url' => route('api.rider-documents.file', [$this->riderDetail->id, $details[1]]),
+                    ])->values();
+            }),
             'profile' => new UserProfileResource($this->whenLoaded('profile')),
             'businesses' => BusinessResource::collection($this->whenLoaded('businesses')),
             'staff' => StaffResource::collection($this->whenLoaded('staff')),

@@ -28,7 +28,7 @@ if (!process.env.SOCKET_BRIDGE_SECRET) {
   }
 }
 
-const PORT = parseInt(process.env.SOCKET_PORT || "3001", 10);
+const PORT = parseInt(process.env.SOCKET_PORT || process.env.PORT || "3001", 10);
 const BRIDGE_PORT = parseInt(process.env.SOCKET_BRIDGE_PORT || "3002", 10);
 const BRIDGE_SECRET = process.env.SOCKET_BRIDGE_SECRET || "";
 const LOCATION_MIN_INTERVAL_MS = parseInt(process.env.SOCKET_LOCATION_MIN_INTERVAL_MS || "1000", 10);
@@ -429,6 +429,12 @@ const httpServer = http.createServer(async (req, res) => {
     setCors();
     res.writeHead(204);
     res.end();
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/healthz") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "ok" }));
     return;
   }
 

@@ -18,5 +18,8 @@
     },
     "dependencies": {
         "socket.io": "^4.8.3"
+    },
+    "overrides": {
+        "shell-quote": "^1.11.0"
     }
 }

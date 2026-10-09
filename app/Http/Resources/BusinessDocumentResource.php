@@ -4,7 +4,6 @@ namespace App\Http\Resources;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
-use Illuminate\Support\Facades\Storage;
 
 class BusinessDocumentResource extends JsonResource
 {
@@ -13,8 +12,8 @@ class BusinessDocumentResource extends JsonResource
         return [
             'id' => $this->id,
             'name' => $this->requiredDocument?->document_name ?? 'Document',
-            'file_url' => $this->file_path ? request()->getSchemeAndHttpHost() . Storage::url($this->file_path) : null,
-            'file_path' => $this->file_path,
+            'file_url' => $this->file_path ? route('api.business-documents.file', $this->id) : null,
+            'file_name' => $this->file_path ? basename($this->file_path) : null,
             'document_number' => $this->document_number,
             'registered_name' => $this->registered_name,
             'issued_by' => $this->issued_by,

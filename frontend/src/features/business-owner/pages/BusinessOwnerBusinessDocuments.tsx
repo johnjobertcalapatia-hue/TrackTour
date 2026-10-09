@@ -1,21 +1,21 @@
 import { useState, useRef, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { get, post } from '@/shared/services/api'
+import { apiErrorMessage, get, openAuthenticatedDocument, post } from '@/shared/services/api'
 import { useActiveBusinessId } from '../services/use-active-business-id'
 import { ArrowLeft, Upload, FileText, Download, File, Lock, AlertTriangle, Calendar, ChevronDown, ChevronRight } from 'lucide-react'
 
 interface RequiredDocument {
   id: number
   name: string
+  file_name?: string | null
   is_expirable: boolean
   description?: string
 }
 
 interface BusinessDocument {
   id: number
-  file_path: string
-  file_name?: string
+  name: string
   document_number: string | null
   registered_name: string | null
   issued_by: string | null
@@ -28,7 +28,7 @@ interface BusinessDocument {
   required_document?: RequiredDocument
   requiredDocument?: RequiredDocument
   type?: string
-  file_url?: string
+  file_url?: string | null
   status?: string
 }
 
@@ -126,7 +126,7 @@ export default function BusinessOwnerBusinessDocuments() {
   }
 
   const docName = (doc: BusinessDocument) => {
-    return doc.requiredDocument?.name ?? doc.required_document?.name ?? doc.type ?? 'Unknown'
+    return doc.requiredDocument?.name ?? doc.required_document?.name ?? doc.name ?? doc.type ?? 'Unknown'
   }
 
   const docStatus = (doc: BusinessDocument) => {
@@ -258,7 +258,7 @@ export default function BusinessOwnerBusinessDocuments() {
                           <span className="text-[#17201A] font-medium">{docName(doc)}</span>
                         </div>
                       </td>
-                      <td className="px-6 py-4 text-[#647067]">{doc.file_name ?? doc.file_path?.split('/').pop()}</td>
+                      <td className="px-6 py-4 text-[#647067]">{doc.file_name ?? '—'}</td>
                       <td className="px-6 py-4 text-[#4B5563]">{doc.document_number ?? '—'}</td>
                       <td className="px-6 py-4 text-[#4B5563]">{doc.issued_by ?? '—'}</td>
                       <td className="px-6 py-4 text-[#4B5563]">{doc.issue_date ?? '—'}</td>
@@ -286,14 +286,14 @@ export default function BusinessOwnerBusinessDocuments() {
                         </span>
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <a
-                          href={doc.file_url ? doc.file_url : (doc.file_path ? `/storage/${doc.file_path}` : '#')}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className={`inline-flex items-center gap-1.5 transition ${doc.file_url || doc.file_path ? 'text-[#647067] hover:text-[#16803C]' : 'text-[#647067] pointer-events-none'}`}
+                        <button
+                          type="button"
+                          onClick={() => doc.file_url && void openAuthenticatedDocument(doc.file_url).catch((error: unknown) => window.alert(apiErrorMessage(error, 'Unable to open this document.')))}
+                          className="inline-flex items-center gap-1.5 text-[#647067] hover:text-[#16803C] transition disabled:pointer-events-none"
+                          disabled={!doc.file_url}
                         >
                           <Download className="w-4 h-4" /> View
-                        </a>
+                        </button>
                       </td>
                     </tr>
                     {expandedDocId === doc.id && (

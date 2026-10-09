@@ -89,6 +89,11 @@ function postBridge(bridgePort, route, body, secret = SECRET) {
   }).then(async (res) => ({ status: res.status, body: await res.json().catch(() => ({})) }));
 }
 
+function bridgeHealth(bridgePort) {
+  return fetch(`http://127.0.0.1:${bridgePort}/healthz`)
+    .then(async (res) => ({ status: res.status, body: await res.json() }));
+}
+
 /** A rider socket, connected but not yet on the radar. */
 function connectRiderSocket(socketPort) {
   return new Promise((resolve, reject) => {
@@ -219,6 +224,14 @@ describe('socket engine delivers the order ping to an online rider', () => {
     await goOnline(socket, engine.bridgePort, riderId);
     return { socket, riderId };
   };
+
+  it('provides an unauthenticated liveness probe without exposing bridge status', async () => {
+    const res = await bridgeHealth(engine.bridgePort);
+
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body, { status: 'ok' });
+    assert.equal((await fetch(`http://127.0.0.1:${engine.bridgePort}/status`)).status, 401);
+  });
 
   it('pings the preferred rider named by the backend for a dispatched order', async () => {
     const { socket, riderId } = await registerRider();

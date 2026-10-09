@@ -31,6 +31,10 @@ class BusinessDocument extends Model
         'verified_at',
     ];
 
+    protected $hidden = [
+        'file_path',
+    ];
+
     protected function casts(): array
     {
         return [

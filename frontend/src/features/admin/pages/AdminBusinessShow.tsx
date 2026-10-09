@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { get, post, put } from '@/shared/services/api'
+import { apiErrorMessage, get, openAuthenticatedDocument, post, put } from '@/shared/services/api'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { Modal } from '@/shared/components/Modal'
@@ -25,8 +25,7 @@ import {
 interface BusinessDocument {
   id: number
   name: string
-  file_url: string
-  file_path?: string
+  file_url: string | null
   document_number: string | null
   registered_name: string | null
   issued_by: string | null
@@ -299,17 +298,16 @@ export default function AdminBusinessShow() {
                               )}
                             </div>
 
-                            {(doc.file_url || doc.file_path) && (
+                            {doc.file_url && (
                               <div className="bg-[#F8FAFC] rounded-lg p-3 border border-[#E2E8E3]">
-                                <a
-                                  href={doc.file_url ?? `/storage/${doc.file_path}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
+                                <button
+                                  type="button"
+                                  onClick={() => doc.file_url && void openAuthenticatedDocument(doc.file_url).catch((error: unknown) => window.alert(apiErrorMessage(error, 'Unable to open this document.')))}
                                   className="inline-flex items-center gap-2 text-[#16803C] hover:text-[#126B32] text-xs font-medium"
                                 >
                                   <FileText className="w-3.5 h-3.5" />
                                   View Document
-                                </a>
+                                </button>
                               </div>
                             )}
 

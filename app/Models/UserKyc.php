@@ -21,6 +21,12 @@ class UserKyc extends Model
         'verified_at',
     ];
 
+    protected $hidden = [
+        'valid_id_front',
+        'valid_id_back',
+        'selfie_holding_id',
+    ];
+
     protected function casts(): array
     {
         return [

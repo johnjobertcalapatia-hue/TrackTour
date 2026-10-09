@@ -10,7 +10,7 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: ["CMD", "mysqladmin", "ping", "--host=127.0.0.1", "--silent"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -35,6 +35,7 @@ services:
         condition: service_healthy
     volumes:
       - public_uploads:/var/www/html/storage/app/public
+      - private_uploads:/var/www/html/storage/app/private
     expose:
       - "80"
     healthcheck:
@@ -68,7 +69,7 @@ services:
         - CMD
         - node
         - -e
-        - "fetch('http://127.0.0.1:3002/status').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+        - "fetch('http://127.0.0.1:3002/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
       interval: 30s
       timeout: 5s
       retries: 3
@@ -109,5 +110,6 @@ services:
 volumes:
   mysql_data:
   public_uploads:
+  private_uploads:
   caddy_data:
   caddy_config:

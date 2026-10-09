@@ -59,10 +59,11 @@ COPY . .
 
 # Runtime-home directories Laravel needs to stay writable. Uploaded media lives
 # at storage/app/public on a persistent deployment volume.
-RUN mkdir -p bootstrap/cache storage/framework/sessions storage/framework/views storage/app/public \
+RUN mkdir -p bootstrap/cache storage/framework/sessions storage/framework/views storage/app/public storage/app/private \
     && chown -R www-data:www-data storage bootstrap/cache public
 
 ENV APP_ENV=production
+ENV PORT=80
 
 COPY docker/apache-vhost.conf /etc/apache2/sites-available/000-default.conf
 COPY docker/supervisord.conf /etc/supervisor/supervisord.conf

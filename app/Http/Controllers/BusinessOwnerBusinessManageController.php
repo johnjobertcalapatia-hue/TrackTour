@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\BusinessOwner\StoreBusinessRequest;
 use App\Http\Requests\BusinessOwner\UpdateBusinessRequest;
+use App\Http\Resources\BusinessDocumentResource;
 use App\Http\Resources\BusinessMediaResource;
 use App\Http\Resources\BusinessResource;
 use App\Models\Barangay;
@@ -69,7 +70,7 @@ class BusinessOwnerBusinessManageController extends Controller
             foreach ($validated['documents'] as $doc) {
                 $filePath = null;
                 if (! empty($doc['file']) && $doc['file'] instanceof \Illuminate\Http\UploadedFile) {
-                    $filePath = $doc['file']->store('businesses/documents', 'public');
+                    $filePath = $doc['file']->store('businesses/documents', 'local');
                 }
 
                 $ocrData = [];
@@ -124,7 +125,7 @@ class BusinessOwnerBusinessManageController extends Controller
         if ($business->owner_id !== request()->user()->id) {
             return $this->forbiddenResponse('You do not own this business.');
         }
-        $business->load('category', 'municipality', 'barangay', 'details', 'documents', 'media');
+        $business->load('category', 'municipality', 'barangay', 'details', 'documents.requiredDocument', 'media');
         return $this->successResponse(BusinessResource::make($business));
     }
 
@@ -270,7 +271,7 @@ class BusinessOwnerBusinessManageController extends Controller
             ->get();
 
         return $this->successResponse([
-            'documents' => $business->documents,
+            'documents' => BusinessDocumentResource::collection($business->documents),
             'available_docs' => $availableDocs,
             'business_status' => $business->status,
         ]);
@@ -337,7 +338,7 @@ class BusinessOwnerBusinessManageController extends Controller
 
         $document = $business->documents()->create([
             'required_document_id' => $validated['required_document_id'],
-            'file_path' => $request->file('file')->store('businesses/documents', 'public'),
+            'file_path' => $request->file('file')->store('businesses/documents', 'local'),
             'document_number' => $validated['document_number'] ?? null,
             'registered_name' => $validated['registered_name'] ?? null,
             'issued_by' => $validated['issued_by'] ?? null,
@@ -350,7 +351,7 @@ class BusinessOwnerBusinessManageController extends Controller
             'ocr_data' => $flagged ? $ocrData : null,
         ]);
 
-        return $this->createdResponse($document, 'Document uploaded successfully.');
+        return $this->createdResponse(BusinessDocumentResource::make($document), 'Document uploaded successfully.');
     }
 
     public function deleteDocument(Request $request, BusinessDocument $businessDocument): JsonResponse
@@ -363,7 +364,7 @@ class BusinessOwnerBusinessManageController extends Controller
             return $this->errorResponse('Documents cannot be modified once the business is approved.', 422);
         }
 
-        Storage::disk('public')->delete($businessDocument->file_path);
+        Storage::disk('local')->delete($businessDocument->file_path);
         $businessDocument->delete();
 
         return $this->noContentResponse('Document archived successfully.');
@@ -674,7 +675,7 @@ class BusinessOwnerBusinessManageController extends Controller
             return $this->forbiddenResponse('You do not own this business.');
         }
 
-        $business->load('documents', 'statusLogs.reviewer', 'category.requiredDocuments');
+        $business->load('documents.requiredDocument', 'statusLogs.reviewer', 'category.requiredDocuments');
 
         $statusLogs = $business->statusLogs->map(fn ($log) => [
             'id' => $log->id,

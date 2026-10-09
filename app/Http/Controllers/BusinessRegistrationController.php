@@ -216,7 +216,7 @@ class BusinessRegistrationController extends Controller
                 foreach ($validated['documents'] as $doc) {
                     $filePath = null;
                     if (! empty($doc['file']) && $doc['file'] instanceof UploadedFile) {
-                        $filePath = $doc['file']->store('businesses/documents', 'public');
+                        $filePath = $doc['file']->store('businesses/documents', 'local');
                     }
                     $business->documents()->create([
                         'required_document_id' => $doc['required_document_id'],

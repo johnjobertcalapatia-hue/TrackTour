@@ -128,9 +128,9 @@ class RegisteredUserController extends Controller
                 'zip_code' => $request->zip_code,
             ]);
 
-            $validIdFrontPath = $request->file('valid_id_front')?->store('ids', 'public');
-            $validIdBackPath = $request->file('valid_id_back')?->store('ids', 'public');
-            $selfiePath = $request->file('selfie_holding_id')?->store('ids', 'public');
+            $validIdFrontPath = $request->file('valid_id_front')?->store('ids', 'local');
+            $validIdBackPath = $request->file('valid_id_back')?->store('ids', 'local');
+            $selfiePath = $request->file('selfie_holding_id')?->store('ids', 'local');
 
             $user->kyc()->create([
                 'government_id_type' => $request->government_id_type,
