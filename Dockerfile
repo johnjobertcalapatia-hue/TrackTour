@@ -38,7 +38,8 @@ RUN apt-get update \
         intl \
         curl \
         opcache \
-    && a2enmod rewrite headers \
+    && a2dismod mpm_event mpm_worker \
+    && a2enmod mpm_prefork rewrite headers \
     && mkdir -p /var/www/html \
     && rm -rf /var/lib/apt/lists/*
 
