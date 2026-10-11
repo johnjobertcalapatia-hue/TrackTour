@@ -7,8 +7,8 @@ RUN npm ci
 
 COPY . .
 
-ARG VITE_API_URL=/api
-ARG VITE_API_ORIGIN=https://tracktour.com
+ARG VITE_API_URL=https://tracktour-production.up.railway.app/api
+ARG VITE_API_ORIGIN=https://tracktour-production.up.railway.app
 ARG VITE_SOCKET_URL=https://tracktour.com
 ARG VITE_PAYMONGO_PUBLIC_KEY
 ENV VITE_API_URL=${VITE_API_URL}

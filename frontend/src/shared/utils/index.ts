@@ -36,10 +36,10 @@ export function capitalize(str: string | undefined | null): string {
   return str.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase())
 }
 
+const env = (import.meta as unknown as { env?: Record<string, string> }).env
 const API_ORIGIN =
-  (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_ORIGIN ||
-  (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_URL ||
-  'http://localhost:8000'
+  env?.VITE_API_ORIGIN ||
+  (env?.VITE_API_URL || 'http://localhost:8000').replace(/\/api\/?$/, '')
 
 export function toAssetUrl(path: string | null | undefined): string {
   if (!path) return ''
