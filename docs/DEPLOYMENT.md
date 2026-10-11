@@ -137,15 +137,16 @@ SOCKET_BRIDGE_SECRET=<same value as API service>
 2. **Environment variables** (build-time, must be `VITE_`-prefixed):
 
 ```text
-VITE_API_URL=https://<your-api-service>.up.railway.app
+VITE_API_URL=https://<your-api-service>.up.railway.app/api
 VITE_SOCKET_URL=https://<your-socket-service>.up.railway.app   # 3001 public
 VITE_PAYMONGO_PUBLIC_KEY=pk_...
-# optional: override asset origin (defaults to VITE_API_URL)
+# optional: asset origin without /api (derived from VITE_API_URL by default)
 # VITE_API_ORIGIN=https://<your-api-service>.up.railway.app
 ```
 
-3. Deploy. Confirm the SPA loads and that `/api/...` calls in the network tab
-   go to `VITE_API_URL`.
+3. Deploy. Confirm the SPA loads and that API calls in the network tab use
+   `/api/...` paths, for example
+   `https://<your-api-service>.up.railway.app/api/landing/cards`.
 
 ---
 
@@ -156,9 +157,14 @@ VITE_PAYMONGO_PUBLIC_KEY=pk_...
 - `SOCKET_SERVER_URL` on the API points at the socket service's **3002** port.
 - `FRONTEND_URL` on the API equals the deployed frontend origin. The current
   production origin `https://tracktour-frontend.vercel.app` is explicitly
-  allowlisted in `config/cors.php`; Laravel's `api/*` CORS path covers the
-  `/api/landing/cards`, `/api/landing-content`, `/api/map/businesses`, and
-  `/api/municipalities` endpoints. Keep other origins explicit—do not use `*`.
+  allowlisted in `config/cors.php`, along with the Railway-hosted frontend
+  `https://nurturing-creation-production-ecea.up.railway.app`; Laravel's
+  `api/*` CORS path covers `/api/landing/cards`, `/api/landing-content`,
+  `/api/map/businesses`, and `/api/municipalities`. Keep other origins
+  explicit—do not use `*`.
+- `VITE_API_URL` on Vercel includes the Laravel `/api` prefix. Calls to the
+  origin root (for example `/landing/cards`) do not reach the API route and
+  will not receive the API CORS headers.
 - API is HTTPS behind Railway; Laravel trust-proxy defaults honour
   `X-Forwarded-Proto` so generated/redirect URLs keep `https`.
 - Classic routes still served by Laravel (`/login`, etc.) are not part of the

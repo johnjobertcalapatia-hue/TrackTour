@@ -6,23 +6,29 @@ use Tests\TestCase;
 
 class CorsConfigurationTest extends TestCase
 {
-    public function test_vercel_frontend_is_allowed_to_preflight_public_api_routes(): void
+    public function test_deployed_frontends_are_allowed_to_preflight_public_api_routes(): void
     {
-        $origin = 'https://tracktour-frontend.vercel.app';
-
-        foreach ([
+        $origins = [
+            'https://tracktour-frontend.vercel.app',
+            'https://nurturing-creation-production-ecea.up.railway.app',
+        ];
+        $uris = [
             '/api/landing/cards',
             '/api/landing-content',
             '/api/map/businesses',
             '/api/municipalities',
-        ] as $uri) {
-            $response = $this->withHeaders([
-                'Origin' => $origin,
-                'Access-Control-Request-Method' => 'GET',
-            ])->options($uri);
+        ];
 
-            $response->assertNoContent();
-            $response->assertHeader('Access-Control-Allow-Origin', $origin);
+        foreach ($origins as $origin) {
+            foreach ($uris as $uri) {
+                $response = $this->withHeaders([
+                    'Origin' => $origin,
+                    'Access-Control-Request-Method' => 'GET',
+                ])->options($uri);
+
+                $response->assertNoContent();
+                $response->assertHeader('Access-Control-Allow-Origin', $origin);
+            }
         }
     }
 

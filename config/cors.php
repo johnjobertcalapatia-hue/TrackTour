@@ -5,6 +5,7 @@ return [
     'allowed_methods' => ['*'],
     'allowed_origins' => [
         'https://tracktour-frontend.vercel.app',
+        'https://nurturing-creation-production-ecea.up.railway.app',
         env('FRONTEND_URL', 'http://localhost:3000'),
         'http://localhost:5173',
         'http://127.0.0.1:5173',
