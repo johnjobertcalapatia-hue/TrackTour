@@ -1,5 +1,11 @@
 # Project Progress — Tourism Management Portal
 
+## Deployment Target Clarification (2026-10-10)
+
+- The user confirms Railway hosting. The repository's current deployment guide specifies Railway for the Laravel API, MySQL, and Socket.IO, with Vercel for the React frontend; the live provider configuration has not been independently verified in this workspace.
+- `docs/RENDER-DEPLOYMENT-PLAN.md` is historical planning, not the selected target. See `docs/DEPLOYMENT.md` and `docs/FULL-STACK-DEPLOYMENT-AUDIT.md`.
+- Deployment audit follow-up: verify Railway persistence covers both `storage/app/public` and `storage/app/private`, and confirm the API uses private networking for the Socket.IO bridge on port 3002.
+
 ## Verification Document Privacy — IMPLEMENTED & LOCALLY VERIFIED
 
 - **Policy:** rider, business-owner KYC, and business verification uploads are private; only the owning account or Tourism Office roles can retrieve them through authenticated API routes. Sensitive paths are omitted from API resources, and Apache denies legacy verification URLs under the public storage symlink.
@@ -11,13 +17,69 @@
 - **Disposable database:** all **201 migrations ran / 0 pending** on an empty MySQL 8.4 database, including during API container startup. This does not establish safety against a populated production schema: historical migrations `2026_07_06_000012_rebuild_business_documents_table.php`, `2026_07_15_054106_rebuild_business_documents_to_uploads_table.php`, and `2026_07_23_120000_restructure_required_documents_table.php` drop/recreate document tables. Inspect the target migration history, schema, and data before any production migration.
 - **Release gate:** back up production database and files; inspect target migration history before running any migration; run `docker compose exec --user www-data api php artisan verification-documents:privatize` and inspect all reported paths; resolve failures, then add `--apply` and run as that same application/web-service user. Verify private owner/staff access and denied cross-account access before accepting real uploads. Purge any external CDN/proxy caches of prior public document URLs.
 
-## Read-Only Migration Safety Audit — BLOCKED (2026-10-08)
+## Read-Only Database & Storage Safety Gate — COMPLETE (2026-10-09)
 
-- The selected `.env` points to `APP_ENV=local`, `DB_HOST=localhost`, and database `track_tour_db`; it does not identify a production/Render target.
-- The local XAMPP MariaDB 10.4.32 process is listening on port 3306, but `mysqladmin ping` fails during the initial protocol handshake. `php artisan migrate:status` did not complete. The local MariaDB error log also reports InnoDB pages with future log sequence numbers and a discarded tablespace for `recover_db`.
-- No database migration history, affected-table schema/counts, file-reference reconciliation, or backup/restore test could be collected. No database or storage changes, repair, restart, backup, migration, or file cleanup were performed.
-- Static source review reconfirms that `2026_07_06_000012_rebuild_business_documents_table.php` and `2026_07_15_054106_rebuild_business_documents_to_uploads_table.php` drop/recreate `business_documents`; `2026_07_23_120000_restructure_required_documents_table.php` drops/recreates `business_category_documents` and `required_documents`. These are hazards only if pending on the target; target migration state is unknown.
-- **Next gate:** first recover/verify the local database using a safe, separately backed-up procedure if it is the intended audit target, or configure read-only access to the actual deployment database. Do not run migrations or delete files until the target history, schema, data, and recoverable backups are verified.
+The 2026-10-08 "BLOCKED" handshake stall cleared on re-test: the local XAMPP
+MariaDB 10.4.32 on localhost:3306 accepts connections for database
+`track_tour_db` (`.env` stays `APP_ENV=local`; no production/Render target is
+configured). A full read-only audit completed and a verified backup was taken.
+No database or storage change, migration, repair, or file deletion was performed.
+
+- **Classification:** `track_tour_db` is treated as a **development/test
+  database** — its contents are sample/demo data (16 users, 8 businesses,
+  7 orders, 1 KYC row, 0 business document rows) with no confirmed real-user
+  information, and it is not a confirmed deployment target. The verified backup
+  is retained anyway as a recovery point for the current schema and test data.
+  Render, if it provisions a separate managed MySQL, receives its own
+  migration/backup validation (see the Render deployment plan).
+
+- **Migration history:** `track_tour_db` has 89 tables; the `migrations` table
+  holds 191 rows vs 201 migration files → **13 pending**. Every pending file
+  was reviewed by its `up()` path: 10 are purely additive; 3 carry data
+  mutations (`offerings.status active → available`,
+  `offerings.preparation_time = 25`, transport `orders.business_id → null` with
+  a guarded FK drop/re-add). None of the 13 touches document tables and none
+  drops schema in `up()`.
+- **Stale migration rows:** 3 recorded rows have no matching file
+  (`rename_rider_credits_to_rider_wallets`, `extend_rider_credit_transactions`,
+  `create_rider_top_ups_table`) — artifacts of the removed rider-credit
+  architecture (AGENTS.md §5.2). No corresponding tables exist on disk; they
+  are benign. Do not prune them merely because the files were deleted; removing
+  the rows is a separate documented operation with its own backup.
+- **Document tables:** the final schema uses `business_document_uploads`
+  (`business_documents` was dropped/rebuilt by the applied 2026-07 hazard
+  migrations; `BusinessDocument` maps to `business_document_uploads`).
+  `business_document_uploads` has 0 rows.
+- **Backup — VERIFIED:** fresh full `mysqldump`
+  `track_tour_db_20261009_222914.sql` (0.43 MB). Round-trip restore into a
+  throwaway database proved recoverability: 89 tables, users 16, migrations
+  191, orders 7, kyc 1 — identical to live; scratch dropped. The previous only
+  candidate, repo-tracked `track_tour_db.sql`, is a stale 0.33 MB dump from
+  2026-09-21. The verified backup still lives only on this machine; the off-box
+  copy is an outstanding decision.
+- **Legacy file inventory (read-only `verification-documents:privatize`):**
+  the command would move **3** files (one `user_kyc` row). Separately, ~215
+  **unreferenced public files** exist with no database reference — 188 under
+  `storage/app/public/businesses/documents/` (~52 MB) and ~27 under
+  `storage/app/public/ids/` (~27 MB) — plus 12 already-private files under
+  `storage/app/private/businesses/documents/`. Unreferenced files are **not
+  covered by the privatization command** and were **archived (2026-10-09)**:
+  `tracktour-orphan-public-files-20261009.zip` (76.28 MB,
+  SHA-256 `64EB6F47…E5BF`) plus `orphan-manifest.csv` (relative path / bytes /
+  per-file SHA-256). Archive verified by extract + re-hash: **215/215 match,
+  0 missing, 0 mismatch**; originals left in place, nothing deleted. The
+  hardened images ship an Apache `.htaccess` denying legacy URLs, but
+  `.htaccess` applies only where Apache serves those files and honors the
+  config; it is not a substitute for access controls on the actual storage
+  service.
+- **Remaining decisions (production still BLOCKED):** confirm the actual
+  deployment database/storage target — if Render uses a separate managed MySQL
+  instance, that target needs its own migration-history, schema, data, and
+  backup review; decide deliberate handling of the 13 pending migrations and
+  the 3 stale rows for the local test DB (apply only after a reviewed,
+  backed-up run) versus a fresh Render target (all 201 files, no local history
+  carries over, unless the local dump is deliberately imported); complete the
+  manual off-box copy of the backup + archive and confirm their checksums.
 
 ## Tourist Order Rating Persistence — COMPLETE & VERIFIED (2026-10-06)
 

@@ -1,9 +1,16 @@
 # TrackTour deployment plan — Render
 
-**Status:** planning only. No Render services, database, or domain have been
-created.  
-**Repository revision reviewed:** `db09758` (`main`) plus uncommitted working
-tree (crash fixes + deployment-readiness changes) re-verified before commit.  
+> **Historical plan; not the selected deployment target.** The current
+> repository deployment guide specifies Railway for the Laravel API, MySQL,
+> and Socket.IO, and Vercel for the React frontend. See
+> [DEPLOYMENT.md](./DEPLOYMENT.md) and the
+> [full-stack deployment progress audit](./FULL-STACK-DEPLOYMENT-AUDIT.md).
+
+**Status:** Render-specific planning only.
+**Progress audit:** [Full-stack deployment progress audit](./FULL-STACK-DEPLOYMENT-AUDIT.md).
+**Repository revision reviewed:** `bb6839b` (`main`), pushed to `origin/main`
+(commits `da00259` frontend crash fixes + `bb6839b` verification-document
+privacy / deployment build hygiene).
 **Goal:** deploy the React frontend, Laravel API, MySQL data, and Socket.IO
 realtime service while preserving the existing payment, dispatch, and rider
 tracking architecture.
@@ -82,9 +89,27 @@ listener is exposed to browsers.
 - Confirm whether this deployment is a demo or will handle real users,
   identity documents, orders, or payments. Use paid always-on compute and
   durable storage for real production data.
+- **Database classification:** the audited `track_tour_db` (XAMPP, 2026-10-09)
+  is **development/test data** (16 users, 8 businesses, 7 orders, 1 KYC;
+  `business_document_uploads` 0). The verified backup is retained as a
+  recovery point for that test schema. Do **not** assume it contains real user
+  information; if Render is a fresh, empty database, test migrations against it
+  directly. If you import the local dump into Render, explicitly confirm that
+  is intentional.
 - Decide whether the database will be fresh or imported from XAMPP. The
   existing Compose notes assume a fresh database; importing data requires a
   separately planned MySQL backup/restore and cutover.
+- **Orphan files:** the local public disk contains ~215 files with no DB
+  reference (188 `businesses/documents/`, ~27 `ids/`). These were **archived
+  2026-10-09** (`tracktour-orphan-public-files-20261009.zip`, manifest, checksums
+  verified 215/215). Originals remain in place; they should be reviewed by
+  content before deletion. The privatization command does not move them.
+- **Migration handling (separate, deliberate):** on the **local test DB**
+  there are **13 pending** migrations and **3 stale** migration rows (no files,
+  no tables). On a **fresh Render database**, only the migration files matter —
+  start with `migrations` table empty and run `migrate --force`. Do not carry
+  over stale rows; pruning local test DB stale records is a separate operation
+  with its own backup (not required if starting fresh on Render).
 - Adopt the existing policy: verification files are private and can be read
   only by the document owner or Tourism Office staff. Confirm retention and
   backup controls for rider IDs and business verification documents.
@@ -164,22 +189,45 @@ services or production resources have been created.
    unrecognized file paths. Purge any external CDN/proxy caches of prior public
    document URLs. Do not serve real documents until this migration and access
    checks pass.
+   **Note:** the local inventory found ~215 files on the public disk with **no
+   database reference** (188 under `businesses/documents/`, ~27 under `ids/`);
+   these were archived (2026-10-09, checksums verified) and the privatization
+   command does not move them — archive/review their contents before any cleanup.
+   The shipped Apache `.htaccess` denies legacy verification URLs, but that
+   applies only where Apache serves those files and honors the config; it is
+   not a substitute for access controls on the actual storage service.
 2. **Historical migration safety (release blocker):** the disposable empty
    MySQL 8.4 database accepted all 201 migrations, but that does not prove they
    are safe against a populated target. In particular,
    `2026_07_06_000012_rebuild_business_documents_table.php`,
    `2026_07_15_054106_rebuild_business_documents_to_uploads_table.php`, and
    `2026_07_23_120000_restructure_required_documents_table.php` drop/recreate
-   document tables. Before any production migration, compare the real
-   `migrations` table with these files, inspect affected table schemas and data,
-   and confirm a recoverable database backup. Do not run
-   `php artisan migrate --force` until this review is complete.
-   The local read-only audit is currently blocked: `.env` targets
-   `APP_ENV=local` / `localhost` / `track_tour_db`, and the XAMPP MariaDB
-   process drops the MySQL protocol handshake. Its error log reports InnoDB
-   future-LSN and discarded-tablespace warnings. No database status, schema,
-   row counts, backup, or repair was performed. This local configuration does
-   not establish the state of a Render/production database.
+   document tables (all three are already applied on the audited local DB, so
+   they are not pending there). The local read-only audit completed on
+   2026-10-09:
+   - `track_tour_db` (XAMPP MariaDB 10.4.32, `APP_ENV=local`) is treated as
+     **development/test data**. It has 89 tables; `migrations` = 191 rows vs
+     201 files → **13 pending**, reviewed by `up()` path: 10 additive, 3 with
+     data mutation (offerings `status` normalization,
+     `offerings.preparation_time = 25`, transport `orders.business_id → null`).
+     None drops schema in `up()`.
+   - 3 recorded migration rows are stale (rider-credit era) with no files and
+     no tables; benign, but do not carry over to a fresh Render DB. Prune only
+     if staying on the local test DB and only as a separate, backed-up
+     operation.
+   - A verified full backup exists (`track_tour_db_20261009_222914.sql`,
+     0.43 MB) — restore proven by a round-trip into a throwaway DB (89 tables,
+     counts identical); it must be copied off-box and re-checksummed. (the
+     215 orphan files are archived separately).
+   **Render target rules:** if the Render DB is **fresh and empty**, start
+   with the full file set (all 201) and run `php artisan migrate --force` once;
+   there are no local-history stale rows to import. If you **import the local
+   dump** (development/test data), explicitly confirm that decision; that dump
+   carries 191 applied + 3 stale records and leaves 13 pending, so you must
+   review `migrate:status` against the target and decide how to handle the
+   stale rows before/at migration. Either way, back up the target and confirm
+   its `migrations` state before any migration. The audited local DB does not
+   establish Render's state; each target needs its own review.
 3. **Render networking:** use paid services in the same workspace and region
    so Laravel can reach the socket bridge through the private hostname. Keep
    port `3002` private; this connectivity cannot be validated until Render is

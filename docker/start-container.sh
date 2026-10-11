@@ -42,8 +42,23 @@ chown www-data:www-data storage/app/public storage/app/private
 # Refresh Laravel's package manifest (build step runs --no-scripts on purpose).
 php artisan package:discover --ansi
 
-# Local-storage uploads are served at /storage via the storage:link symlink.
-php artisan storage:link --no-interaction
+# Local-storage uploads are served at /storage via a symlink. Keep the link
+# idempotent: leave an existing correct link alone, fix a stale/broken link,
+# and refuse to silently delete an unexpected file at the destination path.
+if [ -L public/storage ] || [ -e public/storage ]; then
+  if [ -L public/storage ] && [ "$(readlink public/storage)" = "../storage/app/public" ]; then
+    echo "[start-container] public/storage link is already valid."
+  else
+    echo "[start-container] public/storage exists but is not the expected Laravel link."
+    if [ -L public/storage ] || [ -f public/storage ] || [ -d public/storage ]; then
+      echo "[start-container] Refusing to overwrite an unexpected existing public/storage entry."
+      ls -ld public/storage || true
+    fi
+  fi
+else
+  ln -s ../storage/app/public public/storage
+  echo "[start-container] Created public/storage symlink."
+fi
 
 # Wait for the MySQL service to accept connections, then apply migrations.
 # The database may start alongside this container, so retry before failing.
