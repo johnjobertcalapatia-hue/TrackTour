@@ -7,6 +7,7 @@ use App\Models\Barangay;
 use App\Models\Municipality;
 use App\Models\User;
 use App\Models\UserProfile;
+use App\Services\OtpService;
 use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -15,6 +16,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules;
+use Illuminate\Validation\ValidationException;
 
 class RegisteredUserController extends Controller
 {
@@ -89,6 +91,16 @@ class RegisteredUserController extends Controller
         }
 
         $request->validate($rules);
+
+        // Rider registration proves mobile ownership with a single-use code.
+        // Consume it only after every other rule has passed so a failed attempt
+        // never burns the code.
+        if ($request->role === User::ROLE_RIDER
+            && ! app(OtpService::class)->verifyAndConsume((string) $request->mobile_number, (string) $request->otp_code)) {
+            throw ValidationException::withMessages([
+                'otp_code' => ['The OTP is invalid or has expired. Please request a new code.'],
+            ]);
+        }
 
         $userData = [
             'email' => $request->email,

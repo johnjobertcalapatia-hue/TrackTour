@@ -3,14 +3,14 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Services\OtpService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Mail;
 
 class OtpController extends Controller
 {
+    public function __construct(private OtpService $otpService) {}
+
     public function sendOtp(Request $request): JsonResponse
     {
         $request->validate([
@@ -20,20 +20,8 @@ class OtpController extends Controller
 
         $mobile = $request->mobile_number;
         $email = $request->email;
-        $otp = str_pad(random_int(100000, 999999), 6, '0', STR_PAD_LEFT);
 
-        // Store OTP with 5-minute expiry
-        Cache::put("otp:{$mobile}", $otp, now()->addMinutes(5));
-
-        Mail::raw(
-            "Your TrackTour rider registration code is {$otp}. This code expires in 5 minutes.",
-            function ($message) use ($email) {
-                $message->to($email)->subject('TrackTour rider registration code');
-            }
-        );
-
-        // SMS delivery requires a configured provider; retain the mobile target in logs for local integration.
-        Log::info("Rider OTP generated for mobile {$mobile} and email {$email}");
+        $otp = $this->otpService->send($mobile, $email);
 
         return response()->json([
             'success' => true,
@@ -50,20 +38,14 @@ class OtpController extends Controller
             'otp_code' => ['required', 'string', 'size:6'],
         ]);
 
-        $mobile = $request->mobile_number;
-        $otp = $request->otp_code;
-
-        $storedOtp = Cache::get("otp:{$mobile}");
-
-        if (! $storedOtp || $storedOtp !== $otp) {
+        // Non-consuming pre-check: registration performs the single-use
+        // verification via OtpService::verifyAndConsume().
+        if (! $this->otpService->verify($request->mobile_number, $request->otp_code)) {
             return response()->json([
                 'success' => false,
                 'message' => 'Invalid or expired OTP.',
             ], 422);
         }
-
-        // OTP verified, remove from cache
-        Cache::forget("otp:{$mobile}");
 
         return response()->json([
             'success' => true,

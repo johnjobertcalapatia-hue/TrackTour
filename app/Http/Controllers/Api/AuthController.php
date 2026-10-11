@@ -9,6 +9,7 @@ use App\Http\Resources\UserResource;
 use App\Models\Barangay;
 use App\Models\User;
 use App\Services\DeliveryService;
+use App\Services\OtpService;
 use App\Services\UserService;
 use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\JsonResponse;
@@ -16,16 +17,28 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
 {
     public function __construct(
         private UserService $userService,
         private DeliveryService $deliveryService,
+        private OtpService $otpService,
     ) {}
 
     public function register(RegisterRequest $request): JsonResponse
     {
+        // Rider registration proves mobile ownership with a single-use code.
+        // This is the authoritative consume point: the account cannot be created
+        // with a missing, wrong, expired or already-used code.
+        if ($request->role === User::ROLE_RIDER
+            && ! $this->otpService->verifyAndConsume($request->mobile_number, (string) $request->otp_code)) {
+            throw ValidationException::withMessages([
+                'otp_code' => ['The OTP is invalid or has expired. Please request a new code.'],
+            ]);
+        }
+
         $userData = [
             'email' => $request->email,
             'password' => Hash::make($request->password),

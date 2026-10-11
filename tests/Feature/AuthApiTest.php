@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
 use Tests\TestCase;
 
@@ -69,6 +70,10 @@ class AuthApiTest extends TestCase
             'district' => '1st',
             'province' => 'Oriental Mindoro',
         ]);
+
+        // Rider registration is gated by a single-use OTP issued to the mobile
+        // number; seed the code the registration request must consume.
+        Cache::put('otp:09171234567', '123456', now()->addMinutes(5));
 
         $response = $this->postJson('/api/register', [
             'first_name' => 'Pedro',
