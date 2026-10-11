@@ -40,9 +40,12 @@ RUN apt-get update \
         opcache \
     && a2dismod mpm_event mpm_worker \
     && a2enmod mpm_prefork rewrite headers \
+    && echo "=== Enabled Apache MPM modules ===" \
+    && apache2ctl -M 2>&1 | grep mpm \
+    && echo "=== Apache configuration test ===" \
+    && apache2ctl -t \
     && mkdir -p /var/www/html \
     && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /var/www/html
 
 # Production PHP tuning (opcache) so every request does not recompile the app.
