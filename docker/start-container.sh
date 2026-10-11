@@ -13,6 +13,11 @@ fi
 sed -i "s/^Listen 80$/Listen ${PORT}/" /etc/apache2/ports.conf
 sed -i "s#<VirtualHost \\*:80>#<VirtualHost *:${PORT}>#" /etc/apache2/sites-available/000-default.conf
 
+# Enforce a single Apache MPM at runtime.
+# PHP runs through mod_php, so use prefork and disable event/worker.
+a2dismod -f mpm_event mpm_worker
+a2enmod mpm_prefork
+
 # Diagnose Apache MPM conflicts before starting Laravel services.
 echo "[start-container] Enabled Apache MPM modules:"
 apache2ctl -M 2>&1 | grep -E 'mpm_(event|worker|prefork)_module' || true
