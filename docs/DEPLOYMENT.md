@@ -154,8 +154,11 @@ VITE_PAYMONGO_PUBLIC_KEY=pk_...
 - The **SOCKET_BRIDGE_SECRET** is the same on the API and Socket.IO services —
   otherwise every `/dispatch`, `/trip/*`, `/event` bridge call returns 401.
 - `SOCKET_SERVER_URL` on the API points at the socket service's **3002** port.
-- `FRONTEND_URL` on the API equals the Vercel origin (CORS: `config/cors.php`
-  serves `FRONTEND_URL` verbatim).
+- `FRONTEND_URL` on the API equals the deployed frontend origin. The current
+  production origin `https://tracktour-frontend.vercel.app` is explicitly
+  allowlisted in `config/cors.php`; Laravel's `api/*` CORS path covers the
+  `/api/landing/cards`, `/api/landing-content`, `/api/map/businesses`, and
+  `/api/municipalities` endpoints. Keep other origins explicit—do not use `*`.
 - API is HTTPS behind Railway; Laravel trust-proxy defaults honour
   `X-Forwarded-Proto` so generated/redirect URLs keep `https`.
 - Classic routes still served by Laravel (`/login`, etc.) are not part of the
