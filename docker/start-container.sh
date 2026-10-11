@@ -13,6 +13,17 @@ fi
 sed -i "s/^Listen 80$/Listen ${PORT}/" /etc/apache2/ports.conf
 sed -i "s#<VirtualHost \\*:80>#<VirtualHost *:${PORT}>#" /etc/apache2/sites-available/000-default.conf
 
+# Diagnose Apache MPM conflicts before starting Laravel services.
+echo "[start-container] Enabled Apache MPM modules:"
+apache2ctl -M 2>&1 | grep -E 'mpm_(event|worker|prefork)_module' || true
+
+echo "[start-container] Enabled MPM module files:"
+find /etc/apache2/mods-enabled -maxdepth 1 \
+  \( -name 'mpm_*.load' -o -name 'mpm_*.conf' \) -print
+
+echo "[start-container] Apache configuration test:"
+apache2ctl -t
+
 # APP_KEY must be provided as a persistent deployment secret. Generating a new
 # key on each container creation invalidates sessions and encrypted data.
 if [ -z "${APP_KEY:-}" ]; then
