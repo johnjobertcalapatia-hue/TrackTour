@@ -17,6 +17,29 @@ function normalizeMobileNumber(value: string): string {
   return /^9\d{9}$/.test(mobile) ? `0${mobile}` : mobile
 }
 
+function formatCountdown(seconds: number): string {
+  const minutes = Math.floor(seconds / 60)
+  const remaining = seconds % 60
+  return `${minutes}:${remaining.toString().padStart(2, '0')}`
+}
+
+function ageFromDateOfBirth(value: string): number {
+  const dob = new Date(value)
+  if (Number.isNaN(dob.getTime())) return 0
+  const now = new Date()
+  let age = now.getFullYear() - dob.getFullYear()
+  const monthDelta = now.getMonth() - dob.getMonth()
+  if (monthDelta < 0 || (monthDelta === 0 && now.getDate() < dob.getDate())) age--
+  return age
+}
+
+function todayISO(): string {
+  const now = new Date()
+  const month = (now.getMonth() + 1).toString().padStart(2, '0')
+  const day = now.getDate().toString().padStart(2, '0')
+  return `${now.getFullYear()}-${month}-${day}`
+}
+
 const passwordRule = z
   .string()
   .min(8, 'Password must be at least 8 characters')
@@ -30,6 +53,12 @@ const riderSchema = z.object({
   middle_name: z.string().optional().refine((val) => !val || /^[A-Za-z\s]+$/.test(val), 'Middle name must contain letters only'),
   last_name: z.string().min(1, 'Last name is required').regex(/^[A-Za-z\s]+$/, 'Last name must contain letters only'),
   suffix: z.string().optional(),
+  date_of_birth: z
+    .string()
+    .min(1, 'Date of birth is required')
+    .refine((val) => !Number.isNaN(new Date(val).getTime()), 'Enter a valid date of birth')
+    .refine((val) => new Date(val) <= new Date(), 'Date of birth cannot be in the future')
+    .refine((val) => ageFromDateOfBirth(val) >= 18, 'You must be at least 18 years old'),
   email: z.string().email('Please enter a valid email address'),
   mobile_number: z.string().min(9, 'Mobile number is required').regex(/^((\+63|0)9\d{9}|9\d{9})$/, 'Please enter a valid Philippine mobile number'),
   otp_code: z.string().min(6, 'OTP must be 6 digits').max(6, 'OTP must be 6 digits'),
@@ -68,7 +97,13 @@ export default function RiderRegisterPage() {
   const [otpSending, setOtpSending] = useState(false)
   const [otpVerifying, setOtpVerifying] = useState(false)
   const [countdown, setCountdown] = useState(0)
+  const [lockoutSeconds, setLockoutSeconds] = useState(0)
+  const [emailChecking, setEmailChecking] = useState(false)
+  const [emailExists, setEmailExists] = useState(false)
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const lockoutRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const emailCheckRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const emailCheckSeq = useRef(0)
   const { register: registerUser } = useAuthStore()
   const navigate = useNavigate()
 
@@ -79,6 +114,7 @@ export default function RiderRegisterPage() {
       middle_name: '',
       last_name: '',
       suffix: '',
+      date_of_birth: '',
       email: '',
       mobile_number: '',
       otp_code: '',
@@ -93,13 +129,60 @@ export default function RiderRegisterPage() {
 
   const watchedPassword = form.watch('password')
   const watchedMobile = form.watch('mobile_number')
+  const watchedEmail = form.watch('email')
+  const watchedDateOfBirth = form.watch('date_of_birth')
   const passwordStrength = getPasswordStrength(watchedPassword || '')
 
   useEffect(() => {
     return () => {
       if (countdownRef.current) clearInterval(countdownRef.current)
+      if (lockoutRef.current) clearInterval(lockoutRef.current)
+      if (emailCheckRef.current) clearTimeout(emailCheckRef.current)
     }
   }, [])
+
+  // On-type email availability probe. Debounced, and guarded against stale
+  // responses so a slow reply for an old value cannot overwrite a newer one.
+  useEffect(() => {
+    const email = (watchedEmail || '').trim().toLowerCase()
+
+    if (otpVerified || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setEmailExists(false)
+      setEmailChecking(false)
+      if (emailCheckRef.current) clearTimeout(emailCheckRef.current)
+      return
+    }
+
+    setEmailExists(false)
+    setEmailChecking(true)
+    form.clearErrors('email')
+    if (emailCheckRef.current) clearTimeout(emailCheckRef.current)
+    emailCheckRef.current = setTimeout(async () => {
+      const seq = ++emailCheckSeq.current
+      try {
+        const result = await post<{ available: boolean }>('/auth/check-email', { email })
+        if (seq !== emailCheckSeq.current) return
+        if (result.available === false) {
+          setEmailExists(true)
+          form.setError('email', { type: 'manual', message: 'This email is already registered.' })
+        } else {
+          setEmailExists(false)
+          form.clearErrors('email')
+        }
+      } catch {
+        if (seq !== emailCheckSeq.current) return
+        // A failed probe must never block a legitimate submission; the
+        // authoritative unique check still runs on register.
+        setEmailExists(false)
+      } finally {
+        if (seq === emailCheckSeq.current) setEmailChecking(false)
+      }
+    }, 500)
+
+    return () => {
+      if (emailCheckRef.current) clearTimeout(emailCheckRef.current)
+    }
+  }, [watchedEmail, otpVerified, form])
 
   const startCountdown = useCallback(() => {
     setCountdown(60)
@@ -114,6 +197,35 @@ export default function RiderRegisterPage() {
       })
     }, 1000)
   }, [])
+
+  const startLockout = useCallback((seconds: number) => {
+    if (seconds <= 0) return
+    setLockoutSeconds(seconds)
+    if (lockoutRef.current) clearInterval(lockoutRef.current)
+    lockoutRef.current = setInterval(() => {
+      setLockoutSeconds((prev) => {
+        if (prev <= 1) {
+          if (lockoutRef.current) clearInterval(lockoutRef.current)
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+  }, [])
+
+  const handleOtpError = useCallback(
+    (err: unknown, fallback: string) => {
+      const axiosErr = err as {
+        response?: { status?: number; data?: { message?: string; retry_after?: number } }
+      }
+      const data = axiosErr.response?.data
+      if (axiosErr.response?.status === 429 && data?.retry_after) {
+        startLockout(data.retry_after)
+      }
+      setError(data?.message || fallback)
+    },
+    [startLockout]
+  )
 
   const handleSendOtp = async () => {
     const mobile = normalizeMobileNumber(form.getValues('mobile_number'))
@@ -132,10 +244,11 @@ export default function RiderRegisterPage() {
     try {
       await post('/auth/send-otp', { mobile_number: mobile, email, type: 'registration' })
       setOtpSent(true)
+      setOtpVerified(false)
+      form.setValue('otp_code', '')
       startCountdown()
     } catch (err: unknown) {
-      const axiosErr = err as { response?: { data?: { message?: string } } }
-      setError(axiosErr.response?.data?.message || 'Failed to send OTP')
+      handleOtpError(err, 'Failed to send OTP')
     } finally {
       setOtpSending(false)
     }
@@ -155,8 +268,7 @@ export default function RiderRegisterPage() {
       await post('/auth/verify-otp', { mobile_number: mobile, otp_code: otp, type: 'registration' })
       setOtpVerified(true)
     } catch (err: unknown) {
-      const axiosErr = err as { response?: { data?: { message?: string } } }
-      setError(axiosErr.response?.data?.message || 'Invalid or expired OTP')
+      handleOtpError(err, 'Invalid or expired OTP')
       setOtpVerified(false)
     } finally {
       setOtpVerifying(false)
@@ -169,6 +281,11 @@ export default function RiderRegisterPage() {
       return
     }
 
+    if (emailExists) {
+      form.setError('email', { type: 'manual', message: 'This email is already registered.' })
+      return
+    }
+
     setError('')
     try {
       const fd = new FormData()
@@ -177,6 +294,7 @@ export default function RiderRegisterPage() {
       if (data.middle_name) fd.append('middle_name', data.middle_name)
       fd.append('last_name', data.last_name)
       if (data.suffix) fd.append('suffix', data.suffix)
+      fd.append('date_of_birth', data.date_of_birth)
       fd.append('email', data.email)
       fd.append('mobile_number', normalizeMobileNumber(data.mobile_number))
       fd.append('password', data.password)
@@ -191,8 +309,19 @@ export default function RiderRegisterPage() {
       navigate(getRoleDashboardPath(user.role))
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { message?: string; errors?: Record<string, string[]> } } }
-      if (axiosErr.response?.data?.errors) {
-        const firstError = Object.values(axiosErr.response.data.errors)[0]
+      const fieldErrors = axiosErr.response?.data?.errors
+      if (fieldErrors?.email) {
+        setEmailExists(true)
+        form.setError('email', { type: 'manual', message: fieldErrors.email[0] })
+      }
+      if (fieldErrors?.last_name) {
+        form.setError('last_name', { type: 'manual', message: fieldErrors.last_name[0] })
+      }
+      if (fieldErrors?.date_of_birth) {
+        form.setError('date_of_birth', { type: 'manual', message: fieldErrors.date_of_birth[0] })
+      }
+      if (fieldErrors) {
+        const firstError = Object.values(fieldErrors)[0]
         setError(firstError?.[0] || 'Registration failed')
       } else {
         setError(axiosErr.response?.data?.message || 'Registration failed')
@@ -259,13 +388,37 @@ export default function RiderRegisterPage() {
                 </select>
               </div>
             </div>
+            <div>
+              <label className={labelClasses}>Date of Birth <span className="text-red-500">*</span></label>
+              <div className="flex items-center gap-3">
+                <input
+                  {...form.register('date_of_birth')}
+                  type="date"
+                  className={inputClasses}
+                  max={todayISO()}
+                />
+                {watchedDateOfBirth && ageFromDateOfBirth(watchedDateOfBirth) > 0 && (
+                  <span className="text-xs text-[#6B7280] whitespace-nowrap">
+                    {ageFromDateOfBirth(watchedDateOfBirth)} yrs old
+                  </span>
+                )}
+              </div>
+              {form.formState.errors.date_of_birth && (
+                <p className={errorClasses}>{form.formState.errors.date_of_birth.message}</p>
+              )}
+            </div>
           </div>
 
           {/* Contact Section */}
           <div className="space-y-4">
             <div>
               <label className={labelClasses}>Email Address <span className="text-red-500">*</span></label>
-              <input {...form.register('email')} type="email" className={inputClasses} placeholder="you@example.com" />
+              <input {...form.register('email')} type="email" className={inputClasses} placeholder="you@example.com" disabled={otpVerified} />
+              {emailChecking && !form.formState.errors.email && (
+                <p className="text-xs text-[#6B7280] mt-1 flex items-center gap-1">
+                  <Loader2 className="w-3 h-3 animate-spin" /> Checking availability...
+                </p>
+              )}
               {form.formState.errors.email && (
                 <p className={errorClasses}>{form.formState.errors.email.message}</p>
               )}
@@ -285,7 +438,7 @@ export default function RiderRegisterPage() {
                 <button
                   type="button"
                   onClick={handleSendOtp}
-                  disabled={otpSending || countdown > 0 || otpVerified || !/^((\+63|0)?9\d{9})$/.test(watchedMobile.replace(/[\s-]/g, ''))}
+                  disabled={otpSending || countdown > 0 || otpVerified || lockoutSeconds > 0 || !/^((\+63|0)?9\d{9})$/.test(watchedMobile.replace(/[\s-]/g, ''))}
                   className="px-4 py-2 bg-[#16803C] hover:bg-[#126B32] text-white rounded-xl text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap"
                 >
                   {otpSending ? (
@@ -293,15 +446,20 @@ export default function RiderRegisterPage() {
                   ) : (
                     <Send className="w-4 h-4" />
                   )}
-                  {countdown > 0 ? `${countdown}s` : 'Send OTP'}
+                  {countdown > 0 ? `Resend in ${countdown}s` : otpSent ? 'Resend OTP' : 'Send OTP'}
                 </button>
               </div>
               {form.formState.errors.mobile_number && (
                 <p className={errorClasses}>{form.formState.errors.mobile_number.message}</p>
               )}
+              {otpVerified && (
+                <p className="text-xs text-[#16803C] mt-1 flex items-center gap-1">
+                  <CheckCircle className="w-3 h-3" /> Mobile number verified successfully
+                </p>
+              )}
             </div>
 
-            {otpSent && (
+            {otpSent && !otpVerified && (
               <div>
                 <label className={labelClasses}>OTP Verification <span className="text-red-500">*</span></label>
                 <div className="flex gap-2">
@@ -310,25 +468,23 @@ export default function RiderRegisterPage() {
                     className={`${inputClasses} flex-1`}
                     placeholder="Enter 6-digit OTP"
                     maxLength={6}
-                    disabled={otpVerified}
+                    disabled={lockoutSeconds > 0}
                   />
                   <button
                     type="button"
                     onClick={handleVerifyOtp}
-                    disabled={otpVerifying || otpVerified}
+                    disabled={otpVerifying || lockoutSeconds > 0}
                     className="px-4 py-2 bg-[#16803C] hover:bg-[#126B32] text-white rounded-xl text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
                   >
                     {otpVerifying ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : otpVerified ? (
-                      <CheckCircle className="w-4 h-4" />
                     ) : null}
-                    {otpVerified ? 'Verified' : 'Verify'}
+                    Verify
                   </button>
                 </div>
-                {otpVerified && (
-                  <p className="text-xs text-[#16803C] mt-1 flex items-center gap-1">
-                    <CheckCircle className="w-3 h-3" /> Mobile number verified successfully
+                {lockoutSeconds > 0 && (
+                  <p className="text-xs text-red-500 mt-1">
+                    Too many failed attempts. Try again in {formatCountdown(lockoutSeconds)}.
                   </p>
                 )}
                 {form.formState.errors.otp_code && (

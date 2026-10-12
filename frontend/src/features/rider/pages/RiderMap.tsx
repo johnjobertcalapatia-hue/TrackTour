@@ -8,7 +8,7 @@ import { useAuthStore } from '@/features/auth/services/auth-store'
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
-import { Navigation, MapPin, Play, Truck, CheckCircle, Radio, DollarSign, Wallet, Package } from 'lucide-react'
+import { Navigation, MapPin, Play, Truck, CheckCircle, Radio, Wallet, Package, Car } from 'lucide-react'
 import { useRiderActiveTrip } from '@/features/rider/context/RiderActiveTripContext'
 import { useOsrmRoute } from '@/features/rider/hooks/useOsrmRoute'
 import { resolvePickupRoute } from '@/features/rider/pickup-route'
@@ -516,47 +516,66 @@ export default function RiderMap() {
           )}
         </MapContainer>
 
-        <div className="absolute top-3 left-3 sm:top-4 sm:left-4 z-[1000] max-w-[calc(100%-5rem)] rounded-full border border-[#E4E9E6] bg-white/95 pl-1 sm:pl-1.5 pr-3 sm:pr-4 py-1 sm:py-1.5 shadow-lg backdrop-blur">
-          <div className="flex items-center gap-1.5 sm:gap-2">
-            <span className={`w-6 h-6 sm:w-7 sm:h-7 shrink-0 rounded-full bg-[#F5FBF7] border border-[#E4E9E6] flex items-center justify-center ${tripStatus.accent}`}>
-              <tripStatus.icon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            </span>
-            <p className="text-[10px] sm:text-xs font-bold text-[#17202A] whitespace-nowrap">
-              {tripStatus.title}
-              {tripStatus.meta && <span className={`font-semibold ${tripStatus.accent}`}>{tripStatus.meta}</span>}
-            </p>
+        <div className="absolute top-3 left-3 sm:top-4 sm:left-4 z-[1000] flex flex-col items-start gap-2 max-w-[calc(100%-5rem)]">
+          <div className="rounded-full border border-[#E4E9E6] bg-white/95 pl-1 sm:pl-1.5 pr-3 sm:pr-4 py-1 sm:py-1.5 shadow-lg backdrop-blur">
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <span className={`w-6 h-6 sm:w-7 sm:h-7 shrink-0 rounded-full bg-[#F5FBF7] border border-[#E4E9E6] flex items-center justify-center ${tripStatus.accent}`}>
+                <tripStatus.icon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              </span>
+              <p className="text-[10px] sm:text-xs font-bold text-[#17202A] whitespace-nowrap">
+                {tripStatus.title}
+                {tripStatus.meta && <span className={`font-semibold ${tripStatus.accent}`}>{tripStatus.meta}</span>}
+              </p>
+            </div>
           </div>
-        </div>
-        <div className="absolute top-[52px] left-3 sm:top-[60px] sm:left-4 z-[1000]">
           <button
             type="button"
             onClick={() => setEarningsOpen((o) => !o)}
             className="flex items-center gap-1.5 sm:gap-2 rounded-full border border-[#E4E9E6] bg-white/95 pl-1 sm:pl-1.5 pr-3 sm:pr-4 py-1 sm:py-1.5 shadow-lg backdrop-blur transition hover:bg-white"
           >
             <span className="w-6 h-6 sm:w-7 sm:h-7 shrink-0 rounded-full bg-[#E9F7EF] border border-[#D7E8DB] flex items-center justify-center">
-              <DollarSign className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#087F3F]" />
+              <span className="text-[13px] sm:text-sm font-extrabold leading-none text-[#087F3F]">₱</span>
             </span>
             <p className="text-[10px] sm:text-xs font-bold text-[#17202A] whitespace-nowrap">
               Earnings
             </p>
           </button>
           {earningsOpen && (
-            <div className="mt-2 w-44 rounded-xl border border-white/40 bg-white/30 backdrop-blur-xl p-2 shadow-xl space-y-1.5">
+            <div className="w-44 rounded-xl border border-white/40 bg-white/30 backdrop-blur-xl p-2 shadow-xl space-y-1.5">
               <button
                 type="button"
                 onClick={() => navigate('/rider/earnings')}
                 className="w-full flex items-center gap-2 rounded-lg bg-[#087F3F]/15 border border-[#087F3F]/20 backdrop-blur-md p-2 transition hover:bg-[#087F3F]/25"
               >
                 <span className="w-6 h-6 shrink-0 rounded-full bg-[#087F3F]/20 flex items-center justify-center">
-                  <DollarSign className="w-3 h-3 text-[#087F3F]" />
+                  <span className="text-[11px] font-extrabold leading-none text-[#087F3F]">₱</span>
                 </span>
                 <div>
                   <p className="text-[8px] font-medium text-[#087F3F]/80 uppercase tracking-wider">Earnings</p>
                   <p className="text-xs font-bold text-[#087F3F]">₱{(earningsData?.summary?.total_earnings ?? 0).toFixed(2)}</p>
                 </div>
               </button>
-              </div>
+            </div>
           )}
+          <button
+            type="button"
+            onClick={() => navigate('/rider/deliveries/pending')}
+            className="flex items-center gap-1.5 sm:gap-2 rounded-full border border-[#E4E9E6] bg-white/95 pl-1 sm:pl-1.5 pr-3 sm:pr-4 py-1 sm:py-1.5 shadow-lg backdrop-blur transition hover:bg-white"
+          >
+            <span className="w-6 h-6 sm:w-7 sm:h-7 shrink-0 rounded-full border bg-[#E9F7EF] border-[#D7E8DB] flex items-center justify-center">
+              {isRideHailing
+                ? <Car className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#087F3F]" />
+                : <Package className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#087F3F]" />}
+            </span>
+            <p className="text-[10px] sm:text-xs font-bold text-[#17202A] whitespace-nowrap">
+              {isRideHailing ? 'Bookings' : 'Orders'}
+            </p>
+            {deliveries.length > 0 && (
+              <span className="rounded-full px-1.5 py-0.5 text-[9px] font-bold bg-[#E9F7EF] text-[#087F3F]">
+                {deliveries.length}
+              </span>
+            )}
+          </button>
         </div>
 
       {isPickupStage && purchaseItems.length > 0 && (

@@ -450,6 +450,47 @@ class DeliveryOfferConcurrencyTest extends TestCase
         $this->assertSame(1, $this->pendingLogs($delivery, $riderA)->where('response', 'accepted')->count());
     }
 
+    public function test_board_discovery_then_two_rider_accept_first_wins_second_conflicts(): void
+    {
+        $business = $this->makeBusiness('Board Concurrency');
+        $riderA = $this->makeRider('board-conc-a@example.com');
+        $riderB = $this->makeRider('board-conc-b@example.com');
+        $delivery = $this->makeManualDelivery($this->makeOrder($business));
+
+        $this->makePendingOffer($delivery, $riderA);
+        $this->makePendingOffer($delivery, $riderB);
+
+        // Both riders discover the same delivery on the new board as actionable.
+        $this->getJson('/api/rider/dispatch/board', $this->authHeaders($riderA))
+            ->assertOk()
+            ->assertJsonPath('data.orders.0.delivery_id', $delivery->id)
+            ->assertJsonPath('data.orders.0.rider_status', 'looking_for_riders')
+            ->assertJsonPath('data.orders.0.can_accept', true);
+
+        $this->getJson('/api/rider/dispatch/board', $this->authHeaders($riderB))
+            ->assertOk()
+            ->assertJsonPath('data.orders.0.rider_status', 'looking_for_riders')
+            ->assertJsonPath('data.orders.0.can_accept', true);
+
+        // First board-initiated accept wins over the canonical HTTP endpoint.
+        $this->patchJson('/api/rider/dispatch/accept', ['delivery_id' => $delivery->id], $this->authHeaders($riderA))
+            ->assertOk()->assertJsonPath('success', true);
+        $this->assertSame($riderA->id, $delivery->fresh()->rider_id);
+
+        // The loser receives 409 Conflict and cannot steal the delivery.
+        $this->patchJson('/api/rider/dispatch/accept', ['delivery_id' => $delivery->id], $this->authHeaders($riderB))
+            ->assertStatus(409)->assertJsonPath('success', false);
+        $this->assertSame($riderA->id, $delivery->fresh()->rider_id);
+
+        // Visibility ≠ eligibility: the loser's board no longer offers it as
+        // actionable — it degrades to a read-only "accepted by another rider".
+        $loserOrders = collect($this->getJson('/api/rider/dispatch/board', $this->authHeaders($riderB))
+            ->assertOk()
+            ->json('data.orders'));
+        $this->assertTrue($loserOrders->every(fn ($o) => $o['rider_status'] !== 'looking_for_riders'));
+        $this->assertTrue($loserOrders->contains(fn ($o) => $o['rider_status'] === 'accepted_by_other'));
+    }
+
     public function test_accept_after_offer_expiry_times_out_and_reoffers(): void
     {
         $business = $this->makeBusiness('H Expiry');

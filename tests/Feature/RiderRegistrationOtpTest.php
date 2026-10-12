@@ -23,6 +23,7 @@ class RiderRegistrationOtpTest extends TestCase
         return [
             'first_name' => 'Pedro',
             'last_name' => 'Rider',
+            'date_of_birth' => '2000-01-15',
             'email' => $email,
             'password' => 'Password123!',
             'password_confirmation' => 'Password123!',

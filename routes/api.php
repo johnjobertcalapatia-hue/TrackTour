@@ -92,6 +92,7 @@ Route::post('/forgot-password', [AuthController::class, 'forgotPassword'])->midd
 Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 Route::post('/auth/send-otp', [OtpController::class, 'sendOtp'])->middleware('throttle:5,1');
 Route::post('/auth/verify-otp', [OtpController::class, 'verifyOtp'])->middleware('throttle:10,1');
+Route::post('/auth/check-email', [AuthController::class, 'checkEmail'])->middleware('throttle:30,1');
 
 // PayMongo Webhook (public — verified by signature)
 Route::post('/payments/webhook', [PaymentController::class, 'webhook']);
@@ -494,6 +495,7 @@ Route::middleware('token.only')->group(function () {
         Route::post('/deliveries/{delivery}/purchasing-cash/receive', [RiderPurchasingController::class, 'confirmCashReceipt']);
         Route::get('/dispatch/pending-request', [RiderDispatchController::class, 'pendingRequest']);
         Route::get('/dispatch/offers', [RiderDispatchController::class, 'offers']);
+        Route::get('/dispatch/board', [RiderDispatchController::class, 'board']);
         Route::get('/dispatch/eligibility', [RiderDispatchController::class, 'eligibility']);
         Route::patch('/dispatch/accept', [RiderDispatchController::class, 'accept']);
         Route::patch('/dispatch/decline', [RiderDispatchController::class, 'decline']);

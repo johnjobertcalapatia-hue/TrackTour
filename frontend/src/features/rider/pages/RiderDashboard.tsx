@@ -14,7 +14,6 @@ import {
   Ban,
   HandCoins,
   CreditCard,
-  CircleDollarSign,
   CheckCircle2,
   Circle,
   Zap,
@@ -112,7 +111,7 @@ export default function RiderDashboard() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-[#FFF4B8] flex items-center justify-center">
-                <CircleDollarSign className="w-5 h-5 text-[#087F5B]" />
+                <span className="text-lg font-extrabold leading-none text-[#087F5B]">₱</span>
               </div>
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-[#6B7F75]">Today's Earnings</p>

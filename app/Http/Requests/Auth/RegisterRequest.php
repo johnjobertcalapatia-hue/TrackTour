@@ -4,6 +4,7 @@ namespace App\Http\Requests\Auth;
 
 use App\Models\Barangay;
 use App\Models\User;
+use App\Models\UserProfile;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules;
@@ -66,11 +67,43 @@ class RegisterRequest extends FormRequest
                     'mobile_number' => ['required', 'string', 'max:20'],
                 ]);
             } elseif ($this->role === User::ROLE_RIDER) {
+                $adultCutoff = now()->subYears(18)->format('Y-m-d');
+
                 $rules = array_merge($rules, [
                     'first_name' => ['required', 'string', 'max:50', 'regex:/^[A-Za-z\s]+$/'],
                     'middle_name' => ['nullable', 'string', 'max:50', 'regex:/^[A-Za-z\s]+$/'],
-                    'last_name' => ['required', 'string', 'max:50', 'regex:/^[A-Za-z\s]+$/'],
+                    'last_name' => [
+                        'required',
+                        'string',
+                        'max:50',
+                        'regex:/^[A-Za-z\s]+$/',
+                        // Identity dedup: a rider may not register twice under the
+                        // same first name + last name + date of birth.
+                        function ($attribute, $value, $fail) {
+                            $first = trim((string) $this->input('first_name'));
+                            $last = trim((string) $value);
+                            $dob = $this->input('date_of_birth');
+
+                            if ($first === '' || $last === '' || empty($dob)) {
+                                return;
+                            }
+
+                            $exists = UserProfile::whereHas(
+                                'user',
+                                fn ($query) => $query->where('role', User::ROLE_RIDER)
+                            )
+                                ->whereRaw('LOWER(first_name) = ?', [mb_strtolower($first)])
+                                ->whereRaw('LOWER(last_name) = ?', [mb_strtolower($last)])
+                                ->whereDate('date_of_birth', $dob)
+                                ->exists();
+
+                            if ($exists) {
+                                $fail('A rider with the same first name, last name, and date of birth is already registered.');
+                            }
+                        },
+                    ],
                     'suffix' => ['nullable', 'string', 'in:Jr.,Sr.,II,III,IV,V'],
+                    'date_of_birth' => ['required', 'date', 'before_or_equal:'.$adultCutoff],
                     'mobile_number' => [
                         'required',
                         'string',

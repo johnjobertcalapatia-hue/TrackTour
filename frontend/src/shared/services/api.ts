@@ -139,7 +139,7 @@ function unwrap<T>(response: AxiosResponse<ApiResponse<T>>): any {
   const apiData = response.data.data
   const meta = response.data.meta
   if (meta !== undefined) {
-    return { data: apiData, meta }
+    return { ...response.data, data: apiData }
   }
   return apiData
 }

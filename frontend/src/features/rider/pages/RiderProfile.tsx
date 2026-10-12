@@ -8,13 +8,17 @@ import { useAuthStore } from '@/features/auth/services/auth-store'
 import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Camera, ChevronRight, DollarSign, History, Map as MapIcon, MessageSquare, Save, User } from 'lucide-react'
+import { ArrowLeft, Camera, ChevronRight, History, Map as MapIcon, MessageSquare, Save, User } from 'lucide-react'
 import { toAssetUrl, getInitials } from '@/shared/utils'
+
+function PesoIcon({ className }: { className?: string }) {
+  return <span className={className} aria-hidden="true">₱</span>
+}
 
 const settingsLinks = [
   { to: '/rider/profile', icon: User, title: 'Profile', description: 'Manage your account information' },
   { to: '/rider/history', icon: History, title: 'History', description: 'View your completed deliveries and ride history' },
-  { to: '/rider/earnings', icon: DollarSign, title: 'Earnings', description: 'Track your delivery earnings and payouts' },
+  { to: '/rider/earnings', icon: PesoIcon, title: 'Earnings', description: 'Track your delivery earnings and payouts' },
   { to: '/rider/messages', icon: MessageSquare, title: 'Messages', description: 'Read conversations with tourists and restaurants' },
   { to: '/rider/map', icon: MapIcon, title: 'Live Map', description: 'Open the map for your active trips' },
 ]
@@ -112,18 +116,16 @@ export default function RiderProfile() {
 
   return (
     <div className="max-w-2xl mx-auto">
-      {isSettingsPage && (
-        <div className="mb-3 flex justify-start">
-          <button
-            type="button"
-            onClick={handleBack}
-            className="inline-flex items-center gap-2 rounded-xl border border-[#E5E9E7] bg-white px-3.5 py-2 text-sm font-semibold text-[#17201B] transition hover:bg-[#F3F8F5] hover:text-[#087F3F]"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Back
-          </button>
-        </div>
-      )}
+      <div className="mb-3 flex justify-start">
+        <button
+          type="button"
+          onClick={handleBack}
+          className="inline-flex items-center gap-2 rounded-xl border border-[#E5E9E7] bg-white px-3.5 py-2 text-sm font-semibold text-[#17201B] transition hover:bg-[#F3F8F5] hover:text-[#087F3F]"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          Back
+        </button>
+      </div>
 
       <div className="mb-8">
         <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">{isSettingsPage ? 'Settings' : 'My Profile'}</h1>
@@ -260,7 +262,7 @@ export default function RiderProfile() {
             onClick={() => navigate('/rider/earnings')}
             className="inline-flex items-center gap-2 rounded-xl border border-emerald-500/40 px-4 py-2.5 text-sm font-semibold text-emerald-400 transition hover:bg-emerald-500/10"
           >
-            <DollarSign className="h-4 w-4" />
+            <PesoIcon className="h-4 w-4" />
             View Earnings
           </button>
           </div>

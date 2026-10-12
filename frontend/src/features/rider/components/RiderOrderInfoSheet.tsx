@@ -17,6 +17,7 @@ import {
 import { resolveStopArrival, formatStopDistance } from '@/features/rider/stop-arrival'
 import { pickupReadyLabel, pickupStopReasonLabel } from '@/features/rider/pickup-stops'
 import { useOsrmRoute } from '@/features/rider/hooks/useOsrmRoute'
+import RiderOrderBoard, { useRiderBoard } from '@/features/rider/components/RiderOrderBoard'
 
 // Shares the `rider-map-location` cache key with RiderActiveTripProvider and
 // RiderMap, so this sheet never issues a duplicate request — it re-renders on
@@ -74,6 +75,8 @@ export default function RiderOrderInfoSheet() {
     staleTime: 5000,
     retry: false,
   })
+  const { data: boardData } = useRiderBoard()
+  const boardOrders = boardData?.orders ?? []
 
   const activeId = activeDelivery?.id ?? null
   const purchaseStops = pickupStopsData?.stops ?? []
@@ -159,9 +162,9 @@ export default function RiderOrderInfoSheet() {
   }
 
   // Hidden entirely when there is nothing worth showing (idle rider, no orders).
-  if (!active && others.length === 0) return null
+  if (!active && others.length === 0 && boardOrders.length === 0) return null
 
-  const orderCount = deliveries.length
+  const orderCount = deliveries.length + boardOrders.length
 
   return (
     <div
@@ -371,6 +374,11 @@ export default function RiderOrderInfoSheet() {
                   )
                 })}
               </div>
+            </div>
+          )}
+          {boardOrders.length > 0 && (
+            <div className={cn('px-4 py-3', others.length > 0 && 'border-b border-[#E5E9E7]')}>
+              <RiderOrderBoard />
             </div>
           )}
           {others.length > 0 && (

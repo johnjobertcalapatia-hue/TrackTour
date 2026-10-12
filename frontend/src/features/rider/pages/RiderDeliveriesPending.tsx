@@ -1,14 +1,16 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { get, patch } from '@/shared/services/api'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { formatDateTime } from '@/shared/utils'
 import { useAuthStore } from '@/features/auth/services/auth-store'
 import type { Delivery } from '@/shared/types'
-import { MapPin, Navigation } from 'lucide-react'
+import { ArrowLeft, MapPin, Navigation } from 'lucide-react'
 
 export default function RiderDeliveriesPending() {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const currentService = useAuthStore((state) => state.user?.current_service)
   const isRideHailing = currentService === 'transport'
 
@@ -28,6 +30,13 @@ export default function RiderDeliveriesPending() {
 
   return (
     <div>
+      <button
+        type="button"
+        onClick={() => navigate(-1)}
+        className="inline-flex items-center gap-2 text-sm text-[#6B7280] hover:text-[#17201B] mb-6 transition"
+      >
+        <ArrowLeft className="w-4 h-4" /> Back
+      </button>
       <div className="mb-8">
         <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">
           {isRideHailing ? 'Available Bookings' : 'Available Deliveries'}

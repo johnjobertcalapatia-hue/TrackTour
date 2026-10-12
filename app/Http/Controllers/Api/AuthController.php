@@ -32,11 +32,22 @@ class AuthController extends Controller
         // Rider registration proves mobile ownership with a single-use code.
         // This is the authoritative consume point: the account cannot be created
         // with a missing, wrong, expired or already-used code.
-        if ($request->role === User::ROLE_RIDER
-            && ! $this->otpService->verifyAndConsume($request->mobile_number, (string) $request->otp_code)) {
-            throw ValidationException::withMessages([
-                'otp_code' => ['The OTP is invalid or has expired. Please request a new code.'],
-            ]);
+        if ($request->role === User::ROLE_RIDER) {
+            if ($this->otpService->isLockedOut($request->mobile_number)) {
+                $seconds = $this->otpService->lockoutSecondsRemaining($request->mobile_number);
+
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Too many failed attempts. Please try again in '.(int) max(1, ceil($seconds / 60)).' minute(s).',
+                    'retry_after' => $seconds,
+                ], 429);
+            }
+
+            if (! $this->otpService->verifyAndConsume($request->mobile_number, (string) $request->otp_code)) {
+                throw ValidationException::withMessages([
+                    'otp_code' => ['The OTP is invalid or has expired. Please request a new code.'],
+                ]);
+            }
         }
 
         $userData = [
@@ -101,6 +112,7 @@ class AuthController extends Controller
                     'middle_name' => $request->middle_name,
                     'last_name' => $request->last_name,
                     'suffix' => $request->suffix,
+                    'date_of_birth' => $request->date_of_birth,
                     'mobile_number' => $request->mobile_number,
                 ]);
 
@@ -138,6 +150,32 @@ class AuthController extends Controller
             'user' => UserResource::make($user->load('profile', 'municipality', 'kyc', 'businesses', 'riderDetail')),
             'token' => $token,
         ], 'Registration successful.');
+    }
+
+    /**
+     * Lightweight, unauthenticated email availability probe used by the
+     * registration forms to warn on-type before submit. The authoritative
+     * uniqueness check still happens on register (RegisterRequest + DB unique);
+     * this endpoint never mutates anything.
+     */
+    public function checkEmail(Request $request): JsonResponse
+    {
+        $request->validate([
+            'email' => ['required', 'string', 'email', 'max:255'],
+        ]);
+
+        // Emails are stored lowercased (RegisterRequest `lowercase` rule).
+        $email = Str::lower(trim($request->email));
+        $available = ! User::where('email', $email)->exists();
+
+        return response()->json([
+            'success' => true,
+            'message' => $available ? 'Email is available.' : 'Email is already registered.',
+            'data' => [
+                'email' => $email,
+                'available' => $available,
+            ],
+        ]);
     }
 
     public function login(LoginRequest $request): JsonResponse

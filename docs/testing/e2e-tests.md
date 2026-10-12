@@ -119,6 +119,32 @@ php artisan test
 php artisan test --filter=RestaurantSubOrder|ReadyToDelivered|CompletionConsistency|GroupedOrder|ConcurrencyLock|RiderAcceptanceGate
 ```
 
+## Browser E2E
+
+### Rider Order Board (`tests/selenium_test_rider_order_board.py`)
+Real-browser race for the rider board — the one behavior API tests cannot prove:
+
+1. two riders sign in (separate Chrome sessions)
+2. both boards discover the SAME open delivery
+3. Rider A accepts it
+4. Rider B sees read-only `Accepted by another rider` and cannot claim it
+5. Rider B refreshes / reconnects and recovers via HTTP polling
+6. integrity: one assignment, no duplicate purchasing-cash rows
+
+Fixtures are seeded by `tests/seed_rider_board_e2e.php` (`php tests/seed_rider_board_e2e.php`,
+`--clean` teardown, `--verify` integrity assertions). The scripts are authored but
+**have not been run** in this workspace; do not claim browser-E2E verification until
+`python tests/selenium_test_rider_order_board.py` passes.
+
+Scope: the full COD lifecycle driver (admin/business-owner UIs) is intentionally not
+automated here — it is covered at the API level by `PurchasingCashFlowTest`.
+
+```bash
+# Prereqs: backend + frontend running; pip install selenium; Chrome installed
+$env:TRACKTOUR_E2E_BASE_URL = "http://localhost:3000"   # default
+python tests/selenium_test_rider_order_board.py
+```
+
 ## Regression Reporting Format
 
 After every phase:

@@ -2,8 +2,12 @@
 
 namespace App\Http\Controllers\Rider;
 
+use App\Enums\TripStatus;
 use App\Http\Controllers\Controller;
 use App\Models\BookingDispatchLog;
+use App\Models\Delivery;
+use App\Models\RiderLocation;
+use App\Models\User;
 use App\Services\NearestRiderService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -65,6 +69,119 @@ class RiderDispatchController extends Controller
             ->all();
 
         return $this->successResponse(['offers' => $offers]);
+    }
+
+    /**
+     * Read-only rider order board. Returns every delivery the rider may act on
+     * (their own live offers) plus nearby read-only rows (claimed by another
+     * rider / cancelled). Laravel owns all eligibility and the accepted rider;
+     * the board only presents it. Distance is computed in PHP so it stays
+     * portable to the SQLite test connection (no haversine SQL).
+     */
+    public function board(Request $request): JsonResponse
+    {
+        $this->dispatchService->processTimeouts();
+
+        $rider = $request->user();
+        $rider->load('riderDetail');
+
+        $location = RiderLocation::where('rider_id', $rider->id)
+            ->latest('recorded_at')
+            ->first();
+
+        $radiusKm = (float) config('delivery.board_radius_km', 5);
+        $claimedLimit = (int) config('delivery.board_claimed_limit', 8);
+        $eligibility = $this->buildBoardEligibility($rider, $location);
+
+        $orders = [];
+        $seen = [];
+
+        // 1. Actionable: the rider's own live offers (authoritative, same source
+        //    as /dispatch/offers). These are the only rows with an accept button.
+        $logs = $rider->dispatchLogs()
+            ->where('response', 'pending')
+            ->with(['delivery.order.business', 'delivery.order.items'])
+            ->orderBy('dispatched_at')
+            ->get();
+
+        foreach ($logs as $log) {
+            $payload = $this->buildOfferPayload($log);
+            $delivery = $log->delivery;
+
+            // A pending log for a delivery that is no longer open (cancelled or
+            // already accepted elsewhere) is not actionable; the read-only
+            // sections below surface it instead.
+            if (empty($payload) || empty($payload['delivery_id']) || ! $delivery
+                || $delivery->status !== TripStatus::WAITING) {
+                continue;
+            }
+
+            $isCod = $this->dispatchService->isCodDelivery($delivery);
+            $distance = $this->deliveryDistance($delivery, $location)
+                ?? ($payload['distance_km'] !== null ? (float) $payload['distance_km'] : null);
+
+            $blocked = $this->boardAcceptBlockedReason($eligibility, $isCod, $distance, $radiusKm);
+
+            $orders[] = array_merge($payload, [
+                'rider_status' => 'looking_for_riders',
+                'can_accept' => $blocked === null,
+                'accept_blocked_reason' => $blocked,
+                'cod' => $isCod,
+                'distance_km' => $distance !== null ? round($distance, 2) : $payload['distance_km'],
+                'restaurants' => $this->buildStopDetails($delivery),
+            ]);
+            $seen[$delivery->id] = true;
+        }
+
+        // 2. Read-only: deliveries accepted by another rider, within the board
+        //    radius. No item detail is exposed for someone else's trip.
+        $claimed = Delivery::query()
+            ->whereNotNull('rider_id')
+            ->where('rider_id', '!=', $rider->id)
+            ->whereIn('status', NearestRiderService::COD_ACTIVE_STATUSES)
+            ->whereNotNull('pickup_latitude')
+            ->whereNotNull('pickup_longitude')
+            ->where('updated_at', '>=', now()->subHours(6))
+            ->latest('updated_at')
+            ->limit(50)
+            ->get();
+
+        $claimedAdded = 0;
+        foreach ($claimed as $delivery) {
+            if (isset($seen[$delivery->id]) || $claimedAdded >= $claimedLimit) {
+                continue;
+            }
+            $distance = $this->deliveryDistance($delivery, $location);
+            if ($distance === null || $distance > $radiusKm) {
+                continue;
+            }
+            $orders[] = $this->buildReadOnlyItem($delivery, $distance, 'accepted_by_other');
+            $seen[$delivery->id] = true;
+            $claimedAdded++;
+        }
+
+        // 3. Read-only: recent deliveries this rider was offered that were
+        //    cancelled by the tourist/system.
+        $cancelled = $rider->dispatchLogs()
+            ->whereHas('delivery', fn ($q) => $q->where('status', 'cancelled'))
+            ->with('delivery')
+            ->latest('updated_at')
+            ->limit(5)
+            ->get();
+
+        foreach ($cancelled as $log) {
+            $delivery = $log->delivery;
+            if (! $delivery || isset($seen[$delivery->id])) {
+                continue;
+            }
+            $orders[] = $this->buildReadOnlyItem($delivery, null, 'cancelled');
+            $seen[$delivery->id] = true;
+        }
+
+        return $this->successResponse([
+            'eligibility' => $eligibility,
+            'orders' => $orders,
+        ], 'Rider order board retrieved.');
     }
 
     /**
@@ -163,5 +280,130 @@ class RiderDispatchController extends Controller
         $result = $this->dispatchService->handleRiderResponse($deliveryId, $riderId, 'declined');
 
         return $this->successResponse($result);
+    }
+
+    private function buildBoardEligibility(User $rider, ?RiderLocation $location): array
+    {
+        $cod = $this->dispatchService->getCodEligibility($rider);
+
+        $maxAgeSeconds = (int) config('delivery.cod_location_max_age_minutes', 5) * 60;
+        $ageSeconds = ($location && $location->recorded_at)
+            ? max(0, now()->diffInSeconds($location->recorded_at))
+            : null;
+        $hasCoords = $location
+            && (float) $location->latitude !== 0.0
+            && (float) $location->longitude !== 0.0;
+
+        return [
+            'online' => $cod['online'],
+            'available' => $cod['available'],
+            'account_approved' => $cod['account_approved'],
+            'suspended' => $cod['suspended'],
+            'has_active_delivery' => ($cod['active_orders'] ?? 0) > 0,
+            'active_orders' => $cod['active_orders'],
+            'active_order_limit' => $cod['active_order_limit'],
+            'rider_status' => $rider->riderDetail?->rider_status,
+            'current_service' => $rider->riderDetail?->current_service,
+            'location_ok' => $hasCoords && $ageSeconds !== null && $ageSeconds <= $maxAgeSeconds,
+            'location_age_seconds' => $ageSeconds,
+            'max_pickup_distance_km' => (float) config('delivery.board_radius_km', 5),
+        ];
+    }
+
+    private function boardAcceptBlockedReason(array $eligibility, bool $isCod, ?float $distanceKm, float $radiusKm): ?string
+    {
+        if (! $eligibility['account_approved']) {
+            return 'account_not_approved';
+        }
+        if (! $eligibility['online']) {
+            return 'offline';
+        }
+        if ($eligibility['has_active_delivery']) {
+            return 'active_delivery';
+        }
+        if (! $eligibility['location_ok']) {
+            return 'location_stale';
+        }
+        if ($isCod && ! $eligibility['available']) {
+            return 'unavailable';
+        }
+        if ($distanceKm !== null && $distanceKm > $radiusKm) {
+            return 'out_of_range';
+        }
+
+        return null;
+    }
+
+    private function buildStopDetails(Delivery $delivery): array
+    {
+        return $delivery->childOrders()
+            ->map(fn ($order) => $order->loadMissing(['business', 'items']))
+            ->map(function ($order) {
+                $business = $order->business;
+
+                return [
+                    'business_id' => $order->business_id,
+                    'name' => $business?->business_name ?? $business?->name ?? 'Restaurant',
+                    'address' => $business?->address ?? $order->delivery_address,
+                    'latitude' => $business?->latitude,
+                    'longitude' => $business?->longitude,
+                    'items' => $order->items->map(fn ($item) => [
+                        'name' => $item->product_name ?? 'Item',
+                        'quantity' => (int) $item->quantity,
+                        'price' => (float) ($item->unit_price ?? 0),
+                        'subtotal' => (float) ($item->subtotal ?? 0),
+                    ])->values()->all(),
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    private function buildReadOnlyItem(Delivery $delivery, ?float $distanceKm, string $status): array
+    {
+        $order = $delivery->primaryOrder();
+        $business = $order?->business;
+        $restaurantCount = max(1, (int) $delivery->childOrders()
+            ->pluck('business_id')
+            ->filter()
+            ->unique()
+            ->count());
+
+        // Deliberately minimal: someone else's (or a cancelled) trip must not
+        // leak tourist details, addresses, or financials to a non-assigned rider.
+        return [
+            'id' => null,
+            'delivery_id' => $delivery->id,
+            'order_id' => $delivery->order_id,
+            'order_number' => $order?->order_number ?? ('TT-' . str_pad((string) ($delivery->order_id ?? 0), 5, '0', STR_PAD_LEFT)),
+            'business_name' => $business?->business_name ?? $business?->name ?? 'Restaurant',
+            'restaurant_count' => $restaurantCount,
+            'stops' => $restaurantCount,
+            'distance_km' => $distanceKm !== null ? round($distanceKm, 2) : null,
+            'duration_minutes' => (int) ($delivery->estimated_duration_minutes ?? 0),
+            'rider_status' => $status,
+            'can_accept' => false,
+            'accept_blocked_reason' => $status,
+            'items' => [],
+            'restaurants' => [],
+        ];
+    }
+
+    private function deliveryDistance(Delivery $delivery, ?RiderLocation $location): ?float
+    {
+        if (! $location
+            || (float) $location->latitude === 0.0
+            || (float) $location->longitude === 0.0
+            || $delivery->pickup_latitude === null
+            || $delivery->pickup_longitude === null) {
+            return null;
+        }
+
+        return $this->dispatchService->calculateDistance(
+            (float) $location->latitude,
+            (float) $location->longitude,
+            (float) $delivery->pickup_latitude,
+            (float) $delivery->pickup_longitude,
+        );
     }
 }

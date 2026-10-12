@@ -70,10 +70,18 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
   const riderTrip = useContext(RiderActiveTripContext)
   const location = useLocation()
   const navigate = useNavigate()
-  // Rider Settings (/rider/settings) is its own full content page, so the
-  // floating rider chrome — the Go Online/Go Offline button + status panel and
-  // the profile avatar/rating — is not rendered there instead of overlapping it.
   const riderSettingsPage = bottomNavigation && location.pathname === '/rider/settings'
+  const riderEarningsPage = bottomNavigation && location.pathname.startsWith('/rider/earnings')
+  // The top-right profile avatar/rating is hidden on the full-content Rider
+  // Settings (/rider/settings) and Earnings (/rider/earnings) pages so it does
+  // not overlap them.
+  const riderAvatarHidden = riderSettingsPage || riderEarningsPage
+  // The bottom rider cockpit — the Go Online/Go Offline button + Rider Status
+  // readout, the service quick actions and the order info sheet — belongs to the
+  // live map only. Every other rider page (e.g. the Available Deliveries/Bookings
+  // acceptance list) shows its own content instead.
+  const riderMapPage = bottomNavigation && location.pathname === '/rider/map'
+  const riderChromeHidden = !riderMapPage
   const [collapsed, setCollapsed] = useState(() => {
     if (preferExpanded && window.innerWidth >= 1024) return false
     const saved = localStorage.getItem('sidebar_collapsed')
@@ -714,7 +722,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
           <div className={cn(
             'box-border w-full pt-3 px-4 sm:pt-4 lg:pt-4',
             bottomNavigation && !riderSettingsPage && 'max-w-[480px] mx-auto',
-            riderSettingsPage
+            riderChromeHidden
               ? 'pb-6 sm:pb-8'
               : bottomNavigation
                 ? 'pb-24'
@@ -738,7 +746,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
         </main>
       </div>
 
-      {bottomNavigation && !riderSettingsPage && (
+      {bottomNavigation && !riderChromeHidden && (
         <div className={cn(
           'fixed bottom-6 left-2 right-2 sm:left-4 sm:right-4 z-[1150] max-w-[480px] mx-auto flex flex-col gap-3 transition-all duration-[1000ms] ease-[cubic-bezier(0.25,0.1,0.25,1)]'
         )}>
@@ -926,7 +934,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
           <RiderOrderInfoSheet />
         </div>
       )}
-      {bottomNavigation && roleLabel === 'Rider' && !riderSettingsPage && (
+      {bottomNavigation && roleLabel === 'Rider' && !riderAvatarHidden && (
         <div className="fixed top-3 right-3 z-[1200] flex flex-col items-center gap-1">
           <button
             type="button"

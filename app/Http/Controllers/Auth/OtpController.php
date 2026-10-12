@@ -21,6 +21,10 @@ class OtpController extends Controller
         $mobile = $request->mobile_number;
         $email = $request->email;
 
+        if ($this->otpService->isLockedOut($mobile)) {
+            return $this->lockedOutResponse($mobile);
+        }
+
         $otp = $this->otpService->send($mobile, $email);
 
         return response()->json([
@@ -38,12 +42,26 @@ class OtpController extends Controller
             'otp_code' => ['required', 'string', 'size:6'],
         ]);
 
+        $mobile = $request->mobile_number;
+
+        if ($this->otpService->isLockedOut($mobile)) {
+            return $this->lockedOutResponse($mobile);
+        }
+
         // Non-consuming pre-check: registration performs the single-use
         // verification via OtpService::verifyAndConsume().
-        if (! $this->otpService->verify($request->mobile_number, $request->otp_code)) {
+        if (! $this->otpService->verify($mobile, $request->otp_code)) {
+            // The failed attempt may have just crossed the lockout threshold.
+            if ($this->otpService->isLockedOut($mobile)) {
+                return $this->lockedOutResponse($mobile);
+            }
+
+            $remaining = $this->otpService->remainingAttempts($mobile);
+
             return response()->json([
                 'success' => false,
-                'message' => 'Invalid or expired OTP.',
+                'message' => "Invalid or expired OTP. {$remaining} attempt(s) remaining.",
+                'attempts_remaining' => $remaining,
             ], 422);
         }
 
@@ -51,5 +69,20 @@ class OtpController extends Controller
             'success' => true,
             'message' => 'OTP verified successfully.',
         ]);
+    }
+
+    /**
+     * Uniform 429 body for both OTP endpoints while a mobile is locked out.
+     */
+    private function lockedOutResponse(string $mobile): JsonResponse
+    {
+        $seconds = $this->otpService->lockoutSecondsRemaining($mobile);
+        $minutes = (int) max(1, ceil($seconds / 60));
+
+        return response()->json([
+            'success' => false,
+            'message' => "Too many failed attempts. Please try again in {$minutes} minute(s).",
+            'retry_after' => $seconds,
+        ], 429);
     }
 }

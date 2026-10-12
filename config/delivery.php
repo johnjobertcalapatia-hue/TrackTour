@@ -21,6 +21,10 @@ return [
     'cod_max_pickup_distance_km' => (float) env('COD_MAX_PICKUP_DISTANCE_KM', 5.00),
     'cod_location_max_age_minutes' => (int) env('COD_LOCATION_MAX_AGE_MINUTES', 5),
     'cod_active_order_limit' => (int) env('COD_ACTIVE_ORDER_LIMIT', 2),
+    // Rider order board: the read-only radius (km) used to surface nearby
+    // deliveries the rider was not offered, and the cap on those read-only rows.
+    'board_radius_km' => (float) env('RIDER_BOARD_RADIUS_KM', 5.00),
+    'board_claimed_limit' => (int) env('RIDER_BOARD_CLAIMED_LIMIT', 8),
     // B2 (Option C, master spec §14): a live socket-radar entry is trusted as
     // the GPS freshness source only when the rider reported within this window.
     // Mirrors socket-validation.js LIMITS.radarStaleMs (2 minutes).
