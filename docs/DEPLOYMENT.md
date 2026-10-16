@@ -93,13 +93,18 @@ SOCKET_TRIP_TOKEN_TTL_SECONDS=7200
 SOCKET_LOCATION_MIN_INTERVAL_MS=1000
 SOCKET_PENDING_TRIP_TTL_MS=120000
 
-MAIL_MAILER=smtp
-MAIL_HOST=smtp.gmail.com
-MAIL_PORT=587
-MAIL_USERNAME=...
-MAIL_PASSWORD=...
-MAIL_ENCRYPTION=tls
-MAIL_FROM_ADDRESS=...
+# Outbound email — MUST be Resend on Railway. Railway blocks outbound SMTP
+# ports (587/465), so MAIL_MAILER=smtp makes every OTP / verification send
+# hang until the calling client times out (users see "Failed to send OTP").
+# Resend talks HTTPS on port 443, which Railway allows. Create a key at
+# https://resend.com → API Keys, then:
+MAIL_MAILER=resend
+RESEND_API_KEY=re_...
+# MAIL_FROM_ADDRESS must be an address on a domain verified in Resend
+# (resend.com → Domains, add the DNS record). For testing ONLY,
+# onboarding@resend.dev works but delivers exclusively to the Resend account
+# owner's own inbox — OTPs sent to any other address will fail.
+MAIL_FROM_ADDRESS=no-reply@<your-verified-domain>
 MAIL_FROM_NAME="Track-Tour App"
 ```
 
@@ -165,6 +170,10 @@ VITE_PAYMONGO_PUBLIC_KEY=pk_...
 - `VITE_API_URL` on Vercel includes the Laravel `/api` prefix. Calls to the
   origin root (for example `/landing/cards`) do not reach the API route and
   will not receive the API CORS headers.
+- Outbound email runs through **Resend** (`MAIL_MAILER=resend`), never SMTP:
+  Railway blocks outbound SMTP ports (587/465), so an SMTP mailer hangs until
+  the request times out. The self-managed VPS stack in §9 uses SMTP instead,
+  because a VPS has outbound mail ports open.
 - API is HTTPS behind Railway; Laravel trust-proxy defaults honour
   `X-Forwarded-Proto` so generated/redirect URLs keep `https`.
 - Classic routes still served by Laravel (`/login`, etc.) are not part of the
@@ -233,7 +242,9 @@ network; only ports 80 and 443 are published.
 
    Generate the bridge secret with `openssl rand -hex 32`. Configure the
    PayMongo live keys only when the account and webhook are production-ready.
-   Configure a working SMTP account for production email.
+   Configure a working SMTP account for production email (a self-managed VPS
+   has outbound SMTP available; the Railway managed stack instead uses Resend,
+   see §3).
 4. Build and start the services:
 
    ```sh
