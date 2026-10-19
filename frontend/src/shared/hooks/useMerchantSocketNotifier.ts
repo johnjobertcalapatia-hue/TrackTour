@@ -1,12 +1,13 @@
 // frontend/src/shared/hooks/useMerchantSocketNotifier.ts
 import { useEffect, useRef, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { SOCKET_BASE_URL } from '../services/socket';
 
 export function useMerchantSocketNotifier() {
   const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
-    const socket = io('http://localhost:3001');
+    const socket = io(SOCKET_BASE_URL);
     socketRef.current = socket;
 
     return () => {

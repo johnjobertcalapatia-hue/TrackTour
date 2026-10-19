@@ -1,6 +1,7 @@
 // frontend/src/shared/hooks/useRiderSocketDispatch.ts
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { SOCKET_BASE_URL } from '../services/socket';
 
 interface OrderPingPayload {
   deliveryId: string;
@@ -44,7 +45,7 @@ export function useRiderSocketDispatch({
 
   // Initialize Socket connection
   useEffect(() => {
-    const socket = io('http://localhost:3001');
+    const socket = io(SOCKET_BASE_URL);
     socketRef.current = socket;
 
     socket.on('order_received_ping', (payload: OrderPingPayload) => {
