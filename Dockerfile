@@ -51,6 +51,9 @@ WORKDIR /var/www/html
 # Production PHP tuning (opcache) so every request does not recompile the app.
 COPY docker/opcache.ini /usr/local/etc/php/conf.d/opcache-laravel.ini
 
+# Increase PHP upload limits for registration verification documents.
+COPY docker/uploads.ini /usr/local/etc/php/conf.d/uploads.ini
+
 COPY --from=composer /usr/bin/composer /usr/bin/composer
 
 # Install dependencies without running scripts (schema/app state is not ready
