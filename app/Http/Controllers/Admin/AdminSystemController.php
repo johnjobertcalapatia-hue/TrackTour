@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\ActivityLog;
 use App\Models\TourismSetting;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -76,6 +77,13 @@ class AdminSystemController extends Controller
         TourismSetting::updateOrCreate(
             ['key' => 'ocr_enabled'],
             ['value' => $validated['ocr_enabled'] ? '1' : '0']
+        );
+
+        ActivityLog::record(
+            'system.ocr_settings_updated',
+            'OCR processing ' . ($validated['ocr_enabled'] ? 'enabled' : 'disabled') . '.',
+            null,
+            ActivityLog::TYPE_SETTINGS
         );
 
         return $this->successResponse([

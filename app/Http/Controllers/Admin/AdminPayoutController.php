@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Exceptions\PayoutConflictException;
 use App\Http\Controllers\Controller;
+use App\Models\ActivityLog;
 use App\Models\RiderPayout;
 use App\Services\RiderPayoutService;
 use App\Traits\ApiResponse;
@@ -47,6 +48,13 @@ class AdminPayoutController extends Controller
         try {
             $payout = $this->payoutService->approve($payout, $request->user(), $validated['note'] ?? null);
 
+            ActivityLog::record(
+                'payout.approved',
+                sprintf('Approved rider payout #%d.', $payout->id),
+                $payout,
+                ActivityLog::TYPE_FINANCIAL
+            );
+
             return $this->successResponse($payout, 'Payout approved.');
         } catch (PayoutConflictException $e) {
             return $this->errorResponse($e->getMessage(), 409);
@@ -63,6 +71,13 @@ class AdminPayoutController extends Controller
         try {
             $payout = $this->payoutService->reject($payout, $request->user(), $validated['note'] ?? null);
 
+            ActivityLog::record(
+                'payout.rejected',
+                sprintf('Rejected rider payout #%d.', $payout->id),
+                $payout,
+                ActivityLog::TYPE_FINANCIAL
+            );
+
             return $this->successResponse($payout, 'Payout rejected; earnings released.');
         } catch (PayoutConflictException $e) {
             return $this->errorResponse($e->getMessage(), 409);
@@ -78,6 +93,13 @@ class AdminPayoutController extends Controller
 
         try {
             $payout = $this->payoutService->markPaid($payout, $request->user(), $validated['note'] ?? null);
+
+            ActivityLog::record(
+                'payout.marked_paid',
+                sprintf('Marked rider payout #%d as paid.', $payout->id),
+                $payout,
+                ActivityLog::TYPE_FINANCIAL
+            );
 
             return $this->successResponse($payout, 'Payout marked as paid.');
         } catch (PayoutConflictException $e) {

@@ -3,6 +3,11 @@
 namespace App\Services;
 
 use App\Models\ApprovalRequest;
+use App\Models\Delivery;
+use App\Models\Order;
+use App\Models\Payment;
+use App\Models\RiderDetail;
+use App\Models\User;
 use App\Repositories\Contracts\BookingRepositoryInterface;
 use App\Repositories\Contracts\BusinessRepositoryInterface;
 use App\Repositories\Contracts\MunicipalityRepositoryInterface;
@@ -28,12 +33,21 @@ class AdminService
         $pendingBusinesses = $this->businessRepository->countByStatus('pending');
         $pendingApprovals = ApprovalRequest::where('status', 'pending')->count();
 
+        // Terminal delivery states per AGENTS.md section 8.8.
+        $terminalDeliveryStatuses = ['delivered', 'completed', 'cancelled'];
+
         return [
             'total_users' => $totalUsers,
             'total_businesses' => $totalBusinesses,
             'total_municipalities' => $totalMunicipalities,
             'pending_businesses' => $pendingBusinesses,
             'pending_approvals' => $pendingApprovals,
+            'total_orders' => Order::count(),
+            'active_deliveries' => Delivery::whereNotIn('status', $terminalDeliveryStatuses)->count(),
+            'total_riders' => $this->userRepository->countByRole(User::ROLE_RIDER),
+            'riders_online' => RiderDetail::where('rider_status', 'online')->count(),
+            // Provider-confirmed gross (payments that reached 'paid').
+            'total_revenue' => (float) Payment::where('status', 'paid')->sum('amount'),
         ];
     }
 

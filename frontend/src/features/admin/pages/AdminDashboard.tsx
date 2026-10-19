@@ -1,10 +1,12 @@
 ﻿import { useQuery } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import { get } from '@/shared/services/api'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { formatDate } from '@/shared/utils'
 import { API_ENDPOINTS } from '@/shared/constants'
-import { Users, Building2, MapPin, ClipboardCheck, Briefcase, FileCheck, CheckCircle } from 'lucide-react'
+import { Users, Building2, MapPin, ClipboardCheck, Briefcase, FileCheck, CheckCircle, Package, Truck, Bike, Wallet } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 
 interface DashboardData {
   user: { id: number; name: string; role: string }
@@ -16,6 +18,11 @@ interface DashboardData {
     business_owners: number
     pending_review: number
     approved_owners: number
+    total_orders: number
+    active_deliveries: number
+    total_riders: number
+    riders_online: number
+    total_revenue: number
   }
   usersByRole: Record<string, number>
   recentUsers: {
@@ -36,14 +43,29 @@ interface DashboardData {
   }[]
 }
 
-const statCards = [
-  { key: 'total_users' as const, label: 'Total Users', icon: Users, labelClass: 'text-[#16803C]', iconBg: 'bg-[#EAF6ED]', iconText: 'text-[#16803C]' },
-  { key: 'total_businesses' as const, label: 'Total Businesses', icon: Building2, labelClass: 'text-[#F4B400]', iconBg: 'bg-[#FFF7D6]', iconText: 'text-[#F4B400]' },
-  { key: 'total_municipalities' as const, label: 'Municipalities', icon: MapPin, labelClass: 'text-[#16803C]', iconBg: 'bg-[#EAF6ED]', iconText: 'text-[#16803C]' },
-  { key: 'pending_verifications' as const, label: 'Pending Verifications', icon: ClipboardCheck, labelClass: 'text-[#F4B400]', iconBg: 'bg-[#FFF7D6]', iconText: 'text-[#F4B400]' },
-  { key: 'business_owners' as const, label: 'Business Owners', icon: Briefcase, labelClass: 'text-[#16803C]', iconBg: 'bg-[#EAF6ED]', iconText: 'text-[#16803C]' },
-  { key: 'pending_review' as const, label: 'Pending Review', icon: FileCheck, labelClass: 'text-[#F4B400]', iconBg: 'bg-[#FFF7D6]', iconText: 'text-[#F4B400]' },
-  { key: 'approved_owners' as const, label: 'Approved Owners', icon: CheckCircle, labelClass: 'text-[#16803C]', iconBg: 'bg-[#EAF6ED]', iconText: 'text-[#16803C]' },
+interface StatCard {
+  key: keyof DashboardData['stats']
+  label: string
+  icon: LucideIcon
+  labelClass: string
+  iconBg: string
+  iconText: string
+  to: string
+  format?: 'peso'
+}
+
+const statCards: StatCard[] = [
+  { key: 'total_users', label: 'Total Users', icon: Users, labelClass: 'text-[#16803C]', iconBg: 'bg-[#EAF6ED]', iconText: 'text-[#16803C]', to: '/admin/users' },
+  { key: 'total_businesses', label: 'Total Businesses', icon: Building2, labelClass: 'text-[#F4B400]', iconBg: 'bg-[#FFF7D6]', iconText: 'text-[#F4B400]', to: '/admin/businesses' },
+  { key: 'total_orders', label: 'Total Orders', icon: Package, labelClass: 'text-[#16803C]', iconBg: 'bg-[#EAF6ED]', iconText: 'text-[#16803C]', to: '/admin/reports' },
+  { key: 'active_deliveries', label: 'Active Deliveries', icon: Truck, labelClass: 'text-[#F4B400]', iconBg: 'bg-[#FFF7D6]', iconText: 'text-[#F4B400]', to: '/admin/live/deliveries' },
+  { key: 'total_riders', label: 'Registered Riders', icon: Bike, labelClass: 'text-[#16803C]', iconBg: 'bg-[#EAF6ED]', iconText: 'text-[#16803C]', to: '/admin/riders' },
+  { key: 'total_revenue', label: 'Gross Revenue', icon: Wallet, labelClass: 'text-[#F4B400]', iconBg: 'bg-[#FFF7D6]', iconText: 'text-[#F4B400]', to: '/admin/reports', format: 'peso' },
+  { key: 'total_municipalities', label: 'Municipalities', icon: MapPin, labelClass: 'text-[#16803C]', iconBg: 'bg-[#EAF6ED]', iconText: 'text-[#16803C]', to: '/admin/municipalities' },
+  { key: 'pending_verifications', label: 'Pending Verifications', icon: ClipboardCheck, labelClass: 'text-[#F4B400]', iconBg: 'bg-[#FFF7D6]', iconText: 'text-[#F4B400]', to: '/admin/users' },
+  { key: 'business_owners', label: 'Business Owners', icon: Briefcase, labelClass: 'text-[#16803C]', iconBg: 'bg-[#EAF6ED]', iconText: 'text-[#16803C]', to: '/admin/users?role=business_owner' },
+  { key: 'pending_review', label: 'Pending Review', icon: FileCheck, labelClass: 'text-[#F4B400]', iconBg: 'bg-[#FFF7D6]', iconText: 'text-[#F4B400]', to: '/admin/users?role=business_owner' },
+  { key: 'approved_owners', label: 'Approved Owners', icon: CheckCircle, labelClass: 'text-[#16803C]', iconBg: 'bg-[#EAF6ED]', iconText: 'text-[#16803C]', to: '/admin/users?role=business_owner' },
 ]
 
 const roleColors: Record<string, string> = {
@@ -115,10 +137,17 @@ export default function AdminDashboard() {
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-6">
         {statCards.map((card) => {
-          const value = stats[card.key] ?? 0
+          const raw = stats[card.key] ?? 0
+          const value = card.format === 'peso'
+            ? `₱${Number(raw).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            : raw
           const Icon = card.icon
           return (
-            <div key={card.key} className="bg-white border border-[#E2E8E3] rounded-2xl p-5 shadow-tourism transition-all duration-200 hover:shadow-[0_10px_24px_rgba(22,101,52,0.12)] hover:-translate-y-0.5">
+            <Link
+              key={card.key}
+              to={card.to}
+              className="block bg-white border border-[#E2E8E3] rounded-2xl p-5 shadow-tourism transition-all duration-200 hover:shadow-[0_10px_24px_rgba(22,101,52,0.12)] hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-[#16803C]/30"
+            >
               <div className="flex items-start justify-between">
                 <div>
                   <p className={`text-xs font-semibold uppercase tracking-wider ${card.labelClass}`}>{card.label}</p>
@@ -128,7 +157,7 @@ export default function AdminDashboard() {
                   <Icon className={`w-6 h-6 ${card.iconText}`} />
                 </div>
               </div>
-            </div>
+            </Link>
           )
         })}
       </div>

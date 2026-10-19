@@ -7,6 +7,7 @@ use App\Http\Requests\Admin\StoreUserRequest;
 use App\Http\Requests\Admin\UpdateUserRequest;
 use App\Http\Requests\Admin\UserActionRequest;
 use App\Http\Resources\UserResource;
+use App\Models\ActivityLog;
 use App\Models\User;
 use App\Services\UserService;
 use Illuminate\Http\JsonResponse;
@@ -43,6 +44,12 @@ class AdminUserController extends Controller
             'last_name' => $request->input('last_name', ''),
         ]);
 
+        ActivityLog::record(
+            'user.created',
+            sprintf('Created %s account (%s).', $request->role, $user->email),
+            $user
+        );
+
         return $this->createdResponse(
             UserResource::make($user->load('profile')),
             'User created successfully.'
@@ -73,6 +80,12 @@ class AdminUserController extends Controller
             $user->update(['password' => Hash::make($request->password)]);
         }
 
+        ActivityLog::record(
+            'user.updated',
+            sprintf('Updated account for %s.', $user->email),
+            $user
+        );
+
         return $this->successResponse(
             UserResource::make($user->load('profile')),
             'User updated successfully.'
@@ -81,7 +94,11 @@ class AdminUserController extends Controller
 
     public function destroy(User $user): JsonResponse
     {
+        $email = $user->email;
+
         $this->userService->deleteUser($user);
+
+        ActivityLog::record('user.deleted', sprintf('Deleted account (%s).', $email), $user);
 
         return $this->noContentResponse('User deleted successfully.');
     }
@@ -98,6 +115,8 @@ class AdminUserController extends Controller
             'reviewed_by' => $request->user()->id,
             'reviewed_at' => now(),
         ]);
+
+        ActivityLog::record('user.approved', sprintf('Approved account for %s.', $user->email), $user);
 
         return $this->successResponse(
             UserResource::make($user),
@@ -122,6 +141,8 @@ class AdminUserController extends Controller
             'reviewed_at' => now(),
         ]);
 
+        ActivityLog::record('user.rejected', sprintf('Rejected account for %s. Remarks: %s', $user->email, $request->remarks), $user);
+
         return $this->successResponse(
             UserResource::make($user),
             "Account for \"{$user->fullName}\" has been rejected."
@@ -144,6 +165,8 @@ class AdminUserController extends Controller
             'reviewed_by' => $request->user()->id,
             'reviewed_at' => now(),
         ]);
+
+        ActivityLog::record('user.suspended', sprintf('Suspended account for %s. Remarks: %s', $user->email, $request->remarks), $user);
 
         return $this->successResponse(
             UserResource::make($user),
@@ -171,6 +194,8 @@ class AdminUserController extends Controller
             'reviewed_at' => now(),
         ]);
 
+        ActivityLog::record('user.archived', sprintf('Archived account for %s.', $user->email), $user);
+
         return $this->successResponse(
             UserResource::make($user),
             "Account for \"{$user->fullName}\" has been archived."
@@ -193,6 +218,8 @@ class AdminUserController extends Controller
             'reviewed_at' => now(),
         ]);
 
+        ActivityLog::record('user.restored', sprintf('Restored archived account for %s.', $user->email), $user);
+
         return $this->successResponse(
             UserResource::make($user),
             "Account for \"{$user->fullName}\" has been restored."
@@ -206,6 +233,8 @@ class AdminUserController extends Controller
         ]);
 
         $user->update(['password' => Hash::make($request->password)]);
+
+        ActivityLog::record('user.password_reset', sprintf('Reset password for %s.', $user->email), $user);
 
         return $this->successResponse(null, 'Password reset successfully.');
     }

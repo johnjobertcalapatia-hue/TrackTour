@@ -1,4 +1,5 @@
 ﻿import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { get, post } from '@/shared/services/api'
 import { TableSkeleton } from '@/shared/components/Skeleton'
@@ -19,8 +20,12 @@ const ROLES = [
 ]
 
 export default function AdminUsers() {
+  const [searchParams] = useSearchParams()
   const [search, setSearch] = useState('')
-  const [role, setRole] = useState('')
+  const [role, setRole] = useState(() => {
+    const initialRole = searchParams.get('role') ?? ''
+    return ROLES.some((r) => r.value === initialRole) ? initialRole : ''
+  })
   const [page, setPage] = useState(1)
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [actionModal, setActionModal] = useState<null | { type: string; user: any }>(null)

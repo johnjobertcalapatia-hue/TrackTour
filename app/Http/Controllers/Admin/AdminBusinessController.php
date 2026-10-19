@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\BusinessDocumentResource;
 use App\Http\Resources\BusinessResource;
+use App\Models\ActivityLog;
 use App\Models\Business;
 use App\Models\BusinessCategory;
 use App\Models\BusinessDocument;
@@ -71,6 +72,8 @@ class AdminBusinessController extends Controller
         $business->syncModulesFromCategory();
         Cache::forget("business_{$business->id}_modules");
 
+        ActivityLog::record('business.approved', sprintf('Approved business "%s".', $business->business_name), $business);
+
         return $this->successResponse(
             BusinessResource::make($business->fresh()->load(['owner', 'category', 'municipality'])),
             "Business \"{$business->business_name}\" has been approved. Modules assigned from {$business->category->name} template."
@@ -92,6 +95,8 @@ class AdminBusinessController extends Controller
             'reviewed_by' => $request->user()->id,
         ]);
 
+        ActivityLog::record('business.rejected', sprintf('Rejected business "%s". Remarks: %s', $business->business_name, $request->remarks), $business);
+
         return $this->successResponse(
             BusinessResource::make($business),
             "Business \"{$business->business_name}\" has been rejected."
@@ -112,6 +117,8 @@ class AdminBusinessController extends Controller
             'remarks' => $request->remarks,
             'reviewed_by' => $request->user()->id,
         ]);
+
+        ActivityLog::record('business.suspended', sprintf('Suspended business "%s". Remarks: %s', $business->business_name, $request->remarks), $business);
 
         return $this->successResponse(
             BusinessResource::make($business),
@@ -138,6 +145,17 @@ class AdminBusinessController extends Controller
         ]);
 
         $document->load('requiredDocument');
+
+        ActivityLog::record(
+            'business_document.reviewed',
+            sprintf(
+                'Reviewed document "%s" for business "%s" → %s.',
+                $document->requiredDocument?->name ?? $document->id,
+                $business->business_name,
+                $validated['verification_status']
+            ),
+            $business
+        );
 
         return $this->successResponse(BusinessDocumentResource::make($document), 'Document status updated.');
     }

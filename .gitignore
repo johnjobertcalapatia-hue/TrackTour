@@ -66,6 +66,10 @@ selenium_failure.png
 
 # Local database backups
 /database/backups/
+/backups/
+
+# Audit working artifacts (may contain local data)
+/backend-route-audit.txt
 
 
 # Large/local media files

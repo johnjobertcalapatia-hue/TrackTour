@@ -52,15 +52,14 @@ class AdminRiderController extends Controller
             }
         }
 
-        ActivityLog::create([
-            'user_id' => Auth::id(),
-            'action' => 'rider_fare_settings.updated',
-            'description' => $changes !== []
+        ActivityLog::record(
+            'rider_fare_settings.updated',
+            $changes !== []
                 ? 'Delivery fare settings updated (' . implode(', ', $changes) . ').'
                 : 'Delivery fare settings updated (values unchanged).',
-            'ip_address' => $request->ip(),
-            'user_agent' => $request->userAgent(),
-        ]);
+            null,
+            ActivityLog::TYPE_SETTINGS
+        );
 
         return $this->successResponse($after, 'Delivery fare settings updated successfully.');
     }
@@ -139,6 +138,8 @@ class AdminRiderController extends Controller
             'remarks' => $request->remarks,
         ]);
 
+        ActivityLog::record('rider.approved', sprintf('Approved rider account (%s).', $rider->email), $rider);
+
         try {
             $rider->notify(new RiderAccountStatusChanged('approved'));
         } catch (\Exception $e) {
@@ -169,6 +170,8 @@ class AdminRiderController extends Controller
             'decision' => 'rejected',
             'remarks' => $request->remarks,
         ]);
+
+        ActivityLog::record('rider.rejected', sprintf('Rejected rider account (%s). Remarks: %s', $rider->email, $request->remarks), $rider);
 
         try {
             $rider->notify(new RiderAccountStatusChanged('rejected', $request->remarks));
@@ -201,6 +204,8 @@ class AdminRiderController extends Controller
             'remarks' => $request->remarks,
         ]);
 
+        ActivityLog::record('rider.suspended', sprintf('Suspended rider account (%s). Remarks: %s', $rider->email, $request->remarks), $rider);
+
         try {
             $rider->notify(new RiderAccountStatusChanged('suspended', $request->remarks));
         } catch (\Exception $e) {
@@ -227,6 +232,8 @@ class AdminRiderController extends Controller
             'decision' => 'reactivated',
             'remarks' => $request->remarks,
         ]);
+
+        ActivityLog::record('rider.reactivated', sprintf('Reactivated rider account (%s).', $rider->email), $rider);
 
         try {
             $rider->notify(new RiderAccountStatusChanged('reactivated'));
