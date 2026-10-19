@@ -86,9 +86,6 @@ register: async (formData: Record<string, unknown>) => {
 },
 
   logout: async () => {
-    const currentUser = useAuthStore.getState().user
-
-    // Snapshot the token before clearing so the toggle call can still use it.
     const token = localStorage.getItem('auth_token')
 
     // Clear user and token immediately so React Query, GPS, and all polling
@@ -96,19 +93,11 @@ register: async (formData: Record<string, unknown>) => {
     localStorage.removeItem('auth_token')
     set({ user: null, loading: false })
 
-    // Best-effort: tell the backend to set the rider offline before revoking
-    // the session. Use the saved token directly (the shared api interceptor
-    // no longer has it).
-    if (currentUser?.rider_status === 'online' || currentUser?.rider_status === 'available') {
-      if (token) {
-        await axios.post('/api/rider/availability/toggle', null, {
-          headers: { Authorization: `Bearer ${token}` },
-        }).catch(() => {})
-      }
-    }
-
-    // Revoke the server-side session/token. This may fail if the token is
-    // already gone (e.g. 401 interceptor cleared it) — that's fine.
+    // Revoke the server-side session/token. AuthController::logout is solely
+    // responsible for rider status: it sets an idle rider offline and keeps
+    // the status untouched when the rider still has an active trip. This may
+    // fail if the token is already gone (e.g. 401 interceptor cleared it) —
+    // that's fine.
     await axios.post('/api/logout', null, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     }).catch(() => {})
