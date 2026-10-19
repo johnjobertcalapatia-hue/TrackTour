@@ -76,12 +76,14 @@ export const useAuthStore = create<AuthState>((set) => ({
     return data.user
   },
 
-  register: async (formData: Record<string, unknown>) => {
-    const data = await post<AuthResponse>('/register', formData)
-    localStorage.setItem('auth_token', data.token)
-    set({ user: data.user, loading: false })
-    return data.user
-  },
+register: async (formData: Record<string, unknown>) => {
+  const data = await post<AuthResponse>('/register', formData, {
+    timeout: 60000,
+  })
+  localStorage.setItem('auth_token', data.token)
+  set({ user: data.user, loading: false })
+  return data.user
+},
 
   logout: async () => {
     const currentUser = useAuthStore.getState().user
