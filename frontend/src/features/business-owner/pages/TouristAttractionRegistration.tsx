@@ -2,13 +2,13 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { get, post } from '@/shared/services/api'
+import { findTouristAttractionCategoryId } from '@/shared/utils/category'
 import { Alert } from '@/shared/components/Alert'
 import { beachPinIcon } from '@/shared/utils/pin-icon'
 import { ArrowLeft, ArrowRight, Check, ChevronDown, ImagePlus, MapPin, Upload, X } from 'lucide-react'
 import { MapContainer, Marker, TileLayer, useMap, useMapEvents } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 
-const CATEGORY_ID = 7
 const MAX_PHOTOS = 10
 const MAX_IMAGE_SIZE = 5 * 1024 * 1024
 const DRAFT_STORAGE_KEY = 'tourist-attraction-registration-draft'
@@ -26,6 +26,7 @@ interface Municipality {
 
 interface RegistrationMeta {
   municipalities: Municipality[]
+  categories: { id: number; name: string }[]
 }
 
 interface FormState {
@@ -296,10 +297,12 @@ export default function TouristAttractionRegistration() {
 
   const mutation = useMutation({
     mutationFn: async () => {
+      const categoryId = findTouristAttractionCategoryId(meta?.categories)
+      if (!categoryId) throw new Error('Tourist Attraction category is unavailable.')
       const payload = new FormData()
       payload.append('business_name', form.name)
       payload.append('business_description', form.description)
-      payload.append('business_category_id', String(CATEGORY_ID))
+      payload.append('business_category_id', String(categoryId))
       payload.append('municipality_id', form.municipalityId)
       payload.append('barangay_id', form.barangayId)
       payload.append('address', form.address)

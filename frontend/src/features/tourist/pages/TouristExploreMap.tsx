@@ -7,6 +7,7 @@ import { MapContainer, TileLayer, Marker, Polyline, useMap, useMapEvents } from 
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { beachPinIcon, pinIcon, userPinIcon } from '@/shared/utils/pin-icon'
+import { isTouristAttractionCategory } from '@/shared/utils/category'
 import {
   X,
   MapPin,
@@ -872,7 +873,7 @@ export default function TouristExploreMap() {
                 <Marker
                   key={biz.id}
                   position={[biz.latitude, biz.longitude]}
-                  icon={biz.category?.id === 7 ? beachPinIcon : pinIcon(biz.name, biz.id === pinned?.id)}
+                  icon={isTouristAttractionCategory(biz.category?.name) ? beachPinIcon : pinIcon(biz.name, biz.id === pinned?.id)}
                   eventHandlers={{
                     click: () => handleBusinessSelect(biz),
                     mouseover: (e) => {

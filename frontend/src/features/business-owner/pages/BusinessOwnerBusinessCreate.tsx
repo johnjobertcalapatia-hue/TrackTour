@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { post, get } from '@/shared/services/api'
 import { getLocalDraft, saveLocalDraft, removeLocalDraft } from '@/shared/services/draft-storage'
+import { isTouristAttractionCategory } from '@/shared/utils/category'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { Alert } from '@/shared/components/Alert'
 import { ArrowLeft, MapPin, Building2, ChevronLeft, ChevronRight, Check, Search, ScanLine } from 'lucide-react'
@@ -299,7 +300,7 @@ export default function BusinessOwnerBusinessCreate() {
 
   const nextStep = () => {
     if (!validateStep()) return
-    if (currentStep === 1 && selectedCategoryId === 7) {
+    if (currentStep === 1 && isTouristAttractionCategory(selectedCategory?.name)) {
       navigate('/business-owner/businesses/create/tourist-attraction')
       return
     }

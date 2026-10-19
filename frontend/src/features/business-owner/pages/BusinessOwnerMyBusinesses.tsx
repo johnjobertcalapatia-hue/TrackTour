@@ -4,6 +4,7 @@ import { get, patch } from '@/shared/services/api'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { formatDateTime, toAssetUrl } from '@/shared/utils'
+import { isTouristAttractionCategory } from '@/shared/utils/category'
 import type { Business } from '@/shared/types'
 import { Plus, Building2 } from 'lucide-react'
 
@@ -86,9 +87,9 @@ export default function BusinessOwnerMyBusinesses() {
               </div>
 
               <div className="mt-4 flex items-center justify-end gap-2">
-                <button onClick={(e) => { e.stopPropagation(); navigate(`/business-owner/businesses/${biz.id}/${biz.category === 'Tourist Attraction' || biz.category_id === 7 ? 'tourist-attraction-edit' : 'edit'}`) }} className="px-3 py-2 rounded-xl bg-[#16803C] hover:bg-[#126B32] text-white text-sm">Edit</button>
+                <button onClick={(e) => { e.stopPropagation(); navigate(`/business-owner/businesses/${biz.id}/${isTouristAttractionCategory(biz.category) ? 'tourist-attraction-edit' : 'edit'}`) }} className="px-3 py-2 rounded-xl bg-[#16803C] hover:bg-[#126B32] text-white text-sm">Edit</button>
                 <button onClick={(e) => { e.stopPropagation(); navigate(`/business-owner/businesses/${biz.id}/documents`) }} className="px-3 py-2 rounded-xl bg-white text-[#16803C] border border-[#D7E8DB] hover:bg-[#F3F8F4] text-sm">Documents</button>
-                <button onClick={(e) => { e.stopPropagation(); navigate(`/business-owner/businesses/${biz.id}/${biz.category === 'Tourist Attraction' || biz.category_id === 7 ? 'tourist-attraction-gallery' : 'gallery'}`) }} className="px-3 py-2 rounded-xl bg-white text-[#16803C] border border-[#D7E8DB] hover:bg-[#F3F8F4] text-sm">Gallery</button>
+                <button onClick={(e) => { e.stopPropagation(); navigate(`/business-owner/businesses/${biz.id}/${isTouristAttractionCategory(biz.category) ? 'tourist-attraction-gallery' : 'gallery'}`) }} className="px-3 py-2 rounded-xl bg-white text-[#16803C] border border-[#D7E8DB] hover:bg-[#F3F8F4] text-sm">Gallery</button>
                 <button onClick={(e) => { e.stopPropagation(); navigate(`/business-owner/businesses/${biz.id}/verification`) }} className="px-3 py-2 rounded-xl bg-[#16803C] hover:bg-[#126B32] text-white text-sm">Verification</button>
               </div>
             </div>

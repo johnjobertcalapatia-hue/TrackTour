@@ -194,6 +194,85 @@ class BusinessRegistrationTest extends TestCase
         $this->assertNotContains('equipment_inventory', $hotelCodes);
     }
 
+    private function fetchCategoryFieldKeys(int $categoryId, ?User $user = null): array
+    {
+        $response = $this->actingAs($user ?? $this->createOwner())
+            ->get('/api/business-owner/businesses/category-fields/'.$categoryId);
+
+        $response->assertStatus(200);
+
+        return collect($response->json('data'))->pluck('key')->all();
+    }
+
+    public function test_category_fields_for_restaurant_are_restaurant_specific(): void
+    {
+        $restaurant = BusinessCategory::where('name', 'Restaurant')->first();
+        $this->assertNotNull($restaurant);
+
+        $keys = $this->fetchCategoryFieldKeys($restaurant->id);
+
+        $this->assertContains('seating_capacity', $keys);
+        $this->assertContains('service_type', $keys);
+        $this->assertContains('cuisine_type', $keys);
+        $this->assertNotContains('resort_type', $keys);
+        $this->assertNotContains('property_type', $keys);
+        $this->assertNotContains('number_of_rooms', $keys);
+    }
+
+    public function test_category_fields_resolve_by_name_when_ids_differ_from_seed_order(): void
+    {
+        DB::table('business_categories')->where('name', 'Restaurant')->update(['name' => 'Legacy Restaurant']);
+        $restaurant = BusinessCategory::create(['name' => 'Restaurant']);
+
+        $this->assertNotEquals(4, $restaurant->id);
+
+        $keys = $this->fetchCategoryFieldKeys($restaurant->id);
+
+        $this->assertContains('seating_capacity', $keys);
+        $this->assertContains('service_type', $keys);
+        $this->assertContains('cuisine_type', $keys);
+        $this->assertNotContains('resort_type', $keys);
+        $this->assertNotContains('property_type', $keys);
+        $this->assertNotContains('number_of_rooms', $keys);
+    }
+
+    public function test_category_fields_alias_attractions_to_tourist_attraction_fields(): void
+    {
+        $attractions = BusinessCategory::create(['name' => 'Attractions']);
+
+        $keys = $this->fetchCategoryFieldKeys($attractions->id);
+
+        $this->assertContains('attraction_type', $keys);
+        $this->assertContains('entrance_fee', $keys);
+        $this->assertNotContains('resort_type', $keys);
+    }
+
+    public function test_category_fields_return_empty_for_unknown_category_name(): void
+    {
+        $other = BusinessCategory::create(['name' => 'Karaoke Bar']);
+
+        $response = $this->actingAs($this->createOwner())
+            ->get('/api/business-owner/businesses/category-fields/'.$other->id);
+
+        $response->assertStatus(200);
+        $response->assertJson(['success' => true, 'data' => []]);
+    }
+
+    public function test_category_fields_require_authentication(): void
+    {
+        $this->get('/api/business-owner/businesses/category-fields/4')
+            ->assertStatus(401);
+    }
+
+    public function test_category_fields_forbidden_for_non_business_owner_roles(): void
+    {
+        $tourist = User::factory()->create(['role' => User::ROLE_TOURIST]);
+
+        $this->actingAs($tourist)
+            ->get('/api/business-owner/businesses/category-fields/4')
+            ->assertStatus(403);
+    }
+
     public function test_middleware_sets_active_business_and_modules(): void
     {
         $user = $this->createOwner();

@@ -361,15 +361,18 @@ class BusinessRegistrationController extends Controller
 
     public function getCategoryFields(int $categoryId): JsonResponse
     {
-        $fields = $this->getFieldsForCategory($categoryId);
+        $category = BusinessCategory::find($categoryId);
+        $fields = $category
+            ? $this->getFieldsForCategory($category->name)
+            : [];
 
         return $this->successResponse($fields);
     }
 
-    private function getFieldsForCategory(int $categoryId): array
+    private function getFieldsForCategory(string $categoryName): array
     {
         $fields = [
-            1 => [ // Hotel
+            'Hotel' => [
                 ['key' => 'property_type', 'label' => 'Property Type', 'type' => 'select', 'options' => ['Hotel', 'Resort', 'Tourist Inn', 'Apartel', 'Boutique Hotel', 'Motel']],
                 ['key' => 'hotel_classification', 'label' => 'Star Classification', 'type' => 'select', 'options' => ['1-Star', '2-Star', '3-Star', '4-Star', '5-Star', 'Boutique', 'Budget', 'Unclassified']],
                 ['key' => 'number_of_rooms', 'label' => 'Number of Rooms', 'type' => 'number'],
@@ -383,7 +386,7 @@ class BusinessRegistrationController extends Controller
                 ['key' => 'amenities', 'label' => 'Amenities & Facilities', 'type' => 'textarea', 'placeholder' => 'e.g., Free Wi-Fi, Air Conditioning, 24/7 Front Desk, Airport Shuttle, Room Service, Gym'],
                 ['key' => 'year_built', 'label' => 'Year Built', 'type' => 'number'],
             ],
-            2 => [ // Resort
+            'Resort' => [
                 ['key' => 'resort_type', 'label' => 'Resort Type', 'type' => 'select', 'options' => ['Beach Resort', 'Mountain Resort', 'Lake Resort', 'Spring Resort', 'Private Resort']],
                 ['key' => 'day_tour_available', 'label' => 'Day Tour Available', 'type' => 'boolean'],
                 ['key' => 'overnight_stay', 'label' => 'Overnight Stay', 'type' => 'boolean'],
@@ -394,7 +397,7 @@ class BusinessRegistrationController extends Controller
                 ['key' => 'parking', 'label' => 'Parking', 'type' => 'boolean'],
                 ['key' => 'recreational_activities', 'label' => 'Recreational Activities', 'type' => 'textarea', 'placeholder' => 'List available activities'],
             ],
-            3 => [ // Hotel & Restaurant Combination
+            'Hotel & Restaurant Combination' => [
                 ['key' => 'property_type', 'label' => 'Property Type', 'type' => 'select', 'options' => ['Hotel with Restaurant', 'Resort with Restaurant', 'Inn with Restaurant']],
                 ['key' => 'number_of_rooms', 'label' => 'Number of Rooms', 'type' => 'number'],
                 ['key' => 'number_of_restaurants', 'label' => 'Number of Restaurants', 'type' => 'number'],
@@ -405,7 +408,7 @@ class BusinessRegistrationController extends Controller
                 ['key' => 'swimming_pool', 'label' => 'Swimming Pool Available', 'type' => 'boolean'],
                 ['key' => 'amenities', 'label' => 'Amenities & Facilities', 'type' => 'textarea', 'placeholder' => 'e.g., Free Wi-Fi, Air Conditioning, Restaurant, Bar'],
             ],
-            4 => [ // Restaurant
+            'Restaurant' => [
                 ['key' => 'seating_capacity', 'label' => 'Seating Capacity', 'type' => 'number', 'required' => true],
                 ['key' => 'service_type', 'label' => 'Service Type', 'type' => 'select', 'options' => ['Full-Service Restaurant', 'Fine Dining', 'Casual Dining', 'Fast Food', 'Buffet', 'Food Stall', 'Family Style', 'Food Truck', 'Carinderia'], 'required' => true],
                 ['key' => 'cuisine_type', 'label' => 'Cuisine Types', 'type' => 'multi_checkbox', 'options' => ['Filipino', 'Asian', 'Seafood', 'International', 'Fast Food', 'Desserts', 'Beverages', 'Chinese', 'Japanese', 'Korean', 'American', 'Italian', 'Mexican', 'Vegetarian', 'Vegan', 'Fusion'], 'required' => true],
@@ -415,55 +418,55 @@ class BusinessRegistrationController extends Controller
                 ['key' => 'outdoor_seating_count', 'label' => 'Outdoor Seating Count', 'type' => 'number'],
                 ['key' => 'max_guests_per_reservation', 'label' => 'Max Guests per Reservation', 'type' => 'number'],
             ],
-            5 => [ // Café
+            'Café' => [
                 ['key' => 'coffee_specialty', 'label' => 'Coffee Specialty', 'type' => 'text', 'placeholder' => 'e.g., Barista Coffee, Brewed'],
                 ['key' => 'cuisine_type', 'label' => 'Cuisine/Specialty Types', 'type' => 'multi_checkbox', 'options' => ['Coffee', 'Tea', 'Pastries', 'Brunch', 'Desserts', 'Light Meals', 'Vegan', 'Specialty Drinks']],
                 ['key' => 'indoor_seating_count', 'label' => 'Indoor Seating', 'type' => 'number'],
                 ['key' => 'outdoor_seating_count', 'label' => 'Outdoor Seating', 'type' => 'number'],
                 ['key' => 'total_seating', 'label' => 'Total Seating Capacity', 'type' => 'number'],
             ],
-            6 => [ // Food Hub / Food Park
+            'Food Hub' => [
                 ['key' => 'number_of_stalls', 'label' => 'Number of Stalls', 'type' => 'number'],
                 ['key' => 'cuisine_type', 'label' => 'Food Types', 'type' => 'multi_checkbox', 'options' => ['Filipino', 'Asian', 'Western', 'Seafood', 'Grilled', 'Desserts', 'Drinks', 'International']],
                 ['key' => 'total_seating', 'label' => 'Total Seating Capacity', 'type' => 'number'],
                 ['key' => 'entertainment', 'label' => 'Live Entertainment', 'type' => 'boolean'],
             ],
-            7 => [ // Tourist Attraction
+            'Tourist Attraction' => [
                 ['key' => 'attraction_type', 'label' => 'Attraction Type', 'type' => 'select', 'options' => ['Natural', 'Historical', 'Cultural', 'Adventure', 'Religious', 'Man-made']],
                 ['key' => 'entrance_fee', 'label' => 'Entrance Fee', 'type' => 'text', 'placeholder' => 'e.g., PHP 50 per person'],
                 ['key' => 'guided_tour_available', 'label' => 'Guided Tour Available', 'type' => 'boolean'],
                 ['key' => 'estimated_visit_duration', 'label' => 'Estimated Visit Duration', 'type' => 'text', 'placeholder' => 'e.g., 2-3 hours'],
             ],
-            8 => [ // Tour Guide
+            'Tour Guide' => [
                 ['key' => 'languages_spoken', 'label' => 'Languages Spoken', 'type' => 'text', 'placeholder' => 'e.g., English, Tagalog'],
                 ['key' => 'guide_license_number', 'label' => 'Guide License Number', 'type' => 'text'],
                 ['key' => 'years_of_experience', 'label' => 'Years of Experience', 'type' => 'number'],
                 ['key' => 'tour_types', 'label' => 'Tour Types', 'type' => 'text', 'placeholder' => 'e.g., Historical, Nature, Food'],
                 ['key' => 'maximum_guests', 'label' => 'Maximum Guests per Tour', 'type' => 'number'],
             ],
-            9 => [ // Travel Agency
+            'Travel Agency' => [
                 ['key' => 'accreditation_number', 'label' => 'Accreditation Number', 'type' => 'text'],
                 ['key' => 'services_offered', 'label' => 'Services Offered', 'type' => 'textarea', 'placeholder' => 'List services offered'],
                 ['key' => 'domestic_tours', 'label' => 'Domestic Tours', 'type' => 'boolean'],
                 ['key' => 'international_tours', 'label' => 'International Tours', 'type' => 'boolean'],
             ],
-            10 => [ // Souvenir Shop
+            'Souvenir Shop' => [
                 ['key' => 'offering_categories', 'label' => 'Offering Categories', 'type' => 'textarea', 'placeholder' => 'e.g., Handicrafts, T-shirts, Local food'],
                 ['key' => 'local_products_available', 'label' => 'Local Products Available', 'type' => 'boolean'],
             ],
-            11 => [ // Transport Service
+            'Transport Service' => [
                 ['key' => 'vehicle_type', 'label' => 'Vehicle Type', 'type' => 'select', 'options' => ['Van', 'SUV', 'Sedan', 'Tricycle', 'Jeepney', 'Bus', 'Boat', 'Bicycle']],
                 ['key' => 'number_of_vehicles', 'label' => 'Number of Vehicles', 'type' => 'number'],
                 ['key' => 'passenger_capacity', 'label' => 'Passenger Capacity', 'type' => 'number'],
                 ['key' => 'routes_covered', 'label' => 'Routes Covered', 'type' => 'textarea', 'placeholder' => 'List routes covered'],
             ],
-            12 => [ // Homestay
+            'Homestay' => [
                 ['key' => 'number_of_guest_rooms', 'label' => 'Number of Guest Rooms', 'type' => 'number'],
                 ['key' => 'maximum_guests', 'label' => 'Maximum Guests', 'type' => 'number'],
                 ['key' => 'breakfast_included', 'label' => 'Breakfast Included', 'type' => 'boolean'],
                 ['key' => 'family_friendly', 'label' => 'Family Friendly', 'type' => 'boolean'],
             ],
-            13 => [ // Camping Site
+            'Camping Site' => [
                 ['key' => 'camping_capacity', 'label' => 'Camping Capacity', 'type' => 'number'],
                 ['key' => 'tent_rental', 'label' => 'Tent Rental', 'type' => 'boolean'],
                 ['key' => 'cottage_rental', 'label' => 'Cottage Rental', 'type' => 'boolean'],
@@ -471,20 +474,20 @@ class BusinessRegistrationController extends Controller
                 ['key' => 'comfort_rooms', 'label' => 'Comfort Rooms', 'type' => 'boolean'],
                 ['key' => 'parking', 'label' => 'Parking', 'type' => 'boolean'],
             ],
-            14 => [ // Dive Shop
+            'Dive Shop' => [
                 ['key' => 'dive_types', 'label' => 'Dive Types', 'type' => 'text', 'placeholder' => 'e.g., Scuba, Snorkeling, Free diving'],
                 ['key' => 'equipment_rental', 'label' => 'Equipment Rental', 'type' => 'boolean'],
                 ['key' => 'dive_courses', 'label' => 'Dive Courses Offered', 'type' => 'text', 'placeholder' => 'e.g., Open Water, Advanced'],
                 ['key' => 'maximum_divers', 'label' => 'Maximum Divers per Trip', 'type' => 'number'],
             ],
-            15 => [ // Event Venue
+            'Event Venue' => [
                 ['key' => 'venue_capacity', 'label' => 'Venue Capacity', 'type' => 'number'],
                 ['key' => 'indoor_space', 'label' => 'Indoor Space Available', 'type' => 'boolean'],
                 ['key' => 'outdoor_space', 'label' => 'Outdoor Space Available', 'type' => 'boolean'],
                 ['key' => 'parking_capacity', 'label' => 'Parking Capacity', 'type' => 'number'],
                 ['key' => 'catering_available', 'label' => 'In-House Catering', 'type' => 'boolean'],
             ],
-            16 => [ // Farm Tourism
+            'Farm Tourism' => [
                 ['key' => 'farm_activities', 'label' => 'Farm Activities', 'type' => 'textarea', 'placeholder' => 'List available activities'],
                 ['key' => 'accommodation_available', 'label' => 'Accommodation Available', 'type' => 'boolean'],
                 ['key' => 'farm_size', 'label' => 'Farm Size', 'type' => 'text', 'placeholder' => 'e.g., 5 hectares'],
@@ -492,6 +495,19 @@ class BusinessRegistrationController extends Controller
             ],
         ];
 
-        return $fields[$categoryId] ?? [];
+        $key = mb_strtolower(trim($categoryName));
+
+        $aliases = [
+            'attractions' => 'tourist attraction',
+        ];
+        $key = $aliases[$key] ?? $key;
+
+        foreach ($fields as $name => $fieldSet) {
+            if (mb_strtolower(trim($name)) === $key) {
+                return $fieldSet;
+            }
+        }
+
+        return [];
     }
 }

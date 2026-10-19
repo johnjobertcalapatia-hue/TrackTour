@@ -97,7 +97,7 @@ export default function TouristAttractionEdit() {
       if (!form || !id) throw new Error('Attraction data is unavailable.')
       return post(`/business-owner/businesses/${id}`, {
         ...form,
-        business_category_id: 7,
+        business_category_id: business.business_category_id,
         details: {
           attraction_type: form.attraction_type,
           entrance_fee: form.entrance_fee || '0',
