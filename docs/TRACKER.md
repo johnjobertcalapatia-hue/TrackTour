@@ -26,7 +26,7 @@ checkpoints, `docs/current-status/known-issues.md` (baseline 2026-10-06),
 
 | # | Feature | Status | Audit evidence |
 |---|---------|--------|----------------|
-| F1 | Auth, Sanctum, role-based access, session hardening | ✅ | Auth test files green in suite; cross-role auto-logout + stale-credential 401 guard checkpoints (PROGRESS 2026-09-24/25) |
+| F1 | Auth, Sanctum, role-based access, session hardening | ✅ | Auth test files green in suite; cross-role auto-logout + stale-credential 401 guard checkpoints (PROGRESS 2026-09-24/25); Phase 2.1 roles matrix + office-role self-registration fix + 13 authorization tests (PROGRESS 2026-10-20) |
 | F2 | Business registration & approval wizard | ✅ | `BusinessRegistrationTest` incl. name-keyed category fix (PROGRESS 2026-10-19, VERIFIED) |
 | F3 | Tourism registry (destinations, businesses, landing) | ✅ | Tourist/landing tests green; live probe: `/api/landing/cards` 200 with DB data (2026-10-20) |
 | F4 | Food ordering + multi-restaurant group checkout | ✅ | P11.6 acceptance-gate regression; one canonical order/delivery per checkout pinned by tests |

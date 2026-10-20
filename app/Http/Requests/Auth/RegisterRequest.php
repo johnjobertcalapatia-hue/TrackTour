@@ -21,7 +21,7 @@ class RegisterRequest extends FormRequest
         $rules = [
             'email' => ['required', 'string', 'lowercase', 'email', 'max:255', 'unique:'.User::class],
             'password' => ['required', 'confirmed', Rules\Password::defaults()],
-            'role' => ['required', 'string', Rule::in(User::ROLES)],
+            'role' => ['required', 'string', Rule::in(User::REGISTRABLE_ROLES)],
         ];
 
         if ($this->role === User::ROLE_BUSINESS_OWNER) {
