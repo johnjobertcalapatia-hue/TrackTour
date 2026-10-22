@@ -1,12 +1,11 @@
 # TrackTour full-stack deployment progress audit
 
-**Audit date:** 2026-10-10
+**Audit date:** 2026-10-16
 **Scope:** deployment architecture, local readiness evidence, production status,
 and remaining release gates.
-**Deployment target:** user confirms Railway hosting. The repository's
-deployment guide specifies Railway for Laravel, MySQL, and Socket.IO, with
-Vercel for the React frontend. This audit does not independently verify the
-currently deployed Railway/Vercel services or their runtime settings.
+**Deployment target:** user confirms Railway hosting for the React frontend,
+Laravel API, MySQL, and Socket.IO. This audit does not independently verify the
+currently deployed Railway services or their runtime settings.
 
 ## Executive summary
 
@@ -17,12 +16,12 @@ smoke test, and a live-container verification-document privacy check.
 
 The application and container verification gates are documented as passed, but
 the live production configuration still needs to be confirmed. The selected
-managed-hosting path is Railway for the Laravel API, MySQL, and Socket.IO, plus
-Vercel for the frontend, as specified in `DEPLOYMENT.md`. A separate
+managed-hosting path is Railway for the frontend, Laravel API, MySQL, and
+Socket.IO, as clarified by the user. A separate
 VPS-oriented Docker Compose/Caddy configuration is also present, but is not the
 user-confirmed deployment target. Production database migration state,
 durable file storage, domains, secrets, and deployed-host acceptance results
-must be checked against the actual Railway/Vercel projects.
+must be checked against the actual Railway project.
 
 ## Full-stack components
 
@@ -32,10 +31,10 @@ must be checked against the actual Railway/Vercel projects.
 | API | Laravel 12, PHP 8.2, Apache, Sanctum | Docker image listens on `80` by default and adapts to the platform `PORT`; local XAMPP Apache uses `80`/`443`. Health endpoint: `/up`. |
 | Database | Railway MySQL service (deployment guide); Compose uses MySQL `8.4` | Railway MySQL internal port is `3306`; local XAMPP configuration points to MariaDB `10.4.32` at `localhost:3306`. |
 | Realtime | Node.js `22`, Socket.IO | Browser-facing listener: `3001` locally/Compose, or the platform-provided port when deployed. Laravel bridge: `3002`; keep it private. |
-| Reverse proxy / TLS | Railway routing for backend services; Vercel for frontend; Caddy for VPS alternative | Caddy publishes `80` and `443` only in the VPS configuration. The isolated privacy Compose check omitted Caddy; deployed Railway/Vercel routing and TLS were not verified in this audit. |
+| Reverse proxy / TLS | Railway routing for frontend and backend services; Caddy for VPS alternative | Caddy publishes `80` and `443` only in the VPS configuration. The isolated privacy Compose check omitted Caddy; deployed Railway routing and TLS were not verified in this audit. |
 | Background work | Laravel scheduler and database queue worker under Supervisor | In the current API image these run alongside Apache. Keep the combined API service to one instance unless background workers are separated to avoid duplicate schedulers/workers. |
 | Uploaded files | Laravel public and private local disks | Public media belongs on durable storage. Verification documents use private storage and authenticated owner/Tourism Office routes. Do not use ephemeral container storage for persistent uploads. |
-| Payments / email | PayMongo and SMTP | Production credentials, webhook, callback URLs, and live-mode acceptance are deployment configuration, not locally verified deployment evidence. |
+| Payments / email | PayMongo; Resend on Railway and SMTP on VPS | Production credentials, webhook, callback URLs, and live-mode acceptance are deployment configuration, not locally verified deployment evidence. |
 
 **Storage configuration needs a privacy-specific check:** `docs/DEPLOYMENT.md`
 currently recommends a Railway volume at
@@ -63,27 +62,26 @@ host ports `80` and `443`.
 
 ## Deployment paths found in the repository
 
-### User-confirmed path: Railway backend + Vercel frontend
+### User-confirmed path: full stack on Railway
 
 The repository's [deployment guide](./DEPLOYMENT.md) specifies:
 
 ```text
-Browser
-  ├── Vercel: React/Vite frontend
-  └── Railway project
-      ├── Laravel/Apache API (public HTTPS)
-      ├── Socket.IO (public listener 3001; private bridge 3002)
-      └── Railway MySQL (internal port 3306)
+Railway project
+  ├── React/Vite frontend (public HTTPS, Nginx SPA fallback)
+  ├── Laravel/Apache API (public HTTPS)
+  ├── Socket.IO (public listener 3001; private bridge 3002)
+  └── Railway MySQL (internal port 3306)
 
 API ── Railway private networking ── MySQL and Socket.IO bridge
 API ── Railway volume or tested object storage ── uploads
 ```
 
-The Railway/Vercel arrangement is the repository-documented target and matches
-the user's hosting clarification. Verify the Railway services, private
-networking, port exposure, attached volume, environment variables, and Vercel
-build variables in the actual provider dashboards; repository configuration
-alone does not prove those settings are deployed.
+The separate frontend container is built from `frontend/Dockerfile`; the
+Laravel API remains backend-only. Verify the Railway services, private
+networking, port exposure, attached volume, and build/runtime variables in the
+actual provider dashboard; repository configuration alone does not prove
+those settings are deployed.
 
 ### Alternative configuration: Docker Compose on a VPS
 
@@ -93,7 +91,7 @@ uploads, and Caddy for ports `80`/`443`. This is a VPS-oriented configuration;
 its production host, DNS, TLS issuance, firewall, persistent volume behavior,
 backup procedure, and Caddy routing were not validated by the isolated test.
 
-Do not confuse the VPS Compose option with the user's Railway/Vercel target.
+Do not confuse the VPS Compose option with the user's Railway target.
 The old `RENDER-DEPLOYMENT-PLAN.md` is retained as historical planning
 material, not the current deployment recommendation.
 
@@ -112,9 +110,9 @@ material, not the current deployment recommendation.
 | Local development DB audit | **Completed** | `PROGRESS.md` records 191 applied migration rows, 13 pending migration files, and 3 stale rows in the local test DB. None of the pending files touch document tables or drops schema in `up()`. This is not a deployment target. |
 | Local DB backup | **Restore-tested, local only** | A full dump was restored to a throwaway database and counts matched. The documented backup is still on this machine; an off-box copy/checksum verification remains outstanding. |
 | Unreferenced public files | **Archived, not deleted** | 215 local public files without DB references were archived and checksum-verified; originals remain in place. The archive and manifest require off-box preservation and content review before cleanup. |
-| Production provider/resources | **User reports Railway hosting; not independently verified** | The deployment guide describes Railway API/MySQL/Socket.IO and Vercel frontend, but current service health, URLs, production DB/storage configuration, domains, and secrets were not queried in this audit. |
+| Production provider/resources | **User reports Railway hosting; not independently verified** | Current service health, URLs, production DB/storage configuration, domains, and secrets were not queried in this audit. |
 | Production migration and data cutover | **Blocked** | Target database migration history and schema have not been audited. Do not assume either the local test database or the disposable Compose database is the production target. |
-| Public routing, TLS, deployed flows | **Not verified** | Caddy was omitted from the isolated Compose run. Railway service routing/private bridge, Vercel domains, TLS, frontend-to-API CORS/auth, WebSocket upgrades, payments, and deployed end-to-end flows remain to be verified on the live target. |
+| Public routing, TLS, deployed flows | **Not verified** | Caddy was omitted from the isolated Compose run. Railway service routing/private bridge, domains, TLS, frontend-to-API CORS/auth, WebSocket upgrades, payments, and deployed end-to-end flows remain to be verified on the live target. |
 
 ### Database migration risk
 
@@ -139,9 +137,9 @@ production database.
 ## Main production blockers
 
 1. **Confirm and provision the selected target topology:** Railway for the
-   Laravel API, MySQL, and Socket.IO, plus Vercel for the frontend, as
-   documented. Confirm regions, domains, ownership, budget, and whether the
-   target database starts fresh or imports local data.
+   frontend, Laravel API, MySQL, and Socket.IO. Confirm regions, domains,
+   ownership, budget, and whether the target database starts fresh or imports
+   local data.
 2. **Provision and audit the actual MySQL target:** use a read-only connection
    first to capture migration history, affected schemas, row counts, and
    document-path references. Treat any existing target independently from the
@@ -167,10 +165,11 @@ production database.
    `php artisan migrate --force`. Inspect the Railway target and backup first,
    then ensure a single controlled migration execution per release; do not
    rely on multiple scaled API replicas racing at startup.
-8. **Configure secrets and hostnames:** set server-side secrets on Railway and
-   public `VITE_*` build variables on Vercel. Keep `APP_KEY`, DB credentials,
-   PayMongo secret/webhook keys, SMTP, and `SOCKET_BRIDGE_SECRET` server-side.
-   Only public values belong in `VITE_*` frontend build variables.
+8. **Configure secrets and hostnames:** set server-side secrets and public
+   `VITE_*` build variables on the appropriate Railway services. Keep `APP_KEY`,
+   DB credentials, PayMongo secret/webhook keys, mail-provider credentials, and
+   `SOCKET_BRIDGE_SECRET` server-side. Only public values belong in `VITE_*`
+   frontend build variables.
 9. **Run deployed acceptance tests:** verify HTTPS frontend routes, API
    health/auth/CORS, Socket.IO WebSocket and polling, private API bridge,
    authorized rooms, file permissions and persistence, scheduler/queue health,
@@ -208,7 +207,7 @@ authorized or reported as completed by this audit.
 - `AGENTS.md` — architecture and deployment constraints.
 - `docs/PROGRESS.md` — test checkpoints, local DB backup/audit, and privacy
   inventory.
-- `docs/DEPLOYMENT.md` — Railway backend/DB/Socket.IO and Vercel frontend
+- `docs/DEPLOYMENT.md` — full-stack Railway deployment and VPS alternative
   deployment guide.
 - `docs/RENDER-DEPLOYMENT-PLAN.md` — older Render-specific planning document;
   not the selected target.

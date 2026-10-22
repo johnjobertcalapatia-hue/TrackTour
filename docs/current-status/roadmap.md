@@ -21,7 +21,7 @@ Tourism Office manages only through **monitor / verify / approve / audit / repor
 
 ### Admin Build Scope (Phases 1–7)
 
-- [ ] Phase 1 — Foundation: dashboard, layout, RBAC, audit log, stats
+- [x] Phase 1 — Foundation: dashboard, layout, RBAC, audit log, stats (**COMPLETE & VERIFIED 2026-10-19** — see `docs/PROGRESS.md`; authoritative status: `docs/TRACKER.md`)
 - [ ] Phase 2 — Rider management
 - [ ] Phase 3 — Rider operations monitoring
 - [~] Phase 4 — Financial monitoring (**POS & SALES read-only sub-module complete 2026-09-24**: `/api/admin/pos/*` + `/admin/pos` page + `AdminPosSalesApiTest`; suite 440/2,336 ✓)

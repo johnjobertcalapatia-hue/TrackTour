@@ -12,11 +12,11 @@ class PasswordResetTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_reset_password_link_screen_can_be_rendered(): void
+    public function test_reset_password_link_screen_redirects_to_the_spa(): void
     {
         $response = $this->get('/forgot-password');
 
-        $response->assertStatus(200);
+        $response->assertRedirect(config('app.frontend_url').'/forgot-password');
     }
 
     public function test_reset_password_link_can_be_requested(): void
@@ -30,7 +30,7 @@ class PasswordResetTest extends TestCase
         Notification::assertSentTo($user, ResetPassword::class);
     }
 
-    public function test_reset_password_screen_can_be_rendered(): void
+    public function test_reset_password_screen_redirects_to_the_spa(): void
     {
         Notification::fake();
 
@@ -41,7 +41,9 @@ class PasswordResetTest extends TestCase
         Notification::assertSentTo($user, ResetPassword::class, function ($notification) {
             $response = $this->get('/reset-password/'.$notification->token);
 
-            $response->assertStatus(200);
+            $response->assertRedirect(
+                config('app.frontend_url').'/reset-password?token='.$notification->token
+            );
 
             return true;
         });

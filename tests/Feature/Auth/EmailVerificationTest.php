@@ -25,11 +25,11 @@ class EmailVerificationTest extends TestCase
         ]);
     }
 
-    public function test_email_verification_screen_can_be_rendered(): void
+    public function test_email_verification_screen_redirects_to_the_spa(): void
     {
         $response = $this->be($this->user)->get('/verify-email');
 
-        $response->assertStatus(200);
+        $response->assertRedirect(config('app.frontend_url').'/verify-email');
     }
 
     public function test_user_can_request_a_new_verification_link(): void

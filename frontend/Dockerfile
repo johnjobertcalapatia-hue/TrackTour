@@ -9,7 +9,7 @@ COPY . .
 
 ARG VITE_API_URL=https://tracktour-production.up.railway.app/api
 ARG VITE_API_ORIGIN=https://tracktour-production.up.railway.app
-ARG VITE_SOCKET_URL=https://tracktour-socket.up.railway.app
+ARG VITE_SOCKET_URL=https://tracktour-socket-production.up.railway.app
 ARG VITE_PAYMONGO_PUBLIC_KEY
 ENV VITE_API_URL=${VITE_API_URL}
 ENV VITE_API_ORIGIN=${VITE_API_ORIGIN}

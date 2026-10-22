@@ -2,8 +2,6 @@
 
 use Illuminate\Support\Facades\Route;
 
-Route::view('/', 'app')->name('home');
-
-Route::view('/{any}', 'app')
-    ->where('any', '^(?!api).*$')
-    ->name('spa');
+Route::get('/', static fn () => response()->json([
+    'service' => 'TrackTour API',
+]))->name('home');

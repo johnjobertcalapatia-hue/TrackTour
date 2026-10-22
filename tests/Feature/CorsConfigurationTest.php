@@ -6,12 +6,9 @@ use Tests\TestCase;
 
 class CorsConfigurationTest extends TestCase
 {
-    public function test_deployed_frontends_are_allowed_to_preflight_public_api_routes(): void
+    public function test_railway_frontend_is_allowed_to_preflight_public_api_routes(): void
     {
-        $origins = [
-            'https://tracktour-frontend.vercel.app',
-            'https://nurturing-creation-production-ecea.up.railway.app',
-        ];
+        $origins = ['https://nurturing-creation-production-ecea.up.railway.app'];
         $uris = [
             '/api/landing/cards',
             '/api/landing-content',

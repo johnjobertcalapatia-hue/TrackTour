@@ -1,43 +1,47 @@
 # TrackTour — Production Deployment
 
-The repository includes a self-managed VPS option in §9. The managed
-Vercel/Railway setup below remains available as an alternative.
+The repository includes a self-managed VPS option in §9. The primary managed
+deployment runs the frontend, Laravel API, Socket.IO, and MySQL on Railway.
 
 Target stack:
 
 ```text
-Vercel                         Railway (single project)
-┌──────────────┐               ┌──────────────────────────────────────┐
-│ React SPA    │  HTTPS /api    │ API (Laravel + Apache)  :80        │
-│ (frontend/)  ├──────────────►│  scheduler  (schedule:work)         │
-│              │  HTTPS /ws    │  queue worker (queue:work database) │
-│              ├──────────────►│ Socket.IO service: 3001 → browsers  │
-│              │               │             3002 → bridge (Laravel) │
-└──────────────┘               │ MySQL (Railway data service)        │
-                               └──────────────────────────────────────┘
+Railway (single project)
+┌─────────────────────────────────────────────────────────────────────┐
+│ Frontend (React/Vite + Nginx) :80                                   │
+│     │ HTTPS /api            │ HTTPS /ws                             │
+│     ▼                        ▼                                      │
+│ API (Laravel + Apache) :80   Socket.IO :3001 (public)               │
+│   scheduler + queue worker           :3002 (private bridge)         │
+│ MySQL (private service) :3306                                        │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-Why Vercel: Vercel can only host the static React app. Laravel needs PHP+MySQL,
-the scheduler needs a long-lived OS loop, and the Socket.IO engine needs
-persistent WebSocket processes — all of which run on Railway here.
+The frontend is a separate Railway service built from `frontend/Dockerfile`.
+The Laravel API image stays backend-only; it does not include the React source
+or try to render the SPA.
 
-Three Railway services share this repo:
+Four Railway services share this repo:
 
-| Service      | Dockerfile       | Exposed ports |
-|--------------|------------------|---------------|
-| API          | `Dockerfile`     | 80 (public)   |
-| Socket.IO    | `Dockerfile.socket` | 3001 (public, browsers), 3002 (internal, Laravel bridge) |
+| Service      | Dockerfile / source    | Exposed ports |
+|--------------|------------------------|---------------|
+| Frontend     | `frontend/Dockerfile`  | 80 (public)   |
+| API          | `Dockerfile`           | 80 (public)   |
+| Socket.IO    | `Dockerfile.socket`    | 3001 (public, browsers), 3002 (internal, Laravel bridge) |
 | MySQL        | Railway managed service | 3306 (internal) |
 
 ---
 
 ## 1. Deployment files in this repo
 
-- `frontend/vercel.json` — SPA fallback + Vite build/output for Vercel.
-- `frontend/.env.example` — Vercel vars the frontend build reads.
-- `compose.vps.yaml`, `Caddyfile`, `frontend/Dockerfile`, and
-  `frontend/nginx.vps.conf` — self-managed Ubuntu VPS stack with automatic
-  HTTPS, private MySQL/socket bridge, and static SPA hosting.
+- `frontend/Dockerfile` — reproducible Vite production build and Nginx SPA
+  server for the Railway frontend service.
+- `frontend/nginx.vps.conf` — Nginx SPA fallback used by the frontend image.
+- `frontend/.env.example` — frontend build variables for API, Socket.IO, and
+  PayMongo public-key configuration.
+- `compose.vps.yaml`, `Caddyfile`, and `frontend/nginx.vps.conf` —
+  self-managed Ubuntu VPS stack with automatic HTTPS, private MySQL/socket
+  bridge, and static SPA hosting.
 - `Dockerfile` (+ `docker/apache-vhost.conf`, `docker/supervisord.conf`,
   `docker/start-container.sh`, `docker/opcache.ini`) — Laravel API image.
   On boot it waits for MySQL, runs `php artisan migrate --force`, then starts
@@ -67,8 +71,8 @@ APP_ENV=production
 APP_DEBUG=false
 APP_KEY=<generate once: php -r "echo Illuminate\Encryption\Encrypter::generateKey()" — or php artisan key:generate --show>
 APP_URL=https://<your-api-service>.up.railway.app
-FRONTEND_URL=https://<your-vercel-app>.vercel.app
-SANCTUM_STATEFUL_DOMAINS=<your-vercel-app>.vercel.app,localhost:3000
+FRONTEND_URL=https://<your-frontend-service>.up.railway.app
+SANCTUM_STATEFUL_DOMAINS=<your-frontend-service>.up.railway.app,localhost:3000
 
 DB_CONNECTION=mysql
 DB_HOST=<mysql service name>.railway.internal
@@ -134,12 +138,14 @@ SOCKET_BRIDGE_SECRET=<same value as API service>
    `VITE_SOCKET_URL`), keep **3002 internal** (only Laravel reaches it via
    `SOCKET_SERVER_URL`).
 
-## 5. Vercel — frontend (only this repo's `frontend/`)
+## 5. Railway — React frontend service
 
-1. **New Project → import this repo**, then:
-   - **Root Directory:** `frontend`
-   - Vercel auto-detects Vite (build `npm run build`, output `dist`).
-2. **Environment variables** (build-time, must be `VITE_`-prefixed):
+1. Add a service in the same Railway project from this repo. Set **Root
+   Directory** to `/frontend`; Railway will build `frontend/Dockerfile` and
+   the container's Nginx server listens on port 80.
+2. Set these **build-time Docker arguments** on the frontend service. Vite
+   embeds them in the static bundle, so changing runtime variables alone does
+   not change the deployed frontend:
 
 ```text
 VITE_API_URL=https://<your-api-service>.up.railway.app/api
@@ -149,7 +155,9 @@ VITE_PAYMONGO_PUBLIC_KEY=pk_...
 # VITE_API_ORIGIN=https://<your-api-service>.up.railway.app
 ```
 
-3. Deploy. Confirm the SPA loads and that API calls in the network tab use
+3. Set the resulting public frontend origin in the API service's `FRONTEND_URL`
+   and `SANCTUM_STATEFUL_DOMAINS`, and allow that exact origin in Laravel CORS.
+   Deploy. Confirm the SPA loads and that API calls in the network tab use
    `/api/...` paths, for example
    `https://<your-api-service>.up.railway.app/api/landing/cards`.
 
@@ -160,33 +168,34 @@ VITE_PAYMONGO_PUBLIC_KEY=pk_...
 - The **SOCKET_BRIDGE_SECRET** is the same on the API and Socket.IO services —
   otherwise every `/dispatch`, `/trip/*`, `/event` bridge call returns 401.
 - `SOCKET_SERVER_URL` on the API points at the socket service's **3002** port.
-- `FRONTEND_URL` on the API equals the deployed frontend origin. The current
-  production origin `https://tracktour-frontend.vercel.app` is explicitly
-  allowlisted in `config/cors.php`, along with the Railway-hosted frontend
-  `https://nurturing-creation-production-ecea.up.railway.app`; Laravel's
-  `api/*` CORS path covers `/api/landing/cards`, `/api/landing-content`,
-  `/api/map/businesses`, and `/api/municipalities`. Keep other origins
-  explicit—do not use `*`.
-- `VITE_API_URL` on Vercel includes the Laravel `/api` prefix. Calls to the
-  origin root (for example `/landing/cards`) do not reach the API route and
-  will not receive the API CORS headers.
+- `FRONTEND_URL` on the API equals the deployed Railway frontend origin;
+  configure that exact origin in `config/cors.php` via the environment value.
+  Laravel's `api/*` CORS path covers `/api/landing/cards`,
+  `/api/landing-content`, `/api/map/businesses`, and `/api/municipalities`.
+  Keep other origins explicit—do not use `*`.
+- `VITE_API_URL` on the Railway frontend build includes the Laravel `/api`
+  prefix. Calls to the origin root (for example `/landing/cards`) do not reach
+  the API route and will not receive the API CORS headers.
 - Outbound email runs through **Resend** (`MAIL_MAILER=resend`), never SMTP:
   Railway blocks outbound SMTP ports (587/465), so an SMTP mailer hangs until
   the request times out. The self-managed VPS stack in §9 uses SMTP instead,
   because a VPS has outbound mail ports open.
 - API is HTTPS behind Railway; Laravel trust-proxy defaults honour
   `X-Forwarded-Proto` so generated/redirect URLs keep `https`.
-- Classic routes still served by Laravel (`/login`, etc.) are not part of the
-  Vercel SPA; Vercel serves the React app for all routes except `/api` rewrites.
+- The frontend service serves React routes through its Nginx SPA fallback.
+  Laravel's `/` endpoint identifies the API as JSON; the API service does not
+  serve the React app or catch arbitrary paths as SPA routes.
 
 ## 7. Verification checklist
 
-1. `curl https://<api>.up.railway.app/api/health` (or any public endpoint) → JSON.
-2. Socket engine: `curl https://<socket>.up.railway.app/status` → radar/trip JSON.
-3. `npm run build` locally in `frontend/` → clean.
-4. Run the Laravel suite and resolve failures before production rollout.
-5. Socket JS suite: `npm run test:js` → 51/51.
-6. Log in from the frontend URL; place an order; watch the dispatch ping reach an
+1. `curl https://<api>.up.railway.app/up` → HTTP 200;
+   `curl https://<api>.up.railway.app/` → TrackTour API JSON.
+2. `curl https://<api>.up.railway.app/api/landing/cards` → JSON.
+3. Frontend service serves the built React app and client-side routes.
+4. `npm run build` locally in `frontend/` → clean.
+5. Run the Laravel suite and resolve failures before production rollout.
+6. Socket JS suite: `npm run test:js` → 51/51.
+7. Log in from the frontend URL; place an order; watch the dispatch ping reach an
    online rider and the status flow render in realtime.
 
 ## 8. Known production notes

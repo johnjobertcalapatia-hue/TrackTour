@@ -10,13 +10,13 @@ class PasswordConfirmationTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_confirm_password_screen_can_be_rendered(): void
+    public function test_confirm_password_screen_redirects_to_the_spa(): void
     {
         $user = User::factory()->create();
 
         $response = $this->actingAs($user)->get('/confirm-password');
 
-        $response->assertStatus(200);
+        $response->assertRedirect(config('app.frontend_url').'/confirm-password');
     }
 
     public function test_password_can_be_confirmed(): void

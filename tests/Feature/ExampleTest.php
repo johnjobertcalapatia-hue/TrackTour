@@ -2,18 +2,24 @@
 
 namespace Tests\Feature;
 
-// use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
 class ExampleTest extends TestCase
 {
-    /**
-     * A basic test example.
-     */
-    public function test_the_application_returns_a_successful_response(): void
+    public function test_the_api_root_returns_a_json_service_response(): void
     {
-        $response = $this->get('/');
+        $this->get('/')
+            ->assertOk()
+            ->assertJson(['service' => 'TrackTour API']);
+    }
 
-        $response->assertStatus(200);
+    public function test_the_health_endpoint_remains_available(): void
+    {
+        $this->get('/up')->assertOk();
+    }
+
+    public function test_the_api_does_not_catch_unknown_frontend_routes(): void
+    {
+        $this->get('/some-client-route')->assertNotFound();
     }
 }
