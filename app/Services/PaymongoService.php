@@ -7,15 +7,15 @@ use Illuminate\Support\Facades\Log;
 
 class PaymongoService
 {
-    protected string $secretKey;
-    protected string $webhookSecret;
-    protected string $baseUrl;
+    protected string $secretKey = '';
+    protected string $webhookSecret = '';
+    protected string $baseUrl = 'https://api.paymongo.com/v1';
 
     public function __construct()
     {
-        $this->secretKey = config('services.paymongo.secret_key', '');
-        $this->webhookSecret = config('services.paymongo.webhook_secret', '');
-        $this->baseUrl = config('services.paymongo.base_url', 'https://api.paymongo.com/v1');
+        $this->secretKey = (string) (config('services.paymongo.secret_key') ?? '');
+        $this->webhookSecret = (string) (config('services.paymongo.webhook_secret') ?? '');
+        $this->baseUrl = (string) (config('services.paymongo.base_url') ?? 'https://api.paymongo.com/v1');
     }
 
     public function isConfigured(): bool

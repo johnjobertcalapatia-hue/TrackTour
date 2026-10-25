@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1
 
-# TrackTour Laravel API — production container
+# TrackTour Laravel API - production container
 # Serves the API on :80 (Apache + mod_php) and runs the scheduler + queue worker
 # via supervisord inside the same container.
 
 FROM composer:2 AS composer
 
-FROM php:8.2-apache AS runtime
+FROM php:8.4-apache AS runtime
 
 # System dependencies: tesseract for document OCR, GD/zip/intl/curl ext sources,
 # plus supervisord for the scheduler/queue workers.
