@@ -76,19 +76,19 @@ class TouristDestinationController extends Controller
                     'address' => $attraction->address,
                     'latitude' => $attraction->latitude,
                     'longitude' => $attraction->longitude,
-                    'entrance_fee' => (float) ($details['entrance_fee'] ?? 0),
+                    'entrance_fee' => (float) $details->get('entrance_fee', 0),
                     'images' => $attraction->media
                         ->whereIn('type', ['Logo', 'Gallery'])
                         ->sortBy('sort_order')
                         ->map(fn ($media) => Storage::url($media->file_path))
                         ->values()
                         ->all(),
-                    'amenities' => ! empty($details['activities']) ? [$details['activities']] : [],
+                    'amenities' => $details->get('activities') ? [$details->get('activities')] : [],
                     'rating' => (float) ($attraction->average_rating ?? 0),
                     'category' => [
                         'id' => $attraction->category?->id,
-                        'name' => $details['attraction_type'] ?: ($attraction->category?->name ?? 'Tourist Attraction'),
-                        'slug' => strtolower(str_replace(' ', '-', $details['attraction_type'] ?: 'tourist-attraction')),
+                        'name' => $details->get('attraction_type') ?: ($attraction->category?->name ?? 'Tourist Attraction'),
+                        'slug' => strtolower(str_replace(' ', '-', $details->get('attraction_type') ?: 'tourist-attraction')),
                     ],
                     'municipality' => [
                         'id' => $attraction->municipality?->id,
@@ -154,14 +154,14 @@ class TouristDestinationController extends Controller
             'opening_hours' => $attraction->opening_time && $attraction->closing_time
                 ? substr((string) $attraction->opening_time, 0, 5) . ' - ' . substr((string) $attraction->closing_time, 0, 5)
                 : null,
-            'entrance_fee' => (float) ($details['entrance_fee'] ?? 0),
+            'entrance_fee' => (float) $details->get('entrance_fee', 0),
             'contact_number' => $attraction->contact_number,
             'images' => $images,
-            'amenities' => $details['activities'] ? [$details['activities']] : [],
+            'amenities' => $details->get('activities') ? [$details->get('activities')] : [],
             'rating' => (float) ($attraction->average_rating ?? 0),
             'category' => [
                 'id' => $attraction->category?->id,
-                'name' => $details['attraction_type'] ?: ($attraction->category?->name ?? 'Tourist Attraction'),
+                'name' => $details->get('attraction_type') ?: ($attraction->category?->name ?? 'Tourist Attraction'),
             ],
             'municipality' => [
                 'id' => $attraction->municipality?->id,
