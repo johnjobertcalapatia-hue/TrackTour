@@ -2014,6 +2014,149 @@ Database: no DDL in this phase (notifications + endpoints only)
 
 - None for this phase. Out-of-plan polish (seats stepper, saved places) remains as before; P12.5 wallet backfill and the Admin module plan (§15) are unchanged.
 
+### Local Dev Seed — "Ekslusibo Grill and Restaurant" (Business Owner): Complete & Verified (2026-10-22)
+
+Creates a fully populated, approved business listing in the local `track_tour_db` for the business owner `johnjobertcalapatia@gmail.com` (`users.id = 7`), named **Ekslusibo Grill and Restaurant** (Restaurant category, Barangay Pag-asa, Bansud). Everything was produced through the canonical application code path — no hand-written INSERT for the business itself — so all derived rows (modules, EAV details, media, documents, wallet, status log, activity log) match what the app itself produces.
+
+**Implementation summary**
+
+- **Owner account** — already present, not re-created: `users.id = 7`, `role = business_owner`, `account_status = approved`, registered 2026-10-22 13:43:04; `user_profiles.id = 4` (Johnjobert Jasa Calapatia, Pag-asa, Bansud, mobile 09124827253); `user_kyc.id = 1` (`national_id` 3965098351643148, `verification_status = pending`).
+- **Business creation** — `POST /api/business-owner/businesses` → `BusinessOwnerBusinessManageController::store()` (`app/Http/Controllers/BusinessOwnerBusinessManageController.php:27`) validated by `StoreBusinessRequest`. The controller set `status = under_review` and produced, through the real code path:
+  - the `businesses` row (`businesses.id = 2`),
+  - `syncModulesFromCategory()` → **25** `business_module_assignments` rows (Restaurant template),
+  - **9** EAV `business_details` rows,
+  - **4** `business_media` rows (1 × `Logo`, 3 × `Gallery`),
+  - **2** `business_document_uploads` rows (stored on the `local` disk = private storage).
+- **Restaurant detail fields** use the canonical Restaurant category schema from `BusinessRegistrationController::getFieldsForCategory()` (`app/Http/Controllers/BusinessRegistrationController.php:411`): `seating_capacity` (60), `service_type` (Full-Service Restaurant), `cuisine_type`, `dining_facilities`, `available_services`, `indoor_seating_count` (40), `outdoor_seating_count` (20), `max_guests_per_reservation` (24).
+- **Remaining canonical owner endpoints** — `PUT /api/business-owner/businesses/2/hours` (per-day `business_hours`, lowercase day keys as `Business::getScheduleForDay()` expects), `PUT /api/business-owner/businesses/2/payment-methods` (cash/gcash/card), `PUT /api/business-owner/businesses/2/profile` (`welcome_message`, `signature_dishes`, `featured_banner`), `POST /api/business-owner/businesses/2/cover-photo`.
+- **Approval via the canonical admin flow** — `PUT /api/admin/businesses/2/documents/{1,2}/review` (`verification_status = verified`) then `POST /api/admin/businesses/2/approve` → `AdminBusinessController::approve()`. Approval produced: `businesses.status = approved`, one `business_status_logs` row (reviewed_by = Tourism Office user 1), three `activity_logs` rows (2 × `business_document.reviewed`, 1 × `business.approved`), a re-sync of the 25 category modules, and the `restaurant_wallets` row (₱0) created by `RestaurantWalletService::ensureForBusiness()` on the approved `saved` event.
+- **Normalized profile rows** — `business_profiles` and `restaurant_profiles` populated through the existing `BusinessProfile` / `RestaurantProfile` models. These are the canonical schema home for `welcome_message` / `about_us` / `mission` / `vision` / `featured_banner` / `theme_settings` and for `dining_style` / `average_wait_time` / `chef_message` / `restaurant_story` (the matching `businesses` columns no longer exist — see migration `2026_08_03_130335_migrate_business_data_to_normalized_tables.php`). `restaurant_settings` was created through `Business::getOrCreateRestaurantSetting()`.
+
+**Media & documents**
+
+Generated locally with the GD extension (no binary assets added to the repository):
+
+```text
+storage/app/public/businesses/logos/*.png    logo
+storage/app/public/businesses/gallery/*.png  3 gallery images
+storage/app/public/businesses/covers/*.png   cover photo
+storage/app/private/businesses/documents/*.png  Barangay Business Permit + DTI Registration Certificate
+```
+
+**Local API transport notes (dev environment)**
+
+- Laravel does not parse `multipart/form-data` bodies on `PUT`. The frontend therefore sends `POST` + `_method=PUT` (`frontend/src/shared/services/api.ts`), and JSON bodies must be written to a file when sent from the Windows shell — `--data-raw "{...}"` is mangled by PowerShell's native-argument quoting (embedded double quotes are stripped), which silently produces an empty request body and a `422` on the API side. This cost several misleading "success" responses during verification.
+- `businesses` has **no** `dining_style` / `average_wait_time` / `special_offers` columns even though `Business::$fillable` still lists them; writing them raises `Unknown column`. `BusinessRegistrationController::store()` (the un-routed legacy web path) still assigns them and would fail if re-enabled — see *Known deferred*.
+
+**Tests added**
+
+- None. This phase changed no application code — it is a local development data seed verified against the live schema.
+
+**Verified checkpoint**
+
+```text
+Laravel:  642 passed / 3,405 assertions / 0 failures / 2 skipped
+          2 skipped = known SQLite-only skips (Haversine SQL in RepositoryTest;
+          HAVING on non-aggregate queries in TouristApiTest) — the 5 historical
+          GD skips now pass because the GD extension is enabled in this environment
+Socket JS: 52/52 passed (tests/js/** — no socket files touched)
+Frontend:  not run — no frontend files changed
+Database:  verified against the live `track_tour_db` schema; no DDL applied
+```
+
+**Runtime verification**
+
+- `GET /api/business-owner/businesses` → the listing is present, `status = approved`, category Restaurant.
+- `GET /api/business-owner/businesses/2` → 4 media, 2 documents (`verified`), all 9 detail keys present.
+- `GET /api/map/businesses` (public landing map) → the business appears with coordinates, cover photo, gallery images and its 25 `module_codes`.
+- `GET /api/tourist/explore/2` → 200 (public tourist browse).
+- Schedule logic confirmed: `open_status` = "Opens tomorrow at 8:00 AM" at 22:12 Manila time (closing time 22:00) — `isOpenNow()` / `isWithinScheduleNow()` resolve `business_hours` correctly.
+
+**Architectural decisions**
+
+- The business was created through the real API rather than direct SQL so that module sync, EAV detail encoding (`json_encode` for multi-value fields), private-disk document storage, media sort order, the OCR/manual consistency flag check and the approval side effects are all exercised exactly as in production (AGENTS §19).
+- `restaurant_profiles` / `business_profiles` were written through the existing Eloquent models rather than raw inserts, keeping them consistent with the normalization migration that owns those tables.
+- The temporary Sanctum tokens used for the seeding (`tt-seed-owner`, `tt-seed-admin`) were revoked after verification.
+
+**Known deferred**
+
+- `BusinessRegistrationController::store()` assigns `dining_style`, `average_wait_time` and `special_offers` — columns that no longer exist on `businesses`. The method is **not routed** (only its read helpers `getCategoryFields`, `getCategoryDocuments`, `getDocumentRequirements`, `getBarangays` are), so it is currently dead code and cannot affect runtime behaviour. Left unchanged to avoid touching a subsystem outside this phase's scope.
+- No menu items, offerings or products were seeded — the business has no catalog yet. `signature_dishes` holds dish names via the canonical profile endpoint (the `signature_dishes` / `featured_menu_items` pivot tables expect `menu_item_id` and stay empty until a menu exists). **Superseded by the menu catalog seed below.**
+
+### Local Dev Seed — "Ekslusibo Grill and Restaurant" Menu Catalog: Complete & Verified (2026-10-22)
+
+Transcribes the restaurant's full menu card into the live catalog of the already-approved business (`businesses.id = 2`) through the canonical owner API — **15 menu groups / 85 offerings**, prices exactly as supplied.
+
+**Implementation summary**
+
+- **Menu groups** — `POST /api/business-owner/offerings/categories` → `BusinessOwnerOfferingCategoryController::store()`. 15 `offering_categories` rows for `business_id = 2`, created in card order (ids 1-15), `is_available = 1`.
+- **Menu items** — `POST /api/business-owner/menu` → `BusinessOwnerMenuManageController::store()` (`app/Http/Controllers/BusinessOwnerMenuManageController.php:28`, route `routes/api.php:326`). The canonical create route used by the frontend form (`BusinessOwnerMenuCreate.tsx`). The controller itself set `offering_type = 'menu'`, `status = 'available'` and `bestseller` from `is_featured`; `stock = 0` is the codebase's "unlimited stock" convention (`StaffMenuController.php:92`).
+- **Catalog contents**
+
+  | # | Menu group | Items | Price range |
+  |---|---|---|---|
+  | 1 | Combo Meals | 6 | ₱169 - ₱189 |
+  | 2 | Best Sellers | 2 | ₱199 - ₱1,599 |
+  | 3 | Platters | 2 | ₱1,000 - ₱1,399 |
+  | 4 | Pyesta Bilao | 6 | ₱750 - ₱1,500 |
+  | 5 | Bilao Special | 12 | ₱550 - ₱1,500 |
+  | 6 | All-Day Breakfast | 6 | ₱149 |
+  | 7 | Snacks | 5 | ₱199 |
+  | 8 | Rice | 8 | ₱25 - ₱350 |
+  | 9 | Sizzling | 6 | ₱189 - ₱279 |
+  | 10 | Sinabawan | 6 | ₱259 - ₱549 |
+  | 11 | Vegetables | 5 | ₱190 - ₱210 |
+  | 12 | Pork | 5 | ₱199 - ₱800 |
+  | 13 | Chicken | 6 | ₱170 - ₱599 |
+  | 14 | Seafoods | 5 | ₱150 - ₱350 |
+  | 15 | Beverages | 5 | ₱25 - ₱120 |
+
+  Total **85 offerings**, overall price range **₱25 - ₱1,599**.
+- **Two-price lines became two offerings** (Bilao Special, Rice). The canonical create route ignores `offering_variations` and the documented "Menu Groups Removal & Simplified Menu Creation" decision states that one menu item is one identity with one name and one price, so each paired price was created as its own offering (`Palabok (Large)` / `Palabok (Small)`, `Plain Rice (Small)` / `Plain Rice (Large)`). No `offering_variations` rows were written.
+- **Display order** — `offering_categories.sort_order` and `offerings.sort_order` are not exposed by any routed endpoint (`BusinessOwnerMenuManageController::store()`/`update()` only accept `name`, `description`, `price`, `compare_price`, `offering_category_id`, `is_available`, `stock`, `unit`), so the card order was applied through the canonical `OfferingCategory` / `Offering` models: categories 1-15, items 1-85. The tourist listing (`Tourist\FoodController::index`) orders by `bestseller desc, sort_order asc`, so the card order is what a tourist sees.
+- **Featured items** — the two "Best Sellers" dishes (`Pork/Chicken Sisig` ₱199, `Binange ng Mamay` ₱1,599) were created with `is_featured = 1` → `bestseller = 1`, so they lead the tourist listing.
+- **Profile alignment** — `businesses.signature_dishes` still held the placeholder dish names written during the business seed (none of them exist on the menu card). It was re-pointed through the canonical endpoint `PUT /api/business-owner/businesses/2/profile` to five real menu items: `Barkada Platter`, `Binange ng Mamay`, `Combilao`, `Pork/Chicken Sisig`, `Palabok (Large)`. `welcome_message` and `featured_banner` were untouched by that call.
+- **Descriptions** — only the card's own clarifying text was used (`Barkada Platter` → "Crispy Pata, Grilled Liempo, Chicken BBQ, Chicken Wings"; `Seafood Platter` → "Shrimp, Fish, Squid"). No dish descriptions were invented.
+
+**Tests added**
+
+- None. This phase changed no application code — it is a local development data seed verified against the live schema and the existing suite.
+
+**Verified checkpoint**
+
+```text
+Laravel:  642 passed / 3,405 assertions / 0 failures / 2 skipped
+          2 skipped = known SQLite-only skips (Haversine SQL in RepositoryTest;
+          HAVING on non-aggregate queries in TouristApiTest)
+Socket JS: 52/52 passed (tests/js/** — no socket files touched)
+Frontend:  not run — no frontend files changed
+Database:  verified against the live `track_tour_db` schema; no DDL applied
+```
+
+**Runtime verification**
+
+- `GET /api/tourist/food` → 200, `meta.total = 85`, 8 pages at 12 per page, `categories` = all 15 group names in card order. Page 1 leads with the two best sellers, then follows the card order.
+- `GET /api/tourist/food?category=Bilao%20Special` → 12 items (both sizes of all six dishes); `GET /api/tourist/food?search=Binange` → 1 hit; `GET /api/tourist/food/1` → 200 (`Chicken BBQ`, ₱169, category `Combo Meals`).
+- `GET /api/business-owner/menu?business_id=2` → 200, 85 items, `meta.stats = {total 85, available 85, unavailable 0, hidden 0, archived 0, featured 2}`, `meta.categories` = the 15 groups in card order, each item carrying its `category` object for the owner table.
+- Data checks: every offering has `offering_type = 'menu'`, `status = 'available'`, `is_available = 1`; `sort_order` contiguous 1-85; no offerings for any other business; the 6 repeated dish names are the intended cross-group duplicates (e.g. `Chicken BBQ` in Combo Meals ₱169, Pyesta Bilao ₱800 and Chicken ₱199).
+
+**Architectural decisions**
+
+- The catalog was created through the real owner API rather than direct SQL so that `offering_type`, `status`, `bestseller`, timestamps and validation all match what the app itself produces (AGENTS §19).
+- Paired prices were split into separate offerings instead of `offering_variations`, because no routed endpoint can create variations and the documented decision is one item = one identity + one price.
+- The obsolete normalized tables (`menus`, `menu_items`, `signature_dishes` pivot, `featured_menu_items` pivot) were deliberately left empty — no application code reads them; the live catalog is `offerings` + `offering_categories`.
+- The temporary Sanctum tokens used for the seed and verification (`tt-menu-seed`, `tt-menu-verify`, `tt-menu-verify2`, `tt-mv3`, `tt-sig-seed`) were revoked after verification.
+
+**Known deferred / needs confirmation**
+
+- **Rice size labels are provisional.** The card shows two prices per rice line (₱25/₱250, ₱30/₱300, ₱35/₱350) with **no labels**. They were created as `(Small)` / `(Large)` with the description "… size label pending confirmation with the restaurant." Confirm the real labels (e.g. per-serving vs family pack) and rename the eight rice offerings.
+- **Bilao Special size labels still need confirmation.** `Large` / `Small` were read off the card image; the same pending-confirmation note is on those twelve descriptions.
+- **Group name spelling.** "Pyesta Bilao" was transcribed exactly as supplied — confirm whether the intended name is "Fiesta Bilao".
+- **Slash dishes kept verbatim.** "Pansit Canton / Canton Bihon", "Miki / Bihon" and "Sotanghon / Canton" were each kept as one offering per size with the card's slash in the name, because the card presents them as one line with one price pair. Split them into separate dishes if the restaurant treats them as distinct dishes.
+- **No item photos and no dish descriptions** — no dish images were supplied and none were invented; both can be added through `POST /api/business-owner/menu` (multipart) and `PUT /api/business-owner/menu/{id}`.
+- **`preparation_time` cannot be set through the routed menu API** — `BusinessOwnerMenuManageController::store()` omits it from its validation rules, so it is silently dropped. Not set here (no prep times were supplied, and `restaurant_settings.auto_preparation_prediction_enabled = 0`).
+- **`BusinessResource` does not expose `featured_banner`** even though the column holds the cover-photo path — a pre-existing resource gap, out of scope for this phase.
+
 ### 🚧 In Progress / Planned
 
 - **P12.5 — Restaurant Wallet Foundation Backfill** (planned, next small phase) — one-time idempotent `wallets:backfill` Artisan command: approved restaurants missing a wallet → `RestaurantWalletService::ensureForBusiness()` → one ₱0 wallet each, no transactions, no funds, no DDL. 5 tests; guards the `delivered-but-unsettled → rider busy → no ping` failure class (rider 14 / delivery #3, 2026-09-23). Plan: `docs/current-status/wallet-backfill-plan.md`
