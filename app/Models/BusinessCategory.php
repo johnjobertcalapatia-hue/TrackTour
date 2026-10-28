@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\DiscoveryGroup;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
@@ -50,6 +51,96 @@ class BusinessCategory extends Model
     public function scopeNotArchived($query)
     {
         return $query->whereNull('archived_at');
+    }
+
+    /**
+     * Restrict categories to a canonical tourist-facing discovery group.
+     *
+     * SQL is kept deliberately in sync with DiscoveryGroup::fromCategoryName().
+     * Dining excludes combined hotel/restaurant categories, and Spot excludes
+     * accommodation names so "Beach Resort" is never treated as an attraction.
+     */
+    public function scopeInDiscoveryGroup($query, DiscoveryGroup $group)
+    {
+        return match ($group) {
+            DiscoveryGroup::Spot => $query
+                ->where(function ($q) {
+                    $this->applyCategoryPatterns($q, [
+                        '%attraction%',
+                        '%tourism%',
+                        '%nature%',
+                        '%beach%',
+                        '%park%',
+                        '%historical%',
+                        '%cultural%',
+                        '%adventure%',
+                        '%viewpoint%',
+                        '%tourist spot%',
+                        '%destination%',
+                        '%museum%',
+                    ]);
+                })
+                ->whereRaw('LOWER(name) NOT LIKE ?', ['%resort%'])
+                ->whereRaw('LOWER(name) NOT LIKE ?', ['%hotel%'])
+                ->whereRaw('LOWER(name) NOT LIKE ?', ['%inn%'])
+                ->whereRaw('LOWER(name) NOT LIKE ?', ['%homestay%'])
+                ->whereRaw('LOWER(name) NOT LIKE ?', ['%lodging%'])
+                ->whereRaw('LOWER(name) NOT LIKE ?', ['%motel%'])
+                ->whereRaw('LOWER(name) NOT LIKE ?', ['%apartel%']),
+
+            DiscoveryGroup::Dining => $query
+                ->where(function ($q) {
+                    $this->applyCategoryPatterns($q, [
+                        '%restaurant%',
+                        '%café%',
+                        '%cafe%',
+                        '%food%',
+                        '%bakery%',
+                        '%carinderia%',
+                    ]);
+
+                    $q->orWhereRaw('LOWER(name) = ?', ['bar']);
+                })
+                ->whereRaw('LOWER(name) NOT LIKE ?', ['%hotel%'])
+                ->whereRaw('LOWER(name) NOT LIKE ?', ['%resort%']),
+
+            DiscoveryGroup::Accommodation => $query
+                ->where(function ($q) {
+                    $this->applyCategoryPatterns($q, [
+                        '%hotel%',
+                        '%resort%',
+                        '%homestay%',
+                        '%camping%',
+                        '%inn%',
+                        '%lodging%',
+                        '%stay%',
+                        '%apartel%',
+                        '%motel%',
+                    ]);
+                }),
+
+            DiscoveryGroup::Other => $query
+                ->whereNot(function ($q) {
+                    $q->where(function ($q) {
+                        $q->inDiscoveryGroup(DiscoveryGroup::Spot);
+                    })->orWhere(function ($q) {
+                        $q->inDiscoveryGroup(DiscoveryGroup::Dining);
+                    })->orWhere(function ($q) {
+                        $q->inDiscoveryGroup(DiscoveryGroup::Accommodation);
+                    });
+                }),
+        };
+    }
+
+    private function applyCategoryPatterns($query, array $patterns): void
+    {
+        foreach ($patterns as $index => $pattern) {
+            if ($index === 0) {
+                $query->whereRaw('LOWER(name) LIKE ?', [$pattern]);
+            } else {
+                $query->orWhereRaw('LOWER(name) LIKE ?', [$pattern]);
+            }
+        }
     }
 
     public function archive(): void

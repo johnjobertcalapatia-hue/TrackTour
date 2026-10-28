@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\TourismOffice;
 
+use App\Enums\DiscoveryGroup;
 use App\Http\Controllers\Controller;
 use App\Models\Business;
 use App\Models\TourismSetting;
@@ -33,17 +34,6 @@ class LandingContentController extends Controller
         ['title' => 'Mt. Halcon', 'location' => 'Baco', 'rating' => 4.7, 'category' => 'Adventure'],
         ['title' => 'Bulalacao Beaches', 'location' => 'Bulalacao', 'rating' => 4.5, 'category' => 'Beach'],
         ['title' => 'Mangyan Village', 'location' => 'Oriental Mindoro', 'rating' => 4.3, 'category' => 'Culture'],
-    ];
-
-    /**
-     * Landing filter-tab membership by business category name. A combined
-     * hotel/restaurant is listed under both Food and Resorts; anything not
-     * matched here falls back to the Businesses tab.
-     */
-    private const CARD_TABS_BY_CATEGORY = [
-        'spot' => ['tourist attraction', 'nature', 'beach', 'park', 'historical'],
-        'food' => ['restaurant', 'café', 'cafe', 'food hub', 'food hub / food park', 'bakery', 'fast food', 'food', 'hotel & restaurant combination'],
-        'resort' => ['hotel', 'resort', 'hotel & restaurant combination', 'homestay', 'camping site'],
     ];
 
     /**
@@ -110,33 +100,25 @@ class LandingContentController extends Controller
     private function businessCard(Business $business): array
     {
         $categoryName = $business->category?->name;
-        $types = $this->cardTabs($categoryName);
+        $group = DiscoveryGroup::fromCategoryName($categoryName);
+        $type = match ($group) {
+            DiscoveryGroup::Spot => 'spot',
+            DiscoveryGroup::Dining => 'food',
+            DiscoveryGroup::Accommodation => 'resort',
+            DiscoveryGroup::Other => 'business',
+        };
         $details = $business->details->mapWithKeys(fn ($detail) => [$detail->field_name => $detail->field_value]);
         $rating = (float) ($business->average_rating ?? 0);
 
         return [
             'key' => 'biz-'.$business->id,
-            'types' => $types,
+            'types' => [$type],
             'title' => $business->business_name,
             'location' => $business->municipality?->name ?: $business->address,
-            'category' => (($types[0] === 'spot' ? ($details['attraction_type'] ?? null) : null) ?: $categoryName ?: 'Business'),
+            'category' => (($type === 'spot' ? ($details['attraction_type'] ?? null) : null) ?: $categoryName ?: 'Business'),
             'rating' => $rating > 0 ? round($rating, 1) : null,
             'image' => $business->cover_photo ?: $business->media->first()?->file_path,
         ];
-    }
-
-    private function cardTabs(?string $categoryName): array
-    {
-        $normalized = mb_strtolower(trim((string) $categoryName));
-        $tabs = [];
-
-        foreach (self::CARD_TABS_BY_CATEGORY as $tab => $categoryNames) {
-            if (in_array($normalized, $categoryNames, true)) {
-                $tabs[] = $tab;
-            }
-        }
-
-        return $tabs ?: ['business'];
     }
 
     /**

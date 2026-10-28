@@ -147,7 +147,9 @@ class LandingCardsTest extends TestCase
         $this->assertSame(['resort'], $typesByTitle['Resort Store']);
         $this->assertSame(['spot'], $typesByTitle['Tourist Attraction Store']);
         $this->assertSame(['business'], $typesByTitle['Souvenir Shop Store']);
-        $this->assertEqualsCanonicalizing(['food', 'resort'], $typesByTitle['Seaside Inn']);
+        // Discovery Group rule: a combined hotel/restaurant is accommodation,
+        // not food — single membership (supersedes the old multi-tab behavior).
+        $this->assertSame(['resort'], $typesByTitle['Seaside Inn']);
     }
 
     public function test_destination_category_badge_uses_the_attraction_type_detail(): void

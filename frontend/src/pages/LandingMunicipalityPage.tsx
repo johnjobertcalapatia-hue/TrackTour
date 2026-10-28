@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { get } from '@/shared/services/api'
 import { ApplicationLogo } from '@/shared/components/ApplicationLogo'
 import { categoryName, formatCurrency, safeText, toAssetUrl } from '@/shared/utils'
+import { getDiscoveryGroup } from '@/shared/utils/category'
 import { Star, MapPin, ArrowLeft, Compass } from 'lucide-react'
 
 interface BizCategory {
@@ -52,8 +53,6 @@ interface MunicipalityResponse {
   }
 }
 
-const RESTAURANT_CATEGORIES = ['restaurant', 'café', 'cafe', 'food hub', 'hotel & restaurant combination']
-const RESORT_CATEGORIES = ['resort', 'hotel', 'homestay', 'camping site', 'farm tourism']
 const EMOJI_FOOD = '🍴'
 const EMOJI_STAY = '🏨'
 const EMOJI_PLACE = '📍'
@@ -133,14 +132,13 @@ export default function LandingMunicipalityPage() {
   const businesses = data?.businesses?.data ?? []
   const destinations = (destData?.data ?? []).filter((d) => d.id && d.name)
 
-  const categoryOf = (b: Biz) => categoryName(b.category).toLowerCase()
-  const restaurants = businesses.filter((b) => RESTAURANT_CATEGORIES.includes(categoryOf(b)))
-  const resorts = businesses.filter(
-    (b) => !RESTAURANT_CATEGORIES.includes(categoryOf(b)) && RESORT_CATEGORIES.includes(categoryOf(b))
-  )
-  const others = businesses.filter(
-    (b) => !RESTAURANT_CATEGORIES.includes(categoryOf(b)) && !RESORT_CATEGORIES.includes(categoryOf(b))
-  )
+  const groupOf = (b: Biz) => getDiscoveryGroup(categoryName(b.category), b.category?.id)
+  const restaurants = businesses.filter((b) => groupOf(b) === 'dining')
+  const resorts = businesses.filter((b) => groupOf(b) === 'accommodation')
+  const others = businesses.filter((b) => {
+    const group = groupOf(b)
+    return group !== 'dining' && group !== 'accommodation'
+  })
 
   const businessCover = (b: Biz) => (b.cover_photo ? toAssetUrl(b.cover_photo) : null)
   const businessLocation = (b: Biz) => b.address || safeText(b.municipality) || 'Oriental Mindoro'
@@ -148,9 +146,7 @@ export default function LandingMunicipalityPage() {
   const businessRank = (b: Biz) => (b.average_rating ?? 0) > 0 ? Number(b.average_rating) : null
 
   const openBiz = (b: Biz) =>
-    navigate(
-      RESTAURANT_CATEGORIES.includes(categoryOf(b)) ? `/explore/food/${b.id}` : `/tourist/explore/${b.id}`
-    )
+    navigate(groupOf(b) === 'dining' ? `/explore/food/${b.id}` : `/tourist/explore/${b.id}`)
 
   const toRestaurantCards = (list: Biz[], emoji: string): CardItem[] =>
     list.map((b) => ({

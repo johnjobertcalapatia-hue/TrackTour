@@ -1,11 +1,17 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { get, post } from '@/shared/services/api'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { formatCurrency, formatDateTime, isNewItem, categoryName, toAssetUrl } from '@/shared/utils'
-import { ArrowLeft, Star, MapPin, Phone, Clock, Heart, UtensilsCrossed, Plus, Minus, ShoppingCart, X } from 'lucide-react'
+import { getDiscoveryGroup, type DiscoveryGroup } from '@/shared/utils/category'
+import { recordBrowsedPlace } from '@/shared/services/browsing-history'
+import {
+  ArrowLeft, Star, MapPin, Phone, Clock, Heart, UtensilsCrossed, Plus, Minus,
+  ShoppingCart, X, Share2, Navigation, Ticket, Camera, Video, Compass,
+  Building2, CheckCircle2, Mail, ExternalLink
+} from 'lucide-react'
 
 interface Variation {
   id: number
@@ -38,16 +44,28 @@ interface CartItem {
   variation?: string
 }
 
+interface MediaItem {
+  id: number
+  type: string
+  file_path: string
+  title?: string | null
+  caption?: string | null
+}
+
 interface BusinessDetail {
   id: number
   name: string
   business_name?: string
   description: string
   business_description?: string
+  tagline?: string | null
   category: unknown
+  business_category_id?: number
   municipality: { name: string } | null
   barangay: { name: string } | null
   address: string
+  latitude: number | null
+  longitude: number | null
   phone: string
   contact_number?: string
   email: string
@@ -60,8 +78,14 @@ interface BusinessDetail {
   opening_time: string | null
   closing_time: string | null
   is_favorited: boolean
-  menu_items: MenuItem[]
-  reviews: { id: number; user_name: string; rating: number; comment: string; created_at: string }[]
+  price_range?: string | null
+  facilities?: string[] | null
+  services?: string[] | null
+  category_details?: Record<string, any>
+  details?: { field_name: string; field_value: string }[] | Record<string, any>
+  media?: MediaItem[]
+  menu_items?: MenuItem[]
+  reviews?: { id: number; user_name: string; rating: number; comment: string; created_at: string }[]
 }
 
 interface BusinessDetailResponse {
@@ -71,6 +95,7 @@ interface BusinessDetailResponse {
   reviewsCount?: number
   promotions?: { id: number; name: string; description?: string; type?: string; value?: string }[]
   menu_items?: MenuItem[]
+  gallery?: MediaItem[]
 }
 
 function getCart(): CartItem[] {
@@ -101,7 +126,6 @@ function FoodDetailModal({ item, business, onClose, onAdd, accepting }: {
     <div className="fixed inset-0 z-[3000] flex items-end sm:items-center justify-center">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div className="relative bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl max-h-[90vh] overflow-y-auto z-10">
-        {/* Image */}
         <div className="relative h-56 sm:h-64">
           {item.image ? (
             <img src={toAssetUrl(item.image)} alt={item.name} className="w-full h-full object-cover" />
@@ -129,12 +153,10 @@ function FoodDetailModal({ item, business, onClose, onAdd, accepting }: {
         </div>
 
         <div className="p-5 space-y-5">
-          {/* Description */}
           {item.description && (
             <p className="text-sm text-[#6B7280] leading-relaxed">{item.description}</p>
           )}
 
-          {/* Variations */}
           {item.has_variations && variations.length > 0 && (
             <div>
               <p className="text-sm font-semibold text-[#17201B] mb-3">Choose a variation</p>
@@ -157,7 +179,6 @@ function FoodDetailModal({ item, business, onClose, onAdd, accepting }: {
             </div>
           )}
 
-          {/* Quantity */}
           <div>
             <p className="text-sm font-semibold text-[#17201B] mb-3">Quantity</p>
             <div className="flex items-center gap-4">
@@ -171,7 +192,6 @@ function FoodDetailModal({ item, business, onClose, onAdd, accepting }: {
             </div>
           </div>
 
-          {/* Add to Cart */}
           <button
             onClick={() => { onAdd(item, qty, selectedVariation ?? undefined); onClose() }}
             disabled={!accepting}
@@ -192,6 +212,8 @@ export default function TouristExploreShow() {
   const queryClient = useQueryClient()
   const [cart, setCart] = useState<CartItem[]>(getCart)
   const [detailItem, setDetailItem] = useState<MenuItem | null>(null)
+  const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null)
+  const [shareSuccess, setShareSuccess] = useState(false)
 
   useEffect(() => {
     const sync = () => setCart(getCart())
@@ -208,6 +230,38 @@ export default function TouristExploreShow() {
     mutationFn: () => post('/tourist/favorites/toggle', { business_id: Number(id) }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tourist-explore', id] }),
   })
+
+  // Record browsing history when place data loads
+  useEffect(() => {
+    if (data?.business) {
+      const b = data.business
+      const rawCat = categoryName(b.category)
+      const group: DiscoveryGroup = getDiscoveryGroup(rawCat, b.business_category_id)
+      recordBrowsedPlace({
+        id: b.id,
+        name: b.name || b.business_name || '',
+        category: rawCat,
+        discoveryGroup: group,
+        cover_photo: b.cover_photo,
+        logo: b.logo,
+        municipality: b.municipality?.name || b.address || 'Bansud, Oriental Mindoro',
+        rating: data.avgRating ?? b.rating ?? null,
+        url: `/tourist/explore/${b.id}`,
+      })
+    }
+  }, [data?.business, data?.avgRating])
+
+  const handleShare = () => {
+    const url = window.location.href
+    const title = data?.business?.name || 'TrackTour Destination'
+    if (navigator.share) {
+      navigator.share({ title, url }).catch(() => {})
+    } else if (navigator.clipboard) {
+      navigator.clipboard.writeText(url)
+      setShareSuccess(true)
+      setTimeout(() => setShareSuccess(false), 2500)
+    }
+  }
 
   const addToCart = (item: MenuItem, qty = 1, variation?: Variation) => {
     const current = getCart()
@@ -242,154 +296,405 @@ export default function TouristExploreShow() {
   }
 
   const getItemQty = (itemId: number) => cart.filter((c) => c.id === itemId).reduce((s, c) => s + c.quantity, 0)
-
   const cartCount = cart.reduce((s, c) => s + c.quantity, 0)
   const cartTotal = cart.reduce((s, c) => s + c.price * c.quantity, 0)
 
-  if (isLoading) return <DashboardSkeleton />
-  if (!data?.business) return <div className="text-center py-20 text-[#6B7280]">Business not found.</div>
+  const business = data?.business
+  const detailsMap = useMemo(() => {
+    if (!business) return {} as Record<string, any>
+    if (business.category_details) return business.category_details
+    if (Array.isArray(business.details)) {
+      return business.details.reduce((acc, curr) => {
+        acc[curr.field_name] = curr.field_value
+        return acc
+      }, {} as Record<string, any>)
+    }
+    return (business.details as Record<string, any>) || {}
+  }, [business])
 
-  const business = data.business
+  const allMedia = useMemo(() => {
+    const list: MediaItem[] = []
+    if (!business) return list
+    if (Array.isArray(data?.gallery)) list.push(...data.gallery)
+    if (Array.isArray(business.media)) {
+      business.media.forEach((m) => {
+        if (!list.some((existing) => existing.file_path === m.file_path)) {
+          list.push(m)
+        }
+      })
+    }
+    return list
+  }, [data?.gallery, business])
+
+  if (isLoading) return <DashboardSkeleton />
+  if (!business) return <div className="text-center py-20 text-[#6B7280]">Business not found.</div>
+
+  const catLabel = categoryName(business.category)
+  const discoveryGroup: DiscoveryGroup = getDiscoveryGroup(catLabel, business.business_category_id)
+  const isSpot = discoveryGroup === 'spot'
+  const isAccommodation = discoveryGroup === 'accommodation'
+
   const accepting = business.is_accepting_orders ?? business.is_open
   const bizName = business.name || business.business_name || ''
   const bizCover = business.cover_photo ? toAssetUrl(business.cover_photo) : ''
   const bizLogo = business.logo ? toAssetUrl(business.logo) : ''
   const description = business.description || business.business_description || ''
   const phone = business.phone || business.contact_number || ''
-  const reviews = data.reviews ?? business.reviews ?? []
-  const avgRating = data.avgRating ?? business.rating ?? 0
-  const promotions = data.promotions ?? business.promotions ?? []
+  const reviews = data?.reviews ?? business.reviews ?? []
+  const avgRating = data?.avgRating ?? business.rating ?? 0
+  const promotions = data?.promotions ?? []
+  const menuItems = business.menu_items?.length ? business.menu_items : (data?.menu_items ?? [])
 
-  const menuItems = business.menu_items?.length ? business.menu_items : (data.menu_items ?? [])
+  const photos = allMedia.filter((m) => !m.file_path.endsWith('.mp4') && !m.file_path.endsWith('.mov') && m.type !== 'Promotional Video')
+  const videos = allMedia.filter((m) => m.file_path.endsWith('.mp4') || m.file_path.endsWith('.mov') || m.type === 'Promotional Video')
+
+  const entranceFee = detailsMap.entrance_fee
+  const attractionType = detailsMap.attraction_type
+  const activities = detailsMap.activities
+  const visitDuration = detailsMap.estimated_visit_duration
+  const guidedTour = detailsMap.guided_tour_available
+
+  const hasCoords = Boolean(business.latitude && business.longitude)
+  const directionsUrl = hasCoords
+    ? `https://www.google.com/maps/dir/?api=1&destination=${business.latitude},${business.longitude}`
+    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(bizName + ' Bansud')}`
 
   return (
-    <div className="pb-24">
-      <button onClick={() => navigate(-1)} className="inline-flex items-center gap-2 text-sm text-[#6B7280] hover:text-[#17201B] mb-6 transition">
-        <ArrowLeft className="w-4 h-4" /> Back
-      </button>
+    <div className="pb-24 max-w-6xl mx-auto px-4 sm:px-6">
+      {/* Navigation header */}
+      <div className="flex items-center justify-between mb-6 pt-2">
+        <button onClick={() => navigate(-1)} className="inline-flex items-center gap-2 text-sm font-medium text-[#6B7280] hover:text-[#17201B] transition">
+          <ArrowLeft className="w-4 h-4" /> Back
+        </button>
+        {shareSuccess && (
+          <span className="text-xs bg-[#E9F7EF] text-[#087F3F] px-3 py-1 rounded-full font-semibold animate-fade-in">
+            Link copied to clipboard!
+          </span>
+        )}
+      </div>
 
-      <div className="relative rounded-2xl overflow-hidden mb-6 h-48 sm:h-64">
+      {/* Hero Banner */}
+      <div className="relative rounded-3xl overflow-hidden mb-6 h-56 sm:h-72 lg:h-80 shadow-md">
         {bizCover ? (
           <img src={bizCover} alt={bizName} className="w-full h-full object-cover" />
         ) : (
-          <div className="w-full h-full bg-gradient-to-br from-[#087F3F] to-[#17201B]" />
+          <div className="w-full h-full bg-gradient-to-br from-[#087F3F] via-[#056B35] to-[#17201B] flex items-center justify-center">
+            <Compass className="w-16 h-16 text-white/30" />
+          </div>
         )}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent" />
+
         {bizLogo && (
-          <div className="absolute bottom-4 left-4 w-16 h-16 sm:w-20 sm:h-20 rounded-2xl overflow-hidden ring-4 ring-white/80 shadow-lg bg-white">
+          <div className="absolute bottom-5 left-5 w-16 h-16 sm:w-20 sm:h-20 rounded-2xl overflow-hidden ring-4 ring-white/90 shadow-lg bg-white">
             <img src={bizLogo} alt={bizName} className="w-full h-full object-cover" />
           </div>
         )}
-        <div className={`absolute bottom-4 left-4 right-4 flex items-end justify-between ${bizLogo ? 'pl-20 sm:pl-24' : ''}`}>
-          <div>
-            <h1 className="text-2xl lg:text-3xl font-bold text-white">{bizName}</h1>
-            <p className="text-sm text-gray-200 mt-1">{categoryName(business.category)}</p>
+
+        <div className={`absolute bottom-5 left-5 right-5 flex items-end justify-between ${bizLogo ? 'pl-20 sm:pl-24' : ''}`}>
+          <div className="text-white">
+            <span className="inline-block px-2.5 py-0.5 rounded-full bg-white/20 backdrop-blur-md text-[11px] font-semibold text-emerald-200 border border-white/20 mb-1.5">
+              {isSpot ? 'Tourist Spot' : isAccommodation ? 'Accommodation' : catLabel || 'Business'}
+            </span>
+            <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold text-white drop-shadow-sm leading-tight">
+              {bizName}
+            </h1>
+            <p className="text-xs sm:text-sm text-gray-200 mt-1 flex items-center gap-1.5">
+              <MapPin className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+              {[business.barangay?.name, business.municipality?.name].filter(Boolean).join(', ') || 'Bansud, Oriental Mindoro'}
+            </p>
           </div>
-          <button
-            onClick={() => favoriteMutation.mutate()}
-            className="w-10 h-10 bg-white/20 backdrop-blur-sm rounded-full flex items-center justify-center transition hover:bg-white/30"
-          >
-            <Heart className={`w-5 h-5 ${business.is_favorited ? 'fill-red-500 text-red-500' : 'text-white'}`} />
-          </button>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={handleShare}
+              title="Share destination"
+              className="w-10 h-10 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center text-white hover:bg-white/30 transition shadow-sm"
+            >
+              <Share2 className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => favoriteMutation.mutate()}
+              title="Save to favorites"
+              className="w-10 h-10 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center transition hover:bg-white/30 shadow-sm"
+            >
+              <Heart className={`w-5 h-5 ${business.is_favorited ? 'fill-red-500 text-red-500' : 'text-white'}`} />
+            </button>
+          </div>
         </div>
       </div>
 
+      {/* Main Content Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left Column (2 cols) */}
         <div className="lg:col-span-2 space-y-6">
-          <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6">
-            <h2 className="text-lg font-semibold text-[#17201B] mb-3">About</h2>
-            <p className="text-sm text-[#6B7280] leading-relaxed">{description || 'No description available yet.'}</p>
+          {/* About / Description */}
+          <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6 shadow-sm">
+            <h2 className="text-lg font-bold text-[#17201B] mb-3">
+              {isSpot ? 'About & History' : 'About'}
+            </h2>
+            <p className="text-sm text-[#4B5563] leading-relaxed whitespace-pre-line">
+              {description || 'Discover and explore this wonderful place in Bansud, Oriental Mindoro.'}
+            </p>
+
+            {isSpot && attractionType && (
+              <div className="mt-4 pt-4 border-t border-[#EFF3F0] flex items-center gap-2">
+                <span className="text-xs font-semibold text-[#68736D]">Type of Attraction:</span>
+                <span className="px-2.5 py-1 rounded-full bg-[#E9F7EF] text-[#087F3F] text-xs font-medium">
+                  {attractionType}
+                </span>
+              </div>
+            )}
           </div>
 
+          {/* Activities & Natural Features (For Tourist Spots) */}
+          {isSpot && (activities || visitDuration || guidedTour) && (
+            <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6 shadow-sm">
+              <h2 className="text-lg font-bold text-[#17201B] mb-3">Activities &amp; Highlights</h2>
+              {activities && (
+                <p className="text-sm text-[#4B5563] leading-relaxed">{activities}</p>
+              )}
+              <div className="mt-4 flex flex-wrap gap-3">
+                {visitDuration && (
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#F8FAF9] border border-[#E5E9E7] text-xs text-[#17201B]">
+                    <Clock className="w-4 h-4 text-[#087F3F]" />
+                    <span>Est. Visit: <strong>{visitDuration}</strong></span>
+                  </div>
+                )}
+                {guidedTour && (
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#E9F7EF] text-[#087F3F] text-xs font-semibold">
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Guided Tours Available</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Photos Gallery */}
+          {photos.length > 0 && (
+            <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-bold text-[#17201B] flex items-center gap-2">
+                  <Camera className="w-5 h-5 text-[#087F3F]" /> Photo Gallery
+                </h2>
+                <span className="text-xs text-[#68736D]">{photos.length} photo{photos.length !== 1 ? 's' : ''}</span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {photos.map((item) => (
+                  <div
+                    key={item.id}
+                    onClick={() => setSelectedPhoto(item.file_path)}
+                    className="relative aspect-[4/3] rounded-xl overflow-hidden cursor-pointer group bg-gray-100 border border-[#E5E9E7]"
+                  >
+                    <img
+                      src={toAssetUrl(item.file_path)}
+                      alt={item.title || 'Attraction gallery'}
+                      className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                    />
+                    {item.caption && (
+                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-2 text-white text-[11px] truncate">
+                        {item.caption}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Promotional Videos */}
+          {videos.length > 0 && (
+            <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6 shadow-sm">
+              <h2 className="text-lg font-bold text-[#17201B] flex items-center gap-2 mb-4">
+                <Video className="w-5 h-5 text-[#087F3F]" /> Promotional Videos
+              </h2>
+              <div className="space-y-4">
+                {videos.map((vid) => (
+                  <div key={vid.id} className="rounded-xl overflow-hidden border border-[#E5E9E7] bg-black">
+                    <video
+                      src={toAssetUrl(vid.file_path)}
+                      controls
+                      preload="metadata"
+                      className="w-full max-h-80"
+                    />
+                    {vid.title && (
+                      <div className="p-3 bg-white border-t border-[#E5E9E7]">
+                        <p className="text-sm font-semibold text-[#17201B]">{vid.title}</p>
+                        {vid.caption && <p className="text-xs text-[#68736D] mt-0.5">{vid.caption}</p>}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Promotions (if any) */}
           {promotions.length > 0 && (
-            <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6">
-              <h2 className="text-lg font-semibold text-[#17201B] mb-4">Promotions</h2>
+            <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6 shadow-sm">
+              <h2 className="text-lg font-bold text-[#17201B] mb-4">Special Offers &amp; Announcements</h2>
               <div className="space-y-3">
                 {promotions.map((p) => (
-                  <div key={p.id} className="p-4 rounded-xl bg-[#FFF7D6] border border-[#F4B400]/30">
+                  <div key={p.id} className="p-4 rounded-xl bg-[#FFF7D6] border border-[#F4B400]/40">
                     <p className="text-sm font-semibold text-[#17201B]">{p.name}</p>
-                    {p.description && <p className="text-sm text-[#6B7280] mt-1">{p.description}</p>}
+                    {p.description && <p className="text-xs text-[#6B7280] mt-1">{p.description}</p>}
                   </div>
                 ))}
               </div>
             </div>
           )}
 
-          {reviews.length > 0 && (
-            <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6">
-              <h2 className="text-lg font-semibold text-[#17201B] mb-4">Reviews</h2>
-              <div className="space-y-4">
+          {/* Visitor Reviews */}
+          <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6 shadow-sm">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-bold text-[#17201B]">Visitor Reviews</h2>
+              {avgRating > 0 && (
+                <div className="flex items-center gap-1.5 text-sm font-semibold text-[#17201B]">
+                  <Star className="w-4 h-4 text-amber-400 fill-current" />
+                  <span>{Number(avgRating).toFixed(1)}</span>
+                  <span className="text-xs text-[#9CA3AF]">({reviews.length})</span>
+                </div>
+              )}
+            </div>
+
+            {reviews.length > 0 ? (
+              <div className="space-y-3">
                 {reviews.map((r) => (
                   <div key={r.id} className="p-4 rounded-xl bg-[#F8FAF9] border border-[#E5E9E7]">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium text-[#17201B]">{r.user_name}</span>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-sm font-semibold text-[#17201B]">{r.user_name}</span>
                       <div className="flex items-center gap-1 text-amber-400 text-xs">
-                        <Star className="w-3 h-3 fill-current" /> {r.rating}
+                        <Star className="w-3.5 h-3.5 fill-current" /> {r.rating}
                       </div>
                     </div>
-                    <p className="text-sm text-[#6B7280]">{r.comment}</p>
-                    <p className="text-xs text-[#9CA3AF] mt-2">{formatDateTime(r.created_at)}</p>
+                    <p className="text-sm text-[#4B5563] leading-relaxed">{r.comment}</p>
+                    <p className="text-[11px] text-[#9CA3AF] mt-2">{formatDateTime(r.created_at)}</p>
                   </div>
                 ))}
               </div>
-            </div>
-          )}
+            ) : (
+              <p className="text-sm text-[#68736D] text-center py-6">
+                No visitor reviews yet. Be the first to share your experience!
+              </p>
+            )}
+          </div>
         </div>
 
-        <div className="space-y-4">
-          <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6 space-y-4">
-            <div className="flex items-center gap-2">
-              <StatusBadge status={business.status} size="md" />
-              <span className={`text-sm font-medium ${accepting ? 'text-[#087F3F]' : 'text-[#B91C1C]'}`}>
-                {accepting ? 'Open Now' : 'Closed'}
-              </span>
-            </div>
+        {/* Right Sidebar Column */}
+        <div className="space-y-5">
+          {/* Main Info Card */}
+          <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6 space-y-4 shadow-sm">
+            <h3 className="font-bold text-[#17201B] text-base border-b border-[#EFF3F0] pb-3">
+              {isSpot ? 'Visitor Information' : isAccommodation ? 'Property Details' : 'Business Information'}
+            </h3>
 
-            {!accepting && (
+            {/* Operating status ONLY for dining */}
+            {!isSpot && (
+              <div className="flex items-center gap-2">
+                <StatusBadge status={business.status} size="md" />
+                <span className={`text-sm font-medium ${accepting ? 'text-[#087F3F]' : 'text-[#B91C1C]'}`}>
+                  {accepting ? 'Open Now' : 'Closed'}
+                </span>
+              </div>
+            )}
+
+            {!isSpot && !accepting && (
               <div className="rounded-xl border border-[#B91C1C]/20 bg-[#FEE2E2]/80 px-3 py-2.5">
-                <p className="text-xs font-semibold text-[#B91C1C]">This restaurant is currently closed and not accepting orders.</p>
+                <p className="text-xs font-semibold text-[#B91C1C]">This business is currently closed and not accepting orders.</p>
               </div>
             )}
 
-            {avgRating > 0 && (
-              <div className="flex items-center gap-2 text-sm text-[#6B7280]">
-                <Star className="w-4 h-4 text-amber-400 fill-current" /> {Number(avgRating).toFixed(1)} rating
+            {/* Verified Entrance Fee (Attractions) */}
+            {isSpot && entranceFee && (
+              <div className="flex items-center gap-3 text-sm text-[#17201B] bg-[#E9F7EF] p-3 rounded-xl">
+                <Ticket className="w-5 h-5 text-[#087F3F] shrink-0" />
+                <div>
+                  <p className="text-xs text-[#087F3F] font-semibold">Entrance Fee</p>
+                  <p className="font-bold">{entranceFee}</p>
+                </div>
               </div>
             )}
 
-            <div className="flex items-start gap-2 text-sm text-[#6B7280]">
-              <MapPin className="w-4 h-4 text-[#9CA3AF] mt-0.5 shrink-0" />
+            {/* Price Range */}
+            {business.price_range && !isSpot && (
+              <div className="text-sm text-[#4B5563]">
+                <span className="font-semibold text-[#17201B]">Price Range:</span> {business.price_range}
+              </div>
+            )}
+
+            {/* Verified Visiting / Operating Hours */}
+            {business.opening_time && business.closing_time && (
+              <div className="flex items-start gap-2.5 text-sm text-[#4B5563]">
+                <Clock className="w-4 h-4 text-[#087F3F] mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-medium text-[#17201B]">{isSpot ? 'Visiting Hours' : 'Hours'}</p>
+                  <p className="text-xs text-[#68736D] mt-0.5">{business.opening_time} – {business.closing_time}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Address */}
+            <div className="flex items-start gap-2.5 text-sm text-[#4B5563]">
+              <MapPin className="w-4 h-4 text-[#087F3F] mt-0.5 shrink-0" />
               <div>
-                <p>{business.address || 'Bansud, Oriental Mindoro'}</p>
-                <p className="text-xs text-[#9CA3AF]">
+                <p className="font-medium text-[#17201B]">Location</p>
+                <p className="text-xs text-[#68736D] mt-0.5">{business.address || 'Bansud, Oriental Mindoro'}</p>
+                <p className="text-[11px] text-[#9CA3AF]">
                   {[business.barangay?.name, business.municipality?.name].filter(Boolean).join(', ') || 'Bansud, Oriental Mindoro'}
                 </p>
               </div>
             </div>
 
+            {/* Phone */}
             {phone && (
-              <div className="flex items-center gap-2 text-sm text-[#6B7280]">
-                <Phone className="w-4 h-4 text-[#9CA3AF]" /> {phone}
+              <div className="flex items-center gap-2.5 text-sm text-[#4B5563]">
+                <Phone className="w-4 h-4 text-[#087F3F] shrink-0" />
+                <span className="text-xs font-medium">{phone}</span>
               </div>
             )}
 
-            {business.opening_time && business.closing_time && (
-              <div className="flex items-center gap-2 text-sm text-[#6B7280]">
-                <Clock className="w-4 h-4 text-[#9CA3AF]" /> {business.opening_time} – {business.closing_time}
+            {/* Email */}
+            {business.email && (
+              <div className="flex items-center gap-2.5 text-sm text-[#4B5563]">
+                <Mail className="w-4 h-4 text-[#087F3F] shrink-0" />
+                <span className="text-xs font-medium truncate">{business.email}</span>
               </div>
             )}
+
+            {/* Action Button: Get Directions */}
+            <a
+              href={directionsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full flex items-center justify-center gap-2 py-3 bg-[#087F3F] hover:bg-[#056B35] text-white rounded-xl text-sm font-semibold transition shadow-sm mt-3"
+            >
+              <Navigation className="w-4 h-4" /> Get Directions
+            </a>
+
+            {/* View on interactive tourist map */}
+            <button
+              onClick={() => navigate('/tourist/explore/map')}
+              className="w-full flex items-center justify-center gap-2 py-2.5 bg-white border border-[#D7E8DB] hover:bg-[#F3F8F4] text-[#087F3F] rounded-xl text-xs font-semibold transition"
+            >
+              <Compass className="w-4 h-4" /> View on Map
+            </button>
           </div>
         </div>
       </div>
 
-      {menuItems.length > 0 && (
-        <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6 mt-8">
-          <h2 className="text-lg font-semibold text-[#17201B] mb-4">Menu</h2>
+      {/* Restaurant Menu section: ONLY RENDERED FOR DINING CATEGORY */}
+      {!isSpot && !isAccommodation && menuItems.length > 0 && (
+        <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6 mt-8 shadow-sm">
+          <h2 className="text-lg font-bold text-[#17201B] mb-4">Menu</h2>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
             {menuItems.map((item: MenuItem) => {
               const qty = getItemQty(item.id)
               return (
-                <div key={item.id} className="bg-white border border-[#E5E9E7] rounded-2xl overflow-hidden hover:shadow-lg hover:shadow-[#087F3F]/8 transition group cursor-pointer" onClick={() => item.is_available && accepting && setDetailItem(item)}>
+                <div
+                  key={item.id}
+                  className="bg-white border border-[#E5E9E7] rounded-2xl overflow-hidden hover:shadow-lg hover:shadow-[#087F3F]/8 transition group cursor-pointer"
+                  onClick={() => item.is_available && accepting && setDetailItem(item)}
+                >
                   <div className="relative aspect-[4/3] overflow-hidden">
                     {item.image ? (
                       <img src={toAssetUrl(item.image)} alt={item.name} className="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
@@ -445,9 +750,6 @@ export default function TouristExploreShow() {
                         )}
                       </div>
                     )}
-                    {item.is_available && item.has_variations && (
-                      <p className="text-[11px] text-[#6B7280] mt-1.5 text-center">Tap to view options</p>
-                    )}
                   </div>
                 </div>
               )
@@ -456,8 +758,8 @@ export default function TouristExploreShow() {
         </div>
       )}
 
-      {/* Floating Cart Bar */}
-      {cartCount > 0 && (
+      {/* Floating Cart Bar (ONLY FOR DINING) */}
+      {!isSpot && !isAccommodation && cartCount > 0 && (
         <div className="fixed bottom-0 left-0 right-0 z-[1001] bg-white border-t border-[#E5E9E7] shadow-[0_-4px_20px_rgba(0,0,0,0.08)]">
           <div className="max-w-5xl mx-auto px-6 py-3 flex items-center gap-4">
             <div className="flex items-center gap-3 flex-1 min-w-0">
@@ -482,8 +784,8 @@ export default function TouristExploreShow() {
         </div>
       )}
 
-      {/* Food Detail Modal */}
-      {detailItem && business && (
+      {/* Food Detail Modal (ONLY FOR DINING) */}
+      {!isSpot && !isAccommodation && detailItem && business && (
         <FoodDetailModal
           item={detailItem}
           business={business}
@@ -491,6 +793,24 @@ export default function TouristExploreShow() {
           onClose={() => setDetailItem(null)}
           onAdd={addToCart}
         />
+      )}
+
+      {/* Photo Lightbox Modal */}
+      {selectedPhoto && (
+        <div className="fixed inset-0 z-[3500] bg-black/90 flex items-center justify-center p-4" onClick={() => setSelectedPhoto(null)}>
+          <button
+            onClick={() => setSelectedPhoto(null)}
+            className="absolute top-4 right-4 p-2 bg-white/20 hover:bg-white/40 text-white rounded-full transition"
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <img
+            src={toAssetUrl(selectedPhoto)}
+            alt="Enlarged view"
+            className="max-w-full max-h-[85vh] object-contain rounded-xl shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
       )}
     </div>
   )

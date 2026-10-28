@@ -7,12 +7,13 @@ import { MapContainer, TileLayer, Marker, Polyline, useMap, useMapEvents } from 
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { beachPinIcon, pinIcon, userPinIcon } from '@/shared/utils/pin-icon'
-import { isTouristAttractionCategory } from '@/shared/utils/category'
+import { getDiscoveryGroup, isTouristAttractionCategory, type DiscoveryGroup } from '@/shared/utils/category'
 import {
   X,
   MapPin,
   Star,
   Navigation,
+  Compass,
   ChevronLeft,
   ChevronRight,
   Bookmark,
@@ -27,6 +28,8 @@ import {
   Van,
   Bus,
   Footprints,
+  Film,
+  Info,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -43,14 +46,16 @@ const MAP_LAYERS: Record<MapType, { url: string; attribution: string }> = {
   },
 }
 
-const MAP_CATEGORY_GROUPS: Record<string, string[]> = {
-  'Tourist Spots': ['Tourist Attraction', 'Nature', 'Beach', 'Park', 'Historical'],
-  Food: ['Restaurant', 'Food', 'Cafe', 'Bakery', 'Fast Food'],
-  Businesses: ['Hotel', 'Resort', 'Shop', 'Market', 'Pharmacy', 'Hospital'],
-  Resorts: ['Resort', 'Beach Resort', 'Mountain Resort'],
-}
+const MAP_CATEGORY_OPTIONS = ['all', 'Tourist Spots', 'Food', 'Resorts', 'Other'] as const
 
-const MAP_CATEGORY_OPTIONS = ['all', 'Tourist Spots', 'Food', 'Businesses', 'Resorts'] as const
+type PanelTab = 'Overview' | 'Menu' | 'Gallery' | 'Videos' | 'Reviews' | 'About' | 'Amenities' | 'Visitor Info'
+
+function panelTabsForGroup(group: DiscoveryGroup): PanelTab[] {
+  if (group === 'spot') return ['Overview', 'Gallery', 'Videos', 'Reviews', 'Visitor Info']
+  if (group === 'accommodation') return ['Overview', 'Amenities', 'Gallery', 'Reviews', 'About']
+  if (group === 'dining') return ['Overview', 'Menu', 'Reviews', 'About']
+  return ['Overview', 'Reviews', 'About']
+}
 
 interface Business {
   id: number
@@ -71,13 +76,15 @@ interface Business {
   logo: string | null
   cover_photo: string | null
   images?: (string | null)[]
-  media?: { file_path?: string | null; type?: string | null }[]
+  media?: { id?: number; file_path?: string | null; type?: string | null; caption?: string | null }[]
   is_open: boolean
   reviews_count: number
   reviews_avg_rating: number | null
   promotions: unknown[]
   services?: string[] | null
+  facilities?: string[] | null
   price_range?: string | null
+  category_details?: Record<string, string | null>
   menu_items?: { id: number; name: string; description?: string | null; price: number; image?: string | null; bestseller?: boolean }[]
 }
 
@@ -86,9 +93,6 @@ interface MapData {
   municipalities: { id: number; name: string }[]
   categories?: unknown[]
 }
-
-const PANEL_TABS = ['Overview', 'Menu', 'Reviews', 'About'] as const
-type PanelTab = (typeof PANEL_TABS)[number]
 
 const transportModes = [
   { key: 'motorcycle', label: 'Motorcycle', icon: Motorbike, speed: 30, baseFare: 40, includedKm: 1, perKm: 15 },
@@ -117,14 +121,14 @@ function calcFare(distanceKm: number, mode: (typeof transportModes)[number]): nu
 }
 
 function businessAction(b: Business): { label: string; to: string; icon: LucideIcon } | null {
-  const cat = b.category?.name ?? ''
-  if (['Restaurant', 'Food', 'Cafe', 'Bakery', 'Fast Food'].includes(cat))
-    return { label: 'Order Food', to: '/tourist/food', icon: UtensilsCrossed }
-  if (['Hotel', 'Resort', 'Beach Resort', 'Mountain Resort'].includes(cat))
-    return { label: 'Book / Reserve', to: '/tourist/stays', icon: Hotel }
-  if (['Tourist Attraction', 'Nature', 'Beach', 'Park', 'Historical'].includes(cat))
-    return { label: 'Explore Place', to: '/tourist/explore', icon: Navigation }
-  return { label: 'View Business', to: '/tourist/directory', icon: Building2 }
+  const group = getDiscoveryGroup(b.category?.name, b.category?.id)
+  if (group === 'dining')
+    return { label: 'Order Food', to: `/tourist/food/${b.id}`, icon: UtensilsCrossed }
+  if (group === 'accommodation')
+    return { label: 'Book / Reserve', to: `/tourist/explore/${b.id}`, icon: Hotel }
+  if (group === 'spot')
+    return { label: 'Explore Destination', to: `/tourist/explore/${b.id}`, icon: Compass }
+  return { label: 'View Business', to: `/tourist/explore/${b.id}`, icon: Building2 }
 }
 
 const CARD_WIDTH = 256
@@ -249,10 +253,13 @@ export default function TouristExploreMap() {
   const businesses = mapData?.businesses ?? []
 
   const filteredBusinesses = businesses.filter((b) => {
-    const cat = b.category?.name ?? ''
     if (categoryFilter === 'all') return true
-    const group = MAP_CATEGORY_GROUPS[categoryFilter] ?? []
-    return group.includes(cat)
+    const group = getDiscoveryGroup(b.category?.name, b.category?.id)
+    if (categoryFilter === 'Tourist Spots') return group === 'spot'
+    if (categoryFilter === 'Food') return group === 'dining'
+    if (categoryFilter === 'Resorts') return group === 'accommodation'
+    if (categoryFilter === 'Other') return group === 'other'
+    return true
   })
 
   const handleBusinessSelect = (biz: Business) => {
@@ -380,8 +387,20 @@ export default function TouristExploreMap() {
   const displayBusiness = pinned
   const panelImages = getBusinessImages(displayBusiness)
   const panelImage = panelImages[Math.min(selectedImage, panelImages.length - 1)] ?? null
+  const currentGroup: DiscoveryGroup = getDiscoveryGroup(displayBusiness?.category?.name, displayBusiness?.category?.id)
+  const availablePanelTabs = displayBusiness
+    ? panelTabsForGroup(currentGroup)
+    : (['Overview', 'Menu', 'Reviews', 'About'] as PanelTab[])
   const action = displayBusiness ? businessAction(displayBusiness) : null
   const ActionIcon = action?.icon
+  const entranceFee =
+    displayBusiness?.category_details?.['Entrance Fee'] ||
+    displayBusiness?.category_details?.entrance_fee ||
+    null
+  const visitingHours =
+    displayBusiness?.category_details?.['Daily Visiting Hours'] ||
+    displayBusiness?.category_details?.visiting_hours ||
+    null
 
   let cardStyle: React.CSSProperties = { opacity: 0 }
   if (hover) {
@@ -514,13 +533,13 @@ export default function TouristExploreMap() {
                     </div>
                     {displayBusiness.category && <p className="mt-1 text-sm text-gray-600">{displayBusiness.category.name}</p>}
 
-                    <div className="mt-3 flex gap-5 border-b border-[#E2E8E3]">
-                      {PANEL_TABS.map((t) => (
+                    <div className="mt-3 flex gap-5 border-b border-[#E2E8E3] overflow-x-auto">
+                      {availablePanelTabs.map((t) => (
                         <button
                           key={t}
                           type="button"
                           onClick={() => setPanelTab(t)}
-                          className={`py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                          className={`py-2 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
                             panelTab === t
                               ? 'border-[#087F3F] text-[#087F3F]'
                               : 'border-transparent text-gray-500 hover:text-gray-800'
@@ -595,10 +614,27 @@ export default function TouristExploreMap() {
                               <span className="text-red-600">Closed</span>
                             )}
                           </p>
-                          {displayBusiness.price_range && (
-                            <p className="flex items-center gap-2.5 text-sm text-gray-800">
-                              <Banknote className="w-4 h-4 text-[#087F3F] shrink-0" /> {displayBusiness.price_range}
-                            </p>
+                          {currentGroup === 'spot' ? (
+                            <>
+                              {visitingHours && (
+                                <p className="flex items-center gap-2.5 text-sm text-gray-800">
+                                  <Clock className="w-4 h-4 text-[#087F3F] shrink-0" />
+                                  <span>Visiting hours: {visitingHours}</span>
+                                </p>
+                              )}
+                              {entranceFee && (
+                                <p className="flex items-center gap-2.5 text-sm text-gray-800">
+                                  <Banknote className="w-4 h-4 text-[#087F3F] shrink-0" />
+                                  <span>Entrance: {entranceFee}</span>
+                                </p>
+                              )}
+                            </>
+                          ) : (
+                            displayBusiness.price_range && (
+                              <p className="flex items-center gap-2.5 text-sm text-gray-800">
+                                <Banknote className="w-4 h-4 text-[#087F3F] shrink-0" /> {displayBusiness.price_range}
+                              </p>
+                            )
                           )}
                         </div>
 
@@ -627,6 +663,137 @@ export default function TouristExploreMap() {
                           >
                             <ActionIcon className="w-4 h-4" /> {action.label}
                           </button>
+                        )}
+                      </div>
+                    )}
+
+                    {panelTab === 'Gallery' && (
+                      <div className="pt-4">
+                        {panelImages.length > 0 ? (
+                          <div className="grid grid-cols-2 gap-2">
+                            {panelImages.map((src, i) => (
+                              <img
+                                key={i}
+                                src={toAssetUrl(src)}
+                                alt=""
+                                onClick={() => setSelectedImage(i)}
+                                className={`w-full h-28 object-cover rounded-xl cursor-pointer border-2 transition-all ${
+                                  selectedImage === i ? 'border-[#087F3F] ring-2 ring-[#087F3F]/30' : 'border-transparent hover:opacity-90'
+                                }`}
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="pt-10 pb-6 text-center">
+                            <MapPin className="w-8 h-8 mx-auto text-gray-300" />
+                            <p className="mt-3 text-sm text-gray-500">No gallery photos uploaded yet.</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {panelTab === 'Videos' && (
+                      <div className="pt-4">
+                        {displayBusiness.media?.some((m) =>
+                          m.type === 'Promotional Video' ||
+                          m.type?.toLowerCase().includes('video') ||
+                          m.file_path?.endsWith('.mp4') ||
+                          m.file_path?.endsWith('.mov')
+                        ) ? (
+                          <div className="space-y-3">
+                            {displayBusiness.media
+                              .filter((m) =>
+                                m.type === 'Promotional Video' ||
+                                m.type?.toLowerCase().includes('video') ||
+                                m.file_path?.endsWith('.mp4') ||
+                                m.file_path?.endsWith('.mov')
+                              )
+                              .map((v) => (
+                                <div key={v.id ?? v.file_path} className="rounded-xl overflow-hidden border border-[#E2E8E3] bg-black">
+                                  <video
+                                    src={toAssetUrl(v.file_path ?? '')}
+                                    controls
+                                    playsInline
+                                    className="w-full max-h-48 object-contain"
+                                  />
+                                  {v.caption && <p className="p-2 text-xs text-gray-600 bg-white">{v.caption}</p>}
+                                </div>
+                              ))}
+                          </div>
+                        ) : (
+                          <div className="pt-10 pb-6 text-center">
+                            <Film className="w-8 h-8 mx-auto text-gray-300" />
+                            <p className="mt-3 text-sm text-gray-500">No promotional videos available yet.</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {panelTab === 'Visitor Info' && (
+                      <div className="pt-4 space-y-3 text-sm text-gray-800">
+                        <div className="p-3 bg-[#EAF6ED] rounded-xl flex items-start gap-2.5">
+                          <Info className="w-4 h-4 text-[#087F3F] mt-0.5 shrink-0" />
+                          <div>
+                            <p className="font-semibold text-[#17201A]">Destination Information</p>
+                            <p className="text-xs text-gray-600 mt-0.5">Entrance fees and visiting hours for this attraction.</p>
+                          </div>
+                        </div>
+                        <div className="space-y-2 border-t border-[#EFF3F0] pt-3">
+                          <div className="flex justify-between items-center py-1 border-b border-[#EFF3F0]">
+                            <span className="text-gray-500 text-xs">Entrance Fee</span>
+                            <span className="font-semibold text-gray-900">{entranceFee || 'Free / Open to public'}</span>
+                          </div>
+                          <div className="flex justify-between items-center py-1 border-b border-[#EFF3F0]">
+                            <span className="text-gray-500 text-xs">Visiting Hours</span>
+                            <span className="font-semibold text-gray-900">{visitingHours || 'Daylight hours / Open daily'}</span>
+                          </div>
+                          <div className="flex justify-between items-center py-1 border-b border-[#EFF3F0]">
+                            <span className="text-gray-500 text-xs">Municipality</span>
+                            <span className="font-semibold text-gray-900">
+                              {typeof displayBusiness.municipality === 'object'
+                                ? displayBusiness.municipality?.name
+                                : displayBusiness.municipality || 'Bansud, Oriental Mindoro'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {panelTab === 'Amenities' && (
+                      <div className="pt-4 space-y-3">
+                        {((displayBusiness.facilities && displayBusiness.facilities.length > 0) ||
+                          (displayBusiness.services && displayBusiness.services.length > 0)) ? (
+                          <>
+                            {displayBusiness.facilities && displayBusiness.facilities.length > 0 && (
+                              <div>
+                                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Facilities</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {displayBusiness.facilities.map((f) => (
+                                    <span key={f} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#EAF6ED] text-[#087F3F] text-xs font-medium">
+                                      {f}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                            {displayBusiness.services && displayBusiness.services.length > 0 && (
+                              <div className="mt-3">
+                                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Services</p>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {displayBusiness.services.map((s) => (
+                                    <span key={s} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-medium">
+                                      {s}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <div className="pt-10 pb-6 text-center">
+                            <Building2 className="w-8 h-8 mx-auto text-gray-300" />
+                            <p className="mt-3 text-sm text-gray-500">No amenities listed yet.</p>
+                          </div>
                         )}
                       </div>
                     )}

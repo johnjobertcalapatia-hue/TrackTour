@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Tourist;
 
+use App\Enums\DiscoveryGroup;
 use App\Http\Controllers\Controller;
 use App\Models\Business;
 use App\Models\TouristDestination;
@@ -48,7 +49,7 @@ class TouristDestinationController extends Controller
 
         $attractions = Business::query()
             ->where('status', 'approved')
-            ->where('business_category_id', 7)
+            ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Spot))
             ->with(['category', 'municipality', 'details', 'media'])
             ->when($search, function ($q) use ($search) {
                 $q->where(function ($query) use ($search) {
@@ -123,7 +124,7 @@ class TouristDestinationController extends Controller
 
         $attraction = Business::query()
             ->whereKey($destination)
-            ->where('business_category_id', 7)
+            ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Spot))
             ->where('status', 'approved')
             ->with(['category', 'municipality', 'barangay', 'details', 'media'])
             ->first();

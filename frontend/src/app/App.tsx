@@ -669,7 +669,7 @@ export default function App() {
               <Route path="destinations/:id" element={<TouristDestinationShow />} />
             </Route>
 
-            {/* Public browse */}
+            {/* Public browse — explore detail stays public (landing + guest browsing) */}
             <Route path="search" element={<TouristSearch />} />
             <Route path="explore" element={<TouristExplore />} />
             <Route path="explore/:id" element={<TouristExploreShow />} />

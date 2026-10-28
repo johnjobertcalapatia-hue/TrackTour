@@ -33,8 +33,13 @@ import {
   LayoutGrid,
   Search,
   ExternalLink,
+  Film,
+  Info,
   type LucideIcon,
 } from 'lucide-react'
+import { getDiscoveryGroup, type DiscoveryGroup } from '@/shared/utils/category'
+import { saveDestinationIntent } from '@/shared/services/pending-action'
+import { useAuthStore } from '@/features/auth/services/auth-store'
 
 interface MapBusiness {
   id: number
@@ -57,6 +62,8 @@ interface MapBusiness {
   facilities?: string[] | null
   created_at?: string | null
   menu_items?: MapMenuItem[]
+  category_details?: Record<string, string | null>
+  media?: { id?: number; file_path?: string | null; type?: string | null; caption?: string | null }[]
 }
 
 interface MapMenuItem {
@@ -295,41 +302,27 @@ const DEFAULT_CATEGORIES: LandingCategory[] = [
   { label: 'Resorts', color: '#7C3AED', image: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=600&q=60', tab: 'stays' },
 ]
 
-const MAP_CATEGORY_GROUPS: Record<string, string[]> = {
-  'Tourist Spots': ['Tourist Attraction'],
-  Restaurants: ['Restaurant', 'Café', 'Food Hub'],
-  Resorts: ['Resort', 'Hotel', 'Hotel & Restaurant Combination'],
-}
-
 const MAP_CATEGORY_OPTIONS = ['all', 'Tourist Spots', 'Restaurants', 'Resorts']
 
-const PANEL_TABS = ['Overview', 'Menu', 'Reviews', 'About'] as const
-type PanelTab = (typeof PANEL_TABS)[number]
+type PanelTab = 'Overview' | 'Menu' | 'Gallery' | 'Videos' | 'Reviews' | 'About' | 'Amenities' | 'Visitor Info'
 
 function businessAction(b: MapBusiness): { label: string; to: string; icon: LucideIcon } {
-  const hay = `${b.category ?? ''} ${(b.module_codes ?? []).join(' ')}`.toLowerCase()
-  if (hay.includes('restaurant') || hay.includes('caf') || hay.includes('food')) {
+  const group = getDiscoveryGroup(b.category)
+  if (group === 'dining') {
     return { label: 'Order Food', to: '/tourist/food', icon: UtensilsCrossed }
   }
-  if (hay.includes('resort') || hay.includes('hotel') || hay.includes('stay') || hay.includes('inn')) {
+  if (group === 'accommodation') {
     return { label: 'Book / Reserve', to: '/tourist/stays', icon: Hotel }
   }
-  if (
-    hay.includes('attraction') ||
-    hay.includes('tourist spot') ||
-    hay.includes('explore') ||
-    hay.includes('beach') ||
-    hay.includes('fall') ||
-    hay.includes('destination')
-  ) {
-    return { label: 'Explore Place', to: '/tourist/explore', icon: Compass }
+  if (group === 'spot') {
+    return { label: 'Explore Destination', to: `/tourist/explore/${b.id}`, icon: Compass }
   }
   return { label: 'View Business', to: '/tourist/directory', icon: Building2 }
 }
 
 function visitBusinessRoute(b: MapBusiness): string {
-  const hay = `${b.category ?? ''} ${(b.module_codes ?? []).join(' ')}`.toLowerCase()
-  if (hay.includes('restaurant') || hay.includes('caf') || hay.includes('food')) return `/explore/food/${b.id}`
+  const group = getDiscoveryGroup(b.category)
+  if (group === 'dining') return `/explore/food/${b.id}`
   return `/tourist/explore/${b.id}`
 }
 
@@ -631,6 +624,35 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
   const action = displayBusiness ? businessAction(displayBusiness) : null
   const ActionIcon = action?.icon
 
+  const { user, token } = useAuthStore()
+
+  const handleVisitBusiness = (b: MapBusiness) => {
+    // Explore detail remains publicly browsable; only gated actions (order/book) should force login.
+    navigate(visitBusinessRoute(b))
+  }
+
+  const handleGatedAction = (b: MapBusiness, to: string) => {
+    if (to.startsWith('/tourist/food') || to.startsWith('/tourist/stays') || to.startsWith('/tourist/booking')) {
+      if (!token || !user || user.role !== 'tourist') {
+        saveDestinationIntent(b.id, to)
+        navigate('/login', { state: { from: to } })
+        return
+      }
+    }
+    navigate(to)
+  }
+
+  const currentGroup: DiscoveryGroup = getDiscoveryGroup(displayBusiness?.category)
+  const availablePanelTabs: PanelTab[] = displayBusiness
+    ? currentGroup === 'spot'
+      ? ['Overview', 'Gallery', 'Videos', 'Reviews', 'Visitor Info']
+      : currentGroup === 'accommodation'
+      ? ['Overview', 'Amenities', 'Gallery', 'Reviews', 'About']
+      : currentGroup === 'dining'
+      ? ['Overview', 'Menu', 'Reviews', 'About']
+      : ['Overview', 'Reviews', 'About']
+    : ['Overview', 'Menu', 'Reviews', 'About']
+
   useEffect(() => {
     setSelectedImage(0)
     setPanelTab('Overview')
@@ -649,8 +671,12 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
   }
 
   const filteredBusinesses = businesses.filter((b) => {
-    const catOk = categoryFilter === 'all' || (MAP_CATEGORY_GROUPS[categoryFilter] ?? []).includes(b.category ?? '')
-    return catOk
+    if (categoryFilter === 'all') return true
+    const group = getDiscoveryGroup(b.category)
+    if (categoryFilter === 'Tourist Spots') return group === 'spot'
+    if (categoryFilter === 'Restaurants') return group === 'dining'
+    if (categoryFilter === 'Resorts') return group === 'accommodation'
+    return true
   })
 
   return (
@@ -834,13 +860,13 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
                       </div>
                       {displayBusiness.category && <p className="mt-1 text-sm text-gray-600">{displayBusiness.category}</p>}
 
-                      <div className="mt-3 flex gap-5 border-b border-[#E2E8E3]">
-                        {PANEL_TABS.map((t) => (
+                      <div className="mt-3 flex gap-5 border-b border-[#E2E8E3] overflow-x-auto no-scrollbar">
+                        {availablePanelTabs.map((t) => (
                           <button
                             key={t}
                             type="button"
                             onClick={() => setPanelTab(t)}
-                            className={`py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                            className={`py-2 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
                               panelTab === t
                                 ? 'border-[#087F3F] text-[#087F3F]'
                                 : 'border-transparent text-gray-500 hover:text-gray-800'
@@ -905,26 +931,47 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
                               <MapPin className="w-4 h-4 text-[#087F3F] mt-0.5 shrink-0" />
                               {displayBusiness.municipality ?? 'Bansud, Oriental Mindoro'}
                             </p>
-                            <p className="flex items-center gap-2.5 text-sm text-gray-800">
-                              <Clock className="w-4 h-4 text-[#087F3F] shrink-0" />
-                              {displayBusiness.is_open ? (
-                                <span className="inline-flex items-center gap-1.5 font-medium text-emerald-700">
-                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Open
-                                </span>
-                              ) : (
-                                <span className="text-red-600">Closed</span>
-                              )}
-                            </p>
-                            {displayBusiness.price_range && (
+
+                            {/* Only show open/closed status for non-attraction places */}
+                            {currentGroup !== 'spot' ? (
                               <p className="flex items-center gap-2.5 text-sm text-gray-800">
-                                <Banknote className="w-4 h-4 text-[#087F3F] shrink-0" /> {displayBusiness.price_range}
+                                <Clock className="w-4 h-4 text-[#087F3F] shrink-0" />
+                                {displayBusiness.is_open ? (
+                                  <span className="inline-flex items-center gap-1.5 font-medium text-emerald-700">
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Open
+                                  </span>
+                                ) : (
+                                  <span className="text-red-600">Closed</span>
+                                )}
                               </p>
+                            ) : (
+                              (displayBusiness.category_details?.['Daily Visiting Hours'] || displayBusiness.category_details?.visiting_hours) && (
+                                <p className="flex items-center gap-2.5 text-sm text-gray-800">
+                                  <Clock className="w-4 h-4 text-[#087F3F] shrink-0" />
+                                  <span>Visiting hours: {displayBusiness.category_details?.['Daily Visiting Hours'] || displayBusiness.category_details?.visiting_hours}</span>
+                                </p>
+                              )
+                            )}
+
+                            {currentGroup === 'spot' ? (
+                              (displayBusiness.category_details?.['Entrance Fee'] || displayBusiness.category_details?.entrance_fee) && (
+                                <p className="flex items-center gap-2.5 text-sm text-gray-800">
+                                  <Banknote className="w-4 h-4 text-[#087F3F] shrink-0" />
+                                  <span>Entrance: {displayBusiness.category_details?.['Entrance Fee'] || displayBusiness.category_details?.entrance_fee}</span>
+                                </p>
+                              )
+                            ) : (
+                              displayBusiness.price_range && (
+                                <p className="flex items-center gap-2.5 text-sm text-gray-800">
+                                  <Banknote className="w-4 h-4 text-[#087F3F] shrink-0" /> {displayBusiness.price_range}
+                                </p>
+                              )
                             )}
                           </div>
 
                           {panelImages.length >= 2 && (
                             <div className="mt-4 pt-4 border-t border-[#EFF3F0]">
-                              <p className="text-sm font-semibold text-gray-900 mb-2">Photos &amp; Videos</p>
+                              <p className="text-sm font-semibold text-gray-900 mb-2">Photos</p>
                               <div className="grid grid-cols-3 gap-1.5">
                                 {panelImages.slice(0, 9).map((src, i) => (
                                   <img
@@ -939,23 +986,168 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
                             </div>
                           )}
 
-                          {action && ActionIcon && (
+                          {currentGroup === 'spot' ? (
+                            <button
+                              type="button"
+                              onClick={() => handleVisitBusiness(displayBusiness)}
+                              className="mt-5 w-full h-12 rounded-xl bg-[#087F3F] text-white text-sm font-semibold flex items-center justify-center gap-2 hover:bg-[#056B35] transition-colors shadow-sm"
+                            >
+                              <Compass className="w-4 h-4" /> Explore Destination
+                            </button>
+                          ) : (
+                            action && ActionIcon && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleVisitBusiness(displayBusiness)}
+                                  className="mt-5 w-full h-12 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors border border-[#087F3F] bg-white text-[#087F3F] hover:bg-[#087F3F]/5"
+                                >
+                                  <ExternalLink className="w-4 h-4" /> Visit {displayBusiness.category ?? 'Business'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleGatedAction(displayBusiness, action.to)}
+                                  className="mt-3 w-full h-12 rounded-xl bg-[#087F3F] text-white text-sm font-semibold flex items-center justify-center gap-2 hover:bg-[#056B35] transition-colors"
+                                >
+                                  <ActionIcon className="w-4 h-4" /> {action.label}
+                                </button>
+                              </>
+                            )
+                          )}
+                        </div>
+                      )}
+
+                      {panelTab === 'Gallery' && (
+                        <div className="pt-4">
+                          {panelImages.length > 0 ? (
+                            <div className="grid grid-cols-2 gap-2">
+                              {panelImages.map((src, i) => (
+                                <img
+                                  key={i}
+                                  src={toAssetUrl(src)}
+                                  alt=""
+                                  onClick={() => setSelectedImage(i)}
+                                  className={`w-full h-28 object-cover rounded-xl cursor-pointer border-2 transition-all ${
+                                    selectedImage === i ? 'border-[#087F3F] ring-2 ring-[#087F3F]/30' : 'border-transparent hover:opacity-90'
+                                  }`}
+                                />
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="pt-10 pb-6 text-center">
+                              <MapPin className="w-8 h-8 mx-auto text-gray-300" />
+                              <p className="mt-3 text-sm text-gray-500">No gallery photos uploaded yet.</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {panelTab === 'Videos' && (
+                        <div className="pt-4">
+                          {displayBusiness.media?.some((m) => m.type === 'Promotional Video' || m.type?.toLowerCase().includes('video') || m.file_path?.endsWith('.mp4') || m.file_path?.endsWith('.mov')) ? (
+                            <div className="space-y-3">
+                              {displayBusiness.media
+                                .filter((m) => m.type === 'Promotional Video' || m.type?.toLowerCase().includes('video') || m.file_path?.endsWith('.mp4') || m.file_path?.endsWith('.mov'))
+                                .map((v) => (
+                                  <div key={v.id ?? v.file_path} className="rounded-xl overflow-hidden border border-[#E2E8E3] bg-black">
+                                    <video
+                                      src={toAssetUrl(v.file_path ?? '')}
+                                      controls
+                                      playsInline
+                                      className="w-full max-h-48 object-contain"
+                                    />
+                                    {v.caption && <p className="p-2 text-xs text-gray-600 bg-white">{v.caption}</p>}
+                                  </div>
+                                ))}
+                            </div>
+                          ) : (
+                            <div className="pt-10 pb-6 text-center">
+                              <Film className="w-8 h-8 mx-auto text-gray-300" />
+                              <p className="mt-3 text-sm text-gray-500">No promotional videos available yet.</p>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {panelTab === 'Visitor Info' && (
+                        <div className="pt-4 space-y-3 text-sm text-gray-800">
+                          <div className="p-3 bg-[#EAF6ED] rounded-xl flex items-start gap-2.5">
+                            <Info className="w-4 h-4 text-[#087F3F] mt-0.5 shrink-0" />
+                            <div>
+                              <p className="font-semibold text-[#17201A]">Destination Information</p>
+                              <p className="text-xs text-gray-600 mt-0.5">Verified details provided by the Tourism Office and destination coordinators.</p>
+                            </div>
+                          </div>
+                          <div className="space-y-2 border-t border-[#EFF3F0] pt-3">
+                            <div className="flex justify-between items-center py-1 border-b border-[#EFF3F0]">
+                              <span className="text-gray-500 text-xs">Entrance Fee</span>
+                              <span className="font-semibold text-gray-900">{displayBusiness.category_details?.['Entrance Fee'] || displayBusiness.category_details?.entrance_fee || 'Free / Open to public'}</span>
+                            </div>
+                            <div className="flex justify-between items-center py-1 border-b border-[#EFF3F0]">
+                              <span className="text-gray-500 text-xs">Visiting Hours</span>
+                              <span className="font-semibold text-gray-900">{displayBusiness.category_details?.['Daily Visiting Hours'] || displayBusiness.category_details?.visiting_hours || 'Daylight hours / Open daily'}</span>
+                            </div>
+                            <div className="flex justify-between items-center py-1 border-b border-[#EFF3F0]">
+                              <span className="text-gray-500 text-xs">Municipality</span>
+                              <span className="font-semibold text-gray-900">{displayBusiness.municipality || 'Bansud, Oriental Mindoro'}</span>
+                            </div>
+                            {(displayBusiness.category_details?.['Contact Person'] || displayBusiness.category_details?.contact_person) && (
+                              <div className="flex justify-between items-center py-1 border-b border-[#EFF3F0]">
+                                <span className="text-gray-500 text-xs">Contact</span>
+                                <span className="font-semibold text-gray-900">{displayBusiness.category_details?.['Contact Person'] || displayBusiness.category_details?.contact_person}</span>
+                              </div>
+                            )}
+                            {(displayBusiness.category_details?.['Activities / Highlights'] || displayBusiness.category_details?.activities) && (
+                              <div className="pt-2">
+                                <span className="text-gray-500 text-xs block mb-1">Highlights &amp; Activities</span>
+                                <p className="text-xs text-gray-700 bg-gray-50 p-2.5 rounded-lg leading-relaxed">{displayBusiness.category_details?.['Activities / Highlights'] || displayBusiness.category_details?.activities}</p>
+                              </div>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleVisitBusiness(displayBusiness)}
+                            className="mt-4 w-full h-11 rounded-xl bg-[#087F3F] text-white text-sm font-semibold flex items-center justify-center gap-2 hover:bg-[#056B35] transition-colors"
+                          >
+                            <Compass className="w-4 h-4" /> Explore Full Destination Page
+                          </button>
+                        </div>
+                      )}
+
+                      {panelTab === 'Amenities' && (
+                        <div className="pt-4 space-y-3">
+                          {((displayBusiness.facilities && displayBusiness.facilities.length > 0) || (displayBusiness.services && displayBusiness.services.length > 0)) ? (
                             <>
-                              <button
-                                type="button"
-                                onClick={() => navigate(visitBusinessRoute(displayBusiness))}
-                                className="mt-5 w-full h-12 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors border border-[#087F3F] bg-white text-[#087F3F] hover:bg-[#087F3F]/5"
-                              >
-                                <ExternalLink className="w-4 h-4" /> Visit {displayBusiness.category ?? 'Business'}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => navigate(action.to)}
-                                className="mt-3 w-full h-12 rounded-xl bg-[#087F3F] text-white text-sm font-semibold flex items-center justify-center gap-2 hover:bg-[#056B35] transition-colors"
-                              >
-                                <ActionIcon className="w-4 h-4" /> {action.label}
-                              </button>
+                              {displayBusiness.facilities && displayBusiness.facilities.length > 0 && (
+                                <div>
+                                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Facilities</p>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {displayBusiness.facilities.map((f) => (
+                                      <span key={f} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#EAF6ED] text-[#087F3F] text-xs font-medium">
+                                        {f}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {displayBusiness.services && displayBusiness.services.length > 0 && (
+                                <div className="mt-3">
+                                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Services</p>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {displayBusiness.services.map((s) => (
+                                      <span key={s} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-medium">
+                                        {s}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </>
+                          ) : (
+                            <div className="pt-10 pb-6 text-center">
+                              <Building2 className="w-8 h-8 mx-auto text-gray-300" />
+                              <p className="mt-3 text-sm text-gray-500">No amenities listed yet.</p>
+                            </div>
                           )}
                         </div>
                       )}
@@ -1004,7 +1196,7 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
                           {action && ActionIcon && Array.isArray(displayBusiness.menu_items) && displayBusiness.menu_items.length > 0 && (
                             <button
                               type="button"
-                              onClick={() => navigate(action.to)}
+                              onClick={() => handleGatedAction(displayBusiness, action.to)}
                               className="mt-4 w-full h-11 rounded-xl bg-[#087F3F] text-white text-sm font-semibold flex items-center justify-center gap-2 hover:bg-[#056B35] transition-colors"
                             >
                               <ActionIcon className="w-4 h-4" /> Order Now

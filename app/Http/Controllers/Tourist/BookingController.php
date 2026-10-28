@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Tourist;
 
+use App\Enums\DiscoveryGroup;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Tourist\CreateBookingRequest;
 use App\Models\Booking;
@@ -17,14 +18,7 @@ class BookingController extends Controller
 
     public function index(Request $request)
     {
-        $accommodationCategories = BusinessCategory::whereIn('name', [
-            'hotel', 'resort', 'inn', 'homestay',
-        ])->orWhere(function ($q) {
-            $q->where('name', 'like', '%hotel%')
-                ->orWhere('name', 'like', '%resort%')
-                ->orWhere('name', 'like', '%inn%')
-                ->orWhere('name', 'like', '%homestay%');
-        })->pluck('id');
+        $accommodationCategories = BusinessCategory::inDiscoveryGroup(DiscoveryGroup::Accommodation)->pluck('id');
 
         $rentalCategories = BusinessCategory::whereIn('name', [
             'rental', 'vehicle_rental', 'motorcycle_rental',

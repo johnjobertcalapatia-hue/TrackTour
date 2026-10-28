@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Tourist;
 
+use App\Enums\DiscoveryGroup;
 use App\Http\Controllers\Controller;
 use App\Models\Business;
 use App\Models\BusinessCategory;
@@ -225,17 +226,8 @@ class ExploreController extends Controller
 
         $places = Business::where('status', 'approved')
             ->when($hasLocation, fn ($q) => $this->proximityScope($q, $touristLat, $touristLng))
-            ->whereHas('category', function ($q) {
-                $q->where(function ($qq) {
-                    $qq->where('name', 'like', '%attraction%')
-                        ->orWhere('name', 'like', '%tourism%')
-                        ->orWhere('name', 'like', '%adventure%')
-                        ->orWhere('name', 'like', '%park%')
-                        ->orWhere('name', 'like', '%beach%')
-                        ->orWhere('name', 'like', '%museum%');
-                });
-            })
-            ->with('municipality')
+            ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Spot))
+            ->with('municipality', 'media')
             ->withAvg(['reviews' => fn ($q) => $q->where('status', 'approved')], 'rating')
             ->when($hasLocation, fn ($q) => $q->orderBy('distance_km'))
             ->take(20)
@@ -252,14 +244,7 @@ class ExploreController extends Controller
 
         $foodBusinesses = Business::where('status', 'approved')
             ->when($hasLocation, fn ($q) => $this->proximityScope($q, $touristLat, $touristLng))
-            ->whereHas('category', function ($q) {
-                $q->where(function ($qq) {
-                    $qq->where('name', 'like', '%restaurant%')
-                        ->orWhere('name', 'like', '%food%')
-                        ->orWhere('name', 'like', '%cafe%')
-                        ->orWhere('name', 'like', '%food hub%');
-                });
-            })
+            ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Dining))
             ->whereHas('offerings', fn ($q) => $q->where('is_available', true)->where('status', 'available'))
             ->with('municipality')
             ->withAvg(['reviews' => fn ($q) => $q->where('status', 'approved')], 'rating')
@@ -290,15 +275,7 @@ class ExploreController extends Controller
 
         $stays = Business::where('status', 'approved')
             ->when($hasLocation, fn ($q) => $this->proximityScope($q, $touristLat, $touristLng))
-            ->whereHas('category', function ($q) {
-                $q->where(function ($qq) {
-                    $qq->where('name', 'like', '%hotel%')
-                        ->orWhere('name', 'like', '%resort%')
-                        ->orWhere('name', 'like', '%homestay%')
-                        ->orWhere('name', 'like', '%lodging%')
-                        ->orWhere('name', 'like', '%inn%');
-                });
-            })
+            ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Accommodation))
             ->with('municipality')
             ->withAvg(['reviews' => fn ($q) => $q->where('status', 'approved')], 'rating')
             ->when($hasLocation, fn ($q) => $q->orderBy('distance_km'))
@@ -315,38 +292,14 @@ class ExploreController extends Controller
 
         $counts = [
             'places' => Business::where('status', 'approved')
-                ->whereHas('category', function ($q) {
-                    $q->where(function ($qq) {
-                        $qq->where('name', 'like', '%attraction%')
-                            ->orWhere('name', 'like', '%tourism%')
-                            ->orWhere('name', 'like', '%adventure%')
-                            ->orWhere('name', 'like', '%park%')
-                            ->orWhere('name', 'like', '%beach%')
-                            ->orWhere('name', 'like', '%museum%');
-                    });
-                })
+                ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Spot))
                 ->count(),
             'food' => Business::where('status', 'approved')
-                ->whereHas('category', function ($q) {
-                    $q->where(function ($qq) {
-                        $qq->where('name', 'like', '%restaurant%')
-                            ->orWhere('name', 'like', '%food%')
-                            ->orWhere('name', 'like', '%cafe%')
-                            ->orWhere('name', 'like', '%food hub%');
-                    });
-                })
+                ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Dining))
                 ->whereHas('offerings', fn ($q) => $q->where('is_available', true)->where('status', 'available'))
                 ->count(),
             'stays' => Business::where('status', 'approved')
-                ->whereHas('category', function ($q) {
-                    $q->where(function ($qq) {
-                        $qq->where('name', 'like', '%hotel%')
-                            ->orWhere('name', 'like', '%resort%')
-                            ->orWhere('name', 'like', '%homestay%')
-                            ->orWhere('name', 'like', '%lodging%')
-                            ->orWhere('name', 'like', '%inn%');
-                    });
-                })
+                ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Accommodation))
                 ->count(),
         ];
 
@@ -413,14 +366,7 @@ class ExploreController extends Controller
             ->where('is_available', true)
             ->where('status', 'available')
             ->whereHas('business', fn ($qb) => $qb->where('status', 'approved')->whereNotNull('latitude')->whereNotNull('longitude'))
-            ->whereHas('business.category', function ($qb) {
-                $qb->where(function ($qq) {
-                    $qq->where('name', 'like', '%restaurant%')
-                        ->orWhere('name', 'like', '%food%')
-                        ->orWhere('name', 'like', '%cafe%')
-                        ->orWhere('name', 'like', '%food hub%');
-                });
-            })
+            ->whereHas('business.category', fn ($qb) => $qb->inDiscoveryGroup(DiscoveryGroup::Dining))
             ->where(function ($qb) use ($query) {
                 $qb->where('name', 'like', "%{$query}%")
                     ->orWhereHas('business', fn ($b) => $b->where('business_name', 'like', "%{$query}%"));
@@ -543,9 +489,8 @@ class ExploreController extends Controller
             ]);
         }
 
-        $isFood = (bool) ($anchor->category && (
-            preg_match('/restaurant|food|cafe/i', (string) $anchor->category->name)
-        ));
+        $isFood = $anchor->category
+            && DiscoveryGroup::fromCategoryName($anchor->category->name) === DiscoveryGroup::Dining;
 
         $kind = $isFood ? 'food' : 'stay';
         $title = $isFood ? 'For You · Nearby Eats' : 'For You · Places to Stay Near You';
@@ -555,14 +500,7 @@ class ExploreController extends Controller
                 ->where('is_available', true)
                 ->where('status', 'available')
                 ->whereHas('business', fn ($qb) => $qb->where('status', 'approved')->whereNotNull('latitude')->whereNotNull('longitude'))
-                ->whereHas('business.category', function ($qb) {
-                    $qb->where(function ($qq) {
-                        $qq->where('name', 'like', '%restaurant%')
-                            ->orWhere('name', 'like', '%food%')
-                            ->orWhere('name', 'like', '%cafe%')
-                            ->orWhere('name', 'like', '%food hub%');
-                    });
-                })
+                ->whereHas('business.category', fn ($qb) => $qb->inDiscoveryGroup(DiscoveryGroup::Dining))
                 ->with('business.category', 'category')
                 ->get()
                 ->filter(fn ($food) => $food->business)
@@ -586,14 +524,7 @@ class ExploreController extends Controller
         } else {
             $items = Business::where('status', 'approved')
                 ->whereNotNull('latitude')->whereNotNull('longitude')
-                ->whereHas('category', function ($qb) {
-                    $qb->where(function ($qq) {
-                        $qq->where('name', 'like', '%hotel%')
-                            ->orWhere('name', 'like', '%resort%')
-                            ->orWhere('name', 'like', '%homestay%')
-                            ->orWhere('name', 'like', '%camping%');
-                    });
-                })
+                ->whereHas('category', fn ($qb) => $qb->inDiscoveryGroup(DiscoveryGroup::Accommodation))
                 ->with('category', 'municipality')
                 ->get()
                 ->filter(fn ($b) => $b->latitude && $b->longitude)
@@ -775,7 +706,8 @@ class ExploreController extends Controller
             ->with([
                 'category',
                 'municipality',
-                'media' => fn ($q) => $q->where('type', 'gallery')->orderBy('sort_order'),
+                'details',
+                'media' => fn ($q) => $q->orderBy('sort_order'),
             ])
             ->get(['id', 'business_name', 'status', 'latitude', 'longitude', 'cover_photo', 'business_category_id', 'municipality_id', 'price_range', 'average_rating', 'review_count', 'popularity_score', 'services', 'facilities', 'opening_time', 'closing_time', 'business_hours', 'force_closed', 'created_at']);
 
@@ -804,7 +736,13 @@ class ExploreController extends Controller
                 'latitude' => (float) $b->latitude,
                 'longitude' => (float) $b->longitude,
                 'cover_photo' => $b->cover_photo,
-                'images' => $b->media->pluck('file_path')->filter()->values(),
+                'images' => $b->media->whereIn('type', ['gallery', 'Gallery', 'photo', 'Photo', 'cover', 'Cover', 'logo', 'Logo'])->pluck('file_path')->filter()->values(),
+                'media' => $b->media->map(fn ($m) => [
+                    'id' => $m->id,
+                    'file_path' => $m->file_path,
+                    'type' => $m->type,
+                    'caption' => $m->caption,
+                ])->values(),
                 'category' => $b->category?->name,
                 'municipality' => $b->municipality?->name,
                 'price_range' => $b->price_range,
@@ -817,6 +755,9 @@ class ExploreController extends Controller
                 'module_codes' => $b->module_codes,
                 'services' => $b->services,
                 'facilities' => $b->facilities,
+                'category_details' => $b->details->mapWithKeys(
+                    fn ($detail) => [$detail->field_name => $detail->field_value]
+                ),
                 'created_at' => $b->created_at?->toIso8601String(),
                 'menu_items' => $menuByBusiness->get($b->id, collect())->all(),
             ])
@@ -835,9 +776,8 @@ class ExploreController extends Controller
                 'category',
                 'municipality',
                 'barangay',
-                'media' => fn ($q) => $q
-                    ->whereIn('type', ['Logo', 'Gallery', 'logo', 'gallery'])
-                    ->orderBy('sort_order'),
+                'details',
+                'media' => fn ($q) => $q->orderBy('sort_order'),
                 'promotions' => fn ($q) => $q->active(),
             ])
             ->withCount(['reviews' => fn ($q) => $q->where('status', 'approved')])
@@ -847,11 +787,15 @@ class ExploreController extends Controller
                 $b->is_open = $this->isBusinessOpen($b);
 
                 $mediaImages = $b->media
+                    ->whereIn('type', ['Logo', 'Gallery', 'logo', 'gallery', 'Photo', 'photo', 'cover', 'Cover'])
                     ->pluck('file_path')
                     ->filter()
                     ->values();
 
                 $b->images = $mediaImages;
+                $b->category_details = $b->details->mapWithKeys(
+                    fn ($detail) => [$detail->field_name => $detail->field_value]
+                );
 
                 return $b;
             });
@@ -880,9 +824,19 @@ class ExploreController extends Controller
             abort(404);
         }
 
-        $business->load(['category', 'municipality', 'barangay', 'media' => function ($q) {
-            $q->where('type', 'gallery')->orderBy('sort_order');
-        }]);
+        $business->load([
+            'category',
+            'municipality',
+            'barangay',
+            'details',
+            'media' => function ($q) {
+                $q->orderBy('sort_order');
+            },
+        ]);
+
+        $business->category_details = $business->details->mapWithKeys(
+            fn ($detail) => [$detail->field_name => $detail->field_value]
+        );
 
         $reviews = Review::where('business_id', $business->id)
             ->where('status', 'approved')

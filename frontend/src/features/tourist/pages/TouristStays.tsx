@@ -150,7 +150,7 @@ export default function TouristStays() {
           {stays.map((stay) => (
             <div
               key={stay.id}
-              onClick={() => navigate(`/tourist/stays/${stay.id}`)}
+              onClick={() => navigate(`/tourist/explore/${stay.id}`)}
               className="bg-white border border-[#E5E9E7] rounded-2xl overflow-hidden cursor-pointer hover:border-[#087F3F]/40 transition-all group"
             >
               <div className="relative h-44 bg-[#E9F7EF] overflow-hidden">

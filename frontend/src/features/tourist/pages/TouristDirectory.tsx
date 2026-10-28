@@ -24,20 +24,47 @@ import {
 } from 'lucide-react'
 
 interface Business {
-  _id: string
-  name: string
-  category: string
-  municipality: string
-  address: string
-  rating: number
-  reviewCount: number
-  coverImage: string
-  isOpen: boolean
-  hasPromotions: boolean
-  isVerified: boolean
-  isNew: boolean
-  featured: boolean
-  description: string
+  id?: number
+  _id?: string | number
+  name?: string
+  business_name?: string
+  category?: string | { id?: number; name?: string } | null
+  municipality?: string | { id?: number; name?: string } | null
+  address?: string
+  rating?: number
+  reviews_avg_rating?: number | null
+  reviewCount?: number
+  reviews_count?: number
+  coverImage?: string
+  cover_photo?: string | null
+  isOpen?: boolean
+  is_open?: boolean
+  hasPromotions?: boolean
+  isVerified?: boolean
+  isNew?: boolean
+  featured?: boolean
+  description?: string
+  business_description?: string
+}
+
+function businessId(biz: Business): string {
+  return String(biz.id ?? biz._id ?? '')
+}
+
+function businessDisplayName(biz: Business): string {
+  return biz.name ?? biz.business_name ?? 'Business'
+}
+
+function businessCover(biz: Business): string {
+  return biz.coverImage || biz.cover_photo || '/placeholder-business.jpg'
+}
+
+function businessRating(biz: Business): number {
+  return Number(biz.rating ?? biz.reviews_avg_rating ?? 0)
+}
+
+function businessIsOpen(biz: Business): boolean {
+  return Boolean(biz.isOpen ?? biz.is_open)
 }
 
 interface DirectoryResponse {
@@ -346,15 +373,15 @@ export default function TouristDirectory() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
             {businesses.map((biz) => (
               <Link
-                key={biz._id}
-                to={`/tourist/explore/business/${biz._id}`}
+                key={businessId(biz)}
+                to={`/tourist/explore/${businessId(biz)}`}
                 className="group bg-gray-900/80 backdrop-blur-xl rounded-2xl border border-gray-700/30 shadow-lg shadow-black/5 overflow-hidden hover:border-emerald-500/30 transition-all duration-300"
               >
                 {/* Cover Image */}
                 <div className="relative h-48 overflow-hidden">
                   <img
-                    src={biz.coverImage || '/placeholder-business.jpg'}
-                    alt={biz.name}
+                    src={businessCover(biz)}
+                    alt={businessDisplayName(biz)}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-gray-900/80 via-transparent to-transparent" />
@@ -362,12 +389,12 @@ export default function TouristDirectory() {
                   <div className="absolute top-3 left-3 flex flex-wrap gap-2">
                     <span
                       className={`px-2.5 py-1 rounded-lg text-xs font-semibold ${
-                        biz.isOpen
+                        businessIsOpen(biz)
                           ? 'bg-emerald-500/90 text-white'
                           : 'bg-red-500/90 text-white'
                       }`}
                     >
-                      {biz.isOpen ? 'Open' : 'Closed'}
+                      {businessIsOpen(biz) ? 'Open' : 'Closed'}
                     </span>
                     {biz.hasPromotions && (
                       <span className="px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-500/90 text-white">
@@ -383,15 +410,15 @@ export default function TouristDirectory() {
                   {/* Rating */}
                   <div className="absolute top-3 right-3 flex items-center gap-1 px-2.5 py-1 bg-gray-900/80 backdrop-blur-sm rounded-lg">
                     <Star className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
-                    <span className="text-sm font-semibold text-gray-100">{biz.rating?.toFixed(1) || 'N/A'}</span>
-                    <span className="text-xs text-gray-400">({biz.reviewCount})</span>
+                    <span className="text-sm font-semibold text-gray-100">{businessRating(biz) > 0 ? businessRating(biz).toFixed(1) : 'N/A'}</span>
+                    <span className="text-xs text-gray-400">({biz.reviewCount ?? biz.reviews_count ?? 0})</span>
                   </div>
                 </div>
 
                 {/* Content */}
                 <div className="p-5">
                   <h3 className="text-lg font-semibold text-gray-100 mb-1 group-hover:text-emerald-400 transition-colors">
-                    {biz.name}
+                    {businessDisplayName(biz)}
                   </h3>
                   <p className="text-sm text-emerald-400/80 mb-1">{categoryName(biz.category)}</p>
                   <div className="flex items-center gap-1 text-gray-400 text-sm mb-3">
@@ -453,24 +480,24 @@ export default function TouristDirectory() {
             <div className="flex gap-6 overflow-x-auto pb-4 scrollbar-hide snap-x snap-mandatory">
               {featuredBusinesses.map((biz) => (
                 <Link
-                  key={biz._id}
-                  to={`/tourist/explore/business/${biz._id}`}
+                  key={businessId(biz)}
+                  to={`/tourist/explore/${businessId(biz)}`}
                   className="flex-shrink-0 w-72 snap-start bg-gray-900/80 backdrop-blur-xl rounded-2xl border border-gray-700/30 shadow-lg shadow-black/5 overflow-hidden hover:border-emerald-500/30 transition-all"
                 >
                   <div className="relative h-36 overflow-hidden">
                     <img
-                      src={biz.coverImage || '/placeholder-business.jpg'}
-                      alt={biz.name}
+                      src={businessCover(biz)}
+                      alt={businessDisplayName(biz)}
                       className="w-full h-full object-cover"
                     />
                     <div className="absolute inset-0 bg-gradient-to-t from-gray-900/80 via-transparent to-transparent" />
                     <div className="absolute top-2 right-2 flex items-center gap-1 px-2 py-1 bg-gray-900/80 backdrop-blur-sm rounded-lg">
                       <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
-                      <span className="text-xs font-semibold text-gray-100">{biz.rating?.toFixed(1)}</span>
+                      <span className="text-xs font-semibold text-gray-100">{businessRating(biz) > 0 ? businessRating(biz).toFixed(1) : 'N/A'}</span>
                     </div>
                   </div>
                   <div className="p-4">
-                    <h3 className="font-semibold text-gray-100 mb-1">{biz.name}</h3>
+                    <h3 className="font-semibold text-gray-100 mb-1">{businessDisplayName(biz)}</h3>
                     <p className="text-sm text-emerald-400/80">{categoryName(biz.category)}</p>
                     <div className="flex items-center gap-1 text-gray-500 text-xs mt-1">
                       <MapPin className="w-3 h-3" />

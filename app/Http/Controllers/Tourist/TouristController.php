@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Tourist;
 
+use App\Enums\DiscoveryGroup;
 use App\Http\Controllers\Controller;
 use App\Models\Business;
 use App\Models\BusinessCategory;
@@ -164,15 +165,11 @@ class TouristController extends Controller
             ->take(5)
             ->get();
 
-        $foodCategoryIds = BusinessCategory::where(function ($q) {
-            $q->where('name', 'like', '%restaurant%')
-                ->orWhere('name', 'like', '%food%')
-                ->orWhere('name', 'like', '%cafe%')
-                ->orWhere('name', 'like', '%food hub%');
-        })->pluck('id')->toArray();
+        $foodCategoryIds = BusinessCategory::inDiscoveryGroup(DiscoveryGroup::Dining)->pluck('id')->toArray();
+        $accommodationCategoryIds = BusinessCategory::inDiscoveryGroup(DiscoveryGroup::Accommodation)->pluck('id')->toArray();
 
         $popularRestaurants = $this->getNearestBusinesses($touristLat, $touristLng, $foodCategoryIds, 8, [], $categoryId, $search);
-        $popularResorts = $this->getNearestBusinesses($touristLat, $touristLng, [], 8, $foodCategoryIds, $categoryId, $search);
+        $popularResorts = $this->getNearestBusinesses($touristLat, $touristLng, $accommodationCategoryIds, 8, [], $categoryId, $search);
 
         $transportCategoryIds = BusinessCategory::where(function ($q) {
             $q->where('name', 'like', '%transport%')
@@ -183,7 +180,7 @@ class TouristController extends Controller
         $transportServices = $this->getNearestBusinesses($touristLat, $touristLng, $transportCategoryIds, 6, [], $categoryId, $search);
 
         $topAttractions = $this->filteredBusinesses($categoryId, $search)
-            ->whereHas('category', fn ($q) => $q->where('name', 'like', '%attraction%'))
+            ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Spot))
             ->with('category', 'municipality')
             ->inRandomOrder()
             ->take(8)
@@ -365,7 +362,7 @@ class TouristController extends Controller
                 'title' => 'Summer Escapes',
                 'icon' => '<svg class="w-6 h-6 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>',
                 'businesses' => Business::where('status', 'approved')
-                    ->whereHas('category', fn ($q) => $q->where('name', 'like', '%resort%')->orWhere('name', 'like', '%beach%'))
+                    ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Accommodation))
                     ->with('category', 'municipality')
                     ->inRandomOrder()
                     ->take(4)
@@ -375,7 +372,7 @@ class TouristController extends Controller
                 'title' => 'Cozy Indoors',
                 'icon' => '<svg class="w-6 h-6 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"/></svg>',
                 'businesses' => Business::where('status', 'approved')
-                    ->whereHas('category', fn ($q) => $q->where('name', 'like', '%cafe%')->orWhere('name', 'like', '%restaurant%'))
+                    ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Dining))
                     ->with('category', 'municipality')
                     ->inRandomOrder()
                     ->take(4)
@@ -385,7 +382,7 @@ class TouristController extends Controller
                 'title' => 'Holiday Getaways',
                 'icon' => '<svg class="w-6 h-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>',
                 'businesses' => Business::where('status', 'approved')
-                    ->whereHas('category', fn ($q) => $q->where('name', 'like', '%resort%')->orWhere('name', 'like', '%hotel%'))
+                    ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Accommodation))
                     ->with('category', 'municipality')
                     ->inRandomOrder()
                     ->take(4)
@@ -395,7 +392,7 @@ class TouristController extends Controller
                 'title' => 'Holy Week Retreats',
                 'icon' => '<svg class="w-6 h-6 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 21a9 9 0 009-9 9 9 0 00-9-9 9 9 0 00-9 9 9 9 0 009 9zM12 9a3 3 0 000 6 3 3 0 000-6z"/></svg>',
                 'businesses' => Business::where('status', 'approved')
-                    ->whereHas('category', fn ($q) => $q->where('name', 'like', '%resort%')->orWhere('name', 'like', '%hotel%'))
+                    ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Accommodation))
                     ->with('category', 'municipality')
                     ->inRandomOrder()
                     ->take(4)

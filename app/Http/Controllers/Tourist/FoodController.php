@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Tourist;
 
+use App\Enums\DiscoveryGroup;
 use App\Events\DeliveryStatusChanged;
 use App\Http\Controllers\Controller;
 use App\Models\Business;
@@ -39,14 +40,7 @@ class FoodController extends Controller
             ->where('is_available', true)
             ->where('status', 'available')
             ->whereHas('business', fn ($q) => $q->where('status', 'approved'))
-            ->whereHas('business.category', function ($q) {
-                $q->where(function ($qq) {
-                    $qq->where('name', 'like', '%restaurant%')
-                        ->orWhere('name', 'like', '%food%')
-                        ->orWhere('name', 'like', '%cafe%')
-                        ->orWhere('name', 'like', '%food hub%');
-                });
-            })
+            ->whereHas('business.category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Dining))
             ->with('business.category', 'category');
 
         if ($category && $category !== 'all') {
@@ -100,14 +94,7 @@ class FoodController extends Controller
             ->where('status', 'available')
             ->whereHas('business', fn ($q) => $q->where('status', 'approved'))
             ->whereHas('category')
-            ->whereHas('business.category', function ($q) {
-                $q->where(function ($qq) {
-                    $qq->where('name', 'like', '%restaurant%')
-                        ->orWhere('name', 'like', '%food%')
-                        ->orWhere('name', 'like', '%cafe%')
-                        ->orWhere('name', 'like', '%food hub%');
-                });
-            })
+            ->whereHas('business.category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Dining))
             ->with('category')
             ->get()
             ->map(fn ($food) => $food->category->name)

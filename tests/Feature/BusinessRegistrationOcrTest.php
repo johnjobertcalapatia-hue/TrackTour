@@ -82,6 +82,8 @@ class BusinessRegistrationOcrTest extends TestCase
             $this->markTestSkipped('GD extension is required to create fake images.');
         }
 
+        TourismSetting::updateOrCreate(['key' => 'ocr_enabled'], ['value' => '1']);
+
         $user = $this->createOwner();
         $file = $this->createTestImage("PERMIT NO: PMT-2026-00123\nBusiness Name: TEST RESTAURANT\nDate Issued: January 15, 2026\nExpiry Date: December 31, 2027");
 

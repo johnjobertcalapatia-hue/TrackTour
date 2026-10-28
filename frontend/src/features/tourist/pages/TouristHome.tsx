@@ -4,10 +4,11 @@ import { useAuthStore } from '@/features/auth/services/auth-store'
 import { useQuery } from '@tanstack/react-query'
 import { get } from '@/shared/services/api'
 import { categoryName, toAssetUrl, safeText } from '@/shared/utils'
+import { getBrowsedPlaces, type BrowsedPlace } from '@/shared/services/browsing-history'
 import {
   MapPin, Star, Heart, UtensilsCrossed, Building2, Compass, Calendar,
   Mountain, Waves, TreePine, Tent,
-  Navigation, Utensils, BedDouble,
+  Navigation, Utensils, BedDouble, Clock,
 } from 'lucide-react'
 import HeroCarousel from '../components/home/HeroCarousel'
 import SectionHeader from '../components/home/SectionHeader'
@@ -46,6 +47,7 @@ export default function TouristHome() {
   const user = useAuthStore((s) => s.user)
   const [savedItems, setSavedItems] = useState<Set<string>>(new Set())
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null)
+  const [recentPlaces, setRecentPlaces] = useState<BrowsedPlace[]>(() => getBrowsedPlaces())
 
   useEffect(() => {
     if (!('geolocation' in navigator)) return
@@ -54,6 +56,16 @@ export default function TouristHome() {
       () => {},
       { timeout: 5000, maximumAge: 300000 },
     )
+  }, [])
+
+  useEffect(() => {
+    const sync = () => setRecentPlaces(getBrowsedPlaces())
+    window.addEventListener('browsing-history-updated', sync)
+    window.addEventListener('storage', sync)
+    return () => {
+      window.removeEventListener('browsing-history-updated', sync)
+      window.removeEventListener('storage', sync)
+    }
   }, [])
 
   const { data: forYouData } = useQuery({
@@ -129,6 +141,18 @@ export default function TouristHome() {
         </h2>
         <p className="mt-2 text-[#68736D] text-lg">Discover something amazing around Bansud.</p>
       </div>
+
+      {/* Recently viewed */}
+      {recentPlaces.length > 0 && (
+        <section className="px-4 lg:px-0">
+          <SectionHeader title="Recently Viewed" subtitle="Pick up where you left off" />
+          <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+            {recentPlaces.map((place) => (
+              <RecentPlaceCard key={`${place.discoveryGroup}-${place.id}`} place={place} />
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* For You (Near You) */}
       {forYouItems.length > 0 && (
@@ -217,6 +241,43 @@ export default function TouristHome() {
 
 /* ─── Card components ────────────────────────────────────────── */
 
+function RecentPlaceCard({ place }: { place: BrowsedPlace }) {
+  const img = toAssetUrl(place.cover_photo || place.logo)
+  const groupLabel =
+    place.discoveryGroup === 'dining' ? 'Dining'
+      : place.discoveryGroup === 'accommodation' ? 'Stay'
+        : place.discoveryGroup === 'spot' ? 'Spot'
+          : 'Place'
+  return (
+    <Link
+      to={place.url}
+      className="flex-shrink-0 w-56 bg-white rounded-2xl border border-[#E5E9E7] overflow-hidden hover:shadow-lg hover:shadow-[#087F3F]/8 transition-all duration-300 group"
+    >
+      <div className="relative h-28 overflow-hidden bg-[#E9F7EF]">
+        {img ? (
+          <img src={img} alt={place.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <Compass className="w-8 h-8 text-[#087F3F]/30" />
+          </div>
+        )}
+        <span className="absolute top-2 left-2 inline-flex items-center gap-1 px-2 py-0.5 bg-white/90 backdrop-blur-sm rounded-full text-[10px] font-semibold text-[#087F3F]">
+          <Clock className="w-3 h-3" /> {groupLabel}
+        </span>
+      </div>
+      <div className="p-3">
+        <h3 className="font-semibold text-[#17201B] text-sm line-clamp-1">{place.name}</h3>
+        <p className="mt-0.5 text-xs text-[#68736D] line-clamp-1">{place.municipality}</p>
+        {place.rating != null && (
+          <p className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-[#17201B]">
+            <Star className="w-3 h-3 text-[#F4B400] fill-[#F4B400]" /> {Number(place.rating).toFixed(1)}
+          </p>
+        )}
+      </div>
+    </Link>
+  )
+}
+
 function SpotCard({ spot, saved, onToggleSave, getIcon }: { spot: TouristSpot; saved: boolean; onToggleSave: () => void; getIcon: (c: string) => React.ReactNode }) {
   const img = toAssetUrl(spot.image)
   const spotCategory = categoryName(spot.category)
@@ -270,7 +331,7 @@ function FoodCard({ food, saved, onToggleSave }: { food: FoodItem; saved: boolea
 function HotelCard({ hotel, saved, onToggleSave }: { hotel: Hotel; saved: boolean; onToggleSave: () => void }) {
   const img = toAssetUrl(hotel.image)
   return (
-    <Link to={`/tourist/stays/${hotel.id}`} className="block bg-white rounded-2xl border border-[#E5E9E7] overflow-hidden hover:shadow-lg hover:shadow-[#087F3F]/8 transition-all duration-300 group">
+    <Link to={`/tourist/explore/${hotel.id}`} className="block bg-white rounded-2xl border border-[#E5E9E7] overflow-hidden hover:shadow-lg hover:shadow-[#087F3F]/8 transition-all duration-300 group">
       <div className="relative h-52 overflow-hidden">
         {img ? <img src={img} alt={hotel.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" /> : (
           <div className="w-full h-full bg-gradient-to-br from-[#E9F7EF] to-[#DDF4E6] flex items-center justify-center"><Building2 className="w-12 h-12 text-[#087F3F]/30" /></div>
