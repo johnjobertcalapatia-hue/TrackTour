@@ -90,4 +90,11 @@ php artisan migrate --force --no-interaction
 php artisan config:clear
 php artisan route:clear
 
+# The artisan commands above run as root, but Laravel's runtime user is
+# www-data. A root-owned storage/logs file makes every Log:: write fail with
+# permission denied — and every attempt to log *that* failure fails too — so
+# an ordinary logged warning escalates into an unlogged HTTP 500 with no CORS
+# headers. Keep Laravel's writable paths owned by its runtime user.
+chown -R www-data:www-data storage bootstrap/cache
+
 exec supervisord -n -c /etc/supervisor/supervisord.conf
