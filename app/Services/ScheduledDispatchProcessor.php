@@ -238,13 +238,15 @@ class ScheduledDispatchProcessor
     }
 
     /**
-     * Is this order still eligible for a scheduled dispatch?
+     * Is this order still eligible for a scheduled dispatch (also reused by
+     * NearestRiderService::deliveryIsClaimable() for direct claims of open
+     * deliveries)?
      *
      * Food/group orders qualify through the restaurant lifecycle statuses.
      * Transport (ride-hailing) orders never leave `pending` while awaiting a
      * rider, so a pending transport order is dispatchable by its own rule.
      */
-    private function orderIsDispatchable(Order $order): bool
+    public function orderIsDispatchable(Order $order): bool
     {
         if (in_array($order->status, self::DISPATCHABLE_ORDER_STATUSES, true)) {
             return true;

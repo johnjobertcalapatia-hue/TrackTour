@@ -359,14 +359,14 @@ class DeliveryOfferConcurrencyTest extends TestCase
         $riderB = $this->makeRider('stale-b@example.com');
         $delivery = $this->makeManualDelivery($this->makeOrder($business));
 
-        // B was never offered: cannot claim.
-        $noLog = $this->service->handleRiderResponse($delivery->id, $riderB->id, 'accepted');
-        $this->assertFalse($noLog['success']);
-        $this->assertTrue($noLog['conflict']);
-
         // A wins…
         $this->makePendingOffer($delivery, $riderA);
         $this->service->handleRiderResponse($delivery->id, $riderA->id, 'accepted');
+
+        // B was never offered and the trip is already claimed: cannot claim.
+        $noLog = $this->service->handleRiderResponse($delivery->id, $riderB->id, 'accepted');
+        $this->assertFalse($noLog['success']);
+        $this->assertTrue($noLog['conflict']);
 
         // …but a SECOND accept from A is always rejected (no pending offer remains).
         $second = $this->service->handleRiderResponse($delivery->id, $riderA->id, 'accepted');

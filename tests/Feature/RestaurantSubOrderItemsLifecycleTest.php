@@ -279,9 +279,12 @@ public function test_one_order_item_readiness_gate_and_shared_delivery_rules(): 
         // Exactly ONE rider for the shared trip. The single outstanding offer
         // went to rider A (deterministic mock, lowest id); rider B has no offer.
         $this->assertSame($this->riderA->id, BookingDispatchLog::where('delivery_id', $delivery->id)->first()->rider_id);
-        $unoffered = $this->dispatchService()->handleRiderResponse($delivery->id, $this->riderB->id, 'accepted');
-        $this->assertFalse($unoffered['success'] ?? true, 'Rider without an offer cannot claim the shared trip.');
         $this->assertRiderAccepted($delivery->fresh(), $this->riderA);
+
+        // Once claimed, no other rider can take the shared trip.
+        $late = $this->dispatchService()->handleRiderResponse($delivery->id, $this->riderB->id, 'accepted');
+        $this->assertFalse($late['success'] ?? true, 'A claimed shared trip cannot be taken by another rider.');
+        $this->assertSame($this->riderA->id, $delivery->fresh()->rider_id, 'The first claim stands.');
 
         // 4. Rider acceptance auto-started preparation for the whole shared
         //    order. Restaurants have no accept action anymore — for either

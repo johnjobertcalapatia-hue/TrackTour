@@ -40,6 +40,16 @@ class NearestRiderService
     ];
 
     /**
+     * Dispatch states in which a delivery is still OPEN: no rider bound and
+     * awaiting acceptance. 'notified' / 'waiting_for_rider' carry a live ping
+     * wave; 'no_rider_available' is the parked state after the wave exhausted
+     * or nobody was online at placement. All three are unclaimed work that any
+     * eligible rider may claim directly (rider order/booking boards must show
+     * every open order, not only the offers this rider was pinged for).
+     */
+    public const OPEN_DISPATCH_STATUSES = ['notified', 'waiting_for_rider', 'no_rider_available'];
+
+    /**
      * Deliveries that still bind a rider to an active job:
      *  - any in-road status (assigned → arrived_destination), or
      *  - a delivered COD awaiting cash settlement (cash_due set, not yet settled).
@@ -796,6 +806,19 @@ class NearestRiderService
             ->first();
 
         if (! $log) {
+            // DIRECT CLAIM: no ping offer is required to accept an OPEN
+            // (unclaimed) delivery. The rider order/booking boards list every
+            // open order, so a rider who missed the ping — or a delivery whose
+            // wave expired / parked at no_rider_available — stays claimable.
+            // First accept wins under the delivery row lock. Anything not in
+            // an open state keeps the canonical conflict response.
+            if ($response === 'accepted') {
+                $claim = $this->claimOpenDelivery($deliveryId, $riderId);
+                if ($claim !== null) {
+                    return $claim;
+                }
+            }
+
             return [
                 'success' => false,
                 'message' => 'No pending dispatch request found.',
@@ -867,28 +890,7 @@ class NearestRiderService
             // bound to this rider (or vice versa).
             $lockedLog->update(['response' => 'accepted', 'responded_at' => now()]);
 
-            $lockedDelivery->update([
-                'rider_id' => $riderId,
-                'status' => 'assigned',
-                'assigned_at' => now(),
-                'dispatch_status' => null,
-                'dispatch_expires_at' => null,
-                // Observable terminal end of the dispatch cycle (master spec §49).
-                'dispatch_ended_at' => now(),
-                'dispatch_end_reason' => 'rider_accepted',
-            ]);
-
-            User::where('id', $riderId)->first()?->riderDetail()?->updateOrCreate(
-                ['user_id' => $riderId],
-                ['rider_status' => 'busy', 'rider_status_updated_at' => now()]
-            );
-
-            // Purchasing-cash flow: create the per-restaurant cod_purchases
-            // stops atomically with the assignment so the Tourism Office can
-            // issue the purchasing cash immediately (idempotent).
-            if ($this->isCodDelivery($lockedDelivery)) {
-                app(PurchasingCashService::class)->initializeForDelivery($lockedDelivery);
-            }
+            $this->applyAcceptedAssignment($lockedDelivery, $riderId);
 
             return 'assigned';
         });
@@ -897,19 +899,68 @@ class NearestRiderService
             return $this->rejectAcceptOutcome($outcome, $log, $delivery);
         }
 
+        return $this->finalizeAcceptedDelivery($delivery->id, $riderId);
+    }
+
+    /**
+     * ATOMIC assignment steps shared by every accept path (ping-accept and
+     * direct claim). Runs inside the caller's delivery/rider-locked
+     * transaction: binds the delivery to the rider (observable end of the
+     * dispatch cycle), marks the rider busy (one active delivery), and — for
+     * COD — initializes the purchasing-cash stops. The caller owns the
+     * offer-row update and the post-commit side effects
+     * (finalizeAcceptedDelivery()).
+     */
+    private function applyAcceptedAssignment(Delivery $lockedDelivery, int $riderId): void
+    {
+        $lockedDelivery->update([
+            'rider_id' => $riderId,
+            'status' => 'assigned',
+            'assigned_at' => now(),
+            'dispatch_status' => null,
+            'dispatch_expires_at' => null,
+            // Observable terminal end of the dispatch cycle (master spec §49).
+            'dispatch_ended_at' => now(),
+            'dispatch_end_reason' => 'rider_accepted',
+        ]);
+
+        User::where('id', $riderId)->first()?->riderDetail()?->updateOrCreate(
+            ['user_id' => $riderId],
+            ['rider_status' => 'busy', 'rider_status_updated_at' => now()]
+        );
+
+        // Purchasing-cash flow: create the per-restaurant cod_purchases
+        // stops atomically with the assignment so the Tourism Office can
+        // issue the purchasing cash immediately (idempotent).
+        if ($this->isCodDelivery($lockedDelivery)) {
+            app(PurchasingCashService::class)->initializeForDelivery($lockedDelivery);
+        }
+    }
+
+    /**
+     * Post-commit side effects of ANY successful acceptance. Shared by the
+     * ping-accept path and the direct claim so both behave identically:
+     *  - withdraw the winner's other outstanding offers (one active delivery),
+     *    and cancel the losing riders' offers on the claimed delivery,
+     *  - authorize the winner's socket for the trip room,
+     *  - unlock restaurant preparation (P11.2 acceptance gate),
+     *  - emit the canonical DeliveryAssigned realtime event.
+     */
+    private function finalizeAcceptedDelivery(int $deliveryId, int $riderId): array
+    {
         // One active delivery: withdraw this rider's other outstanding offers
         // (their other deliveries are re-offered only when unclaimed), and
         // cancel the losing riders' offers on the claimed delivery so no other
         // rider can still see it as available. The winner's offer was already
         // set to 'accepted' atomically inside the transaction.
-        $this->cancelOtherPendingOffers($riderId, $delivery->id);
-        $this->cancelOtherRidersOffersForDelivery($delivery->id, $riderId);
+        $this->cancelOtherPendingOffers($riderId, $deliveryId);
+        $this->cancelOtherRidersOffersForDelivery($deliveryId, $riderId);
 
         // Push the authoritative assignment to the real-time engine so only
         // this rider's socket may stream location into the trip room. Best
         // effort: the database assignment is the source of truth.
         try {
-            app(WebsocketNotifierService::class)->notifyTripAssigned($delivery->id, $riderId);
+            app(WebsocketNotifierService::class)->notifyTripAssigned($deliveryId, $riderId);
         } catch (\Throwable $e) {
             // Real-time bridge unavailable; dispatch still succeeds.
         }
@@ -921,10 +972,10 @@ class NearestRiderService
         // assignment already see the order preparing. Best effort: the
         // orders:advance-preparation scheduler self-heals any failure.
         try {
-            app(PreparationStartService::class)->startForDelivery(Delivery::findOrFail($delivery->id));
+            app(PreparationStartService::class)->startForDelivery(Delivery::findOrFail($deliveryId));
         } catch (\Throwable $e) {
             Log::warning('[Dispatch] Preparation start failed', [
-                'delivery_id' => $delivery->id,
+                'delivery_id' => $deliveryId,
                 'error' => $e->getMessage(),
             ]);
         }
@@ -935,7 +986,7 @@ class NearestRiderService
         // proceed). Always ordered AFTER the DB assignment commits; the
         // database assignment remains the source of truth.
         try {
-            $assignedDelivery = Delivery::with('order')->findOrFail($delivery->id);
+            $assignedDelivery = Delivery::with('order')->findOrFail($deliveryId);
             $assignedRider = User::find($riderId);
 
             if ($assignedRider) {
@@ -946,6 +997,131 @@ class NearestRiderService
         }
 
         return ['success' => true, 'message' => 'Delivery accepted!', 'assigned' => true];
+    }
+
+    /**
+     * DIRECT CLAIM — accept an OPEN delivery without a ping offer.
+     *
+     * Business rule (rider order + booking boards): every delivery still
+     * awaiting a rider must be visible AND claimable on the rider boards,
+     * including orders the rider was never pinged for (missed ping, expired
+     * wave, parked at no_rider_available). Any ELIGIBLE rider may accept;
+     * the first accept wins.
+     *
+     * Invariants preserved:
+     *  - ONE active delivery per rider — the same already-active binding
+     *    guard as the ping-accept path rejects a rider who must first finish
+     *    an ongoing delivery, and validateRiderAcceptance() re-verifies
+     *    eligibility under row locks before the assignment.
+     *  - First accept wins — the delivery row is locked FOR UPDATE, so
+     *    exactly one transaction observes rider_id === null and flips it;
+     *    every competing accept (direct claim or stale ping) returns the
+     *    canonical conflict.
+     *  - Delivery ownership — once assigned, the binding is only released by
+     *    the canonical completion/cancellation flow (unchanged).
+     *  - Identical side effects — the claim shares applyAcceptedAssignment()
+     *    and finalizeAcceptedDelivery() with the ping-accept path, so the
+     *    restaurant-prep gate, sockets and realtime events behave the same.
+     *
+     * Returns the canonical result array when the delivery is in an open,
+     * claimable dispatch state; null otherwise so the caller falls back to
+     * the standard "No pending dispatch request found." conflict.
+     */
+    private function claimOpenDelivery(int $deliveryId, int $riderId): ?array
+    {
+        try {
+            $result = DB::transaction(function () use ($deliveryId, $riderId) {
+                $lockedDelivery = Delivery::with('order')->lockForUpdate()->find($deliveryId);
+
+                if (! $lockedDelivery || ! $this->deliveryIsClaimable($lockedDelivery)) {
+                    return null;
+                }
+
+                $rider = User::find($riderId);
+                if (! $rider) {
+                    return null;
+                }
+
+                // One active delivery: a rider with an ongoing job must finish
+                // it before becoming eligible again (same guard and canonical
+                // conflict as the ping-accept path).
+                $alreadyActive = $this->activeBindingsQuery($riderId)
+                    ->where('id', '!=', $lockedDelivery->id)
+                    ->exists();
+
+                if ($alreadyActive) {
+                    return [
+                        'success' => false,
+                        'message' => 'You already have an active delivery. Complete it before accepting another.',
+                        'already_active' => true,
+                        'conflict' => true,
+                    ];
+                }
+
+                // Same atomic eligibility gate as the ping-accept path:
+                // account approved, correct service, availability and COD
+                // binding room.
+                if (! $this->validateRiderAcceptance($lockedDelivery, $riderId)) {
+                    return [
+                        'success' => false,
+                        'message' => 'You are no longer eligible for this delivery.',
+                    ];
+                }
+
+                $this->applyAcceptedAssignment($lockedDelivery, $riderId);
+
+                return ['success' => true, 'message' => 'Delivery accepted!', 'assigned' => true];
+            });
+        } catch (\Throwable $e) {
+            Log::warning('[Dispatch] Direct claim failed', [
+                'delivery_id' => $deliveryId,
+                'rider_id' => $riderId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => 'Unable to accept the delivery right now.',
+                'conflict' => true,
+            ];
+        }
+
+        if ($result === null || ($result['success'] ?? false) !== true) {
+            return $result;
+        }
+
+        return $this->finalizeAcceptedDelivery($deliveryId, $riderId);
+    }
+
+    /**
+     * Is this delivery still OPEN for a direct claim by any eligible rider?
+     * Mirrors the rider-board "open deliveries" query: no rider bound, in an
+     * awaiting-a-rider dispatch state, and the order still dispatchable
+     * (ScheduledDispatchProcessor::orderIsDispatchable).
+     */
+    public function deliveryIsClaimable(Delivery $delivery): bool
+    {
+        if ($delivery->rider_id !== null) {
+            return false;
+        }
+
+        // Only a delivery still in its open/waiting state is claimable:
+        // cancelled, assigned or otherwise advanced deliveries never are
+        // (mirrors the rider-board actionable filter).
+        if ($delivery->status !== TripStatus::WAITING) {
+            return false;
+        }
+
+        if (! in_array($delivery->dispatch_status, self::OPEN_DISPATCH_STATUSES, true)) {
+            return false;
+        }
+
+        $order = $delivery->primaryOrder();
+        if (! $order) {
+            return false;
+        }
+
+        return app(ScheduledDispatchProcessor::class)->orderIsDispatchable($order);
     }
 
     /**

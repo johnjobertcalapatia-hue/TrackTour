@@ -380,29 +380,31 @@ class RiderAcceptanceGateTest extends TestCase
         $this->assertSame('preparing', $order->fresh()->status, 'Rider acceptance auto-starts preparation.');
     }
 
-    public function test_only_the_offered_rider_can_claim_a_delivery(): void
+    /**
+     * Reconciled 2026-10 (rider board fix): an OPEN delivery is claimable by
+     * ANY eligible rider — a ping offer is no longer a precondition. What IS
+     * pinned here: exactly ONE rider ends up bound (first accept wins under
+     * the delivery row lock), and every later accept attempt — the originally
+     * pinged rider included — is a conflict.
+     */
+    public function test_any_eligible_rider_may_claim_an_open_delivery_and_only_one_wins(): void
     {
         $order = $this->createOrder();
         $delivery = $order->activeDelivery();
 
-        // Offer went to rider A; rider B has no pending offer → rejected.
+        // Offer went to rider A; rider B never got a ping but is eligible —
+        // B may claim the open delivery directly.
         $result = $this->dispatchService()->handleRiderResponse($delivery->id, $this->riderB->id, 'accepted');
-        $this->assertFalse($result['success'] ?? true, 'Rider without an offer cannot claim the delivery.');
-        $this->assertNull($delivery->fresh()->rider_id);
+        $this->assertTrue($result['success'] ?? false, 'An eligible rider without a ping may claim an open delivery.');
+        $this->assertSame($this->riderB->id, $delivery->fresh()->rider_id);
+        $this->assertSame('busy', $this->riderB->fresh()->riderDetail->rider_status);
 
-        $this->patchJson('/api/rider/dispatch/accept', ['delivery_id' => $delivery->id], $this->authHeaders($this->riderB))
-            ->assertStatus(409);
-
-        // Rider A (offered) claims it exactly once.
-        $this->assertRiderAccepted($delivery->fresh(), $this->riderA);
-        $this->assertSame($this->riderA->id, $delivery->fresh()->rider_id);
-
-        // Rider B attempts again after assignment → still rejected (conflict).
-        $this->patchJson('/api/rider/dispatch/accept', ['delivery_id' => $delivery->id], $this->authHeaders($this->riderB))
+        // The originally pinged rider arrives late → conflict.
+        $this->patchJson('/api/rider/dispatch/accept', ['delivery_id' => $delivery->id], $this->authHeaders($this->riderA))
             ->assertStatus(409);
 
         // A second accept attempt by the winning rider is a no-op (already assigned).
-        $second = $this->dispatchService()->handleRiderResponse($delivery->fresh()->id, $this->riderA->id, 'accepted');
+        $second = $this->dispatchService()->handleRiderResponse($delivery->fresh()->id, $this->riderB->id, 'accepted');
         $this->assertFalse($second['success'] ?? true);
     }
 
@@ -439,12 +441,11 @@ class RiderAcceptanceGateTest extends TestCase
         $this->postJson("/api/business-owner/orders/{$order->id}/start-preparation", [], $this->authHeaders($this->ownerB))
             ->assertStatus(422);
 
-        // The single outstanding offer went to rider A (deterministic mock) —
-        // rider B has no offer and cannot claim the shared trip (conflict).
-        $this->patchJson('/api/rider/dispatch/accept', ['delivery_id' => $delivery->id], $this->authHeaders($this->riderB))
-            ->assertStatus(409);
-
-        // Rider A claims the shared trip: all restaurant item groups may now prepare.
+        // The single outstanding offer went to rider A (deterministic mock);
+        // rider A claims the shared trip and all restaurant item groups may
+        // then prepare. (An eligible rider without a ping may claim an OPEN
+        // trip directly — pinned in RiderOpenDeliveryClaimTest; a trip that
+        // is already claimed stays a 409 for everyone else, asserted below.)
         $this->assertRiderAccepted($delivery->fresh(), $this->riderA);
 
         $this->postJson("/api/business-owner/orders/{$order->id}/start-preparation", [], $this->authHeaders($this->ownerA))

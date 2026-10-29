@@ -45,7 +45,7 @@ use Tests\TestCase;
  * and validations, with the business-rule guards asserted in-flow:
  *
  *   - preparation is blocked until a rider accepts (AGENTS §4.2)
- *   - a rider without an offer cannot claim the trip (409)
+ *   - a delivery already claimed cannot be taken by another rider (409)
  *   - a non-owner rider cannot advance or settle the delivery (403)
  *   - COD picked_up is gated on every restaurant stop being collected
  *   - settle-cod requires delivered, rejects short cash, and is a one-shot
@@ -359,12 +359,7 @@ class CodOrderToSettlementFlowTest extends TestCase
 
         $this->assertSame('waiting_restaurant', $order->fresh()->status, 'Gate failures leave the order untouched.');
 
-        // ---- 4. A rider without an offer cannot claim (409); the offered rider can ----
-        $this->be($this->riderB)
-            ->patchJson('/api/rider/dispatch/accept', ['delivery_id' => $delivery->id])
-            ->assertStatus(409)
-            ->assertJsonPath('success', false);
-
+        // ---- 4. The offered rider claims it; nobody can take it afterwards ----
         $this->acceptAsRiderA($delivery);
 
         $delivery->refresh();
@@ -372,6 +367,13 @@ class CodOrderToSettlementFlowTest extends TestCase
         $this->assertSame($this->riderA->id, $delivery->rider_id);
         $this->assertEquals((float) $group->grand_total, (float) $delivery->cash_due, 'Cash due frozen at accept = group grand total.');
         $this->assertSame('busy', $this->riderA->fresh()->riderDetail->rider_status);
+
+        // A rider without an offer cannot take a delivery that is already
+        // claimed (409 conflict — same canonical guard as before).
+        $this->be($this->riderB)
+            ->patchJson('/api/rider/dispatch/accept', ['delivery_id' => $delivery->id])
+            ->assertStatus(409)
+            ->assertJsonPath('success', false);
 
         // Rider acceptance is what unlocks the restaurant (AGENTS §4.2).
         $this->assertSame('preparing', $order->fresh()->status, 'Accept auto-transitions waiting_restaurant → preparing.');

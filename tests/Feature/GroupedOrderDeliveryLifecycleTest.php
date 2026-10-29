@@ -245,10 +245,8 @@ class GroupedOrderDeliveryLifecycleTest extends TestCase
         $this->assertSame(1, BookingDispatchLog::count());
         $this->assertSame($this->riderA->id, BookingDispatchLog::where('delivery_id', $delivery->id)->first()->rider_id);
 
-        // ---- Step 3: only the offered rider can claim the shared delivery ----
-        $unoffered = $this->dispatchService()->handleRiderResponse($delivery->id, $this->riderB->id, 'accepted');
-        $this->assertFalse($unoffered['success'] ?? true, 'A rider without an offer cannot claim the trip.');
-
+        // ---- Step 3: the shared delivery is claimed (offered rider accepts);
+        //      once claimed, no other rider can take it ----
         $result = $this->dispatchService()->handleRiderResponse($delivery->id, $this->riderA->id, 'accepted');
         $this->assertTrue($result['success'] ?? false);
 
@@ -257,6 +255,10 @@ class GroupedOrderDeliveryLifecycleTest extends TestCase
         $this->assertSame($this->riderA->id, $delivery->rider_id);
         $this->assertNull($delivery->dispatch_status);
         $this->assertSame('busy', $this->riderA->fresh()->riderDetail->rider_status);
+
+        $late = $this->dispatchService()->handleRiderResponse($delivery->id, $this->riderB->id, 'accepted');
+        $this->assertFalse($late['success'] ?? true, 'A trip already claimed by another rider cannot be claimed again.');
+        $this->assertTrue($late['conflict'] ?? false);
         $this->assertSame('online', $this->riderB->fresh()->riderDetail->rider_status, 'Rider B never claimed this trip.');
 
         // ---- Step 4: one accepted rider unlocks all restaurant item groups ----
