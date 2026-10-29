@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { get, patch } from '@/shared/services/api'
@@ -13,6 +14,7 @@ export default function RiderDeliveriesPending() {
   const navigate = useNavigate()
   const currentService = useAuthStore((state) => state.user?.current_service)
   const isRideHailing = currentService === 'transport'
+  const [acceptError, setAcceptError] = useState<string | null>(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ['rider-deliveries-pending'],
@@ -21,7 +23,18 @@ export default function RiderDeliveriesPending() {
 
   const acceptMutation = useMutation({
     mutationFn: (id: number) => patch('/rider/dispatch/accept', { delivery_id: id }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rider-deliveries-pending'] }),
+    onSuccess: () => {
+      setAcceptError(null)
+      queryClient.invalidateQueries({ queryKey: ['rider-deliveries-pending'] })
+    },
+    onError: (err) => {
+      // First accept wins server-side: a delivery another rider just claimed
+      // (409) or an eligibility gate (offline / busy / stale GPS → 422) must
+      // tell the rider why, then refresh the list so stale rows disappear.
+      const e = err as { response?: { data?: { message?: string } } }
+      setAcceptError(e.response?.data?.message || 'Failed to accept the delivery. Please try again.')
+      queryClient.invalidateQueries({ queryKey: ['rider-deliveries-pending'] })
+    },
   })
 
   if (isLoading) return <DashboardSkeleton />
@@ -45,6 +58,12 @@ export default function RiderDeliveriesPending() {
           {isRideHailing ? 'Accept bookings to start earning' : 'Accept deliveries to start earning'}
         </p>
       </div>
+
+      {acceptError && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 mb-4">
+          <p className="text-sm font-semibold text-red-700">{acceptError}</p>
+        </div>
+      )}
 
       {deliveries.length === 0 ? (
         <div className="bg-white rounded-2xl border border-[#E5E9E7] p-12 text-center">
