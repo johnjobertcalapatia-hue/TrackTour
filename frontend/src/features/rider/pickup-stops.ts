@@ -15,7 +15,7 @@
 
 export type PickupStopStatus = 'pending' | 'collected'
 export type PickupStopReadyLabel = 'ready' | 'preparing' | 'accepted' | 'none'
-export type PickupStopBlockReason = 'not_current' | 'waiting_ready' | 'too_far' | 'gps_unavailable' | 'already_confirmed' | null
+export type PickupStopBlockReason = 'not_current' | 'waiting_arrival' | 'waiting_ready' | 'too_far' | 'gps_unavailable' | 'already_confirmed' | null
 
 export interface PickupStopItem {
   id: number
@@ -45,6 +45,8 @@ export interface PickupStop {
   pickup_lat: number | null
   pickup_lng: number | null
   pickup_address: string | null
+  arrived_at: string | null
+  waiting_seconds: number | null
   status: PickupStopStatus
   pickup_confirmed_at: string | null
   is_ready: boolean
@@ -54,12 +56,15 @@ export interface PickupStop {
   distance_meters: number | null
   can_confirm: boolean
   reason: PickupStopBlockReason
+  arrival_can_confirm: boolean
+  arrival_reason: 'not_current' | 'too_far' | 'gps_unavailable' | null
   items: PickupStopItem[]
   cod_purchase: PickupStopCodPurchase | null
 }
 
 export interface PickupStopsData {
   delivery_id: number
+  pickup_radius_meters?: number
   is_cod: boolean
   purchasing_cash: number | null
   purchasing_cash_issued_at: string | null
@@ -83,6 +88,8 @@ export interface PickupStopsData {
 /** Human label for the gate reason that keeps a stop from being confirmable. */
 export function pickupStopReasonLabel(reason: PickupStopBlockReason): string | null {
   switch (reason) {
+    case 'waiting_arrival':
+      return 'Confirm arrival before pickup.'
     case 'not_current':
       return 'Confirm the pickups in route order.'
     case 'waiting_ready':

@@ -11,6 +11,7 @@ use App\Models\CodSettlement;
 use App\Models\Delivery;
 use App\Models\Municipality;
 use App\Models\Offering;
+use App\Models\Order;
 use App\Models\RiderDetail;
 use App\Models\RiderLocation;
 use App\Models\User;
@@ -258,6 +259,29 @@ class PurchasingCashFlowTest extends TestCase
         $delivery->refresh();
     }
 
+    private function markRestaurantReady(Order $order, Business $business): void
+    {
+        foreach ($order->items()->where('business_id', $business->id)->get() as $item) {
+            $this->be($this->owner)
+                ->patchJson("/api/business-owner/orders/{$order->id}/items/{$item->id}/status", ['status' => 'ready'])
+                ->assertOk();
+        }
+    }
+
+    private function arriveAtRestaurant(Delivery $delivery, Business $business): void
+    {
+        RiderLocation::create([
+            'rider_id' => $this->riderA->id,
+            'latitude' => $business->latitude,
+            'longitude' => $business->longitude,
+            'recorded_at' => now(),
+        ]);
+
+        $this->be($this->riderA)
+            ->postJson("/api/rider/deliveries/{$delivery->id}/pickup-stops/{$business->id}/arrive")
+            ->assertOk();
+    }
+
     private function dispatchService(): NearestRiderService
     {
         return $this->app->make(NearestRiderService::class);
@@ -457,8 +481,10 @@ class PurchasingCashFlowTest extends TestCase
 
     public function test_rider_confirms_receipt_and_marks_purchases_through_canonical_apis(): void
     {
-        [, , $delivery] = $this->createTwoRestaurantCodOrder();
+        [, $order, $delivery] = $this->createTwoRestaurantCodOrder();
         $this->acceptDelivery($delivery);
+        $this->markRestaurantReady($order, $this->restaurantA);
+        $this->markRestaurantReady($order, $this->restaurantB);
 
         $purchasesUrl = '/api/rider/deliveries/' . $delivery->id;
 
@@ -495,6 +521,7 @@ class PurchasingCashFlowTest extends TestCase
 
         // purchased → collected, then duplicate is rejected.
         $this->postJson($purchasesUrl . '/purchases/' . $purchaseIds[0] . '/mark', ['status' => 'purchased'])->assertOk();
+        $this->arriveAtRestaurant($delivery, $this->restaurantA);
         $this->postJson($purchasesUrl . '/purchases/' . $purchaseIds[0] . '/mark', ['status' => 'collected'])->assertOk();
         $this->postJson($purchasesUrl . '/purchases/' . $purchaseIds[0] . '/mark', ['status' => 'collected'])
             ->assertStatus(422)
@@ -513,8 +540,10 @@ class PurchasingCashFlowTest extends TestCase
 
     public function test_picked_up_is_blocked_until_all_restaurants_collected(): void
     {
-        [, , $delivery] = $this->createTwoRestaurantCodOrder();
+        [, $order, $delivery] = $this->createTwoRestaurantCodOrder();
         $this->acceptDelivery($delivery);
+        $this->markRestaurantReady($order, $this->restaurantA);
+        $this->markRestaurantReady($order, $this->restaurantB);
 
         $purchasesUrl = '/api/rider/deliveries/' . $delivery->id;
 
@@ -530,6 +559,7 @@ class PurchasingCashFlowTest extends TestCase
 
         // Partial collection: leave cannot happen yet.
         $this->postJson($purchasesUrl . '/purchases/' . $purchaseIds[0] . '/mark', ['status' => 'purchased'])->assertOk();
+        $this->arriveAtRestaurant($delivery, $this->restaurantA);
         $this->postJson($purchasesUrl . '/purchases/' . $purchaseIds[0] . '/mark', ['status' => 'collected'])->assertOk();
 
         $this->patchJson($purchasesUrl . '/status', ['status' => 'picked_up'])
@@ -539,9 +569,9 @@ class PurchasingCashFlowTest extends TestCase
 
         // Collect the remaining restaurant → leave now allowed.
         $this->postJson($purchasesUrl . '/purchases/' . $purchaseIds[1] . '/mark', ['status' => 'purchased'])->assertOk();
+        $this->arriveAtRestaurant($delivery, $this->restaurantB);
         $this->postJson($purchasesUrl . '/purchases/' . $purchaseIds[1] . '/mark', ['status' => 'collected'])->assertOk();
 
-        $this->patchJson($purchasesUrl . '/status', ['status' => 'picked_up'])->assertOk();
         $this->assertSame('picked_up', $delivery->fresh()->status->value);
     }
 
@@ -560,19 +590,26 @@ class PurchasingCashFlowTest extends TestCase
         $this->be($this->riderA);
         $purchasesUrl = '/api/rider/deliveries/' . $delivery->id;
         $this->postJson($purchasesUrl . '/purchasing-cash/receive')->assertOk();
+        $this->markRestaurantReady($order, $this->restaurantA);
+        $this->markRestaurantReady($order, $this->restaurantB);
 
         $delivery->refresh()->load('codPurchases');
         $this->assertEquals((float) $financed, $delivery->codPurchases->sum(fn ($p) => (float) $p->purchase_amount));
         $this->assertCount(2, $delivery->codPurchases);
 
-        foreach ($delivery->codPurchases as $purchase) {
+        $this->be($this->riderA);
+        foreach ($delivery->codPurchases->sortBy('business_id') as $purchase) {
             $this->postJson($purchasesUrl . '/purchases/' . $purchase->id . '/mark', ['status' => 'purchased'])->assertOk();
+            $this->arriveAtRestaurant($delivery, $purchase->business_id === $this->restaurantA->id
+                ? $this->restaurantA
+                : $this->restaurantB);
             $this->postJson($purchasesUrl . '/purchases/' . $purchase->id . '/mark', ['status' => 'collected'])->assertOk();
         }
 
         // 4) Leave after ALL COLLECTED, then deliver (P14 — the TOURIST confirms
         //    receipt at the drop-off; the rider's own delivered is rejected).
-        foreach (['arrived_pickup', 'picked_up', 'in_transit', 'arrived_destination'] as $status) {
+        $this->assertSame('picked_up', $delivery->fresh()->status->value, 'The final restaurant pickup transitions the shared delivery.');
+        foreach (['in_transit', 'arrived_destination'] as $status) {
             $this->patchJson($purchasesUrl . '/status', ['status' => $status])->assertOk();
         }
         $this->patchJson($purchasesUrl . '/status', ['status' => 'delivered'])

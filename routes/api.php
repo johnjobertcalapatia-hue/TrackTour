@@ -490,6 +490,7 @@ Route::middleware('token.only')->group(function () {
         Route::get('/deliveries/{delivery}/purchases', [RiderPurchasingController::class, 'purchases']);
         Route::get('/deliveries/{delivery}/pickup-route', [RiderDeliveryController::class, 'pickupRoute']);
         Route::get('/deliveries/{delivery}/pickup-stops', [RiderPickupStopController::class, 'index']);
+        Route::post('/deliveries/{delivery}/pickup-stops/{business}/arrive', [RiderPickupStopController::class, 'arrive']);
         Route::post('/deliveries/{delivery}/pickup-stops/{business}/confirm', [RiderPickupStopController::class, 'confirm']);
         Route::post('/deliveries/{delivery}/purchases/{purchase}/mark', [RiderPurchasingController::class, 'mark']);
         Route::post('/deliveries/{delivery}/purchasing-cash/receive', [RiderPurchasingController::class, 'confirmCashReceipt']);

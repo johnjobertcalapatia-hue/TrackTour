@@ -15,6 +15,7 @@ export type BusinessStatusEventName =
   | 'order.status.changed'
   | 'delivery.status.changed'
   | 'delivery.assigned'
+  | 'delivery.pickup.stop.changed'
   | 'rider_assigned'
   | 'trip_cancelled'
   | 'dispatch_status_update'
@@ -85,6 +86,7 @@ export function useBusinessSocketNotifier({
           'order.status.changed',
           'delivery.status.changed',
           'delivery.assigned',
+          'delivery.pickup.stop.changed',
           'rider_assigned',
           'trip_cancelled',
           'dispatch_status_update',

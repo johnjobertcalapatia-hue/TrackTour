@@ -222,3 +222,14 @@ Proposed P11 scope suggestion (subject to owner decision): **1 → 2 → 3** are
 ### Tourist Rating Completion-Path Follow-up — 2026-10-06
 
 Closed the previously tracked `TouristConfirmRatingPersistenceTest` gap without changing delivery confirmation or COD settlement behavior. `FoodController::rateOrder()` now accepts both `delivered` and `completed`, locks and rechecks the order in a transaction, persists ratings on the order, and upserts one associated review. The reviews migration adds nullable `order_id` (foreign key + unique constraint) and `delivery_rating`. The migration was exercised by the Laravel test database; production database migration remains pending deployment. Final full Laravel regression: **564 passed / 3,097 assertions / 0 failures / 2 skipped**.
+
+### Multi-restaurant Pickup Journey Follow-up — 2026-10-30
+
+The rider/restaurant/tourist pickup sequence is now implemented without changing the existing dispatch, COD settlement, or Socket.IO authority model:
+
+- Each restaurant stop has a server-recorded `arrived_at`; repeat arrival requests preserve its original value. The backend requires arrival, ready items, route order, and the configured 50 m radius before confirming that restaurant's pickup.
+- Confirming the final required stop transitions the single shared delivery to `picked_up` within the locked transaction, after all-stop and COD cash-receipt checks. Status and pickup-stop events are dispatched after commit.
+- The legacy COD `collected` action delegates to the canonical pickup sequence. Rider waiting time uses `arrived_at`; restaurant readiness remains governed by rider acceptance; tourist delivery tracking remains gated by backend pickup and delivery state.
+- `delivery_pickup_stops.arrived_at` is added by a migration and exercised by Laravel's SQLite test database. No live database was modified; MySQL lock contention and production migration remain unverified.
+- **Journey coverage:** the canonical COD flow now crosses the restaurant-owner preparation endpoints, rider arrival/pickup and COD endpoints, and tourist status/tracking endpoint; it asserts that tourist tracking stays inactive during restaurant pickups and activates only after the backend transitions the shared delivery.
+- **Regression:** Laravel **674 passed / 3,600 assertions / 0 failures / 2 existing SQLite-incompatible skips**; frontend UI **150 passed / 0 failures**; Socket.IO **52 passed / 0 failures**; production build succeeded. Full frontend lint still reports two unrelated conditional-hook errors in `BusinessOwnerBookingCalendar.tsx`; changed files pass the targeted lint command.

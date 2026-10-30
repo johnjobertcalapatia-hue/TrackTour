@@ -6,6 +6,7 @@ use App\Models\BookingDispatchLog;
 use App\Models\Business;
 use App\Models\BusinessCategory;
 use App\Models\Delivery;
+use App\Events\DeliveryPickupStopChanged;
 use App\Models\Municipality;
 use App\Models\Offering;
 use App\Models\Order;
@@ -409,6 +410,24 @@ class RealtimeCompletenessTest extends TestCase
                 && in_array('rider:'.$this->riderA->id, $pair[0]['rooms'], true),
             ),
             'Shared order status events must fan to every participating business room.'
+        );
+
+        $stops = app(\App\Services\PickupSequenceService::class)->stops($delivery);
+        $stopA = $stops->firstWhere('business_id', $this->restaurantA->id);
+        $this->assertNotNull($stopA);
+        DeliveryPickupStopChanged::dispatch($delivery->fresh(), $stopA, 'arrived');
+
+        $pickupEvents = $this->bridgeEvents(fn ($req) => $req['eventName'] === 'delivery.pickup.stop.changed');
+        $this->assertTrue(
+            $pickupEvents->contains(fn ($pair) =>
+                in_array('business:'.$this->restaurantA->id, $pair[0]['rooms'], true)
+                && ! in_array('business:'.$this->restaurantB->id, $pair[0]['rooms'], true)
+                && in_array('user:'.$this->customer->id, $pair[0]['rooms'], true)
+                && in_array('user:'.$this->riderA->id, $pair[0]['rooms'], true)
+                && in_array('trip:'.$delivery->id, $pair[0]['rooms'], true)
+                && $pair[0]['data']['business_ids'] === [$this->restaurantA->id],
+            ),
+            'Pickup progress is isolated to its restaurant and the authorized rider, tourist, and trip rooms.'
         );
     }
 

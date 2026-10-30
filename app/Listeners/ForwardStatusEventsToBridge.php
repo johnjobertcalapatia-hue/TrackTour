@@ -3,6 +3,7 @@
 namespace App\Listeners;
 
 use App\Events\DeliveryAssigned;
+use App\Events\DeliveryPickupStopChanged;
 use App\Events\DeliveryStatusChanged;
 use App\Events\OrderStatusChanged;
 use App\Services\WebsocketNotifierService;
@@ -24,11 +25,12 @@ use App\Services\WebsocketNotifierService;
  */
 class ForwardStatusEventsToBridge
 {
-    public function handle(OrderStatusChanged|DeliveryAssigned|DeliveryStatusChanged $event): void
+    public function handle(OrderStatusChanged|DeliveryAssigned|DeliveryStatusChanged|DeliveryPickupStopChanged $event): void
     {
         [$rooms, $data] = match (true) {
             $event instanceof DeliveryAssigned => $this->forDeliveryAssigned($event),
             $event instanceof OrderStatusChanged => $this->forOrderStatusChanged($event),
+            $event instanceof DeliveryPickupStopChanged => $this->forPickupStopChanged($event),
             $event instanceof DeliveryStatusChanged => $this->forDeliveryStatusChanged($event),
         };
 
@@ -89,6 +91,7 @@ class ForwardStatusEventsToBridge
 
             if ($delivery->rider_id) {
                 $rooms[] = 'rider:'.$delivery->rider_id;
+                $rooms[] = 'user:'.$delivery->rider_id;
             }
         }
 
@@ -112,6 +115,7 @@ class ForwardStatusEventsToBridge
 
         if ($delivery->rider_id) {
             $rooms[] = 'rider:'.$delivery->rider_id;
+            $rooms[] = 'user:'.$delivery->rider_id;
         }
 
         // Fan out to every restaurant represented by the shared order items.
@@ -129,6 +133,35 @@ class ForwardStatusEventsToBridge
         $data['business_id'] = $primaryOrder?->business_id;
         $data['user_id'] = $primaryOrder?->user_id;
         $data['rider_id'] = $delivery->rider_id;
+
+        return [$rooms, $data];
+    }
+
+    private function forPickupStopChanged(DeliveryPickupStopChanged $event): array
+    {
+        $delivery = $event->delivery;
+        $orders = $delivery->childOrders();
+        $primaryOrder = $orders->first();
+        $rooms = ['trip:'.$delivery->id];
+
+        if ($delivery->rider_id) {
+            $rooms[] = 'rider:'.$delivery->rider_id;
+            $rooms[] = 'user:'.$delivery->rider_id;
+        }
+
+        $businessId = (int) $event->stop->business_id;
+        if ($businessId > 0) {
+            $rooms[] = 'business:'.$businessId;
+        }
+
+        if ($primaryOrder?->user_id) {
+            $rooms[] = 'user:'.$primaryOrder->user_id;
+        }
+
+        $data = $event->broadcastWith();
+        $data['user_id'] = $primaryOrder?->user_id;
+        $data['rider_id'] = $delivery->rider_id;
+        $data['business_ids'] = $businessId > 0 ? [$businessId] : [];
 
         return [$rooms, $data];
     }

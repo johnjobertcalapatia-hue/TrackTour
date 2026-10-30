@@ -297,6 +297,20 @@ class CodOrderToSettlementFlowTest extends TestCase
         return "/api/rider/deliveries/{$delivery->id}/settle-cod";
     }
 
+    private function arriveAtRestaurant(Delivery $delivery, Business $business): void
+    {
+        RiderLocation::create([
+            'rider_id' => $this->riderA->id,
+            'latitude' => $business->latitude,
+            'longitude' => $business->longitude,
+            'recorded_at' => now(),
+        ]);
+
+        $this->be($this->riderA)
+            ->postJson("/api/rider/deliveries/{$delivery->id}/pickup-stops/{$business->id}/arrive")
+            ->assertOk();
+    }
+
     // ───────────────────────────────────────────────────────────────
     // 1. The happy path: order placed → delivered → settled → completed,
     //    entirely over the canonical endpoints, with every business-rule
@@ -429,6 +443,13 @@ class CodOrderToSettlementFlowTest extends TestCase
         $this->assertSame('ready', $order->fresh()->status, 'All items ready → order ready.');
         $this->assertSame($this->riderA->id, $delivery->fresh()->rider_id, 'Restaurant work never rebinds the delivery (AGENTS §4.4).');
 
+        $this->be($this->tourist)
+            ->getJson("/api/tourist/food/order/{$order->id}/status")
+            ->assertOk()
+            ->assertJsonPath('data.delivery_route_active', false)
+            ->assertJsonPath('data.pickup_stops.0.is_ready', true)
+            ->assertJsonPath('data.pickup_stops.1.is_ready', true);
+
         // ---- 7. Rider receives the cash issued by the Tourism Office ----
         $this->assertNotNull($delivery->purchasing_cash_issued_at);
         $this->assertEquals((float) $order->rider_financed_amount, (float) $delivery->purchasing_cash);
@@ -453,6 +474,10 @@ class CodOrderToSettlementFlowTest extends TestCase
         $this->assertNotSame('picked_up', $delivery->fresh()->status->value);
 
         foreach ($purchases as $purchase) {
+            $business = $purchase->business_id === $this->restaurantA->id
+                ? $this->restaurantA
+                : $this->restaurantB;
+            $this->arriveAtRestaurant($delivery, $business);
             $this->be($this->riderA)
                 ->postJson("/api/rider/deliveries/{$delivery->id}/purchases/{$purchase->id}/mark", ['status' => 'purchased'])
                 ->assertOk();
@@ -461,9 +486,16 @@ class CodOrderToSettlementFlowTest extends TestCase
                 ->assertOk();
         }
 
-        $this->be($this->riderA)
-            ->patchJson($this->riderStatusUrl($delivery), ['status' => 'picked_up'])
-            ->assertOk();
+        $this->assertSame('picked_up', $delivery->fresh()->status->value, 'The final restaurant pickup transitions the shared delivery.');
+        $this->be($this->tourist)
+            ->getJson("/api/tourist/food/order/{$order->id}/status")
+            ->assertOk()
+            ->assertJsonPath('data.delivery_route_active', true)
+            ->assertJsonPath('data.delivery.status', 'picked_up')
+            ->assertJsonPath('data.pickup_stops.0.status', 'collected')
+            ->assertJsonPath('data.pickup_stops.1.status', 'collected');
+
+        $this->be($this->riderA);
         $this->be($this->riderA)
             ->patchJson($this->riderStatusUrl($delivery), ['status' => 'in_transit'])
             ->assertOk();

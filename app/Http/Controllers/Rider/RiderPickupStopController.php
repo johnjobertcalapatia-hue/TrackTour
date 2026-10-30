@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Rider;
 
+use App\Events\DeliveryPickupStopChanged;
+use App\Events\DeliveryStatusChanged;
 use App\Http\Controllers\Controller;
 use App\Models\Delivery;
 use App\Models\DeliveryPickupStop;
@@ -71,6 +73,7 @@ class RiderPickupStopController extends Controller
 
         return $this->successResponse([
             'delivery_id' => $delivery->id,
+            'pickup_radius_meters' => (float) config('tracking.pickup_radius_meters', 50),
             'is_cod' => $this->dispatchService->isCodDelivery($delivery),
             'purchasing_cash' => $delivery->purchasing_cash !== null ? (float) $delivery->purchasing_cash : null,
             'purchasing_cash_issued_at' => $delivery->purchasing_cash_issued_at,
@@ -104,7 +107,52 @@ class RiderPickupStopController extends Controller
             return $this->errorResponse($exception->getMessage(), 422);
         }
 
+        $freshDelivery = $delivery->fresh()->load('order.business');
+        $freshStop = DeliveryPickupStop::where('delivery_id', $delivery->id)
+            ->where('business_id', $business)
+            ->firstOrFail();
+        if ($result['stop_changed']) {
+            DeliveryPickupStopChanged::dispatch($freshDelivery, $freshStop, 'pickup_confirmed');
+        }
+        if ($result['delivery_status_change'] !== null) {
+            DeliveryStatusChanged::dispatch(
+                $freshDelivery,
+                $result['delivery_status_change']['old_status'],
+                $result['delivery_status_change']['new_status'],
+            );
+        }
+
         return $this->successResponse($result, 'Order items received. Pickup confirmed.');
+    }
+
+    public function arrive(Request $request, Delivery $delivery, int $business): JsonResponse
+    {
+        if ((int) $delivery->rider_id !== (int) $request->user()?->id) {
+            return $this->forbiddenResponse('You are not assigned to this delivery.');
+        }
+
+        try {
+            $result = $this->sequence->confirmArrival($delivery, $business, (int) $request->user()?->id);
+        } catch (InvalidArgumentException $exception) {
+            return $this->errorResponse($exception->getMessage(), 422);
+        }
+
+        $freshDelivery = $delivery->fresh()->load('order.business');
+        $freshStop = DeliveryPickupStop::where('delivery_id', $delivery->id)
+            ->where('business_id', $business)
+            ->firstOrFail();
+        if ($result['arrival_changed']) {
+            DeliveryPickupStopChanged::dispatch($freshDelivery, $freshStop, 'arrived');
+        }
+        if ($result['delivery_status_change'] !== null) {
+            DeliveryStatusChanged::dispatch(
+                $freshDelivery,
+                $result['delivery_status_change']['old_status'],
+                $result['delivery_status_change']['new_status'],
+            );
+        }
+
+        return $this->successResponse($result, 'Arrival at restaurant confirmed.');
     }
 
     /**

@@ -20,6 +20,7 @@ import {
   Store,
   ClipboardList,
   Hourglass,
+  CookingPot,
 } from 'lucide-react'
 import { resolveSubOrderStatus } from '../utils/subOrderStatusEngine'
 import { OrderProgressTrack } from '../components/OrderProgressTrack'
@@ -108,7 +109,13 @@ interface OrderStatusResponse {
     longitude?: number | null
     item_count: number
     ready_item_count: number
+    status: 'pending' | 'collected'
+    is_ready: boolean
+    arrived_at: string | null
+    pickup_confirmed_at: string | null
+    waiting_seconds: number | null
   }>
+  delivery_route_active?: boolean
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -145,6 +152,12 @@ const deliveryDestIcon = destinationMarkerIcon
 function num(v: number | string | null | undefined): number | null {
   const n = Number(v)
   return Number.isFinite(n) && n !== 0 ? n : null
+}
+
+function formatWaitingDuration(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
 }
 
 function LiveTrackingMap({ delivery, pickupStops, riderLocation }: {
@@ -278,7 +291,9 @@ export default function TouristOrderStatus() {
   // Authorized live tracking (socket-primary, HTTP-poll fallback).
   const trackingBlock = response?.tracking ?? null
   const trackingDeliveryId =
-    isActive && hasRider && trackingBlock?.delivery_id != null ? String(trackingBlock.delivery_id) : null
+    isActive && hasRider && response?.delivery_route_active && trackingBlock?.delivery_id != null
+      ? String(trackingBlock.delivery_id)
+      : null
   const { connection, telemetry, tripCompleted, tripCancelled, rejectedReason, isStale } = useCustomerMapSocket({
     deliveryId: trackingDeliveryId,
     token: trackingBlock?.token ?? null,
@@ -294,10 +309,13 @@ export default function TouristOrderStatus() {
     }, [queryClient, id]),
   })
 
-  const trackingLocation =
+  const trackingLocation = response?.delivery_route_active
+    ? (
     telemetry && Number.isFinite(telemetry.lat) && Number.isFinite(telemetry.lng)
       ? { latitude: telemetry.lat, longitude: telemetry.lng, recorded_at: new Date(telemetry.timestamp).toISOString() }
       : (response?.rider_location ?? null)
+    )
+    : null
 
   const liveStatus = (() => {
     if (tripCancelled) return { text: 'Delivery Cancelled', className: 'text-red-600 bg-red-50', dot: 'bg-red-500', pulse: false }
@@ -498,25 +516,66 @@ export default function TouristOrderStatus() {
           <OrderProgressTrack resolution={resolution} />
         </div>
 
-        {/* Live Tracking Map (when rider assigned and active) */}
+        {/* During pickups, show backend-confirmed restaurant progress, not the delivery leg. */}
         {rider && isActive && !tripCancelled && (
           <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6 mb-6">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
-                <Truck className="w-5 h-5 text-[#087F3F]" />
-                <h2 className="text-lg font-semibold text-[#17201B]">Live Tracking</h2>
+                {response?.delivery_route_active
+                  ? <Truck className="w-5 h-5 text-[#087F3F]" />
+                  : <CookingPot className="w-5 h-5 text-[#F4B400]" />}
+                <h2 className="text-lg font-semibold text-[#17201B]">
+                  {response?.delivery_route_active ? 'Live Tracking' : 'Preparing your order'}
+                </h2>
               </div>
-              <span className={`flex items-center gap-2 text-xs font-medium px-2.5 py-1 rounded-full ${liveStatus.className}`}>
-                <span className={`w-1.5 h-1.5 rounded-full ${liveStatus.dot} ${liveStatus.pulse ? 'animate-pulse' : ''}`} />
-                {liveStatus.text}
-              </span>
+              {response?.delivery_route_active && (
+                <span className={`flex items-center gap-2 text-xs font-medium px-2.5 py-1 rounded-full ${liveStatus.className}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${liveStatus.dot} ${liveStatus.pulse ? 'animate-pulse' : ''}`} />
+                  {liveStatus.text}
+                </span>
+              )}
             </div>
-            <p className="text-sm text-[#6B7280] mb-3">
-              {['on_the_way', 'out_for_delivery', 'in_transit', 'picked_up'].includes(order.status)
-                ? `${rider.name} is on the way to you`
-                : `${rider.name} is visiting ${pickupStops.length || 1} pickup location${pickupStops.length === 1 ? '' : 's'}`}
-            </p>
-            <LiveTrackingMap delivery={delivery} pickupStops={pickupStops} riderLocation={trackingLocation} />
+            {response?.delivery_route_active ? (
+              <>
+                <p className="text-sm text-[#6B7280] mb-3">{rider.name} is on the way to you</p>
+                <LiveTrackingMap delivery={delivery} pickupStops={pickupStops} riderLocation={trackingLocation} />
+              </>
+            ) : (
+              <>
+                <div className="mb-4 flex items-center gap-3 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                  <CookingPot className="h-5 w-5 shrink-0 text-amber-600 motion-safe:animate-bounce" aria-hidden="true" />
+                  <p>Your restaurants are preparing and handing off each part of your order to the rider.</p>
+                </div>
+                <ol className="space-y-2" aria-label="Restaurant pickup progress">
+                  {pickupStops.map((stop, index) => {
+                    const complete = stop.status === 'collected'
+                    const state = complete
+                      ? 'Pickup confirmed'
+                      : stop.is_ready
+                        ? 'Ready for rider'
+                        : stop.ready_item_count > 0
+                          ? `Preparing · ${stop.ready_item_count}/${stop.item_count} items ready`
+                          : 'Preparing your order'
+                    return (
+                      <li key={stop.business_id} className="flex items-center gap-3 rounded-xl border border-[#E5E9E7] bg-[#FAFBFB] px-3 py-3">
+                        <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${complete ? 'bg-[#E9F7EF] text-[#087F3F]' : 'bg-amber-50 text-amber-600'}`}>
+                          {complete ? <CheckCircle2 className="h-4 w-4" /> : <span className="text-xs font-bold">{index + 1}</span>}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold text-[#17201B]">{stop.business_name}</p>
+                          <p className="text-xs text-[#6B7280]">{state}</p>
+                        </div>
+                        {stop.arrived_at && stop.status !== 'collected' && (
+                          <span className="shrink-0 text-xs font-medium text-[#6B7280]">
+                            Waiting {formatWaitingDuration(stop.waiting_seconds ?? 0)}
+                          </span>
+                        )}
+                      </li>
+                    )
+                  })}
+                </ol>
+              </>
+            )}
           </div>
         )}
 

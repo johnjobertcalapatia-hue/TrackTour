@@ -34,6 +34,10 @@ use InvalidArgumentException;
  */
 class PurchasingCashService
 {
+    public function __construct(
+        private PickupSequenceService $pickupSequence,
+    ) {}
+
     /** Statuses during which purchasing cash may still be issued / spent. */
     public const ISSUABLE_STATUSES = ['assigned', 'en_route_pickup', 'arrived_pickup'];
 
@@ -174,13 +178,36 @@ class PurchasingCashService
      *
      * @throws InvalidArgumentException
      */
-    public function markPurchase(Delivery $delivery, int $purchaseId, int $riderId, string $status): void
+    public function markPurchase(Delivery $delivery, int $purchaseId, int $riderId, string $status): ?array
     {
         $this->assertRiderOwnership($delivery, $riderId);
         $this->assertCashReceived($delivery);
 
         if (! in_array($status, [CodPurchase::STATUS_PURCHASED, CodPurchase::STATUS_COLLECTED], true)) {
             throw new InvalidArgumentException('Invalid purchase status. Use purchased or collected.');
+        }
+
+        if ($status === CodPurchase::STATUS_COLLECTED) {
+            $purchase = CodPurchase::where('id', $purchaseId)
+                ->where('delivery_id', $delivery->id)
+                ->first();
+
+            if (! $purchase) {
+                throw new InvalidArgumentException('Purchase stop does not belong to this delivery.');
+            }
+
+            if ($purchase->status === CodPurchase::STATUS_COLLECTED) {
+                throw new InvalidArgumentException('This purchase stop has already been processed.');
+            }
+            if ($purchase->status !== CodPurchase::STATUS_PURCHASED) {
+                throw new InvalidArgumentException('Mark the purchase as bought first.');
+            }
+
+            return $this->pickupSequence->confirmStop(
+                $delivery,
+                (int) $purchase->business_id,
+                $riderId,
+            );
         }
 
         DB::transaction(function () use ($delivery, $purchaseId, $status) {
@@ -204,29 +231,16 @@ class PurchasingCashService
                 throw new InvalidArgumentException('Purchase stop does not belong to this delivery.');
             }
 
-            if ($status === CodPurchase::STATUS_PURCHASED) {
-                if ($purchase->status !== CodPurchase::STATUS_PENDING) {
-                    throw new InvalidArgumentException('This purchase stop has already been processed.');
-                }
-                $purchase->update([
-                    'status' => CodPurchase::STATUS_PURCHASED,
-                    'purchased_at' => now(),
-                ]);
-
-                return;
-            }
-
-            if ($purchase->status === CodPurchase::STATUS_COLLECTED) {
+            if ($purchase->status !== CodPurchase::STATUS_PENDING) {
                 throw new InvalidArgumentException('This purchase stop has already been processed.');
             }
-            if ($purchase->status !== CodPurchase::STATUS_PURCHASED) {
-                throw new InvalidArgumentException('Mark the purchase as bought first.');
-            }
             $purchase->update([
-                'status' => CodPurchase::STATUS_COLLECTED,
-                'collected_at' => now(),
+                'status' => CodPurchase::STATUS_PURCHASED,
+                'purchased_at' => now(),
             ]);
         });
+
+        return null;
     }
 
     /**

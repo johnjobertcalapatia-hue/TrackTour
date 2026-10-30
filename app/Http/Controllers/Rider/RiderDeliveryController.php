@@ -10,6 +10,7 @@ use App\Models\Delivery;
 use App\Models\User;
 use App\Services\DeliveryService;
 use App\Services\NearestRiderService;
+use App\Services\PickupDeliveryTransitionService;
 use App\Services\TransportationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -19,7 +20,8 @@ class RiderDeliveryController extends Controller
 {
     public function __construct(
         private DeliveryService $deliveryService,
-        private NearestRiderService $dispatchService
+        private NearestRiderService $dispatchService,
+        private PickupDeliveryTransitionService $pickupTransitions,
     ) {}
 
     public function pending(Request $request): JsonResponse
@@ -56,7 +58,7 @@ class RiderDeliveryController extends Controller
         }
 
         $validTransitions = [
-            'arrived_pickup' => ['field' => 'arrived_pickup_at', 'from' => ['assigned', 'arrived_pickup']],
+            'arrived_pickup' => ['field' => 'arrived_pickup_at', 'from' => ['assigned', 'en_route_pickup', 'arrived_pickup']],
             'picked_up' => ['field' => 'picked_up_at', 'from' => ['arrived_pickup']],
             'in_transit' => ['field' => null, 'from' => ['arrived_pickup', 'picked_up']],
             'arrived_destination' => ['field' => 'arrived_destination_at', 'from' => ['picked_up', 'in_transit', 'arrived_destination']],
@@ -91,6 +93,17 @@ class RiderDeliveryController extends Controller
                 $updateData[$timestampField] = now();
             }
 
+            if ($newStatus === 'arrived_pickup') {
+                $transition = $this->pickupTransitions->arriveAtPickup($locked);
+
+                return [
+                    'error' => null,
+                    'old_status' => $transition['old_status'] ?? $currentStatus,
+                    'new_status' => 'arrived_pickup',
+                    'final_status' => 'arrived_pickup',
+                ];
+            }
+
             // Every food delivery must confirm each restaurant pickup before
             // leaving the pickup area. COD additionally requires the matching
             // purchasing-cash ledger to be fully collected.
@@ -99,6 +112,20 @@ class RiderDeliveryController extends Controller
                 && ! app(\App\Services\PickupSequenceService::class)->allConfirmed($locked)
             ) {
                 return ['error' => 'not_all_collected'];
+            }
+
+            if ($newStatus === 'picked_up') {
+                $transition = $this->pickupTransitions->pickUp($locked);
+                if (! $transition) {
+                    return ['error' => 'not_all_collected'];
+                }
+
+                return [
+                    'error' => null,
+                    'old_status' => $transition['old_status'],
+                    'new_status' => 'picked_up',
+                    'final_status' => 'picked_up',
+                ];
             }
 
             if (

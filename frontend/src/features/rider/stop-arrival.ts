@@ -1,5 +1,5 @@
-/** Arrival threshold (meters) for reaching an individual pickup stop. */
-export const STOP_ARRIVAL_THRESHOLD_METERS = 100
+/** Arrival threshold (meters) for reaching an individual restaurant pickup stop. */
+export const STOP_ARRIVAL_THRESHOLD_METERS = 50
 
 export interface ArrivalStop {
   id: number

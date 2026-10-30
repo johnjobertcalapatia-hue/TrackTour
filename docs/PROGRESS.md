@@ -1,5 +1,22 @@
 # Project Progress — Tourism Management Portal
 
+## Multi-restaurant Pickup Journey — COMPLETE & VERIFIED (2026-10-30)
+
+- Added server-recorded arrival per restaurant pickup stop. Arrival retries preserve the original `arrived_at`; pickup is blocked until that stop has an arrival, the items are ready, the stop is next in route order, and the rider is within the configured 50 m pickup radius.
+- The final confirmed stop now transitions the shared delivery to `picked_up` inside the locked pickup transaction, after all-stop and COD purchasing-cash guards pass. Delivery status and pickup-stop events are dispatched after commit.
+- Rider Active Delivery retains manual arrival/pickup controls, shows per-stop waiting time from the server timestamp, and offers arrival/ready prompts. Tourists see individual restaurant progress while food is being prepared; the customer delivery route is activated only from the backend's all-stops-confirmed and `picked_up`-or-later state.
+- Added the nullable `delivery_pickup_stops.arrived_at` migration, scoped realtime pickup-stop notifications, tourist pickup progress payload, rider/restaurant/tourist UI coverage, and journey regressions. Legacy COD `collected` requests now use the same arrival/readiness/route-order confirmation path.
+- **Validation:** Laravel **674 passed / 3,600 assertions / 0 failures / 2 skipped**; frontend UI **150 passed / 0 failures**; Socket.IO **52 passed / 0 failures**; production build succeeded (existing chunk-size advisory). The two skips are existing SQLite-incompatible Haversine/dashboard tests. Changed frontend files pass Oxlint with existing warnings; the full frontend lint still reports two unrelated conditional-hook errors in `BusinessOwnerBookingCalendar.tsx`.
+- Laravel's test suite applied and exercised the migration using its test database. No development/production database was manually altered; production schema application remains pending deployment. SQLite does not verify concurrent MySQL row-lock contention.
+- Live socket disconnect/reconnect recovery was reviewed but not exercised during an active delivery. Railway's deployed `TRACKING_PICKUP_RADIUS_METERS` value was not inspected or changed; application default and `.env.example` remain 50 m.
+
+## Rider Restaurant Pickup Geofence — 50 m — BOUNDARY VERIFIED (2026-10-30)
+
+- Restaurant pickup confirmation now has its own `TRACKING_PICKUP_RADIUS_METERS` setting (default 50 m), separate from the existing 100 m general arrival geofence. The frontend pickup prompt uses the same 50 m default.
+- Added boundary coverage for 49.9 m (allowed), 50 m (inclusive/allowed), and 50.1 m (blocked); duplicate confirmation is also asserted to preserve a single collected row and its original confirmation timestamp.
+- **Validation:** Laravel **672 passed / 3,529 assertions / 0 failures / 2 skipped**; frontend UI **145 passed / 0 failures**; Socket.IO **52 passed / 0 failures**; production build succeeded. No schema change.
+- The standard Laravel test configuration uses in-memory SQLite, whose `lockForUpdate()` does not provide production MySQL row-lock contention. This validates replay idempotency, not two simultaneous transactions; concurrent MySQL verification remains outstanding. No dedicated pickup confirmation domain event currently exists.
+
 ## Rider Board — All Open (Unclaimed) Orders Visible + Direct Claim — COMPLETE & VERIFIED (2026-10-29)
 
 - **Requirement:** the rider Order page (dispatch board) and Booking page (legacy "Available Deliveries") must show **every delivery that is still awaiting a rider** — including orders the rider was never pinged for (missed ping at placement, expired wave, parked at `no_rider_available`) — and any eligible rider may accept it. One active delivery per rider is preserved: a rider must finish an accepted delivery before becoming eligible again.

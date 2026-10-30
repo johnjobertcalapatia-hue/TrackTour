@@ -368,11 +368,60 @@ class FoodController extends Controller
 
         $order->load('items.offering', 'items.business', 'business', 'delivery.rider.profile');
         $delivery = $order->activeDelivery();
+        $pickupSequence = app(\App\Services\PickupSequenceService::class);
+        $canonicalStops = collect();
+        $pickupStateByBusiness = [];
 
-        $pickupStops = $order->items
-            ->groupBy(fn ($item) => $item->business_id ?: $order->business_id)
-            ->map(function ($items, $businessId) use ($order) {
-                $business = $items->first()->business ?? $order->business;
+        if ($delivery) {
+            $delivery->loadMissing('codPurchases');
+            $canonicalStops = $pickupSequence->stops($delivery);
+            foreach ($canonicalStops as $stop) {
+                $confirmed = $pickupSequence->stopConfirmed($delivery, $stop);
+                $pickupStateByBusiness[(int) $stop->business_id] = [
+                    'status' => $confirmed ? 'collected' : 'pending',
+                    'arrived_at' => $stop->arrived_at?->toIso8601String(),
+                    'pickup_confirmed_at' => $stop->pickup_confirmed_at?->toIso8601String()
+                        ?? ($delivery->codPurchases
+                            ->firstWhere('business_id', (int) $stop->business_id)
+                            ?->collected_at?->toIso8601String()),
+                    'waiting_seconds' => $stop->arrived_at
+                        ? (int) $stop->arrived_at->diffInSeconds(
+                            $stop->pickup_confirmed_at
+                                ?? $delivery->codPurchases->firstWhere('business_id', (int) $stop->business_id)?->collected_at
+                                ?? now()
+                        )
+                        : null,
+                    'is_ready' => $pickupSequence->businessReady($delivery, (int) $stop->business_id),
+                ];
+            }
+        }
+
+        $progressOrders = $delivery?->childOrders() ?? collect([$order]);
+        $progressItems = collect();
+        foreach ($progressOrders as $progressOrder) {
+            $progressOrder->loadMissing('items.business', 'business');
+            foreach ($progressOrder->items as $item) {
+                $progressItems->push([
+                    'item' => $item,
+                    'business_id' => (int) ($item->business_id ?: $progressOrder->business_id),
+                    'business' => $item->business ?? $progressOrder->business,
+                ]);
+            }
+        }
+
+        $pickupStops = $progressItems
+            ->groupBy('business_id')
+            ->map(function ($entries, $businessId) use ($pickupStateByBusiness) {
+                $items = $entries->pluck('item');
+                $business = $entries->first()['business'];
+                $pickupState = $pickupStateByBusiness[(int) $businessId] ?? [
+                    'status' => 'pending',
+                    'arrived_at' => null,
+                    'pickup_confirmed_at' => null,
+                    'waiting_seconds' => null,
+                    'is_ready' => $items->every(fn ($item) => $item->status === 'ready'),
+                ];
+
                 return [
                     'business_id' => (int) $businessId,
                     'business_name' => $business?->business_name ?? $business?->name ?? 'Restaurant',
@@ -381,10 +430,23 @@ class FoodController extends Controller
                     'longitude' => $business?->longitude !== null ? (float) $business->longitude : null,
                     'item_count' => $items->sum(fn ($item) => max(0, (int) $item->quantity - (int) $item->cancelled_quantity)),
                     'ready_item_count' => $items->where('status', 'ready')->sum(fn ($item) => max(0, (int) $item->quantity - (int) $item->cancelled_quantity)),
-                ];
+                ] + $pickupState;
             })
             ->values()
             ->all();
+
+        $deliveryRouteActiveStatuses = [
+            'picked_up',
+            'in_transit',
+            'en_route_destination',
+            'arrived_destination',
+            'delivered',
+            'completed',
+        ];
+        $deliveryRouteActive = $delivery !== null
+            && $canonicalStops->isNotEmpty()
+            && $canonicalStops->every(fn ($stop) => $pickupSequence->stopConfirmed($delivery, $stop))
+            && in_array($delivery->status->value ?? $delivery->status, $deliveryRouteActiveStatuses, true);
 
         $dispatchLogs = null;
         $riderLocation = null;
@@ -403,6 +465,7 @@ class FoodController extends Controller
 
         $data = compact('order', 'delivery', 'dispatchLogs');
         $data['pickup_stops'] = $pickupStops;
+        $data['delivery_route_active'] = $deliveryRouteActive;
         $data['rider_location'] = $riderLocation ? [
             'latitude' => (float) $riderLocation->latitude,
             'longitude' => (float) $riderLocation->longitude,

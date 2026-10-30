@@ -3,9 +3,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { get, post, patch, apiErrorMessage } from '@/shared/services/api'
 import { useAuthStore } from '@/features/auth/services/auth-store'
 import { resolvePickupGate, isArrivalDismissed, markArrivalDismissed } from '@/features/rider/gating'
-import { resolveStopArrival } from '@/features/rider/stop-arrival'
+import { resolveStopArrival, STOP_ARRIVAL_THRESHOLD_METERS } from '@/features/rider/stop-arrival'
 import type { PickupStopsData } from '@/features/rider/pickup-stops'
 import type { Delivery } from '@/shared/types'
+import { useUserSocketNotifier } from '@/shared/hooks/useUserSocketNotifier'
 
 export type TripState =
   | 'EN_ROUTE_TO_PICKUP'
@@ -26,6 +27,8 @@ export interface TripDelivery {
   delivery_lat: number | null
   delivery_lng: number | null
   business_name?: string | null
+  customer_name?: string | null
+  created_at?: string | null
 }
 
 export type ArrivalAlertKind = 'PICKUP' | 'DROPOFF' | null
@@ -41,7 +44,7 @@ export interface RiderTripLocationData {
 }
 
 const GEOFENCE_METERS = 100
-const ACTIVE_STATUSES = ['assigned', 'arrived_pickup', 'picked_up', 'in_transit', 'arrived_destination']
+const ACTIVE_STATUSES = ['assigned', 'en_route_pickup', 'arrived_pickup', 'picked_up', 'in_transit', 'arrived_destination']
 
 function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371000
@@ -70,6 +73,9 @@ interface RiderActiveTripContextValue {
   onConfirmDelivery: () => void
   /** Unified pickup-stops payload for the assigned delivery (COD + prepaid). */
   pickupStopsData: PickupStopsData | null
+  confirmArrivalStop: (businessId: number) => void
+  confirmArrivalBusy: boolean
+  confirmArrivalError: string | null
   confirmPickupStop: (businessId: number) => void
   confirmStopBusy: boolean
   confirmStopError: string | null
@@ -81,21 +87,29 @@ interface RiderActiveTripContextValue {
   /**
    * The per-stop "Confirm Item Pickup" appearing message. Derived purely from
    * the rider's live position + the authoritative stops payload: non-null only
-   * while the rider is within the pickup radius of the current (next
-   * unconfirmed) stop AND that restaurant's items are READY. Powers the global
-   * alert so the Order details sheet can stay view-only.
+   * while the backend allows pickup confirmation for the current stop. Powers
+   * the global alert while preserving the manual Active Delivery controls.
    */
   pickupStopPrompt: PickupStopPrompt | null
+  pickupArrivalPrompt: PickupArrivalPrompt | null
   /**
    * True once every pickup stop has been collected while the delivery is still
-   * in the pickup stage. Lets the global alert keep surfacing the final
-   * "I Picked Up the Food" confirm even if the one-shot arrival alert was
-   * dismissed earlier — the sheet (now view-only) no longer holds a fallback.
+   * in the pickup stage. Kept for legacy/item-less delivery flows; restaurant
+   * deliveries transition automatically on their final stop.
    */
   pickupComplete: boolean
 }
 
 export interface PickupStopPrompt {
+  deliveryId: number
+  businessId: number
+  businessName: string | null
+  sequence: number
+  totalStops: number
+  distanceMeters: number | null
+}
+
+export interface PickupArrivalPrompt {
   deliveryId: number
   businessId: number
   businessName: string | null
@@ -118,6 +132,12 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.user)
   const fetchUser = useAuthStore((state) => state.fetchUser)
+  useUserSocketNotifier({
+    onStatusEvent: useCallback(() => {
+      void queryClient.invalidateQueries({ queryKey: ['rider-delivery-pickup-stops'] })
+      void queryClient.invalidateQueries({ queryKey: ['rider-map-location'] })
+    }, [queryClient]),
+  })
   const [riderPosition, setRiderPositionState] = useState<[number, number]>([12.8667, 121.45])
   const [arrivalAlert, setArrivalAlert] = useState<ArrivalAlertKind>(null)
   // Optimistic status override: while a pickup-confirm PATCH is in flight (or
@@ -188,7 +208,7 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
   // authoritative and rejects a premature `picked_up` with a 422 whose message
   // we surface via actionError). Stops-bearing deliveries stay blocked until
   // every restaurant stop is confirmed.
-  const isPickupStage = !!activeDelivery && ['assigned', 'arrived_pickup'].includes(activeDelivery.status)
+  const isPickupStage = !!activeDelivery && ['assigned', 'en_route_pickup', 'arrived_pickup'].includes(activeDelivery.status)
 
   const pickupStopsQuery = useQuery({
     queryKey: ['rider-delivery-pickup-stops', activeDelivery?.id],
@@ -214,9 +234,23 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
   // READY); the response refreshes the leg so the next stop advances.
   const confirmStopMutation = useMutation({
     mutationFn: (businessId: number) =>
-      post(`/rider/deliveries/${activeDelivery!.id}/pickup-stops/${businessId}/confirm`),
+      post<{ all_confirmed?: boolean }>(`/rider/deliveries/${activeDelivery!.id}/pickup-stops/${businessId}/confirm`),
+    onSuccess: (result) => {
+      if (result?.all_confirmed) {
+        setOptimisticStatus('picked_up')
+        lastAlertStatus.current = 'picked_up'
+        setArrivalAlert(null)
+      }
+      queryClient.invalidateQueries({ queryKey: ['rider-delivery-pickup-stops', activeDelivery?.id] })
+      queryClient.invalidateQueries({ queryKey: ['rider-map-location'] })
+    },
+  })
+  const confirmArrivalStopMutation = useMutation({
+    mutationFn: (businessId: number) =>
+      post(`/rider/deliveries/${activeDelivery!.id}/pickup-stops/${businessId}/arrive`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['rider-delivery-pickup-stops', activeDelivery?.id] })
+      queryClient.invalidateQueries({ queryKey: ['rider-map-location'] })
     },
   })
 
@@ -227,16 +261,12 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
   // stop + that restaurant's items are READY. Derived (not one-shot) so it
   // naturally re-targets the next stop after each confirm and disappears once
   // every stop is collected.
-  const pickupStopPrompt = useMemo<PickupStopPrompt | null>(() => {
+  const pickupArrivalPrompt = useMemo<PickupArrivalPrompt | null>(() => {
     if (!isPickupStage || !activeDelivery || !pickupStopsData) return null
-    if (
-      pickupStopsData.is_cod &&
-      (!pickupStopsData.purchasing_cash_issued_at || !pickupStopsData.purchasing_cash_received_at)
-    ) return null
     const stops = pickupStopsData.stops ?? []
     if (stops.length === 0 || pickupStopsData.fully_collected) return null
 
-    const { activeStop, distanceMeters, arrived } = resolveStopArrival({
+    const { activeStop, distanceMeters } = resolveStopArrival({
       riderLatitude: riderPosition[0],
       riderLongitude: riderPosition[1],
       stops: stops.map((stop) => ({
@@ -247,11 +277,12 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
         longitude: stop.pickup_lng,
         business_name: stop.business_name,
       })),
+      thresholdMeters: pickupStopsData.pickup_radius_meters ?? STOP_ARRIVAL_THRESHOLD_METERS,
     })
 
-    if (!activeStop || !arrived) return null
+    if (!activeStop) return null
     const current = stops.find((stop) => stop.id === activeStop.id)
-    if (!current?.is_ready) return null
+    if (!current?.arrival_can_confirm) return null
 
     return {
       deliveryId: activeDelivery.id,
@@ -262,6 +293,31 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
       distanceMeters,
     }
   }, [isPickupStage, activeDelivery, pickupStopsData, riderPosition])
+
+  const pickupStopPrompt = useMemo<PickupStopPrompt | null>(() => {
+    if (!isPickupStage || !activeDelivery || !pickupStopsData) return null
+    if (
+      pickupStopsData.is_cod &&
+      (!pickupStopsData.purchasing_cash_issued_at || !pickupStopsData.purchasing_cash_received_at)
+    ) return null
+    const current = pickupStopsData.stops?.find((stop) => stop.status === 'pending' && stop.arrived_at !== null)
+    if (!current?.can_confirm) return null
+
+    return {
+      deliveryId: activeDelivery.id,
+      businessId: current.business_id,
+      businessName: current.business_name,
+      sequence: current.sequence,
+      totalStops: pickupStopsData.stops.length,
+      distanceMeters: current.distance_meters,
+    }
+  }, [isPickupStage, activeDelivery, pickupStopsData])
+
+  useEffect(() => {
+    if ((pickupStopsData?.stops?.length ?? 0) > 0) {
+      setArrivalAlert((current) => current === 'PICKUP' ? null : current)
+    }
+  }, [pickupStopsData])
 
   // Every stop collected (while still in the pickup stage). Used by the global
   // alert to keep the final "I Picked Up the Food" confirm available even when
@@ -338,7 +394,7 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
 
   const tripState: TripState = !activeDelivery
     ? 'IDLE'
-    : effectiveStatus === 'assigned'
+    : effectiveStatus === 'assigned' || effectiveStatus === 'en_route_pickup'
       ? (nearPickup ? 'ARRIVED_AT_PICKUP' : 'EN_ROUTE_TO_PICKUP')
       : effectiveStatus === 'arrived_pickup'
         ? 'ARRIVED_AT_PICKUP'
@@ -375,7 +431,12 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
     // the status, causing the alert to be skipped. `nearDropoff` is kept only as
     // a fallback so the alert can still fire if the frontend tracks the rider
     // inside the geofence before the backend has had a chance to confirm.
-    if (status === 'arrived_pickup' && lastAlertStatus.current !== 'arrived_pickup') {
+    if (
+      status === 'arrived_pickup' &&
+      lastAlertStatus.current !== 'arrived_pickup' &&
+      pickupStopsQuery.isSuccess &&
+      (pickupStopsData?.stops?.length ?? 0) === 0
+    ) {
       // Always record the leg; only surface the alert if the rider has not
       // already dismissed it. Persisted dismissal means a page refresh (which
       // clears lastAlertStatus) does not re-prompt the same pickup card.
@@ -393,7 +454,7 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
       lastAlertStatus.current = null
       setArrivalAlert(null)
     }
-  }, [activeDelivery, nearDropoff])
+  }, [activeDelivery, nearDropoff, pickupStopsData, pickupStopsQuery.isSuccess])
 
   // Also nudge the backend when arriving at a geofence so the authoritative
   // proximity controller transitions the status (keeps server truth in sync).
@@ -444,12 +505,20 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
     onArrivedDrop: () => activeDelivery && arrivedDropMutation.mutate(activeDelivery.id),
     onConfirmDelivery: () => activeDelivery && completeMutation.mutate(activeDelivery.id),
     pickupStopsData: pickupStopsData ?? null,
+    confirmArrivalStop: (businessId) => {
+      if (activeDelivery) confirmArrivalStopMutation.mutate(businessId)
+    },
+    confirmArrivalBusy: confirmArrivalStopMutation.isPending,
+    confirmArrivalError: confirmArrivalStopMutation.isError
+      ? apiErrorMessage(confirmArrivalStopMutation.error)
+      : null,
     confirmPickupStop: (businessId) => {
       if (activeDelivery) confirmStopMutation.mutate(businessId)
     },
     confirmStopBusy: confirmStopMutation.isPending,
     confirmStopError: confirmStopMutation.isError ? apiErrorMessage(confirmStopMutation.error) : null,
     pickupStopPrompt,
+    pickupArrivalPrompt,
     pickupComplete,
     pendingSettlement,
     settleCod: (cashReceived) => {

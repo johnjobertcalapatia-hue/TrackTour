@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircle, ShoppingBag, Loader2, AlertTriangle, Zap, Banknote, Store } from 'lucide-react'
+import { CheckCircle, ShoppingBag, Loader2, AlertTriangle, Zap, Banknote, Store, MapPin } from 'lucide-react'
 import { useRiderActiveTrip } from '@/features/rider/context/RiderActiveTripContext'
 import { formatCurrency } from '@/shared/utils'
 import { formatStopDistance } from '@/features/rider/stop-arrival'
@@ -20,6 +20,10 @@ export default function GlobalRiderAlert() {
     settleBusy,
     settleError,
     pickupStopPrompt,
+    pickupArrivalPrompt,
+    confirmArrivalStop,
+    confirmArrivalBusy,
+    confirmArrivalError,
     confirmPickupStop,
     confirmStopBusy,
     confirmStopError,
@@ -136,6 +140,51 @@ export default function GlobalRiderAlert() {
                   Payment Settled — Finish Delivery
                 </>
               )}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (pickupArrivalPrompt) {
+    const targetName = pickupArrivalPrompt.businessName ?? `Business #${pickupArrivalPrompt.businessId}`
+
+    return (
+      <div className="fixed inset-0 z-[9999] bg-black/60 flex items-end justify-center p-4 backdrop-blur-sm rider-alert-backdrop">
+        <div className="bg-zinc-950/70 backdrop-blur-2xl w-full max-w-md rounded-2xl border border-white/10 shadow-2xl flex flex-col overflow-hidden rider-alert-in">
+          <div className="p-4 border-b border-white/10 text-center bg-white/5">
+            <div className="inline-flex items-center gap-2 px-3 py-1 bg-amber-500/10 border border-amber-500/30 text-amber-400 rounded-full text-xs font-bold uppercase tracking-wider mb-1">
+              <MapPin className="w-3 h-3" />
+              Pickup {pickupArrivalPrompt.sequence} of {pickupArrivalPrompt.totalStops}
+            </div>
+            <h2 className="text-lg font-extrabold text-white tracking-tight">Confirm Restaurant Arrival</h2>
+            <p className="text-xs text-zinc-400">Arrival starts this restaurant's waiting-time clock</p>
+          </div>
+          <div className="p-4 space-y-3">
+            <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+              <p className="text-xs text-zinc-500 font-bold uppercase tracking-wide">Pickup Stop</p>
+              <p className="text-sm text-white font-bold mt-1">{targetName}</p>
+              {pickupArrivalPrompt.distanceMeters != null && (
+                <p className="text-xs text-zinc-400 mt-1">{formatStopDistance(pickupArrivalPrompt.distanceMeters)} away</p>
+              )}
+            </div>
+            {confirmArrivalError && (
+              <div className="flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-950/30 px-3 py-2.5 text-sm font-medium text-red-400">
+                <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>{confirmArrivalError}</span>
+              </div>
+            )}
+          </div>
+          <div className="p-4 border-t border-white/10 bg-white/5">
+            <button
+              type="button"
+              onClick={() => confirmArrivalStop(pickupArrivalPrompt.businessId)}
+              disabled={confirmArrivalBusy}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-400 py-3.5 text-sm font-extrabold uppercase tracking-wider text-neutral-950 transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {confirmArrivalBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />}
+              {confirmArrivalBusy ? 'Confirming...' : 'Confirm Arrival'}
             </button>
           </div>
         </div>

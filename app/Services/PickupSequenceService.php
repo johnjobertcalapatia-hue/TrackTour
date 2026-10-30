@@ -26,7 +26,8 @@ use InvalidArgumentException;
  *
  *     CAN_CONFIRM_PICKUP =
  *         stop is the current (next unconfirmed) stop in route order
- *         AND rider distance to the restaurant <= configured pickup radius
+ *         AND the rider has confirmed arrival and remains within the configured
+ *         pickup radius
  *         AND that restaurant's order items are all READY
  *
  * The delivered state and the COD purchasing-cash money ledger
@@ -256,8 +257,8 @@ class PickupSequenceService
     }
 
     /**
-     * Gate evaluation for one stop — mirrors CAN_CONFIRM_PICKUP. A stop
-     * without coordinates is never blocked on distance (unmeasurable).
+     * Gate evaluation for one stop — mirrors CAN_CONFIRM_PICKUP. Stops without
+     * coordinates cannot satisfy the server-enforced pickup geofence.
      *
      * @return array{can_confirm: bool, reason: string|null, distance_meters: float|null}
      */
@@ -276,15 +277,19 @@ class PickupSequenceService
         $isCurrent = $current?->id === $stop->id;
 
         $withinRadius = ! $hasCoords
-            ? true
+            ? false
             : ($distance !== null
-                ? $distance <= (float) config('tracking.arrival_radius_meters', 100)
+                ? $distance <= (float) config('tracking.pickup_radius_meters', 50)
                 : false);
 
         $readiness = $this->businessReadiness($delivery, (int) $stop->business_id);
 
         if (! $isCurrent) {
             return ['can_confirm' => false, 'reason' => 'not_current', 'distance_meters' => $distance];
+        }
+
+        if ($stop->arrived_at === null) {
+            return ['can_confirm' => false, 'reason' => 'waiting_arrival', 'distance_meters' => $distance];
         }
 
         if ($readiness['label'] !== 'ready' && $readiness['label'] !== 'none') {
@@ -300,6 +305,84 @@ class PickupSequenceService
         }
 
         return ['can_confirm' => true, 'reason' => null, 'distance_meters' => $distance];
+    }
+
+    /**
+     * The rider confirms arrival at the current restaurant stop.
+     *
+     * The original server timestamp is immutable on retries. Both the shared
+     * delivery arrival and per-stop arrival are committed under their locks.
+     *
+     * @return array{success: bool, arrived_at: string, stop: array<string, mixed>, delivery_status_change: array{old_status: string, new_status: string}|null}
+     *
+     * @throws InvalidArgumentException
+     */
+    public function confirmArrival(Delivery $delivery, int $businessId, int $riderId): array
+    {
+        return DB::transaction(function () use ($delivery, $businessId, $riderId) {
+            $locked = Delivery::lockForUpdate()->find($delivery->id);
+
+            if (! $locked) {
+                throw new InvalidArgumentException('Delivery not found.');
+            }
+
+            if ((int) $locked->rider_id !== $riderId) {
+                throw new InvalidArgumentException('You are not assigned to this delivery.');
+            }
+
+            $statusNow = $locked->status->value ?? $locked->status;
+            if (! in_array($statusNow, self::PICKUP_STAGE_STATUSES, true)) {
+                throw new InvalidArgumentException('Arrival can only be confirmed during the pickup stage.');
+            }
+
+            $this->ensureStops($locked);
+            $stops = DeliveryPickupStop::where('delivery_id', $locked->id)
+                ->orderBy('sequence')
+                ->lockForUpdate()
+                ->get();
+            $stop = $stops->firstWhere('business_id', $businessId);
+
+            if (! $stop) {
+                throw new InvalidArgumentException('This restaurant does not fulfil items on this delivery.');
+            }
+
+            if ($this->stopConfirmed($locked, $stop)) {
+                throw new InvalidArgumentException('This restaurant pickup has already been confirmed.');
+            }
+
+            $current = $stops->first(fn (DeliveryPickupStop $entry) => ! $this->stopConfirmed($locked, $entry));
+            if (! $current || (int) $current->business_id !== $businessId) {
+                throw new InvalidArgumentException('Confirm arrival in route order at the next restaurant stop.');
+            }
+
+            $deliveryStatusChange = null;
+            if ($stop->arrived_at === null) {
+                $distance = $this->stopDistanceMeters($locked, $stop);
+                $hasCoordinates = $stop->pickup_latitude !== null && $stop->pickup_longitude !== null;
+                $withinRadius = ! $hasCoordinates
+                    ? false
+                    : ($distance !== null && $distance <= (float) config('tracking.pickup_radius_meters', 50));
+
+                if (! $withinRadius) {
+                    throw new InvalidArgumentException(
+                        $distance === null
+                            ? 'A current GPS location is required to confirm arrival.'
+                            : 'You must be within the pickup area to confirm arrival.'
+                    );
+                }
+
+                $stop->update(['arrived_at' => now()]);
+                $deliveryStatusChange = app(PickupDeliveryTransitionService::class)->arriveAtPickup($locked);
+            }
+
+            return [
+                'success' => true,
+                'arrival_changed' => $deliveryStatusChange !== null || $stop->wasChanged('arrived_at'),
+                'arrived_at' => $stop->fresh()->arrived_at->toIso8601String(),
+                'stop' => $this->stopPayload($locked->fresh(), $stop->fresh()),
+                'delivery_status_change' => $deliveryStatusChange,
+            ];
+        });
     }
 
     /**
@@ -343,22 +426,27 @@ class PickupSequenceService
             }
 
             $this->ensureStops($locked);
-
-            $stop = DeliveryPickupStop::where('delivery_id', $locked->id)
-                ->where('business_id', $businessId)
+            $lockedStops = DeliveryPickupStop::where('delivery_id', $locked->id)
+                ->orderBy('sequence')
                 ->lockForUpdate()
-                ->first();
+                ->get();
+            $stop = $lockedStops->firstWhere('business_id', $businessId);
 
             if (! $stop) {
                 throw new InvalidArgumentException('This restaurant does not fulfil items on this delivery.');
             }
 
-            if (! $this->stopConfirmed($locked, $stop)) {
-                $current = $this->currentStop($locked);
+            $wasConfirmed = $this->stopConfirmed($locked, $stop);
+            if (! $wasConfirmed) {
+                $current = $lockedStops->first(fn (DeliveryPickupStop $entry) => ! $this->stopConfirmed($locked, $entry));
 
                 if ($current && (int) $current->business_id !== $businessId) {
                     $businessName = $stop->business?->business_name ?? $stop->business?->name ?? ('Business #'.$businessId);
                     throw new InvalidArgumentException('Confirm the pickup in route order. '.$businessName.' is not the next pickup yet.');
+                }
+
+                if ($stop->arrived_at === null) {
+                    throw new InvalidArgumentException('Confirm your arrival at this restaurant before confirming pickup.');
                 }
 
                 $readiness = $this->businessReadiness($locked, $businessId);
@@ -370,9 +458,9 @@ class PickupSequenceService
                 $hasCoords = $stop->pickup_latitude !== null && $stop->pickup_longitude !== null;
 
                 $withinRadius = ! $hasCoords
-                    ? true
+                    ? false
                     : ($distance !== null
-                        && $distance <= (float) config('tracking.arrival_radius_meters', 100));
+                        && $distance <= (float) config('tracking.pickup_radius_meters', 50));
 
                 if (! $withinRadius) {
                     throw new InvalidArgumentException('You must be within the pickup area before confirming the order items.');
@@ -410,7 +498,18 @@ class PickupSequenceService
                 }
             }
 
+            $locked->unsetRelation('codPurchases');
             $allConfirmed = $this->allConfirmed($locked);
+            $deliveryStatusChange = null;
+
+            if ($allConfirmed) {
+                $deliveryStatusChange = app(PickupDeliveryTransitionService::class)->pickUp($locked);
+                if (! $deliveryStatusChange) {
+                    throw new InvalidArgumentException(
+                        'The delivery cannot leave the pickup stage until all pickup and COD checks pass.'
+                    );
+                }
+            }
 
             // Capture the ACTUAL pickup GPS point from the rider's latest fix
             // the moment the full pickup sequence completes. This is the
@@ -435,8 +534,10 @@ class PickupSequenceService
 
             return [
                 'success' => true,
+                'stop_changed' => ! $wasConfirmed,
                 'all_confirmed' => $allConfirmed,
                 'stop' => $this->stopPayload($locked, $stop->fresh()),
+                'delivery_status_change' => $deliveryStatusChange,
             ];
         });
     }
@@ -460,6 +561,10 @@ class PickupSequenceService
             'pickup_lat' => $stop->pickup_latitude !== null ? (float) $stop->pickup_latitude : null,
             'pickup_lng' => $stop->pickup_longitude !== null ? (float) $stop->pickup_longitude : null,
             'pickup_address' => $stop->pickup_address,
+            'arrived_at' => $stop->arrived_at?->toIso8601String(),
+            'waiting_seconds' => $stop->arrived_at
+                ? (int) $stop->arrived_at->diffInSeconds($stop->pickup_confirmed_at ?? now())
+                : null,
             'status' => $this->stopConfirmed($delivery, $stop) ? DeliveryPickupStop::STATUS_COLLECTED : DeliveryPickupStop::STATUS_PENDING,
             'pickup_confirmed_at' => $stop->pickup_confirmed_at,
             'is_ready' => $readiness['ready'],
@@ -469,6 +574,18 @@ class PickupSequenceService
             'distance_meters' => $confirmability['distance_meters'] !== null ? round($confirmability['distance_meters'], 0) : null,
             'can_confirm' => $confirmability['can_confirm'],
             'reason' => $confirmability['reason'],
+            'arrival_can_confirm' => $stop->arrived_at === null
+                && ! $this->stopConfirmed($delivery, $stop)
+                && $this->currentStop($delivery)?->id === $stop->id
+                && $confirmability['distance_meters'] !== null
+                && $confirmability['distance_meters'] <= (float) config('tracking.pickup_radius_meters', 50),
+            'arrival_reason' => $stop->arrived_at !== null
+                ? null
+                : ($this->currentStop($delivery)?->id !== $stop->id
+                    ? 'not_current'
+                    : ($confirmability['distance_meters'] === null
+                        ? 'gps_unavailable'
+                        : ($confirmability['distance_meters'] > (float) config('tracking.pickup_radius_meters', 50) ? 'too_far' : null))),
         ];
     }
 

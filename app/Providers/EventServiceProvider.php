@@ -7,6 +7,7 @@ use App\Events\BookingStatusChanged;
 use App\Events\BusinessApproved;
 use App\Events\BusinessRejected;
 use App\Events\DeliveryAssigned;
+use App\Events\DeliveryPickupStopChanged;
 use App\Events\DeliveryStatusChanged;
 use App\Events\OrderCreated;
 use App\Events\OrderStatusChanged;
@@ -55,6 +56,9 @@ class EventServiceProvider extends ServiceProvider
         DeliveryStatusChanged::class => [
             SyncOrderStatusFromDelivery::class,
             SendDeliveryStatusNotification::class,
+            ForwardStatusEventsToBridge::class,
+        ],
+        DeliveryPickupStopChanged::class => [
             ForwardStatusEventsToBridge::class,
         ],
         UserRegistered::class => [

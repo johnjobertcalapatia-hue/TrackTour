@@ -9,11 +9,9 @@ import type { User } from '@/shared/types'
 /**
  * The "Pickup Stops · X/Y confirmed" block lives inside the "Order details"
  * panel (RiderOrderInfoSheet) — the sheet that renders directly below the
- * Service Types quick-action grid on the rider layout. This test locks that
- * placement in: expanding the sheet must surface the per-restaurant pickup
- * stop cards as a VIEW-ONLY status summary. All pickup confirmation moved to
- * the appearing message (GlobalRiderAlert), so the sheet must expose no
- * confirm/navigate/cash actions.
+ * Service Types quick-action grid on the rider layout. The sheet shows the
+ * authoritative per-restaurant pickup state and preserves manual arrival and
+ * pickup confirmation controls alongside the automatic global prompts.
  */
 
 const api = vi.hoisted(() => {
@@ -29,6 +27,8 @@ const api = vi.hoisted(() => {
         pickup_lat: 12.51,
         pickup_lng: 121.31,
         pickup_address: 'Rue A',
+        arrived_at: '2026-09-24T00:55:00Z',
+        waiting_seconds: 300,
         status: 'collected',
         pickup_confirmed_at: '2026-09-24T01:00:00Z',
         is_ready: true,
@@ -37,6 +37,8 @@ const api = vi.hoisted(() => {
         active_item_count: 2,
         distance_meters: 5,
         can_confirm: false,
+        arrival_can_confirm: false,
+        arrival_reason: null,
         reason: null,
         items: [],
         cod_purchase: null,
@@ -50,6 +52,8 @@ const api = vi.hoisted(() => {
         pickup_lat: 12.52,
         pickup_lng: 121.32,
         pickup_address: 'Rue B',
+        arrived_at: '2026-09-24T01:04:00Z',
+        waiting_seconds: 60,
         status: 'pending',
         pickup_confirmed_at: null,
         is_ready: true,
@@ -58,6 +62,8 @@ const api = vi.hoisted(() => {
         active_item_count: 1,
         distance_meters: 3,
         can_confirm: true,
+        arrival_can_confirm: false,
+        arrival_reason: null,
         reason: null,
         items: [{ id: 7, product_name: 'Adobo', quantity: 2, unit_price: 99, subtotal: 198, notes: null, status: 'ready' }],
         cod_purchase: null,
@@ -109,6 +115,15 @@ const api = vi.hoisted(() => {
       return {}
     }),
     post: vi.fn(async (url: string) => {
+      if (url === '/rider/deliveries/7/pickup-stops/2/arrive') {
+        const stop = store.stops.find((s) => s.business_id === 2)
+        if (stop) {
+          stop.arrived_at = '2026-09-24T01:05:00Z'
+          stop.arrival_can_confirm = false
+          stop.can_confirm = true
+        }
+        return { success: true }
+      }
       if (url === '/rider/deliveries/7/pickup-stops/2/confirm') {
         const stop = store.stops.find((s) => s.business_id === 2)
         if (stop) {
@@ -163,6 +178,10 @@ describe('RiderOrderInfoSheet — pickup stops inside the Order details panel', 
     api.store.mapStatus = 'arrived_pickup'
     api.store.stops[0].status = 'collected'
     api.store.stops[1].status = 'pending'
+    api.store.stops[1].arrived_at = '2026-09-24T01:04:00Z'
+    api.store.stops[1].arrival_can_confirm = false
+    api.store.stops[1].can_confirm = true
+    api.store.stops[1].pickup_confirmed_at = null
     api.get.mockClear()
     api.post.mockClear()
     api.patch.mockClear()
@@ -187,7 +206,7 @@ describe('RiderOrderInfoSheet — pickup stops inside the Order details panel', 
     expect(screen.getByText(/pickup confirmed ✓/i)).toBeInTheDocument()
   })
 
-  it('keeps the sheet view-only: no per-stop confirm, navigate, cash-confirm, or Start Delivery actions', async () => {
+  it('preserves manual pickup confirmation in the Active Delivery sheet', async () => {
     renderSheet()
 
     await waitFor(() => expect(screen.getByRole('button', { name: /show order details/i })).toBeInTheDocument())
@@ -196,8 +215,8 @@ describe('RiderOrderInfoSheet — pickup stops inside the Order details panel', 
 
     await waitFor(() => expect(screen.getByText(/pickup stops · 1\/2 confirmed/i)).toBeInTheDocument())
 
-    // The appearing message (GlobalRiderAlert) owns pickup confirmation now.
-    expect(screen.queryByRole('button', { name: /confirm item pickup/i })).not.toBeInTheDocument()
+    const confirmPickup = screen.getByRole('button', { name: /confirm pickup/i })
+    expect(confirmPickup).toBeInTheDocument()
 
     // No navigation/settlement actions remain in the read-only panel.
     expect(screen.queryByText(/navigate/i)).not.toBeInTheDocument()
@@ -205,7 +224,28 @@ describe('RiderOrderInfoSheet — pickup stops inside the Order details panel', 
     expect(screen.queryByRole('button', { name: /start delivery/i })).not.toBeInTheDocument()
     expect(screen.queryByText(/all food collected — you can now leave for delivery/i)).not.toBeInTheDocument()
 
-    // The confirmation cannot be triggered from the sheet at all.
-    expect(api.post).not.toHaveBeenCalled()
+    fireEvent.click(confirmPickup)
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/rider/deliveries/7/pickup-stops/2/confirm'))
+  })
+
+  it('shows a manual arrival confirmation before the pickup action', async () => {
+    api.store.stops[1].arrived_at = null
+    api.store.stops[1].arrival_can_confirm = true
+    api.store.stops[1].can_confirm = false
+
+    renderSheet()
+    await waitFor(() => expect(screen.getByRole('button', { name: /show order details/i })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /show order details/i }))
+
+    const confirmArrival = await screen.findByRole('button', { name: /confirm arrival/i })
+    fireEvent.click(confirmArrival)
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/rider/deliveries/7/pickup-stops/2/arrive'))
+  })
+
+  it('shows the server-origin waiting timer after arrival', async () => {
+    renderSheet()
+    await waitFor(() => expect(screen.getByRole('button', { name: /show order details/i })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /show order details/i }))
+    await waitFor(() => expect(screen.getByText(/waiting \d+:\d{2}/i)).toBeInTheDocument())
   })
 })

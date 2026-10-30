@@ -26,6 +26,17 @@ const h = vi.hoisted(() => {
     onMarkPickedUp: () => {},
     onConfirmDelivery: () => {},
     dismissArrivalAlert: () => {},
+    pickupArrivalPrompt: null as {
+      deliveryId: number
+      businessId: number
+      businessName: string | null
+      sequence: number
+      totalStops: number
+      distanceMeters: number | null
+    } | null,
+    confirmArrivalStop: () => {},
+    confirmArrivalBusy: false,
+    confirmArrivalError: null as string | null,
     pickupStopPrompt: null as {
       deliveryId: number
       businessId: number
@@ -163,6 +174,28 @@ describe('GlobalRiderAlert — COD pickup-gate behaviour', () => {
 describe('GlobalRiderAlert — per-stop pickup appearing message (view-only Order details)', () => {
   beforeEach(() => {
     h.setOverrides({})
+  })
+
+  it('automatically prompts arrival at the current restaurant and confirms it manually', () => {
+    const confirmArrivalStop = vi.fn()
+    h.setOverrides({
+      pickupArrivalPrompt: {
+        deliveryId: 12,
+        businessId: 2,
+        businessName: 'Jobert’s Kitchen',
+        sequence: 1,
+        totalStops: 2,
+        distanceMeters: 20,
+      },
+      confirmArrivalStop,
+    })
+
+    render(<GlobalRiderAlert />)
+
+    expect(screen.getByText(/confirm restaurant arrival/i)).toBeInTheDocument()
+    expect(screen.getByText(/arrival starts this restaurant's waiting-time clock/i)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /confirm arrival/i }))
+    expect(confirmArrivalStop).toHaveBeenCalledWith(2)
   })
 
   it('shows the per-stop Confirm Item Pickup message when the rider is in range and the stop is ready', () => {

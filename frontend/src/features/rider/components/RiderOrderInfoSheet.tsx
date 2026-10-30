@@ -1,4 +1,4 @@
-import { useState, useRef, type PointerEvent as ReactPointerEvent } from 'react'
+import { useState, useRef, useEffect, type PointerEvent as ReactPointerEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { get } from '@/shared/services/api'
 import { StatusBadge } from '@/shared/components/StatusBadge'
@@ -14,7 +14,7 @@ import {
   Package,
   Wallet,
 } from 'lucide-react'
-import { resolveStopArrival, formatStopDistance } from '@/features/rider/stop-arrival'
+import { resolveStopArrival, formatStopDistance, STOP_ARRIVAL_THRESHOLD_METERS } from '@/features/rider/stop-arrival'
 import { pickupReadyLabel, pickupStopReasonLabel } from '@/features/rider/pickup-stops'
 import { useOsrmRoute } from '@/features/rider/hooks/useOsrmRoute'
 import RiderOrderBoard, { useRiderBoard } from '@/features/rider/components/RiderOrderBoard'
@@ -35,6 +35,12 @@ interface OrderInfo {
   business_name?: string | null
   customer_name?: string | null
   created_at?: string | null
+}
+
+function formatWaitingTime(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
 }
 
 // Minimum vertical drag (px) before a pull-up/pull-down toggles the sheet.
@@ -61,10 +67,17 @@ export default function RiderOrderInfoSheet() {
     tripState,
     riderPosition,
     pickupStopsData,
+    confirmArrivalStop,
+    confirmArrivalBusy,
+    confirmArrivalError,
+    confirmPickupStop,
+    confirmStopBusy,
+    confirmStopError,
   } = useRiderActiveTrip()
   const [expanded, setExpanded] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [dragDelta, setDragDelta] = useState(0)
+  const [clockNow, setClockNow] = useState(Date.now())
   const startYRef = useRef(0)
   const movedRef = useRef(false)
 
@@ -83,13 +96,12 @@ export default function RiderOrderInfoSheet() {
   const collectedCount = purchaseStops.filter((p) => p.status === 'collected').length
   const pickupOrigin = pickupStopsData?.pickup_origin ?? null
   const dropoff = pickupStopsData?.dropoff ?? null
-  const isPickupStage = !!activeDelivery && ['assigned', 'arrived_pickup'].includes(activeDelivery.status)
+  const isPickupStage = !!activeDelivery && ['assigned', 'en_route_pickup', 'arrived_pickup'].includes(activeDelivery.status)
   const isDropLeg = tripState === 'OUT_FOR_DELIVERY' || tripState === 'ARRIVED_AT_DROP'
 
   const {
     activeStop,
     distanceMeters: activeStopDistanceMeters,
-    arrived: arrivedAtActiveStop,
   } = resolveStopArrival({
     riderLatitude: riderPosition[0],
     riderLongitude: riderPosition[1],
@@ -101,7 +113,9 @@ export default function RiderOrderInfoSheet() {
       longitude: stop.pickup_lng,
       business_name: stop.business_name,
     })),
+    thresholdMeters: pickupStopsData?.pickup_radius_meters ?? STOP_ARRIVAL_THRESHOLD_METERS,
   })
+  const activeStopArrivalConfirmed = !!purchaseStops.find((stop) => stop.id === activeStop?.id)?.arrived_at
 
   const dropPlanWaypoints: [number, number][] | null =
     pickupOrigin?.latitude != null &&
@@ -116,6 +130,12 @@ export default function RiderOrderInfoSheet() {
     !!dropPlanWaypoints && isPickupStage && !isDropLeg
   )
   const plannedDropEtaLabel = formatEta(plannedDropRoute.distanceKm, plannedDropRoute.durationMin)
+
+  useEffect(() => {
+    if (!purchaseStops.some((stop) => stop.arrived_at && stop.status !== 'collected')) return
+    const timer = window.setInterval(() => setClockNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [purchaseStops])
 
   const deliveries = data?.deliveries ?? []
   const active =
@@ -290,7 +310,7 @@ export default function RiderOrderInfoSheet() {
               )}
 
               <div className="mt-3 space-y-2">
-                {activeStop && !arrivedAtActiveStop && (
+                {activeStop && !activeStopArrivalConfirmed && (
                   <div className="rounded-xl bg-[#FFF7ED] border border-amber-200 px-3 py-2.5">
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex-1 min-w-0">
@@ -312,8 +332,12 @@ export default function RiderOrderInfoSheet() {
                 {purchaseStops.map((stop) => {
                   const stopConfirmed = stop.status === 'collected'
                   const isActiveStop = stop.id === activeStop?.id
-                  const arrivedAtStop = isActiveStop && arrivedAtActiveStop
+                  const arrivedAtStop = stop.arrived_at !== null
                   const reasonLabel = stop.status === 'pending' ? pickupStopReasonLabel(stop.reason) : null
+                  const arrivedAtMs = stop.arrived_at ? Date.parse(stop.arrived_at) : NaN
+                  const elapsedSeconds = Number.isFinite(arrivedAtMs)
+                    ? Math.max(0, Math.floor((clockNow - arrivedAtMs) / 1000))
+                    : null
 
                   return (
                     <div key={stop.id} className="flex items-center gap-3 rounded-xl border border-[#E4E9E6] bg-[#FAFBFB] px-3 py-2.5">
@@ -361,8 +385,43 @@ export default function RiderOrderInfoSheet() {
                                 : 'Heading to pickup'}
                           </p>
                         )}
+                        {stop.arrived_at && (
+                          <p className="text-[10px] font-semibold text-[#087F3F] mt-0.5">
+                            {stopConfirmed ? 'Pickup completed' : `Waiting ${formatWaitingTime(elapsedSeconds ?? 0)}`}
+                          </p>
+                        )}
                         {reasonLabel && (
                           <p className="text-[10px] font-medium text-[#9CA3AF] mt-0.5">{reasonLabel}</p>
+                        )}
+                        {isActiveStop && !stopConfirmed && (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {!stop.arrived_at && stop.arrival_can_confirm && (
+                              <button
+                                type="button"
+                                onClick={() => confirmArrivalStop(stop.business_id)}
+                                disabled={confirmArrivalBusy}
+                                className="rounded-lg bg-amber-100 px-3 py-1.5 text-[11px] font-bold text-amber-800 disabled:opacity-60"
+                              >
+                                {confirmArrivalBusy ? 'Confirming…' : 'Confirm Arrival'}
+                              </button>
+                            )}
+                            {stop.arrived_at && stop.can_confirm && (
+                              <button
+                                type="button"
+                                onClick={() => confirmPickupStop(stop.business_id)}
+                                disabled={confirmStopBusy}
+                                className="rounded-lg bg-[#EAF6ED] px-3 py-1.5 text-[11px] font-bold text-[#087F3F] disabled:opacity-60"
+                              >
+                                {confirmStopBusy ? 'Confirming…' : 'Confirm Pickup'}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {isActiveStop && confirmArrivalError && (
+                          <p role="alert" className="text-[10px] font-semibold text-red-600 mt-1">{confirmArrivalError}</p>
+                        )}
+                        {isActiveStop && confirmStopError && (
+                          <p role="alert" className="text-[10px] font-semibold text-red-600 mt-1">{confirmStopError}</p>
                         )}
                       </div>
                       <div className="shrink-0 flex gap-1.5">

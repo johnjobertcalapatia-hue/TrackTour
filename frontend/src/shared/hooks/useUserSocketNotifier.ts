@@ -15,6 +15,7 @@ export type UserStatusEventName =
   | 'order.status.changed'
   | 'delivery.status.changed'
   | 'delivery.assigned'
+  | 'delivery.pickup.stop.changed'
   | 'trip_cancelled'
   | 'dispatch_status_update'
 
@@ -76,6 +77,7 @@ export function useUserSocketNotifier({
           'order.status.changed',
           'delivery.status.changed',
           'delivery.assigned',
+          'delivery.pickup.stop.changed',
           'trip_cancelled',
           'dispatch_status_update',
         ]

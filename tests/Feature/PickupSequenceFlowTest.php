@@ -14,6 +14,7 @@ use App\Models\RiderLocation;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Event;
 use Tests\TestCase;
 
 /**
@@ -213,12 +214,35 @@ class PickupSequenceFlowTest extends TestCase
 
     private function placeLocation(User $rider, float $lat, float $lng): void
     {
+        RiderLocation::where('rider_id', $rider->id)->delete();
         RiderLocation::create([
             'rider_id' => $rider->id,
             'latitude' => $lat,
             'longitude' => $lng,
             'recorded_at' => now(),
         ]);
+    }
+
+    private function latitudeAtPickupDistance(float $distanceMeters): float
+    {
+        $latitude = round(
+            (float) $this->restaurantA->latitude + ($distanceMeters / 6371000) * (180 / M_PI),
+            7
+        );
+        $measuredDistance = app(\App\Services\PickupSequenceService::class)->distanceMeters(
+            $latitude,
+            (float) $this->restaurantA->longitude,
+            (float) $this->restaurantA->latitude,
+            (float) $this->restaurantA->longitude
+        );
+
+        if ($distanceMeters <= 50 && $measuredDistance > 50) {
+            $latitude = round($latitude - 0.0000001, 7);
+        } elseif ($distanceMeters > 50 && $measuredDistance <= 50) {
+            $latitude = round($latitude + 0.0000001, 7);
+        }
+
+        return $latitude;
     }
 
     private function stopsUrl(Delivery $delivery): string
@@ -231,12 +255,22 @@ class PickupSequenceFlowTest extends TestCase
         return "/api/rider/deliveries/{$delivery->id}/pickup-stops/{$business->id}/confirm";
     }
 
+    private function arriveUrl(Delivery $delivery, Business $business): string
+    {
+        return "/api/rider/deliveries/{$delivery->id}/pickup-stops/{$business->id}/arrive";
+    }
+
     // ───────────────────────────────────────────────────────────────
     // 1. Prepaid group trip: readiness, route order, radius and the
     //    picked_up/in_transit gate, end to end.
     // ───────────────────────────────────────────────────────────────
     public function test_prepaid_pickup_stops_sequence_ready_radius_and_picked_up_gate(): void
     {
+        $deliveryStatuses = [];
+        Event::listen(\App\Events\DeliveryStatusChanged::class, function ($event) use (&$deliveryStatuses): void {
+            $deliveryStatuses[] = $event->newStatus;
+        });
+
         $order = $this->makeOrder('gcash');
         $delivery = $this->makeDelivery($order);
 
@@ -254,7 +288,7 @@ class PickupSequenceFlowTest extends TestCase
         $this->assertSame([$this->restaurantA->id, $this->restaurantB->id], array_column($stops, 'business_id'), 'Shortest-preparation restaurant drives first.');
         $this->assertSame([1, 2], array_column($stops, 'sequence'));
         $this->assertSame([false, false], array_column($stops, 'can_confirm'));
-        $this->assertSame(['waiting_ready', 'not_current'], array_column($stops, 'reason'));
+        $this->assertSame(['waiting_arrival', 'not_current'], array_column($stops, 'reason'));
 
         // ---- The rider reaches the pickup area; the gate blocks leaving before
         //      confirmation, whichever way the status is skipped ----
@@ -272,6 +306,7 @@ class PickupSequenceFlowTest extends TestCase
 
         // ---- Restaurant A readies its items: stop A alone becomes confirmable ----
         $this->readyItems($order, $this->restaurantA);
+        $this->be($this->rider)->postJson($this->arriveUrl($delivery, $this->restaurantA))->assertOk();
 
         $afterReadyA = $this->be($this->rider)
             ->getJson($this->stopsUrl($delivery))
@@ -296,13 +331,27 @@ class PickupSequenceFlowTest extends TestCase
         $stopARow = DeliveryPickupStop::where('delivery_id', $delivery->id)->where('business_id', $this->restaurantA->id)->sole();
         $this->assertSame(DeliveryPickupStop::STATUS_COLLECTED, $stopARow->status);
         $this->assertNotNull($stopARow->pickup_confirmed_at);
+        $confirmedAt = $stopARow->pickup_confirmed_at->copy();
 
         // Re-confirming an already-confirmed stop is an idempotent no-op.
         $this->be($this->rider)
             ->postJson($this->confirmUrl($delivery, $this->restaurantA))
             ->assertOk()
             ->assertJsonPath('data.success', true)
+            ->assertJsonPath('data.stop.status', DeliveryPickupStop::STATUS_COLLECTED)
             ->assertJsonPath('data.all_confirmed', false);
+        $this->assertSame(
+            $confirmedAt->toISOString(),
+            $stopARow->fresh()->pickup_confirmed_at->toISOString(),
+            'Duplicate confirmation does not create a second pickup transition.'
+        );
+        $this->assertSame(
+            1,
+            DeliveryPickupStop::where('delivery_id', $delivery->id)
+                ->where('business_id', $this->restaurantA->id)
+                ->where('status', DeliveryPickupStop::STATUS_COLLECTED)
+                ->count()
+        );
 
         // ---- Stop B is not confirmable until ITS items are ready ----
         $this->be($this->rider)
@@ -312,6 +361,7 @@ class PickupSequenceFlowTest extends TestCase
 
         $this->readyItems($order, $this->restaurantB);
         $this->placeLocation($this->rider, 12.52, 121.32);
+        $this->be($this->rider)->postJson($this->arriveUrl($delivery, $this->restaurantB))->assertOk();
 
         // ---- Confirm B: both stops confirmed, the pickup area opens ----
         $this->be($this->rider)
@@ -321,9 +371,17 @@ class PickupSequenceFlowTest extends TestCase
 
         $this->assertSame(0, CodPurchase::count(), 'Prepaid trips never touch the purchasing-cash ledger.');
 
+        $this->assertSame('picked_up', $delivery->fresh()->status->value, 'The final stop atomically starts the delivery leg.');
+        $this->assertNotNull($delivery->fresh()->picked_up_at);
+        $pickedUpAt = $delivery->fresh()->picked_up_at->toISOString();
+        $this->assertSame(1, count(array_filter($deliveryStatuses, fn ($status) => $status === 'picked_up')));
+
         $this->be($this->rider)
-            ->patchJson("/api/rider/deliveries/{$delivery->id}/status", ['status' => 'picked_up'])
-            ->assertOk();
+            ->postJson($this->confirmUrl($delivery, $this->restaurantB))
+            ->assertStatus(422);
+        $this->assertSame($pickedUpAt, $delivery->fresh()->picked_up_at->toISOString());
+        $this->assertSame(1, count(array_filter($deliveryStatuses, fn ($status) => $status === 'picked_up')));
+
         $this->be($this->rider)
             ->patchJson("/api/rider/deliveries/{$delivery->id}/status", ['status' => 'in_transit'])
             ->assertOk();
@@ -349,6 +407,9 @@ class PickupSequenceFlowTest extends TestCase
         $this->readyItems($order, $this->restaurantA);
         $this->placeLocation($this->rider, 12.51, 121.31);
 
+        $this->be($this->rider)
+            ->postJson($this->arriveUrl($delivery, $this->restaurantA))
+            ->assertOk();
         $this->be($this->rider)
             ->postJson($this->confirmUrl($delivery, $this->restaurantA))
             ->assertOk();
@@ -409,6 +470,9 @@ class PickupSequenceFlowTest extends TestCase
         $this->readyItems($order, $this->restaurantA);
 
         // Move the rider far away (~130km): within-radius check must block.
+        $this->be($this->rider)
+            ->postJson($this->arriveUrl($delivery, $this->restaurantA))
+            ->assertOk();
         $this->placeLocation($this->rider, 13.0, 122.0);
 
         $this->be($this->rider)
@@ -421,6 +485,101 @@ class PickupSequenceFlowTest extends TestCase
         // Back inside the radius: confirmation succeeds.
         $this->placeLocation($this->rider, 12.51, 121.31);
 
+        $this->be($this->rider)
+            ->postJson($this->confirmUrl($delivery, $this->restaurantA))
+            ->assertOk()
+            ->assertJsonPath('data.stop.status', DeliveryPickupStop::STATUS_COLLECTED);
+    }
+
+    public function test_pickup_requires_confirmed_arrival_and_retries_preserve_arrival_time(): void
+    {
+        $order = $this->makeOrder('gcash');
+        $delivery = $this->makeDelivery($order);
+        $this->readyItems($order, $this->restaurantA);
+
+        $this->be($this->rider)
+            ->postJson($this->confirmUrl($delivery, $this->restaurantA))
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Confirm your arrival at this restaurant before confirming pickup.');
+
+        $this->be($this->rider)
+            ->postJson($this->arriveUrl($delivery, $this->restaurantA))
+            ->assertOk();
+        $arrivedAt = DeliveryPickupStop::where('delivery_id', $delivery->id)
+            ->where('business_id', $this->restaurantA->id)
+            ->sole()
+            ->arrived_at;
+
+        $this->travel(30)->seconds();
+        $this->placeLocation($this->rider, 13.0, 122.0);
+        $this->be($this->rider)
+            ->postJson($this->arriveUrl($delivery, $this->restaurantA))
+            ->assertOk()
+            ->assertJsonPath('data.arrival_changed', false);
+
+        $this->assertSame(
+            $arrivedAt->toISOString(),
+            DeliveryPickupStop::where('delivery_id', $delivery->id)
+                ->where('business_id', $this->restaurantA->id)
+                ->sole()
+                ->arrived_at
+                ->toISOString(),
+            'Retry must preserve the server-recorded arrival timestamp.'
+        );
+
+        $this->be($this->rider)
+            ->postJson($this->confirmUrl($delivery, $this->restaurantA))
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'You must be within the pickup area before confirming the order items.');
+
+        $this->travelBack();
+    }
+
+    public function test_pickup_radius_allows_49_9_and_50_meters_but_blocks_50_1_meters(): void
+    {
+        config(['tracking.pickup_radius_meters' => 50]);
+
+        $order = $this->makeOrder('gcash');
+        $delivery = $this->makeDelivery($order);
+        $this->readyItems($order, $this->restaurantA);
+
+        foreach ([
+            [49.9, true],
+            [50.0, true],
+            [50.1, false],
+        ] as [$distanceMeters, $expected]) {
+            $latitude = $this->latitudeAtPickupDistance((float) $distanceMeters);
+            $this->placeLocation($this->rider, $latitude, (float) $this->restaurantA->longitude);
+
+            $stop = $this->be($this->rider)
+                ->getJson($this->stopsUrl($delivery))
+                ->assertOk()
+                ->assertJsonPath('data.pickup_radius_meters', 50)
+                ->json('data.stops.0');
+
+            $this->assertSame(
+                $expected,
+                $stop['arrival_can_confirm'],
+                "Arrival at approximately {$distanceMeters} m should be ".($expected ? 'allowed' : 'blocked').'.'
+            );
+        }
+
+        // The 50.1 m arrival is blocked; exactly 50 m remains inclusive.
+        $latitudeAtFiftyMeters = $this->latitudeAtPickupDistance(50.0);
+        $this->placeLocation($this->rider, $latitudeAtFiftyMeters, (float) $this->restaurantA->longitude);
+        $this->be($this->rider)
+            ->postJson($this->arriveUrl($delivery, $this->restaurantA))
+            ->assertOk();
+
+        $this->placeLocation($this->rider, $this->latitudeAtPickupDistance(49.9), (float) $this->restaurantA->longitude);
+        $this->assertTrue($this->be($this->rider)->getJson($this->stopsUrl($delivery))->json('data.stops.0.can_confirm'));
+
+        $this->placeLocation($this->rider, $this->latitudeAtPickupDistance(50.1), (float) $this->restaurantA->longitude);
+        $this->be($this->rider)
+            ->postJson($this->confirmUrl($delivery, $this->restaurantA))
+            ->assertStatus(422);
+
+        $this->placeLocation($this->rider, $latitudeAtFiftyMeters, (float) $this->restaurantA->longitude);
         $this->be($this->rider)
             ->postJson($this->confirmUrl($delivery, $this->restaurantA))
             ->assertOk()
@@ -464,6 +623,9 @@ class PickupSequenceFlowTest extends TestCase
         $this->readyItems($order, $this->restaurantB);
 
         $this->be($this->rider)
+            ->postJson($this->arriveUrl($delivery, $this->restaurantA))
+            ->assertOk();
+        $this->be($this->rider)
             ->postJson($this->confirmUrl($delivery, $this->restaurantA))
             ->assertOk()
             ->assertJsonPath('data.all_confirmed', false);
@@ -486,6 +648,9 @@ class PickupSequenceFlowTest extends TestCase
 
         // The rider rides to Restaurant B for the final stop.
         $this->placeLocation($this->rider, 12.52, 121.32);
+        $this->be($this->rider)
+            ->postJson($this->arriveUrl($delivery, $this->restaurantB))
+            ->assertOk();
 
         $this->be($this->rider)
             ->postJson($this->confirmUrl($delivery, $this->restaurantB))
@@ -497,14 +662,11 @@ class PickupSequenceFlowTest extends TestCase
             CodPurchase::where('delivery_id', $delivery->id)->where('business_id', $this->restaurantB->id)->sole()->status
         );
 
-        $this->be($this->rider)
-            ->patchJson("/api/rider/deliveries/{$delivery->id}/status", ['status' => 'picked_up'])
-            ->assertOk();
+        $this->assertSame('picked_up', $delivery->fresh()->status->value);
     }
 
     // ───────────────────────────────────────────────────────────────
-    // 5. A cod_purchases row collected through the legacy mark flow already
-    //    counts as the pickup stop confirmed (no regression).
+    // 5. Legacy COD collection delegates to the canonical arrival/pickup flow.
     // ───────────────────────────────────────────────────────────────
     public function test_legacy_cod_mark_flow_confirms_the_pickup_stop(): void
     {
@@ -512,36 +674,86 @@ class PickupSequenceFlowTest extends TestCase
         $delivery = $this->makeDelivery($order);
         app(\App\Services\PurchasingCashService::class)->initializeForDelivery($delivery);
         $this->issueAndReceivePurchasingCash($delivery);
+        $this->readyItems($order, $this->restaurantA);
+        $this->readyItems($order, $this->restaurantB);
 
-        foreach (CodPurchase::where('delivery_id', $delivery->id)->orderBy('business_id')->get() as $purchase) {
+        $purchases = CodPurchase::where('delivery_id', $delivery->id)->orderBy('business_id')->get();
+        foreach ($purchases as $purchase) {
             $this->be($this->rider)
                 ->postJson("/api/rider/deliveries/{$delivery->id}/purchases/{$purchase->id}/mark", ['status' => 'purchased'])
                 ->assertOk();
-            $this->be($this->rider)
-                ->postJson("/api/rider/deliveries/{$delivery->id}/purchases/{$purchase->id}/mark", ['status' => 'collected'])
-                ->assertOk();
         }
 
-        // Every stop counts as confirmed even though the stop rows were never
-        // touched directly — the ledger stays in step.
-        $this->assertTrue(
-            app(\App\Services\PickupSequenceService::class)->allConfirmed($delivery->fresh())
-        );
+        $this->be($this->rider)
+            ->postJson("/api/rider/deliveries/{$delivery->id}/purchases/{$purchases[0]->id}/mark", ['status' => 'collected'])
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'Confirm your arrival at this restaurant before confirming pickup.');
 
         $this->be($this->rider)
-            ->patchJson("/api/rider/deliveries/{$delivery->id}/status", ['status' => 'arrived_pickup'])
+            ->postJson($this->arriveUrl($delivery, $this->restaurantA))
             ->assertOk();
 
         $this->be($this->rider)
-            ->patchJson("/api/rider/deliveries/{$delivery->id}/status", ['status' => 'picked_up'])
+            ->postJson("/api/rider/deliveries/{$delivery->id}/purchases/{$purchases[0]->id}/mark", ['status' => 'collected'])
+            ->assertOk();
+        $this->placeLocation($this->rider, 12.52, 121.32);
+        $this->be($this->rider)
+            ->postJson($this->arriveUrl($delivery, $this->restaurantB))
+            ->assertOk();
+        $this->be($this->rider)
+            ->postJson("/api/rider/deliveries/{$delivery->id}/purchases/{$purchases[1]->id}/mark", ['status' => 'collected'])
             ->assertOk();
 
-        // The stop rows were intentionally untouched by the legacy flow: the
-        // COD ledger IS the source of truth for them, so the gate stays in step.
+        $this->assertSame('picked_up', $delivery->fresh()->status->value);
+
         foreach ([$this->restaurantA, $this->restaurantB] as $restaurant) {
             $stop = DeliveryPickupStop::where('delivery_id', $delivery->id)->where('business_id', $restaurant->id)->sole();
-            $this->assertSame(DeliveryPickupStop::STATUS_PENDING, $stop->status, 'Legacy mark never writes the pickup-stop row.');
+            $this->assertSame(DeliveryPickupStop::STATUS_COLLECTED, $stop->status, 'Legacy collection must use canonical pickup confirmation.');
             $this->assertTrue(app(\App\Services\PickupSequenceService::class)->stopConfirmed($delivery->fresh(), $stop));
         }
+    }
+
+    public function test_tourist_delivery_route_activates_only_after_every_stop_and_picked_up_transition(): void
+    {
+        $tourist = User::create([
+            'email' => 'tourist-pickup-progress@example.com',
+            'password' => Hash::make('Password123!'),
+            'role' => 'tourist',
+            'account_status' => 'approved',
+        ]);
+        $order = $this->makeOrder('gcash');
+        $order->update(['user_id' => $tourist->id]);
+        $delivery = $this->makeDelivery($order);
+        $statusUrl = "/api/tourist/food/order/{$order->id}/status";
+
+        $this->be($tourist)
+            ->getJson($statusUrl)
+            ->assertOk()
+            ->assertJsonPath('data.delivery_route_active', false)
+            ->assertJsonPath('data.pickup_stops.0.status', 'pending');
+
+        $this->readyItems($order, $this->restaurantA);
+        $this->readyItems($order, $this->restaurantB);
+        $this->be($this->rider)->postJson($this->arriveUrl($delivery, $this->restaurantA))->assertOk();
+        $this->be($this->rider)->postJson($this->confirmUrl($delivery, $this->restaurantA))->assertOk();
+
+        $this->be($tourist)
+            ->getJson($statusUrl)
+            ->assertOk()
+            ->assertJsonPath('data.delivery_route_active', false)
+            ->assertJsonPath('data.pickup_stops.0.status', 'collected')
+            ->assertJsonPath('data.pickup_stops.1.status', 'pending');
+
+        $this->placeLocation($this->rider, 12.52, 121.32);
+        $this->be($this->rider)->postJson($this->arriveUrl($delivery, $this->restaurantB))->assertOk();
+        $this->be($this->rider)->postJson($this->confirmUrl($delivery, $this->restaurantB))->assertOk();
+
+        $this->be($tourist)
+            ->getJson($statusUrl)
+            ->assertOk()
+            ->assertJsonPath('data.delivery_route_active', true)
+            ->assertJsonPath('data.delivery.status', 'picked_up')
+            ->assertJsonPath('data.pickup_stops.0.status', 'collected')
+            ->assertJsonPath('data.pickup_stops.1.status', 'collected');
     }
 }

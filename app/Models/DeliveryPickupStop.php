@@ -39,6 +39,7 @@ class DeliveryPickupStop extends Model
         'pickup_longitude',
         'pickup_address',
         'status',
+        'arrived_at',
         'pickup_confirmed_at',
     ];
 
@@ -49,6 +50,7 @@ class DeliveryPickupStop extends Model
             'preparation_time' => 'integer',
             'pickup_latitude' => 'decimal:7',
             'pickup_longitude' => 'decimal:7',
+            'arrived_at' => 'datetime',
             'pickup_confirmed_at' => 'datetime',
         ];
     }

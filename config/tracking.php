@@ -6,6 +6,8 @@ return [
     // Arrival geofence radius in meters. When a rider is within this distance of
     // the pickup/delivery point, the system marks them as "arrived".
     'arrival_radius_meters' => env('TRACKING_ARRIVAL_RADIUS_METERS', 100),
+    // Restaurant pickup-confirmation radius; separate from general arrival.
+    'pickup_radius_meters' => env('TRACKING_PICKUP_RADIUS_METERS', 50),
     // Teleport guard: a location fix implying a speed above this ceiling is
     // rejected before it can trigger an arrival or be persisted.
     'max_speed_kph' => env('TRACKING_MAX_SPEED_KPH', 150),

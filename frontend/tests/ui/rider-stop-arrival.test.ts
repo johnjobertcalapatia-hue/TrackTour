@@ -68,6 +68,21 @@ describe('resolveStopArrival — stop-level arrival detection', () => {
     expect(still.arrived).toBe(true)
   })
 
+  it.each([
+    [49.9, true],
+    [50, true],
+    [50.1, false],
+  ])('uses the inclusive 50 m pickup boundary at %s m', (meters, expected) => {
+    const latitude = (meters / 6371000) * (180 / Math.PI)
+    const result = resolveStopArrival({
+      riderLatitude: latitude,
+      riderLongitude: 0,
+      stops: [{ id: 1, sequence: 1, status: 'pending', latitude: 0, longitude: 0 }],
+    })
+
+    expect(result.arrived).toBe(expected)
+  })
+
   it('does not re-trigger arrival for a collected stop (advances to the next)', () => {
     const result = resolveStopArrival({
       riderLatitude: 12.87,

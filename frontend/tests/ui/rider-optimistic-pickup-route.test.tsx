@@ -92,10 +92,11 @@ const USER: User = {
 }
 
 function Probe() {
-  const { tripState, onMarkPickedUp } = useRiderActiveTrip()
+  const { tripState, onMarkPickedUp, pickupGateBlocked } = useRiderActiveTrip()
   return (
     <div>
       <span data-testid="trip-state">{tripState}</span>
+      <span data-testid="pickup-gate-blocked">{String(pickupGateBlocked)}</span>
       <button type="button" onClick={onMarkPickedUp}>
         Confirm Pickup
       </button>
@@ -139,6 +140,7 @@ describe('RiderActiveTripProvider — optimistic drop-off leg on pickup confirm'
     renderProbe()
 
     await waitFor(() => expect(screen.getByTestId('trip-state')).toHaveTextContent('ARRIVED_AT_PICKUP'))
+    await waitFor(() => expect(screen.getByTestId('pickup-gate-blocked')).toHaveTextContent('false'))
 
     fireEvent.click(screen.getByRole('button', { name: /confirm pickup/i }))
 
@@ -152,6 +154,7 @@ describe('RiderActiveTripProvider — optimistic drop-off leg on pickup confirm'
     renderProbe()
 
     await waitFor(() => expect(screen.getByTestId('trip-state')).toHaveTextContent('ARRIVED_AT_PICKUP'))
+    await waitFor(() => expect(screen.getByTestId('pickup-gate-blocked')).toHaveTextContent('false'))
 
     fireEvent.click(screen.getByRole('button', { name: /confirm pickup/i }))
 
@@ -165,6 +168,7 @@ describe('RiderActiveTripProvider — optimistic drop-off leg on pickup confirm'
     renderProbe()
 
     await waitFor(() => expect(screen.getByTestId('trip-state')).toHaveTextContent('ARRIVED_AT_PICKUP'))
+    await waitFor(() => expect(screen.getByTestId('pickup-gate-blocked')).toHaveTextContent('false'))
 
     fireEvent.click(screen.getByRole('button', { name: /confirm pickup/i }))
 

@@ -3,6 +3,8 @@
 namespace App\Http\Controllers\Rider;
 
 use App\Http\Controllers\Controller;
+use App\Events\DeliveryPickupStopChanged;
+use App\Events\DeliveryStatusChanged;
 use App\Models\Delivery;
 use App\Models\OrderItem;
 use App\Services\NearestRiderService;
@@ -85,9 +87,27 @@ class RiderPurchasingController extends Controller
         ]);
 
         try {
-            $this->purchasingCash->markPurchase($delivery, $purchase->id, (int) auth()->id(), $validated['status']);
+            $result = $this->purchasingCash->markPurchase($delivery, $purchase->id, (int) auth()->id(), $validated['status']);
         } catch (InvalidArgumentException $e) {
             return $this->errorResponse($e->getMessage(), 422);
+        }
+
+        if ($result !== null) {
+            $freshDelivery = $delivery->fresh()->load('order.business');
+            $freshStop = \App\Models\DeliveryPickupStop::where('delivery_id', $delivery->id)
+                ->where('business_id', $result['stop']['business_id'])
+                ->firstOrFail();
+
+            if ($result['stop_changed']) {
+                DeliveryPickupStopChanged::dispatch($freshDelivery, $freshStop, 'pickup_confirmed');
+            }
+            if ($result['delivery_status_change'] !== null) {
+                DeliveryStatusChanged::dispatch(
+                    $freshDelivery,
+                    $result['delivery_status_change']['old_status'],
+                    $result['delivery_status_change']['new_status'],
+                );
+            }
         }
 
         return $this->successResponse(
