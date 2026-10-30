@@ -184,7 +184,7 @@ describe('RiderOrderInfoSheet — pickup stops inside the Order details panel', 
     expect(screen.getByText(/confirm the item pickup at every restaurant in order/i)).toBeInTheDocument()
     expect(screen.getAllByText('Restaurant A').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Restaurant B').length).toBeGreaterThan(0)
-    expect(screen.getByText(/collected ✓/i)).toBeInTheDocument()
+    expect(screen.getByText(/pickup confirmed ✓/i)).toBeInTheDocument()
   })
 
   it('keeps the sheet view-only: no per-stop confirm, navigate, cash-confirm, or Start Delivery actions', async () => {

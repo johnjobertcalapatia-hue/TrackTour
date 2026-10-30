@@ -342,6 +342,27 @@ class PickupSequenceFlowTest extends TestCase
     // ───────────────────────────────────────────────────────────────
     // 2. Ownership and route-order isolation on the confirm endpoint.
     // ───────────────────────────────────────────────────────────────
+    public function test_confirmed_pickup_stops_are_not_reconfirmable_even_when_ready_and_in_range(): void
+    {
+        $order = $this->makeOrder('gcash');
+        $delivery = $this->makeDelivery($order);
+        $this->readyItems($order, $this->restaurantA);
+        $this->placeLocation($this->rider, 12.51, 121.31);
+
+        $this->be($this->rider)
+            ->postJson($this->confirmUrl($delivery, $this->restaurantA))
+            ->assertOk();
+
+        $payload = $this->be($this->rider)
+            ->getJson($this->stopsUrl($delivery))
+            ->assertOk()
+            ->json('data.stops');
+
+        $this->assertSame('collected', $payload[0]['status']);
+        $this->assertFalse($payload[0]['can_confirm']);
+        $this->assertSame('already_confirmed', $payload[0]['reason']);
+    }
+
     public function test_confirm_pickup_enforces_ownership_and_route_order(): void
     {
         $order = $this->makeOrder('gcash');

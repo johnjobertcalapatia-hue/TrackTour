@@ -266,10 +266,14 @@ class PickupSequenceService
         $confirmed = $this->stopConfirmed($delivery, $stop);
         $current = $this->currentStop($delivery);
 
-        $isCurrent = $current?->id === $stop->id || $confirmed;
-
         $distance = $this->stopDistanceMeters($delivery, $stop);
         $hasCoords = $stop->pickup_latitude !== null && $stop->pickup_longitude !== null;
+
+        if ($confirmed) {
+            return ['can_confirm' => false, 'reason' => 'already_confirmed', 'distance_meters' => $distance];
+        }
+
+        $isCurrent = $current?->id === $stop->id;
 
         $withinRadius = ! $hasCoords
             ? true

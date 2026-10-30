@@ -15,7 +15,7 @@
 
 export type PickupStopStatus = 'pending' | 'collected'
 export type PickupStopReadyLabel = 'ready' | 'preparing' | 'accepted' | 'none'
-export type PickupStopBlockReason = 'not_current' | 'waiting_ready' | 'too_far' | 'gps_unavailable' | null
+export type PickupStopBlockReason = 'not_current' | 'waiting_ready' | 'too_far' | 'gps_unavailable' | 'already_confirmed' | null
 
 export interface PickupStopItem {
   id: number
@@ -91,6 +91,8 @@ export function pickupStopReasonLabel(reason: PickupStopBlockReason): string | n
       return 'Move into the pickup area first.'
     case 'gps_unavailable':
       return 'Share your location to confirm this pickup.'
+    case 'already_confirmed':
+      return 'Pickup already confirmed.'
     default:
       return null
   }

@@ -367,7 +367,7 @@ export default function RiderOrderInfoSheet() {
                       </div>
                       <div className="shrink-0 flex gap-1.5">
                         {stopConfirmed && (
-                          <span className="text-[11px] font-semibold text-[#087F3F] self-center">Collected ✓</span>
+                          <span className="text-[11px] font-semibold text-[#087F3F] self-center">Pickup confirmed ✓</span>
                         )}
                       </div>
                     </div>
