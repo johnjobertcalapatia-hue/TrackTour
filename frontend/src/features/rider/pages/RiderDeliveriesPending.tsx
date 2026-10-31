@@ -12,6 +12,7 @@ import { ArrowLeft, MapPin, Navigation } from 'lucide-react'
 export default function RiderDeliveriesPending() {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
+  const fetchUser = useAuthStore((state) => state.fetchUser)
   const currentService = useAuthStore((state) => state.user?.current_service)
   const isRideHailing = currentService === 'transport'
   const [acceptError, setAcceptError] = useState<string | null>(null)
@@ -25,7 +26,12 @@ export default function RiderDeliveriesPending() {
     mutationFn: (id: number) => patch('/rider/dispatch/accept', { delivery_id: id }),
     onSuccess: () => {
       setAcceptError(null)
-      queryClient.invalidateQueries({ queryKey: ['rider-deliveries-pending'] })
+      void fetchUser()
+      void queryClient.invalidateQueries({ queryKey: ['rider-deliveries-pending'] })
+      void queryClient.invalidateQueries({ queryKey: ['rider-deliveries-active'] })
+      void queryClient.invalidateQueries({ queryKey: ['rider-map-location'] })
+      void queryClient.invalidateQueries({ queryKey: ['rider-dashboard'] })
+      navigate('/rider/map', { replace: true })
     },
     onError: (err) => {
       // First accept wins server-side: a delivery another rider just claimed
