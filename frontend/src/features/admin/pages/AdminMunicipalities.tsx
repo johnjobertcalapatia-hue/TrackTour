@@ -2,9 +2,9 @@
 import { get } from '@/shared/services/api'
 import { TableSkeleton } from '@/shared/components/Skeleton'
 import { API_ENDPOINTS } from '@/shared/constants'
-import type { Municipality, PaginatedResponse, Business, Barangay } from '@/shared/types'
+import type { Municipality, PaginatedResponse } from '@/shared/types'
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, MapPin, Search } from 'lucide-react'
+import { ChevronDown, ChevronRight, Search, Building2, MapPin } from 'lucide-react'
 
 export default function AdminMunicipalities() {
   const [expandedId, setExpandedId] = useState<number | null>(null)
@@ -26,13 +26,6 @@ export default function AdminMunicipalities() {
     setSearch(value)
   }
 
-  // Get businesses for a barangay
-  const getBarangayBusinessCount = (brgy: Barangay): number => {
-    // Count businesses in this barangay
-    // We'll use the businesses relationship from the municipality data
-    return (brgy.businesses?.length ?? 0)
-  }
-
   return (
     <div>
       <div className="mb-8">
@@ -40,7 +33,7 @@ export default function AdminMunicipalities() {
         <p className="mt-1 text-sm lg:text-base text-[#6B7280]">Manage municipalities and their barangays with businesses</p>
       </div>
 
-      <div className="rounded-2xl bg-white border border-[#E2E8E3] shadow-tourism">
+      <div className="rounded-2xl bg-white border border-[#E2E8E3] shadow-tourism mb-6">
         <div className="p-5 lg:p-6 border-b border-[#E2E8E3]">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#6B7280]" />
@@ -55,99 +48,92 @@ export default function AdminMunicipalities() {
         </div>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-[#E2E8E3] bg-[#F6F8F4]">
-              <th className="text-left px-5 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">Municipality</th>
-              <th className="text-left px-5 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">Province</th>
-              <th className="text-left px-5 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wider text-[#6B7280]">Barangays</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[#E2E8E3]">
-            {municipalities.map((mun) => (
-              <>
-                <tr
-                  key={mun.id}
-                  className="hover:bg-[#F3F8F4] transition-colors cursor-pointer"
-                  onClick={() => setExpandedId(expandedId === mun.id ? null : mun.id)}
-                >
-                  <td className="px-5 lg:px-6 py-3">
-                    <div className="flex items-center gap-3">
-                      <div
-        className="w-10 h-10 rounded-md bg-[#EAF6ED] flex items-center justify-center text-sm font-medium text-[#16803C] overflow-hidden"
-      >
-        <span className="font-bold text-[#16803C]">
-          {mun.name?.charAt(0)?.toUpperCase() ?? '?'}
-        </span>
-      </div>
-      <div>
-        <div className="font-medium text-[#17201A]">{mun.name}</div>
-        <div className="text-xs text-[#6B7280]">{mun.district?.trim() || ''} District</div>
-      </div>
-    </div>
-                  </td>
-                  <td className="px-5 lg:px-6 py-3 text-[#6B7280] whitespace-nowrap">
-                    {mun.province || 'Oriental Mindoro'}
-                  </td>
-                  <td className="px-5 lg:px-6 py-3 text-right">
-                    <span className="inline-flex items-center justify-center min-w-[3rem] px-3 py-2 rounded-full bg-[#EAF6ED] text-[#16803C] text-xs font-medium">
-                      {mun.barangays?.length ?? 0}
-                    </span>
-                  </td>
-                </tr>
-                {expandedId === mun.id && mun.barangays && (
-                  <tr key={`${mun.id}-barangays`}>
-                    <td colSpan={3} className="px-5 lg:px-6 py-4 bg-[#F6F8F4]">
-                      <div className="ml-8">
-                        <p className="text-xs font-semibold uppercase tracking-wider text-[#6B7280] mb-2">Barangays</p>
-                        <div className="space-y-4">
-                          {mun.barangays.map((brgy) => (
-                            <div
-                              key={brgy.id}
-                              className="bg-white rounded-lg p-3 border border-[#D7E8DB] shadow-sm hover:border-[#16803C] transition-colors"
-                            >
-                              <div className="flex items-between justify-between mb-2">
-                                <span className="font-medium text-[#17201A]">{brgy.name}</span>
-                                <span className="text-xs text-[#6B7280]">
-                                  {brgy.businesses?.length ?? 0} businesses
-                                </span>
-                              </div>
-                              <div className="space-y-1 text-sm text-[#6B7280]">
-                                {brgy.businesses?.map((business) => (
-                                  <a
-                                    key={business.id}
-                                    href="/business/{business.id}"
-                                    target="_blank"
-                                    className="text-decoration-none text-[#16803C] small"
-                                  >
-                                    {business.business_name ?? 'Unnamed Business'}
-                                  </a>
-                                ))}
-                                {brgy.businesses?.length === 0 && (
-                                  <span>No businesses</span>
-                                )}
-                              </div>
-                            </div>
-                          ))}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+        {municipalities.map((mun) => (
+          <div key={mun.id} className="bg-white rounded-xl border border-[#E2E8E3] shadow-sm hover:border-[#16803C] transition-all duration-200 cursor-pointer hover:shadow-md">
+            <div
+              className="p-5"
+              onClick={() => setExpandedId(expandedId === mun.id ? null : mun.id)}
+            >
+              <div className="flex items-start gap-3">
+                <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-[#EAF6ED] to-[#D1FAE5] flex items-center justify-center shrink-0">
+                  <span className="font-bold text-lg text-[#16803C]">
+                    {mun.name?.charAt(0)?.toUpperCase() ?? '?'}
+                  </span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-[#17201A] truncate">{mun.name}</div>
+                  <div className="text-xs text-[#6B7280] mt-0.5">{mun.district || 'N/A'} District</div>
+                  <div className="text-xs text-[#6B7280] mt-0.5">{mun.province || 'Oriental Mindoro'}</div>
+                </div>
+                <div className="shrink-0">
+                  {expandedId === mun.id ? (
+                    <ChevronDown className="w-5 h-5 text-[#6B7280]" />
+                  ) : (
+                    <ChevronRight className="w-5 h-5 text-[#6B7280]" />
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-4 pt-3 border-t border-[#E2E8E3] flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Building2 className="w-4 h-4 text-[#6B7280]" />
+                  <span className="text-sm text-[#6B7280]">Barangays</span>
+                </div>
+                <span className="inline-flex items-center justify-center px-3 py-1 rounded-full bg-[#EAF6ED] text-[#16803C] text-xs font-semibold">
+                  {mun.barangays?.length ?? 0}
+                </span>
+              </div>
+            </div>
+
+            {expandedId === mun.id && mun.barangays && (
+              <div className="border-t border-[#E2E8E3] bg-[#F6F8F4] p-5">
+                <p className="text-xs font-semibold uppercase tracking-wider text-[#6B7280] mb-3">Barangays</p>
+                <div className="space-y-3">
+                  {mun.barangays.map((brgy) => (
+                    <div
+                      key={brgy.id}
+                      className="bg-white rounded-lg p-4 border border-[#D7E8DB] shadow-sm hover:border-[#16803C] transition-colors"
+                    >
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <MapPin className="w-4 h-4 text-[#16803C]" />
+                          <span className="font-medium text-[#17201A]">{brgy.name}</span>
                         </div>
+                        <span className="text-xs text-[#6B7280] bg-[#EAF6ED] px-2 py-1 rounded-full">
+                          {brgy.businesses?.length ?? 0} businesses
+                        </span>
                       </div>
-                    </td>
-                  </tr>
-                )}
-              </>
-            ))}
-            {municipalities.length === 0 && (
-              <tr>
-                <td colSpan={3} className="px-5 lg:px-6 py-12 text-center text-[#6B7280]">No municipalities found</td>
-              </tr>
+                      <div className="space-y-2">
+                        {brgy.businesses?.map((business) => (
+                          <a
+                            key={business.id}
+                            href={`/admin/businesses/${business.id}`}
+                            className="block text-sm text-[#16803C] hover:text-[#0d5f2e] hover:underline transition-colors"
+                          >
+                            {business.business_name || 'Unnamed Business'}
+                          </a>
+                        ))}
+                        {brgy.businesses?.length === 0 && (
+                          <span className="text-sm text-[#6B7280] italic">No businesses yet</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             )}
-          </tbody>
-        </table>
+          </div>
+        ))}
+        {municipalities.length === 0 && (
+          <div className="col-span-full bg-white rounded-xl border border-[#E2E8E3] shadow-sm p-12 text-center text-[#6B7280]">
+            No municipalities found
+          </div>
+        )}
       </div>
 
       {meta && meta.last_page > 1 && (
-        <div className="px-5 lg:px-6 py-4 border-t border-[#E2E8E3] flex items-center justify-between">
+        <div className="mt-6 bg-white rounded-xl border border-[#E2E8E3] shadow-sm px-5 lg:px-6 py-4 flex items-center justify-between">
           <p className="text-sm text-[#6B7280]">
             Showing {((meta.current_page - 1) * meta.per_page) + 1} to{' '}
             {Math.min(meta.current_page * meta.per_page, meta.total)} of {meta.total} municipalities
