@@ -13,7 +13,6 @@ const base = (input: Partial<ResolvePickupRouteInput> = {}): ResolvePickupRouteI
   hasPickupStops: true,
   allCollected: false,
   stops: [stopA, stopB, stopC],
-  finalPickup: { latitude: stopC.latitude, longitude: stopC.longitude },
   destination: { latitude: 12.9, longitude: 121.49 },
   fallbackPickup: { latitude: stopA.latitude, longitude: stopA.longitude },
   fallbackDestination: { latitude: 12.9, longitude: 121.49 },
@@ -52,22 +51,22 @@ describe('resolvePickupRoute — staged group-checkout pickup routing', () => {
     ])
   })
 
-  it('switches to the drop-off route (final pickup → destination) once all food is collected', () => {
+  it('switches to the live rider → destination route once all food is collected', () => {
     const input = base({
       allCollected: true,
       stops: [stopA, stopB, stopC].map((s) => ({ ...s, status: 'collected' as const })),
     })
     expect(resolvePickupRoute(input)).toEqual([
-      [stopC.latitude, stopC.longitude],
+      rider,
       [12.9, 121.49],
     ])
   })
 
-  it('uses the last collected stop as the drop-off origin when finalPickup is missing', () => {
+  it('routes from the current rider position after the final stop is collected', () => {
     const input = base({
       allCollected: true,
-      finalPickup: null,
       destination: { latitude: 12.9, longitude: 121.49 },
+      rider: [12.891, 121.482],
       stops: [
         { ...stopA, status: 'collected' },
         { ...stopB, status: 'collected' },
@@ -75,7 +74,7 @@ describe('resolvePickupRoute — staged group-checkout pickup routing', () => {
       ],
     })
     expect(resolvePickupRoute(input)).toEqual([
-      [stopC.latitude, stopC.longitude],
+      [12.891, 121.482],
       [12.9, 121.49],
     ])
   })
@@ -85,10 +84,15 @@ describe('resolvePickupRoute — staged group-checkout pickup routing', () => {
     expect(resolvePickupRoute(input)).toEqual([])
   })
 
-  it('keeps the drop-leg route after pickup completes (last restaurant → destination)', () => {
-    const input = base({ isPickupLeg: false, isDropLeg: true, allCollected: true })
+  it('keeps routing from the live rider position during the drop leg', () => {
+    const input = base({
+      isPickupLeg: false,
+      isDropLeg: true,
+      allCollected: true,
+      rider: [12.895, 121.485],
+    })
     expect(resolvePickupRoute(input)).toEqual([
-      [stopC.latitude, stopC.longitude],
+      [12.895, 121.485],
       [12.9, 121.49],
     ])
   })
@@ -97,7 +101,6 @@ describe('resolvePickupRoute — staged group-checkout pickup routing', () => {
     const input = base({
       hasPickupStops: false,
       stops: [],
-      finalPickup: null,
       destination: null,
     })
     expect(resolvePickupRoute(input)).toEqual([
@@ -112,10 +115,10 @@ describe('resolvePickupRoute — staged group-checkout pickup routing', () => {
       isDropLeg: true,
       destination: null,
       fallbackDestination: { latitude: 12.95, longitude: 121.55 },
-      finalPickup: null,
+      rider: [12.895, 121.485],
     })
     expect(resolvePickupRoute(input)).toEqual([
-      [stopA.latitude, stopA.longitude],
+      [12.895, 121.485],
       [12.95, 121.55],
     ])
   })
@@ -126,7 +129,6 @@ describe('resolvePickupRoute — staged group-checkout pickup routing', () => {
         base({
           isPickupLeg: false,
           isDropLeg: true,
-          finalPickup: null,
           destination: null,
           fallbackPickup: null,
           fallbackDestination: null,
@@ -155,11 +157,10 @@ describe('resolvePickupRoute — staged group-checkout pickup routing', () => {
       isDropLeg: true,
       allCollected: true,
       stops: [stopA, stopB, stopC].map((s) => ({ ...s, status: 'collected' as const })),
-      finalPickup: { latitude: 0, longitude: 0 },
       destination: { latitude: 12.9, longitude: 121.49 },
     })
     expect(resolvePickupRoute(input)).toEqual([
-      [stopC.latitude, stopC.longitude],
+      rider,
       [12.9, 121.49],
     ])
   })

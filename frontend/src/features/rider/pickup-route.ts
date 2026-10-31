@@ -21,8 +21,6 @@ export interface ResolvePickupRouteInput {
   allCollected: boolean
   /** Per-restaurant stops in drive order (ascending preparation time). */
   stops: StagedRouteStop[]
-  /** The LAST restaurant (pickupOrigin) — drop-off route origin. */
-  finalPickup: StagedRoutePoint | null
   /** The tourist drop-off destination. */
   destination: StagedRoutePoint | null
   /** Delivery-level pickup coordinate fallback. */
@@ -36,7 +34,7 @@ export interface ResolvePickupRouteInput {
  *
  * The driver navigates to ONE restaurant at a time: the next unconsumed stop
  * in drive order. Only after every restaurant's food is collected does the
- * route switch to the drop-off leg (final pickup → tourist destination).
+ * route switch to the drop-off leg (live rider position → tourist destination).
  *
  *   Start → Stop 1 → Stop 2 → … → Last Stop → Drop-off
  *                    (one leg at a time)
@@ -55,26 +53,21 @@ export function resolvePickupRoute(input: ResolvePickupRouteInput): [number, num
     return [lat, lng]
   }
 
-  const lastCollected =
-    input.stops.filter((s) => s.status === 'collected').slice(-1)[0] ?? null
-  const origin =
-    toPoint(input.finalPickup) ??
-    (lastCollected ? toPoint(lastCollected) : null) ??
-    toPoint(input.fallbackPickup)
   const destination = toPoint(input.destination) ?? toPoint(input.fallbackDestination)
 
-  // Drop leg: last restaurant → tourist destination.
+  // Drop leg: live rider position → tourist destination.
   if (input.isDropLeg) {
-    return origin && destination ? [origin, destination] : []
+    return destination ? [input.rider, destination] : []
   }
 
   if (!input.isPickupLeg) return []
 
   const rider = input.rider
 
-  // Every restaurant collected: leave toward the destination immediately.
+  // Every restaurant collected: route from the rider's current position to
+  // the destination, even before the final pickup-status confirmation.
   if (input.hasPickupStops && input.allCollected) {
-    return origin && destination ? [origin, destination] : []
+    return destination ? [input.rider, destination] : []
   }
 
   // Multi-restaurant pickup: route only to the NEXT unconsumed restaurant.
