@@ -24,7 +24,7 @@ export default function AdminTourists() {
     queryKey: ['admin-tourists', debouncedSearch, page],
     queryFn: () =>
       get<PaginatedResponse<User>>(API_ENDPOINTS.ADMIN.TOURISTS, {
-        params: { search: debouncedSearch || undefined, page },
+        params: { search: debouncedSearch || undefined, role: 'tourist', page },
       }),
   })
 
