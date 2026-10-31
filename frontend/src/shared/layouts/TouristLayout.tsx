@@ -2,13 +2,13 @@
 import { Outlet, useLocation, Link } from 'react-router-dom'
 import TouristHeader from '@/features/tourist/components/layout/TouristHeader'
 import TouristSidebar from '@/features/tourist/components/layout/TouristSidebar'
-import { X, Home, Map, Heart, Compass, User } from 'lucide-react'
+import { X, Home, Map, Package, Compass, User } from 'lucide-react'
 
 const MOBILE_NAV = [
   { to: '/tourist/dashboard', label: 'Home', icon: Home },
   { to: '/tourist/explore', label: 'Explore', icon: Compass },
   { to: '/tourist/explore/map', label: 'Map', icon: Map },
-  { to: '/tourist/favorites', label: 'Saved', icon: Heart },
+  { to: '/tourist/orders', label: 'Orders', icon: Package },
   { to: '/tourist/profile', label: 'Profile', icon: User },
 ]
 
