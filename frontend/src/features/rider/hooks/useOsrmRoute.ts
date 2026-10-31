@@ -106,17 +106,28 @@ export function useOsrmRoute(waypoints: LatLng[] | null, enabled: boolean): Osrm
     if (lastKey.current === key) return
 
     // Only refetch once per meaningful origin move (what makes the line follow
-    // the rider). A failed fetch does NOT set lastKey, so it can be retried.
+    // the rider) when the remaining waypoints are unchanged. A changed target
+    // must reroute immediately even when the rider has not moved 200 metres. A
+    // failed fetch does NOT set lastKey, so it can be retried.
     if (lastKey.current) {
-      const [prevLat, prevLng] = lastKey.current.split('|')[0]!.split(',').map(Number) as [number, number]
-      const currentOrigin = coords[0]!
-      if (moveMeters([prevLat, prevLng], currentOrigin) <= MIN_REFETCH_MOVE_M) return
+      const previousWaypoints = lastKey.current.split('|')
+      const currentWaypoints = key.split('|')
+      const targetChanged =
+        previousWaypoints.slice(1).join('|') !== currentWaypoints.slice(1).join('|')
+      if (!targetChanged) {
+        const [prevLat, prevLng] = previousWaypoints[0]!.split(',').map(Number) as [number, number]
+        const currentOrigin = coords[0]!
+        if (moveMeters([prevLat, prevLng], currentOrigin) <= MIN_REFETCH_MOVE_M) return
+      }
     }
 
     if (inFlight.current) return
 
     let cancelled = false
     inFlight.current = true
+    setPoints([])
+    setDistanceKm(null)
+    setDurationMin(null)
 
     fetch(osrmUrl)
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('OSRM request failed'))))

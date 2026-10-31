@@ -328,6 +328,11 @@
   scrollbar-width: none;
 }
 
+.leaflet-div-icon.custom-rider-navigation-marker {
+  background: transparent;
+  border: 0;
+}
+
 .leaflet-container::-webkit-scrollbar {
   display: none;
 }

@@ -24,6 +24,21 @@ export const riderMarkerIcon = L.icon({
   popupAnchor: [0, -22],
 })
 
+export const riderNavigationMarkerIcon = L.divIcon({
+  className: 'custom-rider-navigation-marker',
+  html: `
+    <div style="width:44px;height:44px;position:relative;filter:drop-shadow(0 2px 2.5px rgba(0,0,0,0.4))">
+      <div style="position:absolute;left:4px;top:4px;width:36px;height:36px;box-sizing:border-box;border:3px solid #ffffff;border-radius:50%;background:#087F3F"></div>
+      <svg class="rider-navigation-arrow" xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44" style="position:absolute;inset:0;transform-origin:22px 22px;will-change:transform">
+        <path d="M 22 10 L 30 29 L 22 24 L 14 29 Z" fill="#ffffff"/>
+      </svg>
+    </div>
+  `,
+  iconSize: [44, 44],
+  iconAnchor: [22, 22],
+  popupAnchor: [0, -22],
+})
+
 export const pickupMarkerIcon = L.divIcon({
   className: 'custom-pickup-marker',
   html: `

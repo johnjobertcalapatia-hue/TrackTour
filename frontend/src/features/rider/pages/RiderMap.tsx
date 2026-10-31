@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { get, patch, post } from '@/shared/services/api'
@@ -12,7 +12,8 @@ import { Navigation, MapPin, Play, Truck, CheckCircle, Radio, Wallet, Package, C
 import { useRiderActiveTrip } from '@/features/rider/context/RiderActiveTripContext'
 import { useOsrmRoute } from '@/features/rider/hooks/useOsrmRoute'
 import { resolvePickupRoute } from '@/features/rider/pickup-route'
-import { riderMarkerIcon as motorcycleIcon, pickupMarkerIcon, destinationMarkerIcon } from '@/shared/utils/map-markers'
+import { riderNavigationMarkerIcon, pickupMarkerIcon, destinationMarkerIcon } from '@/shared/utils/map-markers'
+import { RiderHeadingController } from '@/shared/utils/rider-heading'
 
 const pickupIcon = pickupMarkerIcon
 const deliveryDestIcon = destinationMarkerIcon
@@ -20,6 +21,9 @@ const deliveryDestIcon = destinationMarkerIcon
 interface RiderLocation {
   latitude: number
   longitude: number
+  heading?: number
+  speed?: number
+  accuracy?: number
 }
 
 const stopNumberIcon = (n: number) =>
@@ -135,6 +139,11 @@ export default function RiderMap() {
   const user = useAuthStore((state) => state.user)
   const [riderPosition, setRiderPosition] = useState<[number, number]>([12.8667, 121.4500])
   const watchIdRef = useRef<number | null>(null)
+  const headingControllerRef = useRef<RiderHeadingController | null>(null)
+  if (!headingControllerRef.current) {
+    headingControllerRef.current = new RiderHeadingController()
+  }
+  const headingController = headingControllerRef.current
   const [earningsOpen, setEarningsOpen] = useState(false)
 
   const {
@@ -246,7 +255,17 @@ export default function RiderMap() {
   const lastLocationSent = useRef(0)
   const locationInFlight = useRef(false)
 
-  const sendLocation = useCallback((lat: number, lng: number) => {
+  const riderMarkerEvents = useMemo<L.LeafletEventHandlerFnMap>(() => ({
+    add: (event) => {
+      const marker = event.target as L.Marker
+      headingController.attach(
+        marker.getElement()?.querySelector<HTMLElement>('.rider-navigation-arrow') ?? null,
+      )
+    },
+    remove: () => headingController.attach(null),
+  }), [headingController])
+
+  const sendLocation = useCallback((position: GeolocationPosition) => {
     // Read directly from the store so we catch the null user immediately,
     // even before React re-renders after logout clears user from the store.
     if (!useAuthStore.getState().user?.id) return
@@ -254,22 +273,35 @@ export default function RiderMap() {
     // but throttle the backend POST so the PHP proximity endpoint is never
     // hammered faster than it can respond (avoids ERR_INSUFFICIENT_RESOURCES)
     // and no two location requests are ever in flight at the same time.
-    setRiderPosition([lat, lng])
-    setTripRiderPosition(lat, lng)
+    const { latitude, longitude, heading, speed, accuracy } = position.coords
+    headingController.update({
+      latitude,
+      longitude,
+      heading,
+      speed,
+      accuracy,
+      timestamp: position.timestamp,
+    })
+    setRiderPosition([latitude, longitude])
+    setTripRiderPosition(latitude, longitude)
     if (locationInFlight.current) return
     const now = Date.now()
     if (now - lastLocationSent.current < 3000) return
     lastLocationSent.current = now
     locationInFlight.current = true
+    const location: RiderLocation = { latitude, longitude }
+    if (heading !== null && Number.isFinite(heading)) location.heading = heading
+    if (speed !== null && Number.isFinite(speed)) location.speed = speed
+    if (accuracy !== null && Number.isFinite(accuracy)) location.accuracy = accuracy
     locationMutation.mutate(
-      { latitude: lat, longitude: lng },
+      location,
       {
         onSettled: () => {
           locationInFlight.current = false
         },
       }
     )
-  }, [locationMutation, setTripRiderPosition])
+  }, [headingController, locationMutation, setTripRiderPosition])
 
   useEffect(() => {
     if (!user?.id) {
@@ -283,13 +315,13 @@ export default function RiderMap() {
     if (!navigator.geolocation) return
 
     navigator.geolocation.getCurrentPosition(
-      (pos) => sendLocation(pos.coords.latitude, pos.coords.longitude),
+      sendLocation,
       undefined,
       { enableHighAccuracy: true }
     )
 
     watchIdRef.current = navigator.geolocation.watchPosition(
-      (pos) => sendLocation(pos.coords.latitude, pos.coords.longitude),
+      sendLocation,
       undefined,
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
     )
@@ -301,6 +333,8 @@ export default function RiderMap() {
     }
   }, [sendLocation, user?.id])
 
+  useEffect(() => () => headingController.destroy(), [headingController])
+
   const deliveries = data?.deliveries ?? []
   const isRideHailing = user?.current_service === 'transport'
 
@@ -311,14 +345,12 @@ export default function RiderMap() {
   const purchaseStops = pickupStopsData?.stops ?? []
   const fullyCollected = pickupStopsData?.fully_collected ?? false
   const allRouteStopsCollected = fullyCollected
-  const pickupOrigin = pickupStopsData?.pickup_origin ?? null
   const dropoff = pickupStopsData?.dropoff ?? null
 
   // Group-checkout routing (see resolvePickupRoute): the rider navigates to the
   // NEXT unconsumed restaurant in drive order, not all of them at once. Only
   // after every restaurant's food is collected does the route switch to the
-  // drop-off leg (last restaurant → tourist destination). Drop-off leg: the
-  // LAST restaurant picked up (longest prep) → destination.
+  // drop-off leg (live rider position → tourist destination).
   const routeWaypoints = resolvePickupRoute({
     rider: riderPosition,
     isPickupLeg,
@@ -331,10 +363,6 @@ export default function RiderMap() {
       latitude: stop.pickup_lat,
       longitude: stop.pickup_lng,
     })),
-    finalPickup:
-      pickupOrigin?.latitude != null && pickupOrigin?.longitude != null
-        ? { latitude: pickupOrigin.latitude, longitude: pickupOrigin.longitude }
-        : null,
     destination:
       dropoff?.latitude != null && dropoff?.longitude != null
         ? { latitude: dropoff.latitude, longitude: dropoff.longitude }
@@ -452,7 +480,11 @@ export default function RiderMap() {
           />
           <RecenterMap center={riderPosition} />
 
-          <Marker position={riderPosition} icon={motorcycleIcon}>
+          <Marker
+            position={riderPosition}
+            icon={riderNavigationMarkerIcon}
+            eventHandlers={riderMarkerEvents}
+          >
             <Popup>
               <div className="text-sm">
                 <p className="font-semibold">Your Location</p>
