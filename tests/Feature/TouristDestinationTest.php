@@ -5,11 +5,13 @@ namespace Tests\Feature;
 use App\Models\Business;
 use App\Models\BusinessCategory;
 use App\Models\BusinessDetail;
+use App\Models\BusinessMedia;
 use App\Models\Municipality;
 use App\Models\TourismCategory;
 use App\Models\TouristDestination;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -79,6 +81,137 @@ class TouristDestinationTest extends TestCase
         $response->assertOk()
             ->assertJsonPath('success', true)
             ->assertJsonPath('data.data', []);
+    }
+
+    public function test_explore_uses_first_public_published_attraction_gallery_photo(): void
+    {
+        Storage::fake('public');
+        $attraction = $this->makeAttraction('Hidden Falls', [
+            'cover_photo' => 'businesses/gallery/legacy-cover.webp',
+        ]);
+
+        $attraction->media()->create([
+            'type' => 'Logo',
+            'file_path' => 'businesses/logos/logo.webp',
+            'sort_order' => 0,
+        ]);
+        BusinessMedia::create([
+            'business_id' => $attraction->id,
+            'type' => 'Gallery',
+            'file_path' => 'businesses/gallery/draft.webp',
+            'sort_order' => 1,
+            'status' => 'draft',
+            'visibility' => 'public',
+        ]);
+        BusinessMedia::create([
+            'business_id' => $attraction->id,
+            'type' => 'Gallery',
+            'file_path' => 'businesses/gallery/hidden.webp',
+            'sort_order' => 2,
+            'status' => 'published',
+            'visibility' => 'hidden',
+        ]);
+        BusinessMedia::create([
+            'business_id' => $attraction->id,
+            'type' => 'Gallery',
+            'file_path' => 'businesses/gallery/first-public.webp',
+            'sort_order' => 3,
+            'status' => 'published',
+            'visibility' => 'public',
+        ]);
+        BusinessMedia::create([
+            'business_id' => $attraction->id,
+            'type' => 'Gallery',
+            'file_path' => 'businesses/gallery/second-public.webp',
+            'sort_order' => 4,
+            'status' => 'published',
+            'visibility' => 'public',
+        ]);
+        Storage::disk('public')->put('businesses/gallery/first-public.webp', 'first image');
+        Storage::disk('public')->put('businesses/gallery/second-public.webp', 'second image');
+
+        $response = $this->getJson('/api/tourist/explore');
+
+        $response->assertOk()
+            ->assertJsonPath(
+                'data.places.0.cover_photo',
+                '/storage/businesses/gallery/first-public.webp'
+            );
+    }
+
+    public function test_explore_falls_back_to_cover_when_attraction_has_no_gallery_photos(): void
+    {
+        Storage::fake('public');
+        Storage::disk('public')->put('businesses/gallery/cover.webp', 'cover image');
+        $attraction = $this->makeAttraction('Bansud Viewpoint', [
+            'cover_photo' => 'businesses/gallery/cover.webp',
+        ]);
+
+        $response = $this->getJson('/api/tourist/explore');
+
+        $response->assertOk()
+            ->assertJsonPath('data.places.0.id', $attraction->id)
+            ->assertJsonPath('data.places.0.cover_photo', '/storage/businesses/gallery/cover.webp');
+    }
+
+    public function test_explore_returns_no_attraction_image_when_no_eligible_photo_or_cover_exists(): void
+    {
+        Storage::fake('public');
+        $attraction = $this->makeAttraction('Bare Viewpoint');
+        $attraction->media()->create([
+            'type' => 'Gallery',
+            'file_path' => 'businesses/gallery/draft.webp',
+            'sort_order' => 0,
+            'status' => 'draft',
+            'visibility' => 'public',
+        ]);
+
+        $response = $this->getJson('/api/tourist/explore');
+
+        $response->assertOk()
+            ->assertJsonPath('data.places.0.id', $attraction->id)
+            ->assertJsonPath('data.places.0.cover_photo', null);
+    }
+
+    public function test_explore_skips_deleted_and_missing_gallery_files(): void
+    {
+        Storage::fake('public');
+        $attraction = $this->makeAttraction('Waterfall Trail', [
+            'cover_photo' => 'businesses/gallery/cover.webp',
+        ]);
+        Storage::disk('public')->put('businesses/gallery/cover.webp', 'cover image');
+        Storage::disk('public')->put('businesses/gallery/valid.webp', 'valid image');
+
+        $deletedMedia = $attraction->media()->create([
+            'type' => 'Gallery',
+            'file_path' => 'businesses/gallery/deleted.webp',
+            'sort_order' => 0,
+            'status' => 'published',
+            'visibility' => 'public',
+        ]);
+        Storage::disk('public')->put('businesses/gallery/deleted.webp', 'deleted image');
+        $deletedMedia->delete();
+
+        $attraction->media()->create([
+            'type' => 'Gallery',
+            'file_path' => 'businesses/gallery/missing.webp',
+            'sort_order' => 1,
+            'status' => 'published',
+            'visibility' => 'public',
+        ]);
+        $attraction->media()->create([
+            'type' => 'Gallery',
+            'file_path' => 'businesses/gallery/valid.webp',
+            'sort_order' => 2,
+            'status' => 'published',
+            'visibility' => 'public',
+        ]);
+
+        $response = $this->getJson('/api/tourist/explore');
+
+        $response->assertOk()
+            ->assertJsonPath('data.places.0.id', $attraction->id)
+            ->assertJsonPath('data.places.0.cover_photo', '/storage/businesses/gallery/valid.webp');
     }
 
     public function test_destinations_index_returns_legacy_destinations(): void

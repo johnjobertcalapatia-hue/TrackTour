@@ -232,15 +232,25 @@ class ExploreController extends Controller
             ->when($hasLocation, fn ($q) => $q->orderBy('distance_km'))
             ->take(20)
             ->get()
-            ->map(fn ($b) => [
-                'id' => $b->id,
-                'name' => $b->name,
-                'cover_photo' => self::resolveMediaUrl($b->cover_photo)
-                    ?? self::resolveMediaUrl($b->media->first()?->file_path),
-                'rating' => $b->reviews_avg_rating ?? $b->average_rating ?? null,
-                'municipality' => $b->municipality?->name ?? '',
-                'type' => 'place',
-            ]);
+            ->map(function ($b) {
+                $galleryPhoto = $b->media
+                    ->filter(fn ($media) => strcasecmp((string) $media->type, 'Gallery') === 0)
+                    ->filter(fn ($media) => ($media->status ?? 'published') === 'published')
+                    ->filter(fn ($media) => ($media->visibility ?? 'public') === 'public')
+                    ->filter(fn ($media) => Storage::disk('public')->exists($media->file_path))
+                    ->sortBy('sort_order')
+                    ->first();
+
+                return [
+                    'id' => $b->id,
+                    'name' => $b->name,
+                    'cover_photo' => self::resolveMediaUrl($galleryPhoto?->file_path)
+                        ?? self::resolveMediaUrl($b->cover_photo),
+                    'rating' => $b->reviews_avg_rating ?? $b->average_rating ?? null,
+                    'municipality' => $b->municipality?->name ?? '',
+                    'type' => 'place',
+                ];
+            });
 
         $foodBusinesses = Business::where('status', 'approved')
             ->when($hasLocation, fn ($q) => $this->proximityScope($q, $touristLat, $touristLng))
