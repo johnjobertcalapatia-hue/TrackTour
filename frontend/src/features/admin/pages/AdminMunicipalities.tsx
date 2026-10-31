@@ -2,7 +2,7 @@
 import { get } from '@/shared/services/api'
 import { TableSkeleton } from '@/shared/components/Skeleton'
 import { API_ENDPOINTS } from '@/shared/constants'
-import type { Municipality, PaginatedResponse } from '@/shared/types'
+import type { Municipality, PaginatedResponse, Business, Barangay } from '@/shared/types'
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, MapPin, Search } from 'lucide-react'
 
@@ -26,11 +26,18 @@ export default function AdminMunicipalities() {
     setSearch(value)
   }
 
+  // Get businesses for a barangay
+  const getBarangayBusinessCount = (brgy: Barangay): number => {
+    // Count businesses in this barangay
+    // We'll use the businesses relationship from the municipality data
+    return (brgy.businesses?.length ?? 0)
+  }
+
   return (
     <div>
       <div className="mb-8">
         <h1 className="text-2xl lg:text-3xl font-bold text-[#17201A]">Municipalities</h1>
-        <p className="mt-1 text-sm lg:text-base text-[#6B7280]">Manage municipalities and their barangays</p>
+        <p className="mt-1 text-sm lg:text-base text-[#6B7280]">Manage municipalities and their barangays with businesses</p>
       </div>
 
       <div className="rounded-2xl bg-white border border-[#E2E8E3] shadow-tourism">
@@ -68,17 +75,17 @@ export default function AdminMunicipalities() {
                   <td className="px-5 lg:px-6 py-3">
                     <div className="flex items-center gap-3">
                       <div
-                        className="w-10 h-10 rounded-lg bg-[#EAF6ED] flex items-center justify-center text-sm font-medium text-[#16803C] overflow-hidden"
-                      >
-                        <span className="font-bold text-[#16803C]">
-                          {mun.name?.charAt(0)?.toUpperCase() ?? '?'}
-                        </span>
-                      </div>
-                      <div>
-                        <div className="font-medium text-[#17201A]">{mun.name}</div>
-                        <div className="text-xs text-[#6B7280]">{mun.district?.trim() || ''} District</div>
-                      </div>
-                    </div>
+        className="w-10 h-10 rounded-md bg-[#EAF6ED] flex items-center justify-center text-sm font-medium text-[#16803C] overflow-hidden"
+      >
+        <span className="font-bold text-[#16803C]">
+          {mun.name?.charAt(0)?.toUpperCase() ?? '?'}
+        </span>
+      </div>
+      <div>
+        <div className="font-medium text-[#17201A]">{mun.name}</div>
+        <div className="text-xs text-[#6B7280]">{mun.district?.trim() || ''} District</div>
+      </div>
+    </div>
                   </td>
                   <td className="px-5 lg:px-6 py-3 text-[#6B7280] whitespace-nowrap">
                     {mun.province || 'Oriental Mindoro'}
@@ -94,21 +101,35 @@ export default function AdminMunicipalities() {
                     <td colSpan={3} className="px-5 lg:px-6 py-4 bg-[#F6F8F4]">
                       <div className="ml-8">
                         <p className="text-xs font-semibold uppercase tracking-wider text-[#6B7280] mb-2">Barangays</p>
-                        <div className="space-y-2">
+                        <div className="space-y-4">
                           {mun.barangays.map((brgy) => (
                             <div
                               key={brgy.id}
-                              className="flex items-center px-3 py-2 rounded-full bg-white border border-[#D7E8DB] text-sm text-[#17201A]"
+                              className="bg-white rounded-lg p-3 border border-[#D7E8DB] shadow-sm hover:border-[#16803C] transition-colors"
                             >
-                              <span className="font-medium">{brgy.name}</span>
-                              <span className="ml-2 text-xs text-[#6B7280]">
-                                ({brgy.businesses?.length ?? 0} businesses)
-                              </span>
+                              <div className="flex items-between justify-between mb-2">
+                                <span className="font-medium text-[#17201A]">{brgy.name}</span>
+                                <span className="text-xs text-[#6B7280]">
+                                  {brgy.businesses?.length ?? 0} businesses
+                                </span>
+                              </div>
+                              <div className="space-y-1 text-sm text-[#6B7280]">
+                                {brgy.businesses?.map((business) => (
+                                  <a
+                                    key={business.id}
+                                    href="/business/{business.id}"
+                                    target="_blank"
+                                    className="text-decoration-none text-[#16803C] small"
+                                  >
+                                    {business.business_name ?? 'Unnamed Business'}
+                                  </a>
+                                ))}
+                                {brgy.businesses?.length === 0 && (
+                                  <span>No businesses</span>
+                                )}
+                              </div>
                             </div>
                           ))}
-                          {mun.barangays.length === 0 && (
-                            <p className="text-xs text-[#6B7280]">No barangays</p>
-                          )}
                         </div>
                       </div>
                     </td>
