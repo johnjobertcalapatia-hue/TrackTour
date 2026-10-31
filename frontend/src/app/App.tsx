@@ -60,6 +60,7 @@ const AdminTourists = lazy_(() => import('@/features/admin/pages/AdminTourists')
 const AdminRoles = lazy_(() => import('@/features/admin/pages/AdminRoles'))
 const AdminRiders = lazy_(() => import('@/features/admin/pages/AdminRiders'))
 const AdminRiderShow = lazy_(() => import('@/features/admin/pages/AdminRiderShow'))
+const AdminRiderCashReconciliation = lazy_(() => import('@/features/admin/pages/AdminRiderCashReconciliation'))
 const AdminReports = lazy_(() => import('@/features/admin/pages/AdminReports'))
 const AdminPosSales = lazy_(() => import('@/features/admin/pages/AdminPosSales'))
 const AdminAuditLogs = lazy_(() => import('@/features/admin/pages/AdminAuditLogs'))
@@ -184,6 +185,7 @@ const StaffMenuEdit = lazy_(() => import('@/features/staff/pages/StaffMenuEdit')
 const RiderProfile = lazy_(() => import('@/features/rider/pages/RiderProfile'))
 const RiderMessages = lazy_(() => import('@/features/rider/pages/RiderMessages'))
 const RiderEarnings = lazy_(() => import('@/features/rider/pages/RiderEarnings'))
+const RiderCashReconciliation = lazy_(() => import('@/features/rider/pages/RiderCashReconciliation'))
 const RiderEarningShow = lazy_(() => import('@/features/rider/pages/RiderEarningShow'))
 const RiderDeliveriesPending = lazy_(() => import('@/features/rider/pages/RiderDeliveriesPending'))
 const RiderDeliveriesActive = lazy_(() => import('@/features/rider/pages/RiderDeliveriesActive'))
@@ -523,6 +525,7 @@ const riderSections = [
   ]},
   { label: 'More', items: [
     { to: '/rider/earnings', label: 'Earnings', icon: <FileBarChart className="w-5 h-5" /> },
+    { to: '/rider/cash-reconciliation', label: 'Cash Receipt', icon: <FileText className="w-5 h-5" /> },
     { to: '/rider/messages', label: 'Messages', icon: <MessageSquare className="w-5 h-5" /> },
     { to: '/rider/profile', label: 'Profile', icon: <User className="w-5 h-5" /> },
     { to: '/rider/settings', label: 'Settings', icon: <Settings className="w-5 h-5" /> },
@@ -626,6 +629,7 @@ export default function App() {
             <Route path="roles" element={<AdminRoles />} />
             <Route path="riders" element={<AdminRiders />} />
             <Route path="riders/:id" element={<AdminRiderShow />} />
+            <Route path="riders/:id/cash-reconciliation" element={<AdminRiderCashReconciliation />} />
             <Route path="reports" element={<AdminReports />} />
             <Route path="pos" element={<AdminPosSales />} />
             <Route path="audit-logs" element={<AdminAuditLogs />} />
@@ -788,6 +792,7 @@ export default function App() {
           >
             <Route index element={<Navigate to="/rider/map" replace />} />
             <Route path="earnings" element={<RiderEarnings />} />
+            <Route path="cash-reconciliation" element={<RiderCashReconciliation />} />
             <Route path="earnings/:deliveryId" element={<RiderEarningShow />} />
             <Route path="profile" element={<RiderProfile />} />
             <Route path="settings" element={<RiderProfile />} />

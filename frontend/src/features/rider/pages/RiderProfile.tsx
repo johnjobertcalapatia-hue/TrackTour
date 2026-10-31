@@ -8,7 +8,7 @@ import { useAuthStore } from '@/features/auth/services/auth-store'
 import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Camera, ChevronRight, History, Map as MapIcon, MessageSquare, Save, User } from 'lucide-react'
+import { ArrowLeft, Camera, ChevronRight, FileText, History, Map as MapIcon, MessageSquare, Save, User } from 'lucide-react'
 import { toAssetUrl, getInitials } from '@/shared/utils'
 
 function PesoIcon({ className }: { className?: string }) {
@@ -19,6 +19,7 @@ const settingsLinks = [
   { to: '/rider/profile', icon: User, title: 'Profile', description: 'Manage your account information' },
   { to: '/rider/history', icon: History, title: 'History', description: 'View your completed deliveries and ride history' },
   { to: '/rider/earnings', icon: PesoIcon, title: 'Earnings', description: 'Track your delivery earnings and payouts' },
+  { to: '/rider/cash-reconciliation', icon: FileText, title: 'Daily cash receipt', description: 'Review COD collections and cash-fund reconciliation' },
   { to: '/rider/messages', icon: MessageSquare, title: 'Messages', description: 'Read conversations with tourists and restaurants' },
   { to: '/rider/map', icon: MapIcon, title: 'Live Map', description: 'Open the map for your active trips' },
 ]

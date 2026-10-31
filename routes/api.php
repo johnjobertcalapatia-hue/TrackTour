@@ -477,6 +477,8 @@ Route::middleware('token.only')->group(function () {
         Route::put('/profile', [RiderProfileController::class, 'update']);
         Route::post('/profile/photo', [RiderProfileController::class, 'uploadPhoto']);
         Route::get('/earnings', [RiderController::class, 'earnings']);
+        Route::get('/cash-fund/daily-receipt', [RiderPurchasingController::class, 'dailyCashReceipt']);
+        Route::post('/cash-fund/daily-receipt/submissions', [RiderPurchasingController::class, 'submitDailyCashReconciliation']);
         Route::get('/earnings/{delivery}', [RiderController::class, 'earning']);
         Route::post('/availability/toggle', [RiderController::class, 'toggleAvailability']);
         Route::post('/service', [RiderController::class, 'switchService']);
@@ -493,6 +495,7 @@ Route::middleware('token.only')->group(function () {
         Route::post('/deliveries/{delivery}/pickup-stops/{business}/arrive', [RiderPickupStopController::class, 'arrive']);
         Route::post('/deliveries/{delivery}/pickup-stops/{business}/confirm', [RiderPickupStopController::class, 'confirm']);
         Route::post('/deliveries/{delivery}/purchases/{purchase}/mark', [RiderPurchasingController::class, 'mark']);
+        Route::post('/deliveries/{delivery}/purchases/{purchase}/expense', [RiderPurchasingController::class, 'submitPurchaseExpense']);
         Route::post('/deliveries/{delivery}/purchasing-cash/receive', [RiderPurchasingController::class, 'confirmCashReceipt']);
         Route::get('/dispatch/pending-request', [RiderDispatchController::class, 'pendingRequest']);
         Route::get('/dispatch/offers', [RiderDispatchController::class, 'offers']);
@@ -581,6 +584,21 @@ Route::middleware('token.only')->group(function () {
 
         // Purchasing-cash (COD)
         Route::post('/deliveries/{delivery}/issue-purchasing-cash', [AdminPurchasingCashController::class, 'issue']);
+        Route::post('/deliveries/{delivery}/purchasing-cash/additional', [AdminPurchasingCashController::class, 'issueAdditional']);
+        Route::get('/riders/{rider}/cash-fund', [AdminPurchasingCashController::class, 'riderLedger']);
+        Route::get('/riders/{rider}/cash-fund/daily-receipt', [AdminPurchasingCashController::class, 'riderDailyReceipt']);
+        Route::post('/riders/{rider}/cash-fund/returns', [AdminPurchasingCashController::class, 'recordCashFundReturn']);
+        Route::post('/riders/{rider}/cash-fund/returns/{movement}/reverse', [AdminPurchasingCashController::class, 'reverseCashFundReturn']);
+        Route::post('/riders/{rider}/cash-fund/daily-receipt/{reconciliation}/movements', [AdminPurchasingCashController::class, 'recordDailyCashMovement']);
+        Route::post('/riders/{rider}/cash-fund/daily-receipt/{reconciliation}/verify', [AdminPurchasingCashController::class, 'verifyDailyCashReconciliation']);
+        Route::post('/riders/{rider}/cash-fund/daily-receipt/{reconciliation}/close', [AdminPurchasingCashController::class, 'closeDailyCashReconciliation']);
+        Route::post('/riders/{rider}/cash-fund/daily-receipt/{reconciliation}/corrections/{correction}/review', [AdminPurchasingCashController::class, 'reviewDailyCashCorrection']);
+        Route::post('/riders/{rider}/cash-fund/daily-receipt/{reconciliation}/corrections/{correction}/close', [AdminPurchasingCashController::class, 'closeDailyCashCorrection']);
+        Route::post('/riders/{rider}/cash-fund/daily-receipt/{reconciliation}/movements/{movement}/reverse', [AdminPurchasingCashController::class, 'reverseDailyCashMovement']);
+        Route::post('/riders/{rider}/cash-fund/daily-receipt/{reconciliation}/movements/{movement}/adjust', [AdminPurchasingCashController::class, 'adjustDailyCashMovement']);
+        Route::get('/deliveries/{delivery}/purchases/{purchase}/expenses', [AdminPurchasingCashController::class, 'purchaseExpenses']);
+        Route::post('/deliveries/{delivery}/purchases/{purchase}/expenses/{expense}/{decision}', [AdminPurchasingCashController::class, 'reviewPurchaseExpense']);
+        Route::get('/deliveries/{delivery}/purchases/{purchase}/expenses/{expense}/receipt', [AdminPurchasingCashController::class, 'purchaseReceipt']);
 
         // Reports
         Route::get('/reports', [AdminReportController::class, 'system']);

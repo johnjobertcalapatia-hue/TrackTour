@@ -53,6 +53,7 @@ class Delivery extends Model
         'purchasing_cash_issued_at',
         'purchasing_cash_issued_by',
         'purchasing_cash_received_at',
+        'rider_cash_fund_id',
         'route_history',
         'location_sequence',
     ];
@@ -159,5 +160,15 @@ class Delivery extends Model
     public function codPurchases(): HasMany
     {
         return $this->hasMany(CodPurchase::class);
+    }
+
+    public function riderCashFund(): BelongsTo
+    {
+        return $this->belongsTo(RiderCashFund::class);
+    }
+
+    public function cashFundTransactions(): HasMany
+    {
+        return $this->hasMany(RiderCashFundTransaction::class);
     }
 }

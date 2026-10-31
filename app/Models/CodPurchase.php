@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * One per-restaurant purchase stop for a COD delivery.
@@ -58,5 +59,10 @@ class CodPurchase extends Model
     public function business(): BelongsTo
     {
         return $this->belongsTo(Business::class);
+    }
+
+    public function expenses(): HasMany
+    {
+        return $this->hasMany(CodPurchaseExpense::class);
     }
 }

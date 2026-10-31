@@ -6,6 +6,7 @@ use App\Models\ActivityLog;
 use App\Models\CodPurchase;
 use App\Models\Delivery;
 use App\Models\Order;
+use App\Models\RiderCashFundTransaction;
 use App\Models\User;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -36,6 +37,7 @@ class PurchasingCashService
 {
     public function __construct(
         private PickupSequenceService $pickupSequence,
+        private RiderCashFundService $cashFunds,
     ) {}
 
     /** Statuses during which purchasing cash may still be issued / spent. */
@@ -86,67 +88,74 @@ class PurchasingCashService
      *
      * @throws InvalidArgumentException
      */
-    public function issuePurchasingCash(Delivery $delivery, int $officerId): array
+    public function issuePurchasingCash(Delivery $delivery, User $officer): array
     {
-        if (! $this->isCod($delivery)) {
-            throw new InvalidArgumentException('This delivery is not a cash-on-delivery order.');
-        }
+        return DB::transaction(function () use ($delivery, $officer) {
+            $locked = Delivery::query()->lockForUpdate()->findOrFail($delivery->id);
 
-        if (! $delivery->rider_id) {
-            throw new InvalidArgumentException('This delivery has no assigned rider yet.');
-        }
-
-        if ($delivery->purchasing_cash_issued_at !== null) {
-            throw new InvalidArgumentException('Purchasing cash has already been issued for this delivery.');
-        }
-
-        $status = $delivery->status->value ?? $delivery->status;
-        if (! in_array($status, self::ISSUABLE_STATUSES, true)) {
-            throw new InvalidArgumentException('Purchasing cash can only be issued while the rider is en route to or at the pickup area.');
-        }
-
-        $delivery = Delivery::find($delivery->id);
-        $this->initializeForDelivery($delivery);
-
-        $rows = $delivery->codPurchases;
-        $total = round($rows->sum(fn (CodPurchase $p) => (float) $p->purchase_amount), 2);
-
-        if ($rows->isEmpty() || $total <= 0) {
-            throw new InvalidArgumentException('There are no purchasable items on this delivery.');
-        }
-
-        DB::transaction(function () use ($delivery, $officerId, $total) {
-            $locked = Delivery::lockForUpdate()->find($delivery->id);
-
-            if (! $locked || $locked->purchasing_cash_issued_at !== null) {
-                return;
+            if (! $this->isCod($locked)) {
+                throw new InvalidArgumentException('This delivery is not a cash-on-delivery order.');
             }
 
+            if (! $locked->rider_id) {
+                throw new InvalidArgumentException('This delivery has no assigned rider yet.');
+            }
+
+            if ($locked->purchasing_cash_issued_at !== null) {
+                throw new InvalidArgumentException('Purchasing cash has already been issued for this delivery.');
+            }
+
+            $status = $locked->status->value ?? $locked->status;
+            if (! in_array($status, self::ISSUABLE_STATUSES, true)) {
+                throw new InvalidArgumentException('Purchasing cash can only be issued while the rider is en route to or at the pickup area.');
+            }
+
+            $this->initializeForDelivery($locked);
+            $rows = CodPurchase::query()->where('delivery_id', $locked->id)->get();
+            $total = round($rows->sum(fn (CodPurchase $p) => (float) $p->purchase_amount), 2);
+
+            if ($rows->isEmpty() || $total <= 0) {
+                throw new InvalidArgumentException('There are no purchasable items on this delivery.');
+            }
+
+            $fund = $this->cashFunds->recordDeliveryIssuance($locked, $officer, $total);
             $locked->update([
                 'purchasing_cash' => $total,
                 'purchasing_cash_issued_at' => now(),
-                'purchasing_cash_issued_by' => $officerId,
+                'purchasing_cash_issued_by' => $officer->id,
+                'rider_cash_fund_id' => $fund->id,
             ]);
 
-            ActivityLog::create([
-                'user_id' => $officerId,
-                'action' => 'purchasing_cash.issued',
-                'description' => sprintf(
+            ActivityLog::record(
+                'purchasing_cash.issued',
+                sprintf(
                     'Issued purchasing cash ₱%s to rider #%s for delivery #%s (%d restaurant purchase stop(s)).',
                     number_format($total, 2),
-                    (string) $delivery->rider_id,
-                    (string) $delivery->id,
-                    (int) $delivery->codPurchases->count()
+                    (string) $locked->rider_id,
+                    (string) $locked->id,
+                    $rows->count()
                 ),
-            ]);
-        });
+                $locked,
+                ActivityLog::TYPE_FINANCIAL
+            );
 
-        return [
-            'delivery_id' => $delivery->id,
-            'purchasing_cash' => $total,
-            'purchasing_cash_issued_at' => now(),
-            'purchases_count' => $delivery->codPurchases->count(),
-        ];
+            return [
+                'delivery_id' => $locked->id,
+                'rider_cash_fund_id' => $fund->id,
+                'purchasing_cash' => $total,
+                'purchasing_cash_issued_at' => $locked->fresh()->purchasing_cash_issued_at,
+                'purchases_count' => $rows->count(),
+            ];
+        });
+    }
+
+    public function issueAdditionalPurchasingCash(
+        Delivery $delivery,
+        User $officer,
+        float $amount,
+        string $idempotencyKey
+    ): RiderCashFundTransaction {
+        return $this->cashFunds->issueAdditionalCash($delivery, $officer, $amount, $idempotencyKey);
     }
 
     /**
@@ -154,21 +163,9 @@ class PurchasingCashService
      *
      * @throws InvalidArgumentException
      */
-    public function confirmCashReceipt(Delivery $delivery, int $riderId): void
+    public function confirmCashReceipt(Delivery $delivery, User $rider): void
     {
-        $this->assertRiderOwnership($delivery, $riderId);
-        $this->assertIssued($delivery);
-
-        if ($delivery->purchasing_cash_received_at !== null) {
-            return; // Idempotent: already confirmed.
-        }
-
-        $status = $delivery->status->value ?? $delivery->status;
-        if (! in_array($status, self::ISSUABLE_STATUSES, true)) {
-            throw new InvalidArgumentException('Purchasing cash receipt can only be confirmed at the pickup stage.');
-        }
-
-        $delivery->update(['purchasing_cash_received_at' => now()]);
+        $this->cashFunds->confirmCashReceipt($delivery, $rider);
     }
 
     /**
@@ -292,9 +289,41 @@ class PurchasingCashService
 
                 $allocations->put((string) $businessId, round((float) $allocations->get((string) $businessId, 0.0) + $base, 2));
             }
+
         }
 
         return $allocations;
+    }
+
+    public function submitPurchaseExpense(
+        Delivery $delivery,
+        CodPurchase $purchase,
+        User $rider,
+        float $actualAmount,
+        float $officeCashUsed,
+        float $personalContribution,
+        \Illuminate\Http\UploadedFile $receipt
+    ): \App\Models\CodPurchaseExpense {
+        return $this->cashFunds->submitPurchaseExpense(
+            $delivery,
+            $purchase,
+            $rider,
+            $actualAmount,
+            $officeCashUsed,
+            $personalContribution,
+            $receipt
+        );
+    }
+
+    public function reviewPurchaseExpense(
+        Delivery $delivery,
+        CodPurchase $purchase,
+        \App\Models\CodPurchaseExpense $expense,
+        User $officer,
+        bool $approve,
+        ?string $reason = null
+    ): \App\Models\CodPurchaseExpense {
+        return $this->cashFunds->reviewPurchaseExpense($delivery, $purchase, $expense, $officer, $approve, $reason);
     }
 
     /**
@@ -492,6 +521,18 @@ class PurchasingCashService
 
         if ($delivery->purchasing_cash_received_at === null) {
             throw new InvalidArgumentException('Confirm receipt of the purchasing cash before purchasing food.');
+        }
+
+        if (RiderCashFundTransaction::query()
+            ->where('rider_cash_fund_id', $delivery->rider_cash_fund_id)
+            ->where('delivery_id', $delivery->id)
+            ->whereIn('type', [
+                RiderCashFundTransaction::TYPE_CASH_ISSUED,
+                RiderCashFundTransaction::TYPE_ADDITIONAL_CASH_ISSUED,
+            ])
+            ->whereNull('received_at')
+            ->exists()) {
+            throw new InvalidArgumentException('Confirm receipt of all purchasing-cash issuances before purchasing food.');
         }
     }
 

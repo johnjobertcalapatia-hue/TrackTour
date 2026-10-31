@@ -119,6 +119,12 @@ export default function AdminRiderShow() {
               </div>
             </div>
             <StatusBadge status={rider.account_status} size="md" />
+            <Link
+              to={`/admin/riders/${id}/cash-reconciliation`}
+              className="inline-flex items-center gap-2 rounded-xl bg-[#16803C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#126B32]"
+            >
+              View daily cash receipt
+            </Link>
           </div>
         </div>
       </div>

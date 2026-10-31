@@ -1636,6 +1636,7 @@ class NearestRiderService
             if (! $riderId) {
                 throw new \InvalidArgumentException('No rider is assigned to this delivery.');
             }
+            User::query()->lockForUpdate()->findOrFail($riderId);
 
             $lockedOrders = $lockedDelivery->childOrders();
             if ($lockedOrders->isEmpty()) {

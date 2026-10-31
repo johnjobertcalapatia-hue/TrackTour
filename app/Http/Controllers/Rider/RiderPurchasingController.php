@@ -7,8 +7,12 @@ use App\Events\DeliveryPickupStopChanged;
 use App\Events\DeliveryStatusChanged;
 use App\Models\Delivery;
 use App\Models\OrderItem;
+use App\Models\CodPurchase;
 use App\Services\NearestRiderService;
 use App\Services\PurchasingCashService;
+use App\Services\RiderCashFundService;
+use App\Services\RiderDailyReconciliationService;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -17,8 +21,51 @@ use InvalidArgumentException;
 class RiderPurchasingController extends Controller
 {
     public function __construct(
-        private PurchasingCashService $purchasingCash
+        private PurchasingCashService $purchasingCash,
+        private RiderCashFundService $cashFund
     ) {}
+
+    public function dailyCashReceipt(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'date' => ['nullable', 'date_format:Y-m-d', 'before_or_equal:'.now('Asia/Manila')->toDateString()],
+        ]);
+
+        try {
+            $receipt = $this->cashFund->dailyReceipt(
+                auth()->user(),
+                $validated['date'] ?? now('Asia/Manila')->toDateString()
+            );
+        } catch (AuthorizationException $e) {
+            return $this->forbiddenResponse($e->getMessage());
+        }
+
+        return $this->successResponse($receipt);
+    }
+
+    public function submitDailyCashReconciliation(Request $request, RiderDailyReconciliationService $reconciliations): JsonResponse
+    {
+        $validated = $request->validate([
+            'date' => ['required', 'date_format:Y-m-d', 'before_or_equal:'.now('Asia/Manila')->toDateString()],
+            'cash_remitted' => ['required', 'numeric', 'decimal:0,2', 'min:0', 'max:9999999999.99'],
+            'office_cash_returned' => ['required', 'numeric', 'decimal:0,2', 'min:0', 'max:9999999999.99'],
+            'remittance_reference' => ['required', 'string', 'max:100'],
+            'note' => ['nullable', 'string', 'max:2000'],
+            'idempotency_key' => ['required', 'uuid'],
+        ]);
+
+        $reconciliation = $reconciliations->submit(
+            auth()->user(),
+            $validated['date'],
+            (float) $validated['cash_remitted'],
+            (float) $validated['office_cash_returned'],
+            $validated['remittance_reference'],
+            $validated['note'] ?? null,
+            $validated['idempotency_key']
+        );
+
+        return $this->successResponse($reconciliation, 'Daily cash submission recorded.');
+    }
 
     /**
      * GET /rider/deliveries/{delivery}/purchases
@@ -54,6 +101,7 @@ class RiderPurchasingController extends Controller
             'purchasing_cash' => $delivery->purchasing_cash !== null ? (float) $delivery->purchasing_cash : null,
             'purchasing_cash_issued_at' => $delivery->purchasing_cash_issued_at,
             'purchasing_cash_received_at' => $delivery->purchasing_cash_received_at,
+            'rider_cash_fund_id' => $delivery->rider_cash_fund_id,
             'fully_collected' => $this->purchasingCash->isFullyCollected($delivery),
             'pickup_origin' => $this->purchasingCash->pickupOrigin($delivery),
             'dropoff' => [
@@ -127,7 +175,7 @@ class RiderPurchasingController extends Controller
         }
 
         try {
-            $this->purchasingCash->confirmCashReceipt($delivery, (int) auth()->id());
+            $this->purchasingCash->confirmCashReceipt($delivery, auth()->user());
         } catch (InvalidArgumentException $e) {
             return $this->errorResponse($e->getMessage(), 422);
         }
@@ -136,6 +184,52 @@ class RiderPurchasingController extends Controller
             'delivery_id' => $delivery->id,
             'purchasing_cash_received_at' => $delivery->fresh()->purchasing_cash_received_at,
         ], 'Purchasing cash receipt confirmed.');
+    }
+
+    /**
+     * POST /rider/deliveries/{delivery}/purchases/{purchase}/expense
+     * Submit actual purchase funding and private receipt evidence for review.
+     */
+    public function submitPurchaseExpense(Request $request, Delivery $delivery, CodPurchase $purchase): JsonResponse
+    {
+        if ((int) $delivery->rider_id !== (int) auth()->id()) {
+            return $this->forbiddenResponse('You are not assigned to this delivery.');
+        }
+
+        if ((int) $purchase->delivery_id !== (int) $delivery->id) {
+            return $this->notFoundResponse('Purchase stop not found for this delivery.');
+        }
+
+        $validated = $request->validate([
+            'actual_purchase_amount' => ['required', 'numeric', 'decimal:0,2', 'gt:0', 'max:9999999999.99'],
+            'tourism_office_cash_used' => ['required', 'numeric', 'decimal:0,2', 'min:0', 'max:9999999999.99'],
+            'rider_personal_contribution' => ['required', 'numeric', 'decimal:0,2', 'min:0', 'max:9999999999.99'],
+            'receipt' => ['required', 'file', 'image', 'mimes:jpg,jpeg,png,webp', 'max:10240'],
+        ]);
+
+        try {
+            $expense = $this->purchasingCash->submitPurchaseExpense(
+                $delivery,
+                $purchase,
+                auth()->user(),
+                (float) $validated['actual_purchase_amount'],
+                (float) $validated['tourism_office_cash_used'],
+                (float) $validated['rider_personal_contribution'],
+                $validated['receipt']
+            );
+        } catch (InvalidArgumentException $e) {
+            return $this->errorResponse($e->getMessage(), 422);
+        }
+
+        return $this->successResponse([
+            'id' => $expense->id,
+            'revision' => $expense->revision,
+            'actual_purchase_amount' => (float) $expense->actual_purchase_amount,
+            'tourism_office_cash_used' => (float) $expense->tourism_office_cash_used,
+            'rider_personal_contribution' => (float) $expense->rider_personal_contribution,
+            'status' => $expense->status,
+            'submitted_at' => $expense->submitted_at,
+        ], 'Purchase expense submitted for Tourism Office verification.');
     }
 
     private function purchasePayload(\App\Models\CodPurchase $purchase): array
@@ -151,6 +245,19 @@ class RiderPurchasingController extends Controller
             'status' => $purchase->status,
             'purchased_at' => $purchase->purchased_at,
             'collected_at' => $purchase->collected_at,
+            'latest_expense' => $purchase->expenses()
+                ->orderByDesc('revision')
+                ->first([
+                    'id',
+                    'revision',
+                    'actual_purchase_amount',
+                    'tourism_office_cash_used',
+                    'rider_personal_contribution',
+                    'status',
+                    'submitted_at',
+                    'verified_at',
+                    'rejection_reason',
+                ]),
         ];
     }
 

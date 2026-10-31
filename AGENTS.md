@@ -295,13 +295,38 @@ Rider Earnings
 delivery fee + eligible tip
 ```
 
-The rider keeps the physical COD cash.
+The legacy policy remains effective until an authorized Tourism Office
+administrator configures and approves a Philippine-local policy effective
+date. Completed deliveries before that date remain under the legacy policy,
+including deliveries whose COD cash settlement is still outstanding.
 
-The rider does NOT remit the COD cash to TrackTour under the current architecture.
+After the approved effective date, riders remit the verified daily COD amount
+to the Tourism Office under the cash-fund liquidation workflow:
+
+```text
+net COD remittance
+    = verified physical COD collections
+    - authoritative rider delivery-fee earnings
+    - rider tips
+    - verified rider-funded restaurant purchase amounts
+    - other explicitly approved rider entitlements
+```
+
+If the result is negative, record the remaining amount as payable to the rider;
+never create a negative cash remittance. Return unused Tourism Office
+purchasing cash separately from COD remittance. Do not double-count either
+amount.
+
+The approved policy is not active until its effective date is configured and
+authorized. The new ledger foundation alone does not change current cash
+ownership behavior.
 
 Do not treat COD cash as rider earnings.
 
-Do not deduct COD cash from rider earnings.
+Do not calculate rider earnings from COD cash; use authoritative
+`rider_earnings` records. The existing 80/20 COD settlement allocation is a
+separate accounting calculation and must not be deducted again from physical
+COD remittance.
 
 ---
 
@@ -328,18 +353,18 @@ Do not reintroduce a credit wallet, a protected reserve, `reserved_credit`, or `
 
 For COD settlement:
 
-```text
-Tourist
-   ↓
-Cash
-   ↓
-Rider keeps cash
+The legacy cash-ownership policy applies before the configured effective date.
+After activation, the physical cash flow is distinct from the accounting
+allocation:
 
-Rider Credit
-   ↓
-Settlement deduction
-   ↓
-Restaurant + Tourism Office
+```text
+Tourist → Rider → verified net COD remittance → Tourism Office
+                  verified rider entitlements → rider
+
+Tourism Office cash advance → restaurant purchases → unused cash returned
+
+CodSettlementService → restaurant / Tourism Office 80/20 allocation ledger
+                       (separate; not deducted again from COD cash)
 ```
 
 The settlement base must be the actual rider-financed/reserved amount.
@@ -369,7 +394,9 @@ Examples:
 ₱1000 → Restaurant ₱800 + Tourism Office ₱200
 ```
 
-The existing `CodSettlementService` performs the settlement allocation once. New settlement functionality must not duplicate that allocation or reintroduce a rider-credit deduction.
+The existing `CodSettlementService` performs the settlement allocation once.
+New reconciliation functionality must not duplicate that allocation, alter
+its configured base, or reintroduce a rider-credit deduction.
 
 ---
 
