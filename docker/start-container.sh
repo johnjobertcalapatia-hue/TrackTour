@@ -84,7 +84,12 @@ if [ "$DB_READY" != "1" ]; then
   exit 1
 fi
 
-php artisan migrate --force --no-interaction
+# --isolated: cross-process mutex (cache_locks) so overlapping boots/deploys can
+# never run migrations concurrently; exits 0 if another instance holds the lock.
+# --graceful: a migration error logs a warning and returns 0 instead of crashing
+# the entrypoint (set -e) into a restart loop — always pair it with a post-deploy
+# `php artisan migrate:status` check (see docs/DEPLOYMENT.md).
+php artisan migrate --force --no-interaction --isolated --graceful
 
 # Fresh caches/clear any stale build artifacts.
 php artisan config:clear

@@ -11,7 +11,10 @@ return new class extends Migration
         Schema::create('rider_daily_reconciliation_corrections', function (Blueprint $table) {
             $table->id();
             $table->foreignId('rider_daily_reconciliation_id')
-                ->constrained('rider_daily_reconciliations')
+                // Explicit name: the implicit {table}_{column}_foreign form is
+                // 76 characters — over MySQL's 64-character identifier limit
+                // (error 1059).
+                ->constrained('rider_daily_reconciliations', 'id', 'rider_daily_recon_corr_recon_fk')
                 ->restrictOnDelete();
             $table->unsignedInteger('cycle_number');
             $table->string('status', 24)->default('pending_review');

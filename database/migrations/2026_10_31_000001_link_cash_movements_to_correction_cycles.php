@@ -14,7 +14,10 @@ return new class extends Migration
                 ->constrained('rider_daily_cash_movements')
                 ->restrictOnDelete();
             $table->foreignId('correction_id')
-                ->constrained('rider_daily_reconciliation_corrections')
+                // Explicit name: the implicit {table}_{column}_foreign form is
+                // 65 characters — one over MySQL's 64-character identifier
+                // limit (error 1059).
+                ->constrained('rider_daily_reconciliation_corrections', 'id', 'rider_daily_recon_cycle_corr_fk')
                 ->restrictOnDelete();
             $table->timestamps();
 

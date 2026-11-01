@@ -112,8 +112,17 @@ MAIL_FROM_ADDRESS=no-reply@<your-verified-domain>
 MAIL_FROM_NAME="Track-Tour App"
 ```
 
-4. First deploy runs migrations automatically (`start-container.sh`). Verify in
-   the `migrations` table. If the initial DB is empty, optionally seed a base
+4. Every deploy runs migrations automatically (`start-container.sh`) as
+   `php artisan migrate --force --no-interaction --isolated --graceful`:
+   `--isolated` takes the cache-based command mutex so overlapping boots or
+   rapid redeploys can never run migrations concurrently, and `--graceful`
+   turns a migration error into a logged warning with exit 0 instead of a
+   crash-looping entrypoint (`set -e`). **Mandatory post-deploy gate:** because
+   `--graceful` masks failures, ALWAYS run `php artisan migrate:status` in the
+   Railway shell after a deploy containing migrations; any row still marked
+   `Pending` means the deploy is NOT healthy — read the container logs for the
+   migration warning and remediate before releasing traffic (see §7 item 8).
+   If the initial DB is empty, optionally seed a base
    set once: Railway shell → `php artisan db:seed --force`.
 5. (Recommended) bind a **volume** at `/var/www/html/storage/app/public` so
    uploaded documents/media survive redeploys, and file expiry runs via
@@ -197,6 +206,9 @@ VITE_PAYMONGO_PUBLIC_KEY=pk_...
 6. Socket JS suite: `npm run test:js` → 51/51.
 7. Log in from the frontend URL; place an order; watch the dispatch ping reach an
    online rider and the status flow render in realtime.
+8. `php artisan migrate:status` (Railway shell) → zero rows marked `Pending`.
+   Mandatory: `--graceful` (see §3) turns migration failures into warnings, so
+   a green deploy can still hide an unapplied or failed migration.
 
 ## 8. Known production notes
 
@@ -208,6 +220,14 @@ VITE_PAYMONGO_PUBLIC_KEY=pk_...
   base OS, OCR falls back to `eng` only — check log noise after deploy.
 - Uploaded media must live on the Railway volume, not the container layer.
 - No Redis: sessions/queue/cache all use MySQL (`database` drivers).
+- **2026-10-31 migration incident:** production crash-looped with error 1050
+  because migration `2026_10_30_000003` aborted on MySQL's 64-character
+  identifier limit (error 1059) after its `CREATE TABLE` statements
+  auto-committed, leaving a bare `rider_daily_reconciliation_events` table and
+  an unrecorded migration. The migration is now idempotent and repair-capable:
+  the next deploy heals the partial schema through the normal `migrate` run —
+  no manual SQL, no table drops, no migration-history inserts. Verify with
+  `migrate:status` (§7 item 8) after that deploy.
 
 ## 9. Ubuntu VPS — Docker Compose + Caddy
 

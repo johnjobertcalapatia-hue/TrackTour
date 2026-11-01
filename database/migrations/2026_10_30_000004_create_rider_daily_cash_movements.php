@@ -15,7 +15,10 @@ return new class extends Migration
             $table->date('business_date');
             $table->foreignId('rider_daily_reconciliation_id')
                 ->nullable()
-                ->constrained('rider_daily_reconciliations')
+                // Explicit name: the implicit {table}_{column}_foreign form is
+                // exactly 64 characters (MySQL's hard limit) and would leave no
+                // headroom for future column/table renames — error 1059 risk.
+                ->constrained('rider_daily_reconciliations', 'id', 'rider_daily_cash_move_recon_fk')
                 ->restrictOnDelete();
             $table->unsignedInteger('revision')->nullable();
             $table->string('movement_type', 40);
