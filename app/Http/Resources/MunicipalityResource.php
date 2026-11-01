@@ -17,6 +17,8 @@ class MunicipalityResource extends JsonResource
             'region' => $this->region,
             'latitude' => $this->latitude,
             'longitude' => $this->longitude,
+            'logo' => $this->logo,
+            'cover_photo' => $this->cover_photo,
             'barangays' => BarangayResource::collection($this->whenLoaded('barangays')),
         ];
     }

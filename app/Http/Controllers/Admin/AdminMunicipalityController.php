@@ -40,6 +40,8 @@ class AdminMunicipalityController extends Controller
             },
         ]);
 
+        $totalBusinesses = $municipality->barangays->sum(fn ($b) => $b->businesses->count());
+
         return $this->successResponse([
             'municipality' => MunicipalityResource::make($municipality),
             'barangays' => $municipality->barangays->map(function ($barangay) {
@@ -60,6 +62,10 @@ class AdminMunicipalityController extends Controller
                     }),
                 ];
             }),
+            'stats' => [
+                'barangays_count' => $municipality->barangays->count(),
+                'businesses_count' => $totalBusinesses,
+            ],
         ]);
     }
 

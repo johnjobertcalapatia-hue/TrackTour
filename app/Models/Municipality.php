@@ -10,7 +10,7 @@ class Municipality extends Model
 {
     use SoftDeletes;
 
-    protected $fillable = ['name', 'district', 'province', 'latitude', 'longitude'];
+    protected $fillable = ['name', 'district', 'province', 'logo', 'cover_photo', 'latitude', 'longitude'];
 
     protected $casts = [
         'latitude' => 'decimal:7',
