@@ -566,6 +566,7 @@ Route::middleware('token.only')->group(function () {
 
         // Municipalities
         Route::get('/municipalities', [AdminMunicipalityController::class, 'index']);
+        Route::get('/municipalities/{municipality}', [AdminMunicipalityController::class, 'show']);
 
         // Riders
         Route::get('/riders', [AdminRiderController::class, 'index']);

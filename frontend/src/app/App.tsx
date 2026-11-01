@@ -56,6 +56,7 @@ const AdminBusinesses = lazy_(() => import('@/features/admin/pages/AdminBusiness
 const AdminBusinessShow = lazy_(() => import('@/features/admin/pages/AdminBusinessShow'))
 const AdminBusinessCategories = lazy_(() => import('@/features/admin/pages/AdminBusinessCategories'))
 const AdminMunicipalities = lazy_(() => import('@/features/admin/pages/AdminMunicipalities'))
+const AdminMunicipalityShow = lazy_(() => import('@/features/admin/pages/AdminMunicipalityShow'))
 const AdminTourists = lazy_(() => import('@/features/admin/pages/AdminTourists'))
 const AdminRoles = lazy_(() => import('@/features/admin/pages/AdminRoles'))
 const AdminRiders = lazy_(() => import('@/features/admin/pages/AdminRiders'))
@@ -625,6 +626,7 @@ export default function App() {
             <Route path="businesses/:id" element={<AdminBusinessShow />} />
             <Route path="business-categories" element={<AdminBusinessCategories />} />
             <Route path="municipalities" element={<AdminMunicipalities />} />
+            <Route path="municipalities/:id" element={<AdminMunicipalityShow />} />
             <Route path="tourists" element={<AdminTourists />} />
             <Route path="roles" element={<AdminRoles />} />
             <Route path="riders" element={<AdminRiders />} />

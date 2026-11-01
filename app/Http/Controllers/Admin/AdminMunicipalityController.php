@@ -26,6 +26,43 @@ class AdminMunicipalityController extends Controller
         );
     }
 
+    public function show(Municipality $municipality): JsonResponse
+    {
+        $municipality->load([
+            'barangays' => function ($query) {
+                $query->with([
+                    'businesses' => function ($bizQuery) {
+                        $bizQuery->with('category')
+                            ->where('status', 'approved')
+                            ->orderBy('business_name');
+                    },
+                ])->orderBy('name');
+            },
+        ]);
+
+        return $this->successResponse([
+            'municipality' => MunicipalityResource::make($municipality),
+            'barangays' => $municipality->barangays->map(function ($barangay) {
+                return [
+                    'id' => $barangay->id,
+                    'name' => $barangay->name,
+                    'municipality_id' => $barangay->municipality_id,
+                    'businesses' => $barangay->businesses->map(function ($business) {
+                        return [
+                            'id' => $business->id,
+                            'business_name' => $business->business_name,
+                            'category' => $business->category?->name,
+                            'category_id' => $business->business_category_id,
+                            'status' => $business->status,
+                            'logo' => $business->logo,
+                            'address' => $business->address,
+                        ];
+                    }),
+                ];
+            }),
+        ]);
+    }
+
     public function store(StoreMunicipalityRequest $request): JsonResponse
     {
         $municipality = Municipality::create($request->only('name', 'province'));

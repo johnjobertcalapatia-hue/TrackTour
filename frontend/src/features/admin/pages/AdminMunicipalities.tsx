@@ -1,13 +1,14 @@
 ﻿import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { get } from '@/shared/services/api'
 import { TableSkeleton } from '@/shared/components/Skeleton'
 import { API_ENDPOINTS } from '@/shared/constants'
 import type { Municipality, PaginatedResponse } from '@/shared/types'
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, Search, Building2, MapPin } from 'lucide-react'
+import { Search, Building2, MapPin, ChevronRight } from 'lucide-react'
 
 export default function AdminMunicipalities() {
-  const [expandedId, setExpandedId] = useState<number | null>(null)
+  const navigate = useNavigate()
   const [search, setSearch] = useState('')
 
   const { data, isLoading } = useQuery({
@@ -24,6 +25,10 @@ export default function AdminMunicipalities() {
 
   const handleSearch = (value: string) => {
     setSearch(value)
+  }
+
+  const handleMunicipalityClick = (municipalityId: number) => {
+    navigate(`/admin/municipalities/${municipalityId}`)
   }
 
   return (
@@ -50,11 +55,12 @@ export default function AdminMunicipalities() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
         {municipalities.map((mun) => (
-          <div key={mun.id} className="bg-white rounded-xl border border-[#E2E8E3] shadow-sm hover:border-[#16803C] transition-all duration-200 cursor-pointer hover:shadow-md">
-            <div
-              className="p-5"
-              onClick={() => setExpandedId(expandedId === mun.id ? null : mun.id)}
-            >
+          <div
+            key={mun.id}
+            className="bg-white rounded-xl border border-[#E2E8E3] shadow-sm hover:border-[#16803C] transition-all duration-200 cursor-pointer hover:shadow-md group"
+            onClick={() => handleMunicipalityClick(mun.id)}
+          >
+            <div className="p-5">
               <div className="flex items-start gap-3">
                 <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-[#EAF6ED] to-[#D1FAE5] flex items-center justify-center shrink-0">
                   <span className="font-bold text-lg text-[#16803C]">
@@ -62,16 +68,12 @@ export default function AdminMunicipalities() {
                   </span>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-[#17201A] truncate">{mun.name}</div>
+                  <div className="font-semibold text-[#17201A] truncate group-hover:text-[#16803C] transition-colors">{mun.name}</div>
                   <div className="text-xs text-[#6B7280] mt-0.5">{mun.district || 'N/A'} District</div>
                   <div className="text-xs text-[#6B7280] mt-0.5">{mun.province || 'Oriental Mindoro'}</div>
                 </div>
                 <div className="shrink-0">
-                  {expandedId === mun.id ? (
-                    <ChevronDown className="w-5 h-5 text-[#6B7280]" />
-                  ) : (
-                    <ChevronRight className="w-5 h-5 text-[#6B7280]" />
-                  )}
+                  <ChevronRight className="w-5 h-5 text-[#6B7280] group-hover:text-[#16803C] transition-colors" />
                 </div>
               </div>
 
@@ -85,44 +87,6 @@ export default function AdminMunicipalities() {
                 </span>
               </div>
             </div>
-
-            {expandedId === mun.id && mun.barangays && (
-              <div className="border-t border-[#E2E8E3] bg-[#F6F8F4] p-5">
-                <p className="text-xs font-semibold uppercase tracking-wider text-[#6B7280] mb-3">Barangays</p>
-                <div className="space-y-3">
-                  {mun.barangays.map((brgy) => (
-                    <div
-                      key={brgy.id}
-                      className="bg-white rounded-lg p-4 border border-[#D7E8DB] shadow-sm hover:border-[#16803C] transition-colors"
-                    >
-                      <div className="flex items-start justify-between mb-3">
-                        <div className="flex items-center gap-2">
-                          <MapPin className="w-4 h-4 text-[#16803C]" />
-                          <span className="font-medium text-[#17201A]">{brgy.name}</span>
-                        </div>
-                        <span className="text-xs text-[#6B7280] bg-[#EAF6ED] px-2 py-1 rounded-full">
-                          {brgy.businesses?.length ?? 0} businesses
-                        </span>
-                      </div>
-                      <div className="space-y-2">
-                        {brgy.businesses?.map((business) => (
-                          <a
-                            key={business.id}
-                            href={`/admin/businesses/${business.id}`}
-                            className="block text-sm text-[#16803C] hover:text-[#0d5f2e] hover:underline transition-colors"
-                          >
-                            {business.business_name || 'Unnamed Business'}
-                          </a>
-                        ))}
-                        {brgy.businesses?.length === 0 && (
-                          <span className="text-sm text-[#6B7280] italic">No businesses yet</span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </div>
         ))}
         {municipalities.length === 0 && (
