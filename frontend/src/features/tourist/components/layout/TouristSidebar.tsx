@@ -1,157 +1,122 @@
-import { useMemo } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useAuthStore } from '@/features/auth/services/auth-store'
 import { getInitials, toAssetUrl } from '@/shared/utils'
 import { cn } from '@/shared/utils'
-import {
-  Home, Compass, Map, Heart, Luggage, Package, LogOut, ChevronLeft, ChevronRight,
-} from 'lucide-react'
+import { User, LogOut, LogIn, ChevronDown } from 'lucide-react'
+import { TOURIST_NAV_ITEMS, useActiveTouristNav } from './tourist-nav'
+import PhotoPlaceholder from '@/shared/components/PhotoPlaceholder'
+import { useCurrentMunicipality, useMunicipalityPhotos, DEFAULT_MUNICIPALITY_NAME } from '@/shared/hooks/use-current-municipality'
 
-interface NavItem {
-  to: string
-  label: string
-  icon: React.ComponentType<{ className?: string }>
-}
-
-const PRIMARY_ITEMS: NavItem[] = [
-  { to: '/tourist/dashboard', label: 'Home', icon: Home },
-  { to: '/tourist/explore', label: 'Explore', icon: Compass },
-  { to: '/tourist/explore/map', label: 'Map', icon: Map },
-  { to: '/tourist/favorites', label: 'Saved', icon: Heart },
-  { to: '/tourist/trips', label: 'My Trips', icon: Luggage },
-]
-
-const ACTIVITY_ITEMS: NavItem[] = [
-  { to: '/tourist/orders', label: 'Orders & Bookings', icon: Package },
-]
-
-const ALL_ITEMS: NavItem[] = [...PRIMARY_ITEMS, ...ACTIVITY_ITEMS]
-
-interface TouristSidebarProps {
-  collapsed?: boolean
-  onToggleCollapse?: () => void
-}
-
-export default function TouristSidebar({ collapsed = false, onToggleCollapse }: TouristSidebarProps) {
+export default function TouristSidebar() {
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
-  const location = useLocation()
+  const navigate = useNavigate()
   const profilePhoto = toAssetUrl(user?.profile_photo)
-
-  const activeNavPath = useMemo(() => {
-    const current = location.pathname
-    const candidates = ALL_ITEMS
-      .map((i) => i.to)
-      .filter((to) => current === to || current.startsWith(to + '/'))
-    if (candidates.length === 0) return null
-    return candidates.sort((a, b) => b.length - a.length)[0]
-  }, [location.pathname])
-
-  const isActive = (to: string) => to === activeNavPath
-
-  const renderSection = (title: string, items: NavItem[]) => (
-    <div className="mb-4">
-      {!collapsed && <p className="px-3 mb-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#9CA3AF]">{title}</p>}
-      {items.map((item) => {
-        const active = isActive(item.to)
-        return (
-          <Link
-            key={item.label + item.to}
-            to={item.to}
-            className={cn(
-              'flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium transition-all duration-150',
-              collapsed ? 'justify-center' : '',
-              active
-                ? 'bg-[#E9F7EF] text-[#087F3F] border-l-[3px] border-[#087F3F] ml-0'
-                : 'text-[#68736D] hover:bg-[#F3F8F4] hover:text-[#17201B]'
-            )}
-          >
-            <item.icon className={cn('w-[18px] h-[18px] shrink-0', active ? 'text-[#087F3F]' : 'text-[#9CA3AF]')} />
-            {!collapsed && <span className="flex-1">{item.label}</span>}
-          </Link>
-        )
-      })}
-    </div>
-  )
+  const activeTo = useActiveTouristNav()
+  const municipality = useCurrentMunicipality()
+  const placeName = municipality?.name ?? DEFAULT_MUNICIPALITY_NAME
+  const photos = useMunicipalityPhotos(municipality?.id)
+  // Located with no photos yet: empty container (the tourism office uploads one).
+  const promoPhoto = municipality ? (photos[0] ? toAssetUrl(photos[0].src) : null) : '/assets/tourism/discover-bansud.png'
+  const promoTo = municipality
+    ? (user ? `/tourist/municipality/${municipality.id}` : `/explore/municipality/${municipality.id}`)
+    : '/tourist/explore'
 
   return (
-    <aside className={cn(
-      'relative hidden lg:flex flex-col shrink-0 bg-white border-r border-[#E5E9E7] h-[calc(100vh-64px)] sticky top-16 overflow-y-auto transition-[width] duration-200',
-      collapsed ? 'w-[76px]' : 'w-[260px]'
-    )}>
-      {/* User Card */}
-      <div className={cn('pt-5 pb-3', collapsed ? 'px-2' : 'px-4')}>
-        {!collapsed && <p className="px-3 mb-2 text-[10px] font-bold uppercase tracking-[0.08em] text-[#9CA3AF]">SIGNED IN AS</p>}
-        <div className={cn('flex items-center gap-3', collapsed ? 'justify-center' : '')}>
-          <div className="relative">
-            {profilePhoto ? (
-              <img src={profilePhoto} alt={user?.name} className="w-11 h-11 rounded-full object-cover ring-2 ring-[#087F3F]/20" />
-            ) : (
-              <span className="w-11 h-11 rounded-full bg-gradient-to-br from-[#087F3F] to-[#056B35] text-white flex items-center justify-center text-sm font-bold shrink-0">
-                {getInitials(user?.name)}
-              </span>
-            )}
-            <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-[#087F3F] rounded-full border-2 border-white" />
-          </div>
-          {!collapsed && <div className="min-w-0">
-            <p className="text-sm font-bold text-[#17201B] truncate">{user?.name || 'Tourist'}</p>
-            <p className="text-xs text-[#68736D]">Tourist</p>
-          </div>}
-        </div>
+    <aside className="tourist-sidebar flex flex-col w-[248px] shrink-0 h-full bg-white border-r border-[#E5E9E7]">
+      {/* Brand */}
+      <Link to="/tourist/dashboard" className="flex items-center gap-2.5 px-6 pt-6 pb-5">
+        <img src="/assets/logo/tracktour.png" alt="TrackTour logo" className="w-12 h-12 object-contain shrink-0" />
+        <span className="leading-tight">
+          <span className="block text-[22px] font-extrabold tracking-tight text-[#087F3F]">TrackTour</span>
+          <span className="block text-[11px] font-semibold uppercase tracking-[0.1em] text-[#56615B]">Bansud Tourism</span>
+        </span>
+      </Link>
+
+      {/* User card */}
+      <div className="mx-0 px-5 py-4 bg-[#F3F8F4] border-y border-[#E5E9E7]">
+        <Link to={user ? '/tourist/profile' : '/login'} className="flex items-center gap-3">
+          {profilePhoto ? (
+            <img src={profilePhoto} alt="" className="w-12 h-12 rounded-full object-cover ring-2 ring-white shadow-sm" />
+          ) : (
+            <span className="w-12 h-12 rounded-full bg-gradient-to-br from-[#087F3F] to-[#056B35] text-white flex items-center justify-center text-sm font-bold shrink-0 ring-2 ring-white">
+              {user ? getInitials(user.name) : <User className="w-5 h-5" />}
+            </span>
+          )}
+          <span className="min-w-0">
+            <span className="block text-[15px] font-bold text-[#17201B] truncate">{user?.name || 'Guest'}</span>
+            <span className="flex items-center gap-1 text-[13px] text-[#56615B]">
+              {user ? 'Tourist' : 'Sign in for orders'} {user && <ChevronDown className="w-3.5 h-3.5" />}
+            </span>
+          </span>
+        </Link>
       </div>
 
-      <div className={cn('pb-2', collapsed ? 'px-2' : 'px-4')}>
-        <div className="border-t border-[#E5E9E7]" />
-      </div>
-
-      {/* Nav sections */}
-      <nav className={cn('flex-1 pb-4 space-y-1', collapsed ? 'px-1' : 'px-2')}>
-        {renderSection('DISCOVER', PRIMARY_ITEMS)}
-        {renderSection('ACTIVITY', ACTIVITY_ITEMS)}
+      {/* Navigation */}
+      <nav aria-label="Tourist navigation" className="px-4 pt-4 space-y-1">
+        {TOURIST_NAV_ITEMS.map((item) => {
+          const active = item.to === activeTo
+          return (
+            <Link
+              key={item.to}
+              to={item.to}
+              aria-current={active ? 'page' : undefined}
+              className={cn(
+                'tourist-nav-link flex items-center gap-4 px-4 py-3 rounded-2xl text-[15px] font-semibold transition-colors',
+                active
+                  ? 'tourist-nav-active bg-gradient-to-r from-[#087F3F] to-[#3E9D5F] text-white shadow-md shadow-[#087F3F]/20'
+                  : 'text-[#17201B] hover:bg-[#F3F8F4] hover:text-[#087F3F]'
+              )}
+            >
+              <item.icon className={cn('w-[22px] h-[22px] shrink-0', active ? 'text-white' : 'text-[#3B4540]')} />
+              <span>{item.label}</span>
+            </Link>
+          )
+        })}
       </nav>
 
-      {/* Logout */}
-      <div className={cn('pb-4 mt-auto', collapsed ? 'px-1' : 'px-3')}>
-        <div className="border-t border-[#E5E9E7] pt-3">
-          {onToggleCollapse && (
-            <div className="relative group">
-              <button
-                type="button"
-                onClick={onToggleCollapse}
-                className={cn(
-                  'hidden lg:flex items-center gap-3 py-2.5 text-sm font-medium text-[#68736D] hover:bg-[#F3F8F4] hover:text-[#087F3F] transition w-full',
-                  collapsed ? 'justify-center px-0' : 'px-3'
-                )}
-                aria-label={collapsed ? 'Expand navigation sidebar' : 'Collapse navigation sidebar'}
-              >
-                {collapsed ? (
-                  <ChevronRight className="w-5 h-5 shrink-0" />
-                ) : (
-                  <>
-                    <ChevronLeft className="w-5 h-5 shrink-0" />
-                    <span>Collapse</span>
-                  </>
-                )}
-              </button>
-              {collapsed && (
-                <div className="absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2.5 py-1 bg-white text-[#17201A] text-xs font-medium rounded-md whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50 shadow-lg border border-[#E5E9E7]">
-                  Expand
-                </div>
-              )}
-            </div>
-          )}
+      {/* Promo card */}
+      <Link
+        to={promoTo}
+        className="tourist-promo-card relative block mx-5 mt-6 h-[clamp(150px,26vh,230px)] rounded-2xl overflow-hidden group [@media(max-height:720px)]:hidden"
+        aria-label={`Discover ${placeName}: explore, order, travel`}
+      >
+        {promoPhoto ? (
+          <img
+            src={promoPhoto}
+            alt=""
+            data-testid="promo-photo"
+            className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition duration-500"
+          />
+        ) : (
+          <PhotoPlaceholder testId="promo-photo-empty" />
+        )}
+        <span className="absolute inset-0 bg-gradient-to-t from-[#0B2A17]/90 via-[#0B2A17]/35 to-transparent" />
+        <span className="absolute left-5 right-4 bottom-5 text-white -rotate-6 origin-bottom-left">
+          <span className={cn('block leading-[1.05] font-extrabold italic drop-shadow', placeName.length > 10 ? 'text-[23px]' : 'text-[28px]')}>Discover<br /><span data-testid="promo-place" className="break-words">{placeName}</span></span>
+          <span className="block mt-2 text-sm font-semibold">Explore. Order. Travel.</span>
+          <span className="block mt-1 h-1 w-24 rounded-full bg-[#F4B400]" />
+        </span>
+      </Link>
+
+      {/* Account */}
+      <div className="mt-auto px-4 py-4 border-t border-[#E5E9E7]">
+        {user ? (
           <button
-            onClick={() => { logout(); window.location.href = '/login' }}
-            className={cn(
-              'flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-[#68736D] hover:text-red-500 hover:bg-red-50 transition w-full',
-              collapsed ? 'justify-center' : ''
-            )}
-            title={collapsed ? 'Log out' : undefined}
+            type="button"
+            onClick={() => { logout(); navigate('/login') }}
+            className="flex items-center gap-4 w-full px-4 py-3 rounded-2xl text-[15px] font-semibold text-[#17201B] hover:bg-red-50 hover:text-red-600 transition-colors"
           >
-            <LogOut className="w-[18px] h-[18px]" />
-            {!collapsed && 'Log Out'}
+            <LogOut className="w-[22px] h-[22px]" /> Log Out
           </button>
-        </div>
+        ) : (
+          <Link
+            to="/login"
+            className="flex items-center gap-4 w-full px-4 py-3 rounded-2xl text-[15px] font-semibold text-[#087F3F] hover:bg-[#F3F8F4] transition-colors"
+          >
+            <LogIn className="w-[22px] h-[22px]" /> Sign In
+          </Link>
+        )}
       </div>
     </aside>
   )

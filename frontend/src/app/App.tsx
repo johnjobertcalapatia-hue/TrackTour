@@ -17,7 +17,7 @@ import {
   Package, BookOpen, Percent, BarChart3, Activity, ShoppingCart, UserPlus,
   CircleAlert, Megaphone, FileText, Scan, Wallet, CreditCard,
   ChefHat, CalendarDays, BedDouble, Image, Home,
-  ClipboardCheck, DollarSign, UsersRound, Archive, Eye, Settings2, Store
+  ClipboardCheck, DollarSign, Archive, Eye, Settings2, Store
 } from 'lucide-react'
 
 // Auth pages (not lazy — small, needed immediately)
@@ -62,6 +62,7 @@ const AdminRoles = lazy_(() => import('@/features/admin/pages/AdminRoles'))
 const AdminRiders = lazy_(() => import('@/features/admin/pages/AdminRiders'))
 const AdminRiderShow = lazy_(() => import('@/features/admin/pages/AdminRiderShow'))
 const AdminRiderCashReconciliation = lazy_(() => import('@/features/admin/pages/AdminRiderCashReconciliation'))
+const AdminRiderCash = lazy_(() => import('@/features/admin/pages/AdminRiderCash'))
 const AdminReports = lazy_(() => import('@/features/admin/pages/AdminReports'))
 const AdminPosSales = lazy_(() => import('@/features/admin/pages/AdminPosSales'))
 const AdminAuditLogs = lazy_(() => import('@/features/admin/pages/AdminAuditLogs'))
@@ -84,10 +85,14 @@ const TouristDirectory = lazy_(() => import('@/features/tourist/pages/TouristDir
 const TouristMunicipality = lazy_(() => import('@/features/tourist/pages/TouristMunicipality'))
 const TouristFood = lazy_(() => import('@/features/tourist/pages/TouristFood'))
 const TouristFoodShow = lazy_(() => import('@/features/tourist/pages/TouristFoodShow'))
+const TouristFoodItemDetail = lazy_(() => import('@/features/tourist/pages/TouristFoodItemDetail'))
 const TouristFoodCart = lazy_(() => import('@/features/tourist/pages/TouristFoodCart'))
 const TouristGroupOrder = lazy_(() => import('@/features/tourist/pages/TouristGroupOrder'))
 const TouristOrderStatus = lazy_(() => import('@/features/tourist/pages/TouristOrderStatus'))
 const TouristOrders = lazy_(() => import('@/features/tourist/pages/TouristOrders'))
+const TouristActivities = lazy_(() => import('@/features/tourist/pages/TouristActivities'))
+const TouristOrderDetails = lazy_(() => import('@/features/tourist/pages/TouristOrderDetails'))
+const TouristWriteReview = lazy_(() => import('@/features/tourist/pages/TouristWriteReview'))
 const TouristBooking = lazy_(() => import('@/features/tourist/pages/TouristBooking'))
 const TouristBookingShow = lazy_(() => import('@/features/tourist/pages/TouristBookingShow'))
 const TouristTransport = lazy_(() => import('@/features/tourist/pages/TouristTransport'))
@@ -122,6 +127,9 @@ const BusinessOwnerOfferingCategories = lazy_(() => import('@/features/business-
 const BusinessOwnerMenu = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerMenu'))
 const BusinessOwnerMenuCreate = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerMenuCreate'))
 const BusinessOwnerMenuEdit = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerMenuEdit'))
+const BusinessOwnerResortProfile = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerResortProfile'))
+const BusinessOwnerResortOfferings = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerResortOfferings'))
+const BusinessOwnerResortOfferingForm = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerResortOfferingForm'))
 const BusinessOwnerFoodCreate = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerFoodCreate'))
 const BusinessOwnerOrders = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerOrders'))
 const BusinessOwnerOrderShow = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerOrderShow'))
@@ -150,13 +158,11 @@ const BusinessOwnerKitchen = lazy_(() => import('@/features/business-owner/pages
 const BusinessOwnerAttendance = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerAttendance'))
 const BusinessOwnerScheduling = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerScheduling'))
 const BusinessOwnerPayroll = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerPayroll'))
-const BusinessOwnerCustomers = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerCustomers'))
 const BusinessOwnerRoles = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerRoles'))
 const BusinessOwnerSettings = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerSettings'))
 const BusinessOwnerArchiveVault = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerArchiveVault'))
 const BusinessOwnerGallery = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerGallery'))
 const BusinessOwnerExpenses = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerExpenses'))
-const BusinessOwnerDispatch = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerDispatch'))
 const BusinessOwnerOperationalReports = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerOperationalReports'))
 // Converted business pages
 const BusinessOwnerBusinessDocuments = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerBusinessDocuments'))
@@ -189,6 +195,8 @@ const RiderEarnings = lazy_(() => import('@/features/rider/pages/RiderEarnings')
 const RiderCashReconciliation = lazy_(() => import('@/features/rider/pages/RiderCashReconciliation'))
 const RiderEarningShow = lazy_(() => import('@/features/rider/pages/RiderEarningShow'))
 const RiderDeliveriesPending = lazy_(() => import('@/features/rider/pages/RiderDeliveriesPending'))
+const RiderDeliveryOffer = lazy_(() => import('@/features/rider/pages/RiderDeliveryOffer'))
+const RiderTripStatus = lazy_(() => import('@/features/rider/pages/RiderTripStatus'))
 const RiderDeliveriesActive = lazy_(() => import('@/features/rider/pages/RiderDeliveriesActive'))
 const RiderDeliveriesCompleted = lazy_(() => import('@/features/rider/pages/RiderDeliveriesCompleted'))
 const RiderHistory = lazy_(() => import('@/features/rider/pages/RiderHistory'))
@@ -229,6 +237,7 @@ const adminSections = [
   { label: 'Live Operations', items: [
     { to: '/admin/live/map', label: 'Live Map', icon: <Map className="w-5 h-5" /> },
     { to: '/admin/live/deliveries', label: 'Deliveries', icon: <Package className="w-5 h-5" /> },
+    { to: '/admin/rider-cash', label: 'Rider Cash', icon: <Wallet className="w-5 h-5" /> },
     { to: '/admin/live/sos', label: 'SOS Alerts', icon: <CircleAlert className="w-5 h-5" /> },
     { to: '/admin/live/tours', label: 'Live Tours', icon: <Navigation className="w-5 h-5" /> },
   ]},
@@ -307,7 +316,6 @@ const businessOwnerCommonSections: CategorySubSection[] = [
     label: 'Operations',
     items: [
       { to: '/business-owner/orders', label: 'Orders', icon: <ShoppingCart className="w-5 h-5" />, module: 'food_ordering' },
-      { to: '/business-owner/customers', label: 'Customers', icon: <UsersRound className="w-5 h-5" />, module: 'customer_management' },
       { to: '/business-owner/promotions', label: 'Promotions', icon: <Percent className="w-5 h-5" />, module: 'promotions' },
     ],
   },
@@ -335,9 +343,7 @@ const businessOwnerCommonSections: CategorySubSection[] = [
   {
     label: 'Settings',
     items: [
-      { to: '/business-owner/settings?tab=general', label: 'General', icon: <Settings className="w-5 h-5" /> },
       { to: '/business-owner/settings?tab=location', label: 'Location', icon: <MapPin className="w-5 h-5" /> },
-      { to: '/business-owner/settings?tab=hours', label: 'Operating Hours', icon: <Clock className="w-5 h-5" /> },
       { to: '/business-owner/settings?tab=visibility', label: 'Visibility', icon: <Eye className="w-5 h-5" /> },
       { to: '/business-owner/settings?tab=documents', label: 'Documents', icon: <FileText className="w-5 h-5" /> },
       { to: '/business-owner/settings?tab=payment-methods', label: 'Payment Methods', icon: <Wallet className="w-5 h-5" /> },
@@ -362,7 +368,6 @@ const commonCategoryRoutes = new Set([
   '/business-owner/archive',
   '/business-owner/orders',
   '/business-owner/bookings',
-  '/business-owner/customers',
   '/business-owner/promotions',
   '/business-owner/menu',
   '/business-owner/offerings/categories',
@@ -391,8 +396,6 @@ const categorySubSections: Record<string, CategorySubSection[]> = {
       { to: '/business-owner/pos', label: 'POS & Sales', icon: <CreditCard className="w-5 h-5" />, module: 'pos_sales' },
       { to: '/business-owner/orders', label: 'Orders', icon: <ShoppingCart className="w-5 h-5" />, module: 'food_ordering' },
       { to: '/business-owner/kitchen', label: 'Kitchen Display System', icon: <ChefHat className="w-5 h-5" />, module: 'kitchen_orders' },
-      { to: '/business-owner/dispatch', label: 'Dispatch Hub', icon: <Bike className="w-5 h-5" />, module: 'delivery_management' },
-      { to: '/business-owner/customers', label: 'Customers', icon: <UsersRound className="w-5 h-5" />, module: 'customer_management' },
       { to: '/business-owner/promotions', label: 'Promotions', icon: <Percent className="w-5 h-5" />, module: 'promotions' },
     ]},
     { label: 'Workforce', items: [
@@ -402,6 +405,17 @@ const categorySubSections: Record<string, CategorySubSection[]> = {
     ]},
     { label: 'Reports', items: [
       { to: '/business-owner/operational-reports', label: 'Operational Reports', icon: <FileBarChart className="w-5 h-5" />, module: 'operational_reports' },
+    ]},
+  ],
+  // Dynamic resort system (Stage 5). Setup is gated server-side by Resort
+  // category + ownership, not by module, so it is always listed for resorts.
+  Resort: [
+    { label: 'Setup', items: [
+      { to: '/business-owner/resort/profile', label: 'Resort Types & Facilities', icon: <Settings2 className="w-5 h-5" /> },
+      { to: '/business-owner/resort/offerings', label: 'Cottages & Offerings', icon: <Home className="w-5 h-5" /> },
+    ]},
+    { label: 'Operations', items: [
+      { to: '/business-owner/bookings', label: 'Reservations', icon: <CalendarCheck className="w-5 h-5" />, module: 'reservation_management' },
     ]},
   ],
   Hotel: [
@@ -483,7 +497,7 @@ function BusinessOwnerLayout() {
       }
     }
 
-    // Restaurant sales tools (POS & Sales, Kitchen Display System, Dispatch Hub)
+    // Restaurant sales tools (POS & Sales, Kitchen Display System)
     // go directly below the Menu section in the restaurant sidebar.
     const menuIdx = sections.findIndex((s) => s.label === 'Menu')
     const restaurantSalesIdx = sections.findIndex((s) => s.label === 'Restaurant — Sales')
@@ -632,6 +646,7 @@ export default function App() {
             <Route path="riders" element={<AdminRiders />} />
             <Route path="riders/:id" element={<AdminRiderShow />} />
             <Route path="riders/:id/cash-reconciliation" element={<AdminRiderCashReconciliation />} />
+            <Route path="rider-cash" element={<AdminRiderCash />} />
             <Route path="reports" element={<AdminReports />} />
             <Route path="pos" element={<AdminPosSales />} />
             <Route path="audit-logs" element={<AdminAuditLogs />} />
@@ -664,12 +679,15 @@ export default function App() {
               <Route path="favorites" element={<TouristFavorites />} />
               <Route path="reviews" element={<TouristReviews />} />
               <Route path="orders" element={<TouristOrders />} />
+              <Route path="activities" element={<TouristActivities />} />
+              <Route path="orders/:id/details" element={<TouristOrderDetails />} />
+              <Route path="orders/:orderId/items/:itemId/review" element={<TouristWriteReview />} />
               <Route path="history" element={<TouristHistory />} />
               <Route path="notifications" element={<TouristNotifications />} />
               <Route path="messages" element={<TouristMessages />} />
               <Route path="profile" element={<TouristProfile />} />
               <Route path="food" element={<TouristFood />} />
-              <Route path="food/:id" element={<TouristFoodShow />} />
+              <Route path="food/item/:id" element={<TouristFoodItemDetail />} />
               <Route path="municipality/:id" element={<TouristMunicipality />} />
               <Route path="destinations" element={<TouristDestinations />} />
               <Route path="destinations/:id" element={<TouristDestinationShow />} />
@@ -679,6 +697,8 @@ export default function App() {
             <Route path="search" element={<TouristSearch />} />
             <Route path="explore" element={<TouristExplore />} />
             <Route path="explore/:id" element={<TouristExploreShow />} />
+            {/* Restaurant page is public like explore/:id (guests browse; checkout stays protected). */}
+            <Route path="food/:id" element={<TouristFoodShow />} />
             <Route path="explore/map" element={<TouristExploreMap />} />
             <Route path="stays" element={<TouristStays />} />
             <Route path="directory" element={<TouristDirectory />} />
@@ -724,6 +744,10 @@ export default function App() {
             <Route path="menu" element={<BusinessOwnerMenu />} />
             <Route path="menu/create" element={<BusinessOwnerMenuCreate />} />
             <Route path="menu/:id/edit" element={<BusinessOwnerMenuEdit />} />
+            <Route path="resort/profile" element={<BusinessOwnerResortProfile />} />
+            <Route path="resort/offerings" element={<BusinessOwnerResortOfferings />} />
+            <Route path="resort/offerings/new" element={<BusinessOwnerResortOfferingForm />} />
+            <Route path="resort/offerings/:offeringId/edit" element={<BusinessOwnerResortOfferingForm />} />
             <Route path="food/create" element={<BusinessOwnerFoodCreate />} />
             <Route path="orders" element={<BusinessOwnerOrders />} />
             <Route path="orders/:id" element={<BusinessOwnerOrderShow />} />
@@ -753,10 +777,10 @@ export default function App() {
             <Route path="attendance" element={<BusinessOwnerAttendance />} />
             <Route path="scheduling" element={<BusinessOwnerScheduling />} />
             <Route path="payroll" element={<BusinessOwnerPayroll />} />
-            <Route path="customers" element={<BusinessOwnerCustomers />} />
+            <Route path="customers/*" element={<Navigate to="/business-owner/dashboard" replace />} />
             <Route path="roles" element={<BusinessOwnerRoles />} />
             <Route path="expenses" element={<BusinessOwnerExpenses />} />
-            <Route path="dispatch" element={<BusinessOwnerDispatch />} />
+            <Route path="dispatch" element={<Navigate to="/business-owner/orders" replace />} />
             <Route path="settings" element={<BusinessOwnerSettings />} />
             <Route path="archive" element={<BusinessOwnerArchiveVault />} />
             <Route path="operational-reports" element={<BusinessOwnerOperationalReports />} />
@@ -802,6 +826,8 @@ export default function App() {
             <Route path="messages" element={<RiderMessages />} />
             <Route path="map" element={<RiderMap />} />
             <Route path="deliveries/pending" element={<RiderDeliveriesPending />} />
+            <Route path="deliveries/offer/:deliveryId" element={<RiderDeliveryOffer />} />
+            <Route path="deliveries/:deliveryId/status" element={<RiderTripStatus />} />
             <Route path="deliveries/active" element={<RiderDeliveriesActive />} />
             <Route path="deliveries/completed" element={<RiderDeliveriesCompleted />} />
           </Route>
@@ -811,7 +837,7 @@ export default function App() {
             path="/tourism-office"
             element={
               <ProtectedRoute roles={['tourism_office', 'bansud_tourism_office']}>
-                <DashboardLayout sections={tourismOfficeSections} roleLabel="Tourism Office" />
+                <DashboardLayout sections={tourismOfficeSections} roleLabel="Tourism Office" theme="tourism-office" />
               </ProtectedRoute>
             }
           >

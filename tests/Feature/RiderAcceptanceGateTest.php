@@ -22,6 +22,7 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
+use Tests\Concerns\ConfirmsCodRestaurantPayments;
 use Tests\TestCase;
 
 /**
@@ -50,6 +51,7 @@ use Tests\TestCase;
  */
 class RiderAcceptanceGateTest extends TestCase
 {
+    use ConfirmsCodRestaurantPayments;
     use RefreshDatabase;
 
     private User $ownerA;
@@ -340,6 +342,8 @@ class RiderAcceptanceGateTest extends TestCase
         // Rider accepts → preparation starts automatically (no restaurant call).
         $this->assertRiderAccepted($order->activeDelivery(), $this->riderA);
         $this->assertSame('preparing', $order->fresh()->status, 'Rider acceptance auto-started preparation.');
+        // Stage B (2026-11-08): COD food becomes ready only after the restaurant confirms the rider's payment.
+        $this->confirmRestaurantPayments($order);
 
         $this->postJson("/api/business-owner/orders/{$order->id}/start-preparation", [], $this->authHeaders($this->ownerA))
             ->assertOk();
@@ -617,6 +621,8 @@ class RiderAcceptanceGateTest extends TestCase
         $this->assertSame('preparing', $order->status, 'Rider acceptance auto-started preparation.');
         $this->assertSame('preparing', $order->items->firstWhere('id', $item1->id)->status);
         $this->assertSame('preparing', $order->items->firstWhere('id', $item2->id)->status);
+        // Stage B (2026-11-08): COD food becomes ready only after the restaurant confirms the rider's payment.
+        $this->confirmRestaurantPayments($order);
 
         $this->patchJson("/api/business-owner/orders/{$order->id}/items/{$item1->id}/status", ['status' => 'ready'], $this->authHeaders($this->ownerA))
             ->assertOk();

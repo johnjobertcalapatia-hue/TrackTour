@@ -66,10 +66,11 @@ interface HistoryResponse {
 
 const ITEMS_PER_PAGE = 8
 
-export default function TouristHistory() {
+export default function TouristHistory({ embedded = false, only }: { embedded?: boolean; only?: Tab[] } = {}) {
   const navigate = useNavigate()
   const [page, setPage] = useState(1)
-  const [activeTab, setActiveTab] = useState<Tab>('food')
+  const visibleTabs = only?.length ? TABS.filter((t) => only.includes(t.key)) : TABS
+  const [activeTab, setActiveTab] = useState<Tab>(visibleTabs[0]!.key)
 
   const { data, isLoading } = useQuery<HistoryResponse>({
     queryKey: ['tourist-history', activeTab],
@@ -89,14 +90,16 @@ export default function TouristHistory() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">History</h1>
-        <p className="mt-1 text-sm text-[#6B7280]">Your activity across all services</p>
-      </div>
+      {!embedded && (
+        <div className="mb-6">
+          <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">History</h1>
+          <p className="mt-1 text-sm text-[#6B7280]">Your activity across all services</p>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-2 mb-6 overflow-x-auto pb-1">
-        {TABS.map(({ key, label, icon: Icon }) => (
+        {visibleTabs.map(({ key, label, icon: Icon }) => (
           <button
             key={key}
             onClick={() => { setActiveTab(key); setPage(1) }}

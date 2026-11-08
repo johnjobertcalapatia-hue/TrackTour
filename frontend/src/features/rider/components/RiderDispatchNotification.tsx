@@ -58,7 +58,7 @@ export default function RiderDispatchNotification() {
   const fetchOffers = useCallback(async (): Promise<RiderDeliveryRequestData[]> => {
     try {
       const res = await get<{ offers: RiderDeliveryRequestData[] }>('/rider/dispatch/offers')
-      return (res?.offers ?? []).map((offer) => ({ ...offer, initial_timeout: offer.expires_in ?? 45 }))
+      return (res?.offers ?? []).map((offer) => ({ ...offer, initial_timeout: offer.expires_in ?? 30 }))
     } catch {
       return []
     }

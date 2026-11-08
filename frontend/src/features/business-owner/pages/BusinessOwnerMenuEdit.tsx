@@ -7,7 +7,20 @@ import { z } from 'zod'
 import { get, put } from '@/shared/services/api'
 import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
-import { ArrowLeft, Save, Image, X, Plus, Trash2, GripVertical } from 'lucide-react'
+import { ArrowLeft, Save, Image, X, Plus, Trash2, GripVertical, Play } from 'lucide-react'
+
+/**
+ * Matches the backend: up to 7 extra photos or videos (8 with the main image).
+ * Photos JPG/PNG/WebP up to 5 MB; videos MP4/MOV/WebM up to 20 MB.
+ */
+const MAX_GALLERY_IMAGES = 7
+const GALLERY_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp']
+const GALLERY_VIDEO_TYPES = ['video/mp4', 'video/quicktime', 'video/webm']
+const GALLERY_TYPES = [...GALLERY_IMAGE_TYPES, ...GALLERY_VIDEO_TYPES]
+const GALLERY_MAX_BYTES = 5 * 1024 * 1024
+const GALLERY_VIDEO_MAX_BYTES = 20 * 1024 * 1024
+/** The server accepts about 40 MB per save (PHP post_max_size); stay a little under it. */
+const SAVE_MAX_BYTES = 38 * 1024 * 1024
 
 interface Variation {
   id?: number
@@ -50,6 +63,8 @@ interface MenuItemDetail {
   is_featured: boolean
   has_variations: boolean
   image: string | null
+  /** Extra food photos (besides the main image), shown to tourists in the dish photo carousel. */
+  gallery?: { path: string; url: string; type?: 'image' | 'video' }[]
   variations: { id: number; name: string; price: number; compare_price: number | null; image: string | null; is_available: boolean }[]
 }
 
@@ -66,6 +81,11 @@ export default function BusinessOwnerMenuEdit() {
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  // Extra photos: existing ones the owner removed (sent as remove_gallery[]) and new uploads (gallery_images[]).
+  const galleryInputRef = useRef<HTMLInputElement>(null)
+  const [removedGallery, setRemovedGallery] = useState<string[]>([])
+  const [newGallery, setNewGallery] = useState<{ file: File; preview: string }[]>([])
+  const [galleryError, setGalleryError] = useState('')
 
   const [variations, setVariations] = useState<Variation[]>([])
 
@@ -118,12 +138,52 @@ export default function BusinessOwnerMenuEdit() {
     mutationFn: (data: any) => put(`/business-owner/menu/${id}`, data),
     onSuccess: () => {
       setSuccess('Menu item updated successfully.')
+      newGallery.forEach((g) => URL.revokeObjectURL(g.preview))
+      setNewGallery([])
+      setRemovedGallery([])
       queryClient.invalidateQueries({ queryKey: ['bo-menu'] })
       queryClient.invalidateQueries({ queryKey: ['bo-menu-item', id] })
       queryClient.invalidateQueries({ queryKey: ['bo-menu-categories-options'] })
     },
     onError: (err: any) => setError(err.response?.data?.message || 'Failed to update menu item.'),
   })
+
+  const keptGallery = (item?.gallery ?? []).filter((g) => !removedGallery.includes(g.path))
+  const galleryCount = keptGallery.length + newGallery.length
+  const galleryRemaining = MAX_GALLERY_IMAGES - galleryCount
+  const newGalleryBytes = newGallery.reduce((sum, g) => sum + g.file.size, 0)
+  const saveTooLarge = newGalleryBytes > SAVE_MAX_BYTES
+
+  const handleGallerySelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = '' // allow picking the same files again
+    setGalleryError('')
+    const accepted: { file: File; preview: string }[] = []
+    for (const file of files) {
+      if (!GALLERY_TYPES.includes(file.type)) {
+        setGalleryError('Photos must be JPG, PNG or WebP; videos MP4, MOV or WebM.')
+        continue
+      }
+      const isVideo = GALLERY_VIDEO_TYPES.includes(file.type)
+      if (file.size > (isVideo ? GALLERY_VIDEO_MAX_BYTES : GALLERY_MAX_BYTES)) {
+        setGalleryError(`"${file.name}" is larger than ${isVideo ? '20' : '5'} MB.`)
+        continue
+      }
+      if (accepted.length >= galleryRemaining) {
+        setGalleryError(`You can add up to ${MAX_GALLERY_IMAGES} more photos or videos.`)
+        break
+      }
+      accepted.push({ file, preview: URL.createObjectURL(file) })
+    }
+    if (accepted.length) setNewGallery((prev) => [...prev, ...accepted])
+  }
+
+  const removeNewGallery = (index: number) => {
+    setNewGallery((prev) => {
+      URL.revokeObjectURL(prev[index]!.preview)
+      return prev.filter((_, i) => i !== index)
+    })
+  }
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -192,6 +252,8 @@ export default function BusinessOwnerMenuEdit() {
         payload.append('is_featured', data.is_featured ? '1' : '0')
         payload.append('has_variations', data.has_variations ? '1' : '0')
         if (imageFile) payload.append('image', imageFile)
+        newGallery.forEach((g) => payload.append('gallery_images[]', g.file))
+        removedGallery.forEach((path) => payload.append('remove_gallery[]', path))
 
         if (data.has_variations && variations.length > 0) {
           variations.forEach((v, i) => {
@@ -227,6 +289,88 @@ export default function BusinessOwnerMenuEdit() {
               <img src={preview} alt="Preview" className="w-full h-full object-cover" />
             </div>
           )}
+
+          {/* More photos: tourists swipe through them on the dish page. */}
+          <div className="pt-5 border-t border-[#E2E8E3]" aria-labelledby="more-photos-title">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h3 id="more-photos-title" className="text-sm font-semibold text-[#17201A]">More photos &amp; videos</h3>
+              <span className="text-xs text-[#647067]" data-testid="gallery-count">{galleryCount} / {MAX_GALLERY_IMAGES}</span>
+            </div>
+            <p className="text-xs text-[#647067] mt-1">
+              Add up to {MAX_GALLERY_IMAGES} more photos or short videos of this dish (photos: JPG, PNG or WebP up to 5 MB; videos: MP4, MOV or WebM up to 20 MB). Tourists can swipe through them when viewing the food item.
+            </p>
+
+            <ul className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-3" aria-label="More photos and videos">
+              {keptGallery.map((g, i) => (
+                <li key={g.path} className="relative aspect-square rounded-xl overflow-hidden border border-[#E2E8E3]">
+                  {g.type === 'video' ? (
+                    <>
+                      <video src={g.url} muted playsInline preload="metadata" aria-label={`Video ${i + 2} of ${item.name}`} className="w-full h-full object-cover bg-black" />
+                      <span className="absolute bottom-1 left-1 inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-black/70 text-white text-[10px] font-semibold"><Play className="w-3 h-3 fill-current" aria-hidden="true" /> Video</span>
+                    </>
+                  ) : (
+                    <img src={g.url} alt={`Photo ${i + 2} of ${item.name}`} className="w-full h-full object-cover" />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setRemovedGallery((prev) => [...prev, g.path])}
+                    aria-label={`Remove ${g.type === 'video' ? 'video' : 'photo'} ${i + 2}`}
+                    className="absolute top-1 right-1 w-7 h-7 rounded-full bg-white/90 text-[#B91C1C] flex items-center justify-center shadow hover:bg-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </li>
+              ))}
+              {newGallery.map((g, i) => (
+                <li key={g.preview} className="relative aspect-square rounded-xl overflow-hidden border-2 border-dashed border-[#16803C]/50">
+                  {g.file.type.startsWith('video/') ? (
+                    <video src={g.preview} muted playsInline preload="metadata" aria-label={`New video: ${g.file.name}`} className="w-full h-full object-cover bg-black" />
+                  ) : (
+                    <img src={g.preview} alt={`New photo: ${g.file.name}`} className="w-full h-full object-cover" />
+                  )}
+                  <span className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded bg-[#16803C] text-white text-[10px] font-semibold">New</span>
+                  <button
+                    type="button"
+                    onClick={() => removeNewGallery(i)}
+                    aria-label={`Remove new ${g.file.type.startsWith('video/') ? 'video' : 'photo'} ${g.file.name}`}
+                    className="absolute top-1 right-1 w-7 h-7 rounded-full bg-white/90 text-[#B91C1C] flex items-center justify-center shadow hover:bg-white"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </li>
+              ))}
+              {galleryRemaining > 0 && (
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => galleryInputRef.current?.click()}
+                    className="w-full aspect-square rounded-xl border border-dashed border-[#E2E8E3] hover:border-[#16803C]/50 text-[#647067] hover:text-[#16803C] flex flex-col items-center justify-center gap-1 text-xs font-medium transition"
+                  >
+                    <Plus className="w-5 h-5" aria-hidden="true" />
+                    Add photos or videos
+                  </button>
+                </li>
+              )}
+            </ul>
+            <input
+              ref={galleryInputRef}
+              type="file"
+              accept={GALLERY_TYPES.join(',')}
+              multiple
+              onChange={handleGallerySelect}
+              className="hidden"
+              data-testid="gallery-input"
+            />
+            {galleryError && <p role="alert" className="text-[#B91C1C] text-xs mt-2">{galleryError}</p>}
+            {saveTooLarge && (
+              <p role="alert" data-testid="gallery-too-large" className="text-[#B45309] text-xs mt-2">
+                These new files add up to more than 38 MB, which is too much for one save. Save a few now, then add the rest.
+              </p>
+            )}
+            {(newGallery.length > 0 || removedGallery.length > 0) && (
+              <p className="text-xs text-[#647067] mt-2">Photo changes are saved when you click Save Changes.</p>
+            )}
+          </div>
         </div>
 
         {/* Basic Info */}
@@ -401,7 +545,7 @@ export default function BusinessOwnerMenuEdit() {
           <button type="button" onClick={() => navigate(-1)} className="px-5 py-2.5 rounded-xl bg-white text-[#16803C] border border-[#D7E8DB] text-sm font-medium hover:bg-[#F3F8F4] transition">
             Cancel
           </button>
-          <button type="submit" disabled={mutation.isPending} className="inline-flex items-center gap-2 bg-[#16803C] hover:bg-[#126B32] disabled:opacity-50 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition">
+          <button type="submit" disabled={mutation.isPending || saveTooLarge} className="inline-flex items-center gap-2 bg-[#16803C] hover:bg-[#126B32] disabled:opacity-50 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition">
             <Save className="w-4 h-4" />
             {mutation.isPending ? 'Saving...' : 'Save Changes'}
           </button>

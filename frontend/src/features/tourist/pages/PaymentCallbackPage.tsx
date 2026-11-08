@@ -85,7 +85,7 @@ export default function PaymentCallbackPage() {
             <p className="text-sm text-[#6B7280] mb-4">
               {type === 'group_order'
                 ? 'Your GCash payment has been processed. Each restaurant will now accept and prepare its part of your group order.'
-                : 'Your GCash payment has been processed. Waiting for the restaurant to accept your order.'}
+                : 'Your GCash payment has been processed. Waiting for a rider to accept your order delivery offer.'}
             </p>
             {payment && (
               <div className="bg-[#F8FAF9] rounded-xl p-4 mb-6 text-left space-y-2">

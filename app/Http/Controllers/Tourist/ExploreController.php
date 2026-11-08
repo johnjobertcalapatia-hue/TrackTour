@@ -224,7 +224,12 @@ class ExploreController extends Controller
         $weather = '28°C';
         $userMunicipality = Auth::user()?->municipality?->name ?? session('municipality', 'Bansud, Oriental Mindoro');
 
+        // Explore list filter: one municipality, or all when omitted.
+        $municipalityId = filter_var($request->input('municipality_id'), FILTER_VALIDATE_INT) ?: null;
+        $inMunicipality = fn ($q) => $q->when($municipalityId, fn ($q) => $q->where('municipality_id', $municipalityId));
+
         $places = Business::where('status', 'approved')
+            ->tap($inMunicipality)
             ->when($hasLocation, fn ($q) => $this->proximityScope($q, $touristLat, $touristLng))
             ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Spot))
             ->with('municipality', 'media')
@@ -253,6 +258,7 @@ class ExploreController extends Controller
             });
 
         $foodBusinesses = Business::where('status', 'approved')
+            ->tap($inMunicipality)
             ->when($hasLocation, fn ($q) => $this->proximityScope($q, $touristLat, $touristLng))
             ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Dining))
             ->whereHas('offerings', fn ($q) => $q->where('is_available', true)->where('status', 'available'))
@@ -284,6 +290,7 @@ class ExploreController extends Controller
         })->values();
 
         $stays = Business::where('status', 'approved')
+            ->tap($inMunicipality)
             ->when($hasLocation, fn ($q) => $this->proximityScope($q, $touristLat, $touristLng))
             ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Accommodation))
             ->with('municipality')
@@ -302,13 +309,16 @@ class ExploreController extends Controller
 
         $counts = [
             'places' => Business::where('status', 'approved')
+                ->tap($inMunicipality)
                 ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Spot))
                 ->count(),
             'food' => Business::where('status', 'approved')
+                ->tap($inMunicipality)
                 ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Dining))
                 ->whereHas('offerings', fn ($q) => $q->where('is_available', true)->where('status', 'available'))
                 ->count(),
             'stays' => Business::where('status', 'approved')
+                ->tap($inMunicipality)
                 ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Accommodation))
                 ->count(),
         ];
@@ -719,7 +729,7 @@ class ExploreController extends Controller
                 'details',
                 'media' => fn ($q) => $q->orderBy('sort_order'),
             ])
-            ->get(['id', 'business_name', 'status', 'latitude', 'longitude', 'cover_photo', 'business_category_id', 'municipality_id', 'price_range', 'average_rating', 'review_count', 'popularity_score', 'services', 'facilities', 'opening_time', 'closing_time', 'business_hours', 'force_closed', 'created_at']);
+            ->get(['id', 'business_name', 'status', 'latitude', 'longitude', 'logo', 'cover_photo', 'business_category_id', 'municipality_id', 'price_range', 'average_rating', 'review_count', 'popularity_score', 'services', 'facilities', 'opening_time', 'closing_time', 'business_hours', 'force_closed', 'created_at']);
 
         $menuByBusiness = Offering::whereIn('business_id', $businesses->pluck('id'))
             ->where('is_available', true)
@@ -745,6 +755,7 @@ class ExploreController extends Controller
                 'name' => $b->name,
                 'latitude' => (float) $b->latitude,
                 'longitude' => (float) $b->longitude,
+                'logo' => self::resolveMediaUrl($b->logo),
                 'cover_photo' => $b->cover_photo,
                 'images' => $b->media->whereIn('type', ['gallery', 'Gallery', 'photo', 'Photo', 'cover', 'Cover', 'logo', 'Logo'])->pluck('file_path')->filter()->values(),
                 'media' => $b->media->map(fn ($m) => [
@@ -795,6 +806,7 @@ class ExploreController extends Controller
             ->get()
             ->map(function ($b) {
                 $b->is_open = $this->isBusinessOpen($b);
+                $b->is_accepting_orders = $b->isAcceptingOrders();
 
                 $mediaImages = $b->media
                     ->whereIn('type', ['Logo', 'Gallery', 'logo', 'gallery', 'Photo', 'photo', 'cover', 'Cover'])
@@ -809,6 +821,28 @@ class ExploreController extends Controller
 
                 return $b;
             });
+
+        $menuByBusiness = Offering::whereIn('business_id', $businesses->pluck('id'))
+            ->where('is_available', true)
+            ->where('status', 'available')
+            ->with('category')
+            ->orderByDesc('bestseller')
+            ->orderBy('sort_order')
+            ->get(['id', 'business_id', 'name', 'description', 'price', 'image', 'is_available', 'bestseller'])
+            ->groupBy('business_id')
+            ->map(fn ($items) => $items->values()->map(fn ($offering) => [
+                'id' => $offering->id,
+                'name' => $offering->name,
+                'description' => $offering->description,
+                'price' => (float) $offering->price,
+                'image' => $offering->image,
+                'bestseller' => (bool) $offering->bestseller,
+                'category' => $offering->category?->name,
+            ])->all());
+
+        $businesses->each(function ($business) use ($menuByBusiness) {
+            $business->menu_items = $menuByBusiness->get($business->id, []);
+        });
 
         $categories = BusinessCategory::all();
 
@@ -854,8 +888,11 @@ class ExploreController extends Controller
             ->latest()
             ->take(10)
             ->get();
-        $avgRating = $reviews->avg('rating') ?? 0;
-        $reviewsCount = Review::where('business_id', $business->id)->where('status', 'approved')->count();
+        // Aggregate over ALL approved reviews (not just the latest 10 shown).
+        $ratingSummary = Review::approvedSummaryFor($business->id);
+        $ratingBreakdown = $ratingSummary['breakdown'];
+        $reviewsCount = $ratingSummary['count'];
+        $avgRating = $ratingSummary['average'];
 
         $promotions = Promotion::where('business_id', $business->id)->active()->latest()->get();
 
@@ -910,6 +947,7 @@ class ExploreController extends Controller
             'reviews',
             'avgRating',
             'reviewsCount',
+            'ratingBreakdown',
             'promotions',
             'offerings',
             'offeringCategories',
@@ -918,6 +956,16 @@ class ExploreController extends Controller
             'isOpen',
         );
         $data['menu_items'] = $menuItems;
+        // Dynamic resort system: types + facilities (null for non-resorts; sections stay hidden).
+        $data['resort'] = \App\Services\ResortClassificationService::isResort($business)
+            ? \App\Http\Controllers\ResortProfileController::present($business) + [
+                // Published offerings only; one whose required partner isn't published can't be booked, so it's hidden.
+                'offerings' => $business->resortOfferings()->published()->with('images', 'requires')->get()
+                    ->filter(fn ($o) => $o->requires_offering_id === null || ($o->requires && $o->requires->is_published))
+                    ->map(fn ($o) => \App\Http\Controllers\ResortOfferingController::present($o))
+                    ->values(),
+            ]
+            : null;
 
         if ($request->expectsJson()) {
             return $this->successResponse($data);

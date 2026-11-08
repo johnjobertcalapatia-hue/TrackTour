@@ -45,6 +45,8 @@ class BusinessResource extends JsonResource
             'business_hours' => $this->business_hours,
             'price_range' => $this->price_range,
             'accepts_reservation' => $this->accepts_reservation,
+            'accepts_orders' => $this->accepts_orders,
+            'accepts_walk_ins' => $this->accepts_walk_ins,
             'facilities' => $this->facilities,
             'services' => $this->services,
             'payment_methods' => $this->payment_methods,

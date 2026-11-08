@@ -35,5 +35,9 @@ class RegistrationTest extends TestCase
         $response->assertSessionHasNoErrors();
         $this->assertAuthenticated();
         $response->assertRedirect(route('home', absolute: false));
+        $this->assertDatabaseHas('users', [
+            'email' => 'test@example.com',
+            'email_verified_at' => null,
+        ]);
     }
 }

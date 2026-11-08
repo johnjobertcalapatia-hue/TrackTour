@@ -9,9 +9,11 @@ use App\Http\Resources\UserResource;
 use App\Models\Barangay;
 use App\Models\User;
 use App\Services\DeliveryService;
+use App\Services\EmailVerificationOtpService;
 use App\Services\OtpService;
 use App\Services\UserService;
 use Illuminate\Auth\Events\Registered;
+use Illuminate\Auth\Events\Verified;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -25,6 +27,7 @@ class AuthController extends Controller
         private UserService $userService,
         private DeliveryService $deliveryService,
         private OtpService $otpService,
+        private EmailVerificationOtpService $emailVerificationOtpService,
     ) {}
 
     public function register(RegisterRequest $request): JsonResponse
@@ -307,13 +310,76 @@ class AuthController extends Controller
 
     public function sendVerificationEmail(Request $request): JsonResponse
     {
-        if ($request->user()->hasVerifiedEmail()) {
+        $user = $request->user();
+
+        if ($user->hasVerifiedEmail()) {
+            return $this->successResponse(
+                ['retry_after' => 0],
+                'Email already verified.',
+            );
+        }
+
+        if ($this->emailVerificationOtpService->isLockedOut($user)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Too many failed attempts. Please try again later.',
+                'retry_after' => $this->emailVerificationOtpService->lockoutSecondsRemaining($user),
+            ], 429);
+        }
+
+        $retryAfter = $this->emailVerificationOtpService->send($user);
+
+        return $this->successResponse(
+            ['retry_after' => $retryAfter],
+            $retryAfter > 0
+                ? 'A verification code was recently sent. Check your inbox before requesting another.'
+                : 'A verification code has been sent to your email address.',
+        );
+    }
+
+    public function verifyEmailOtp(Request $request): JsonResponse
+    {
+        $request->validate([
+            'otp_code' => ['required', 'string', 'regex:/^\d{6}$/'],
+        ]);
+
+        $user = $request->user();
+
+        if ($user->hasVerifiedEmail()) {
             return $this->successResponse(null, 'Email already verified.');
         }
 
-        $request->user()->sendEmailVerificationNotification();
+        if ($this->emailVerificationOtpService->isLockedOut($user)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Too many failed attempts. Please try again later.',
+                'retry_after' => $this->emailVerificationOtpService->lockoutSecondsRemaining($user),
+            ], 429);
+        }
 
-        return $this->successResponse(null, 'A new verification link has been sent to your email address.');
+        if ($this->emailVerificationOtpService->verifyAndConsume($user, $request->string('otp_code')->toString())) {
+            event(new Verified($user));
+
+            return $this->successResponse([
+                'email_verified_at' => $user->fresh()->email_verified_at,
+            ], 'Email verified successfully.');
+        }
+
+        if ($this->emailVerificationOtpService->isLockedOut($user)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Too many failed attempts. Please try again later.',
+                'retry_after' => $this->emailVerificationOtpService->lockoutSecondsRemaining($user),
+            ], 429);
+        }
+
+        $remaining = $this->emailVerificationOtpService->remainingAttempts($user);
+
+        return response()->json([
+            'success' => false,
+            'message' => "Invalid or expired verification code. {$remaining} attempt(s) remaining.",
+            'attempts_remaining' => $remaining,
+        ], 422);
     }
 
     public function confirmPassword(Request $request): JsonResponse

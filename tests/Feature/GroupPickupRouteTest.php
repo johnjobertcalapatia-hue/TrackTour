@@ -19,12 +19,13 @@ use Illuminate\Support\Facades\Hash;
 use Tests\TestCase;
 
 /**
- * P5 — Grouped pickup/routing: the prep-ordered grouped pickup route is a
+ * P5 — Grouped pickup/routing: the ordered grouped pickup route is a
  * canonical, payment-method-independent surface of an assigned delivery.
  *
  * A multi-restaurant trip (COD or prepaid) routes the rider through EVERY
- * fulfilling restaurant in ascending preparation time (shortest prep first),
- * exposes the longest-prep restaurant as the drop-off route origin, and the
+ * fulfilling restaurant FARTHEST from the tourist first (2026-11-07 rule,
+ * docs/dispatch-escalation-plan.md; previously shortest prep first), exposes
+ * the last pickup as the drop-off route origin, and the
  * tourist destination as the drop-off point. The rider-facing endpoint
  * GET /rider/deliveries/{delivery}/pickup-route serves it; COD stops keep
  * their purchasing-cash ledger row attached so the cash panel + ALL-COLLECTED
@@ -210,6 +211,13 @@ class GroupPickupRouteTest extends TestCase
     private function createAndDispatchGroup(array $restaurants, string $paymentMethod = 'gcash'): Delivery
     {
         $group = $this->groupService->createGroup($this->owner, $this->basePayload($restaurants, $paymentMethod));
+        // Reconciled 2026-11-07: production dispatches a GCash group only after
+        // payment confirmation (PaymentController fans the children out to
+        // paid / waiting_restaurant first). The accept path now refuses orders
+        // that are not dispatchable, so the fixture simulates that payment.
+        if ($paymentMethod !== 'cash') {
+            $group->orders()->update(['payment_status' => 'paid', 'status' => 'waiting_restaurant']);
+        }
         app(\App\Services\SmartDispatchService::class)->scheduleGroupDispatch($group->fresh());
         $delivery = $group->fresh()->delivery;
         $this->assertNotNull($delivery, 'Group owns exactly one shared delivery.');
@@ -267,7 +275,8 @@ class GroupPickupRouteTest extends TestCase
         $this->assertFalse($route['is_cod'], 'Prepaid trip has no purchasing-cash flow.');
         $this->assertCount(2, $route['stops']);
 
-        // Fastest prep is picked up first: Restaurant A (10 min max) before B (25 min max).
+        // Farthest from the tourist is picked up first (2026-11-07 rule): Restaurant A
+        // (12.51,121.31) is farther from the drop-off (12.6,121.4) than B (12.52,121.32).
         $first = $route['stops'][0];
         $second = $route['stops'][1];
 
@@ -284,7 +293,7 @@ class GroupPickupRouteTest extends TestCase
         $this->assertSame(2, $second['sequence']);
         $this->assertSame(25, $second['preparation_time']);
 
-        // Longest prep is the drop-off route origin.
+        // The last pickup (nearest the tourist) is the drop-off route origin.
         $origin = $route['pickup_origin'];
         $this->assertNotNull($origin);
         $this->assertSame($this->restaurantB->id, $origin['business_id']);

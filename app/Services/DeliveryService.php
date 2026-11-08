@@ -44,6 +44,18 @@ class DeliveryService
         return $this->deliveryRepository->getPendingDeliveries($riderId, $limit);
     }
 
+    /** Offers this rider could see that another rider accepted recently. */
+    public function getRecentlyTakenForRider(int $riderId, int $minutes = 10, int $limit = 15): Collection
+    {
+        return $this->deliveryRepository->getRecentlyTakenForRider($riderId, $minutes, $limit);
+    }
+
+    /** @return array<int, float|null> rider → first-pickup km per delivery id */
+    public function pickupDistancesKm(int $riderId, Collection $deliveries): array
+    {
+        return $this->deliveryRepository->pickupDistancesKm($riderId, $deliveries);
+    }
+
     public function getActiveDeliveries(int $riderId): Collection
     {
         return $this->deliveryRepository->getActiveDeliveries($riderId);

@@ -1,15 +1,15 @@
-import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { post } from '@/shared/services/api'
+import { get, post } from '@/shared/services/api'
 import { createCheckoutSession } from '@/shared/services/payment'
 import { useAuthStore } from '@/features/auth/services/auth-store'
-import { ArrowLeft, Trash2, Plus, Minus, ShoppingCart, Smartphone, Banknote, Zap, MapPin, StickyNote, Store, UtensilsCrossed, Search, X, LocateFixed, User, AlertCircle, Check } from 'lucide-react'
+import { ArrowLeft, Trash2, Plus, Minus, ShoppingCart, Smartphone, Banknote, Zap, MapPin, StickyNote, Store, UtensilsCrossed, Search, X, LocateFixed, User, AlertCircle, Check, Layers } from 'lucide-react'
 import { formatCurrency, toAssetUrl } from '@/shared/utils'
 import { savePendingAction } from '@/shared/services/pending-action'
 import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
-import { userPinIcon } from '@/shared/utils/pin-icon'
+import { checkoutPinIcon } from '@/shared/utils/pin-icon'
 
 interface CartItem {
   id: number
@@ -28,6 +28,63 @@ const DELIVERY_BASE_FARE = 40.00
 const DELIVERY_INCLUDED_KM = 2.00
 const DELIVERY_PER_KM = 15.00
 const DEFAULT_CENTER: [number, number] = [12.8667, 121.45]
+const CHECKOUT_MAP_TILES = {
+  streets: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+  satellite: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+} as const
+const KAWIT_REFERENCES: [number, number][] = [
+  [12.9604185, 121.4676504],
+  [12.959466, 121.4791385],
+]
+const KAWIT_LABEL_RADIUS_KM = 1
+
+function distanceBetweenCoordinatesKm(from: [number, number], to: [number, number]): number {
+  const radians = (degrees: number) => degrees * Math.PI / 180
+  const latitudeDelta = radians(to[0] - from[0])
+  const longitudeDelta = radians(to[1] - from[1])
+  const a = Math.sin(latitudeDelta / 2) ** 2
+    + Math.cos(radians(from[0])) * Math.cos(radians(to[0])) * Math.sin(longitudeDelta / 2) ** 2
+
+  return 6371 * 2 * Math.asin(Math.sqrt(a))
+}
+
+function formatGeocodedAddress(
+  address: Record<string, string | undefined>,
+  placeName?: string,
+  coordinates?: [number, number],
+): string {
+  const isNearConfirmedKawitLocation = coordinates
+    ? KAWIT_REFERENCES.some(
+        (reference) => distanceBetweenCoordinatesKm(coordinates, reference) <= KAWIT_LABEL_RADIUS_KM,
+      )
+    : false
+  const barangay = isNearConfirmedKawitLocation
+    ? 'Kawit'
+    : address.suburb
+      || address.village
+      || address.hamlet
+      || address.quarter
+      || address.neighbourhood
+      || address.locality
+  const geocodedPlaceName = isNearConfirmedKawitLocation ? undefined : placeName
+
+  const parts = [
+      address.house_number,
+      address.road,
+      barangay,
+      address.city_district,
+      geocodedPlaceName,
+    address.city,
+    address.town,
+    address.municipality,
+    address.county,
+    address.state_district,
+    address.state,
+  ]
+
+  return [...new Set(parts.map((part) => part?.trim()).filter((part): part is string => Boolean(part)))]
+    .join(', ')
+}
 
 interface DeliveryFeeData {
   delivery_fee: number
@@ -37,6 +94,41 @@ interface DeliveryFeeData {
   distance_charge: number
   service_adjustment: number
   is_estimated: boolean
+}
+
+type LocationSource = 'gps' | 'manual' | 'search' | null
+type ServiceAreaStatus = 'approximate_match' | 'ambiguous' | 'outside' | 'unknown'
+
+interface ServiceAreaAssessment {
+  status: ServiceAreaStatus
+  municipality: string | null
+}
+
+function assessServiceArea(
+  address: Record<string, string | undefined>,
+  supportedMunicipalities: string[],
+): ServiceAreaAssessment {
+  const placeNames = [...new Set(
+    [address.municipality, address.city, address.town]
+      .map((place) => place?.trim())
+      .filter((place): place is string => Boolean(place)),
+  )]
+  if (placeNames.length === 0) return { status: 'unknown', municipality: null }
+  if (supportedMunicipalities.length === 0) return { status: 'unknown', municipality: null }
+
+  const municipalityByNormalizedName = new Map(
+    supportedMunicipalities.map((name) => [name.trim().toLowerCase(), name]),
+  )
+  const matches = [...new Set(
+    placeNames
+      .map((place) => municipalityByNormalizedName.get(place.toLowerCase()))
+      .filter((name): name is string => Boolean(name)),
+  )]
+
+  if (matches.length > 1) return { status: 'ambiguous', municipality: null }
+  if (matches.length === 1) return { status: 'approximate_match', municipality: matches[0] }
+
+  return { status: 'outside', municipality: placeNames[0] }
 }
 
 function MapClickHandler({ onClick }: { onClick: (lat: number, lng: number) => void }) {
@@ -69,12 +161,45 @@ export default function TouristFoodCart() {
   const [paymentMethod, setPaymentMethod] = useState<'gcash' | 'cash'>('gcash')
   const [mapCenter, setMapCenter] = useState<[number, number]>(DEFAULT_CENTER)
   const [markerPos, setMarkerPos] = useState<[number, number] | null>(null)
+  const [mapType, setMapType] = useState<'streets' | 'satellite'>('streets')
+  const [isMapTypeMenuOpen, setIsMapTypeMenuOpen] = useState(false)
+  const [locationSource, setLocationSource] = useState<LocationSource>(null)
+  const [addressEditedManually, setAddressEditedManually] = useState(false)
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null)
+  const [locationConfirmed, setLocationConfirmed] = useState(false)
+  const [serviceAreaAssessment, setServiceAreaAssessment] = useState<ServiceAreaAssessment>({
+    status: 'unknown',
+    municipality: null,
+  })
+  const [geocodedAddressComponents, setGeocodedAddressComponents] = useState<Record<string, string | undefined> | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [isSearching, setIsSearching] = useState(false)
   const [isLocating, setIsLocating] = useState(false)
+  const [isReverseGeocoding, setIsReverseGeocoding] = useState(false)
+  const [locationError, setLocationError] = useState('')
+  const [searchError, setSearchError] = useState('')
   const [orderError, setOrderError] = useState('')
   const [showConfirm, setShowConfirm] = useState(false)
   const searchTimer = useRef<ReturnType<typeof setTimeout>>()
+  const locationRequestId = useRef(0)
+
+  const municipalitiesQuery = useQuery({
+    queryKey: ['delivery-supported-municipalities'],
+    queryFn: () => get<{ id: number; name: string }[]>('/municipalities'),
+    staleTime: 5 * 60 * 1000,
+  })
+  const supportedMunicipalities = useMemo(
+    () => Array.isArray(municipalitiesQuery.data)
+      ? municipalitiesQuery.data.map((municipality) => municipality.name)
+      : [],
+    [municipalitiesQuery.data],
+  )
+
+  useEffect(() => {
+    if (geocodedAddressComponents) {
+      setServiceAreaAssessment(assessServiceArea(geocodedAddressComponents, supportedMunicipalities))
+    }
+  }, [geocodedAddressComponents, supportedMunicipalities])
 
   useEffect(() => {
     const stored = localStorage.getItem('food_cart')
@@ -121,60 +246,173 @@ export default function TouristFoodCart() {
   }
 
   const reverseGeocode = async (lat: number, lng: number) => {
+    const requestId = ++locationRequestId.current
+    setIsReverseGeocoding(true)
+    setLocationError('')
+    setGeocodedAddressComponents(null)
+    setServiceAreaAssessment({ status: 'unknown', municipality: null })
+
     try {
       const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`)
+      if (!res.ok) throw new Error(`Reverse geocoding failed with status ${res.status}.`)
       const data = await res.json()
+      if (requestId !== locationRequestId.current) return
+
       if (data.display_name) {
-        const addr = data.address || {}
-        const parts = [addr.house_number, addr.road, addr.neighbourhood || addr.suburb || addr.village].filter(Boolean)
-        const short = parts.length > 0 ? parts.join(', ') : data.display_name.split(',').slice(0, 3).join(',')
+        const short = formatGeocodedAddress(data.address || {}, data.name, [lat, lng])
         setDeliveryAddress(short)
-        setSearchQuery(data.display_name)
+        setSearchQuery(short)
+        setAddressEditedManually(false)
+        setGeocodedAddressComponents(data.address || {})
+      } else {
+        setLocationError('We could not suggest an address for this pin. Enter the barangay and address manually.')
       }
-    } catch { /* ignore */ }
+    } catch {
+      if (requestId === locationRequestId.current) {
+        setLocationError('Address lookup is unavailable. Enter the barangay and address manually.')
+      }
+    } finally {
+      if (requestId === locationRequestId.current) setIsReverseGeocoding(false)
+    }
+  }
+
+  const handleManualMapLocation = (lat: number, lng: number) => {
+    locationRequestId.current += 1
+    clearTimeout(searchTimer.current)
+    setMarkerPos([lat, lng])
+    setLocationSource('manual')
+    setAddressEditedManually(false)
+    setGpsAccuracy(null)
+    setLocationConfirmed(false)
+    setIsLocating(false)
+    setIsSearching(false)
+    setLocationError('')
+    setSearchError('')
+    setDeliveryAddress('')
+    setGeocodedAddressComponents(null)
+    setServiceAreaAssessment({ status: 'unknown', municipality: null })
+    reverseGeocode(lat, lng)
   }
 
   const handleMapClick = (lat: number, lng: number) => {
-    setMarkerPos([lat, lng])
-    reverseGeocode(lat, lng)
+    handleManualMapLocation(lat, lng)
   }
 
   const searchAddress = () => {
     if (!searchQuery.trim()) return
+    setLocationConfirmed(false)
+    setIsReverseGeocoding(false)
+    setIsLocating(false)
     setIsSearching(true)
+    setSearchError('')
+    setLocationError('')
+    setGeocodedAddressComponents(null)
+    setServiceAreaAssessment({ status: 'unknown', municipality: null })
     clearTimeout(searchTimer.current)
+    const requestId = ++locationRequestId.current
     searchTimer.current = setTimeout(async () => {
       try {
         const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=1&addressdetails=1`)
+        if (!res.ok) throw new Error(`Address search failed with status ${res.status}.`)
         const data = await res.json()
+        if (requestId !== locationRequestId.current) return
+
         if (data.length > 0) {
           const lat = parseFloat(data[0].lat)
           const lng = parseFloat(data[0].lon)
+          if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+            throw new Error('Address search returned invalid coordinates.')
+          }
           setMapCenter([lat, lng])
           setMarkerPos([lat, lng])
-          const addr = data[0].address || {}
-          const parts = [addr.house_number, addr.road, addr.neighbourhood || addr.suburb || addr.village].filter(Boolean)
-          const short = parts.length > 0 ? parts.join(', ') : data[0].display_name.split(',').slice(0, 3).join(',')
+          setLocationSource('search')
+          setAddressEditedManually(false)
+          setGpsAccuracy(null)
+          setLocationConfirmed(false)
+          const short = formatGeocodedAddress(data[0].address || {}, data[0].name, [lat, lng])
           setDeliveryAddress(short)
+          setSearchQuery(short)
+          setGeocodedAddressComponents(data[0].address || {})
+        } else {
+          setSearchError('No matching address was found. Try a nearby place or adjust the pin on the map.')
         }
-      } catch { /* ignore */ }
-      setIsSearching(false)
+      } catch {
+        if (requestId === locationRequestId.current) {
+          setSearchError('Address search is unavailable. You can still place the pin on the map.')
+        }
+      } finally {
+        if (requestId === locationRequestId.current) setIsSearching(false)
+      }
     }, 500)
   }
 
   const useMyLocation = () => {
+    if (!navigator.geolocation) {
+      setLocationError('This device or browser does not provide location access. Set the pin manually on the map.')
+      return
+    }
+
+    const requestId = ++locationRequestId.current
+    clearTimeout(searchTimer.current)
     setIsLocating(true)
+    setIsSearching(false)
+    setLocationConfirmed(false)
+    setLocationError('')
+    setSearchError('')
+    setGeocodedAddressComponents(null)
+    setServiceAreaAssessment({ status: 'unknown', municipality: null })
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        const { latitude, longitude, accuracy } = pos.coords
+        if (requestId !== locationRequestId.current) return
+        const { latitude, longitude } = pos.coords
+        const accuracy = Number.isFinite(pos.coords.accuracy) && pos.coords.accuracy >= 0
+          ? pos.coords.accuracy
+          : null
         setMapCenter([latitude, longitude])
         setMarkerPos([latitude, longitude])
+        setLocationSource('gps')
+        setAddressEditedManually(false)
+        setGpsAccuracy(accuracy)
+        setLocationConfirmed(false)
+        setDeliveryAddress('')
         reverseGeocode(latitude, longitude)
         setIsLocating(false)
       },
-      () => { setIsLocating(false) },
+      (error) => {
+        if (requestId !== locationRequestId.current) return
+        const message = error.code === error.PERMISSION_DENIED
+          ? 'Location permission was denied. Allow location access or set the pin manually.'
+          : error.code === error.POSITION_UNAVAILABLE
+            ? 'Your current location is unavailable. Try again or set the pin manually.'
+            : 'Getting your location timed out. Try again or set the pin manually.'
+        setLocationError(message)
+        setIsLocating(false)
+      },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     )
+  }
+
+  const handleDeliveryAddressChange = (value: string) => {
+    locationRequestId.current += 1
+    clearTimeout(searchTimer.current)
+    setIsReverseGeocoding(false)
+    setIsLocating(false)
+    setIsSearching(false)
+    setDeliveryAddress(value)
+    setAddressEditedManually(true)
+    setLocationConfirmed(false)
+    setLocationError('')
+    setGeocodedAddressComponents(null)
+    setServiceAreaAssessment({ status: 'unknown', municipality: null })
+  }
+
+  const handleSearchQueryChange = (value: string) => {
+    locationRequestId.current += 1
+    clearTimeout(searchTimer.current)
+    setIsSearching(false)
+    setIsReverseGeocoding(false)
+    setSearchQuery(value)
+    setSearchError('')
   }
 
   const fullAddress = [deliveryAddress, landmark].filter(Boolean).join(', ')
@@ -339,9 +577,17 @@ export default function TouristFoodCart() {
   })
 
   const canCheckout = cart.length > 0
-    && (orderType === 'pickup' || (deliveryAddress.trim().length > 0 && markerPos !== null))
+    && (orderType === 'pickup' || (
+      deliveryAddress.trim().length > 0
+      && markerPos !== null
+      && locationConfirmed
+      && !isLocating
+      && !isSearching
+      && !isReverseGeocoding
+    ))
     && (orderType !== 'delivery' || deliverySpeed !== 'fast' || (riderTipAmount >= 20 && riderTipAmount <= 100))
     && !hasClosedRestaurant
+  const isLowAccuracyGps = locationSource === 'gps' && (gpsAccuracy === null || gpsAccuracy > 50)
 
   return (
     <div>
@@ -399,18 +645,26 @@ export default function TouristFoodCart() {
             <div className="space-y-3">
               {cart.map((item) => (
                 <div key={item.id} className="bg-white border border-[#E5E9E7] rounded-2xl p-4 flex items-center gap-4">
-                  {item.image ? (
-                    <img src={toAssetUrl(item.image)} alt={item.name} className="w-16 h-16 rounded-xl object-cover shrink-0" />
-                  ) : (
-                    <div className="w-16 h-16 bg-gradient-to-br from-[#E9F7EF] to-[#DDF4E6] rounded-xl shrink-0 flex items-center justify-center">
-                      <UtensilsCrossed className="w-6 h-6 text-[#087F3F]/40" />
+                  {/* Photo, name, restaurant and price open the item's information page;
+                      the quantity and remove controls stay separate. */}
+                  <Link
+                    to={`/tourist/food/item/${item.id}`}
+                    aria-label={`View ${item.name}`}
+                    className="flex-1 min-w-0 flex items-center gap-4 rounded-xl -m-1 p-1 hover:bg-[#F6FAF7] transition"
+                  >
+                    {item.image ? (
+                      <img src={toAssetUrl(item.image)} alt={item.name} className="w-16 h-16 rounded-xl object-cover shrink-0" />
+                    ) : (
+                      <div className="w-16 h-16 bg-gradient-to-br from-[#E9F7EF] to-[#DDF4E6] rounded-xl shrink-0 flex items-center justify-center">
+                        <UtensilsCrossed className="w-6 h-6 text-[#087F3F]/40" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-medium text-[#17201B] truncate">{item.name}</h3>
+                      <p className="text-xs text-[#6B7280]">{item.business_name}</p>
+                      <p className="text-sm font-semibold text-[#087F3F] mt-1">{formatCurrency(item.price)}</p>
                     </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-medium text-[#17201B] truncate">{item.name}</h3>
-                    <p className="text-xs text-[#6B7280]">{item.business_name}</p>
-                    <p className="text-sm font-semibold text-[#087F3F] mt-1">{formatCurrency(item.price)}</p>
-                  </div>
+                  </Link>
                   <div className="flex items-center gap-2">
                     <button onClick={() => updateQuantity(item.id, -1)} className="w-7 h-7 rounded-lg bg-[#E5E9E7] text-[#17201B] flex items-center justify-center hover:bg-[#d1d5db] transition">
                       <Minus className="w-3 h-3" />
@@ -547,11 +801,72 @@ export default function TouristFoodCart() {
               {/* Map */}
               <div className="h-72 relative">
                 <MapContainer center={mapCenter} zoom={16} className="w-full h-full" zoomControl={false} attributionControl={false}>
-                  <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                <TileLayer key={mapType} url={CHECKOUT_MAP_TILES[mapType]} />
                   <MapCenterUpdater center={mapCenter} />
                   <MapClickHandler onClick={handleMapClick} />
-                  {markerPos && <Marker position={markerPos} icon={userPinIcon} />}
+                  {markerPos && (
+                    <Marker
+                      position={markerPos}
+                      icon={checkoutPinIcon}
+                      draggable
+                      eventHandlers={{
+                        dragend: (event) => {
+                          const position = event.target.getLatLng()
+                          handleManualMapLocation(position.lat, position.lng)
+                        },
+                      }}
+                    />
+                  )}
                 </MapContainer>
+
+                <div className="absolute top-3 right-3 z-[1000]">
+                  <button
+                    type="button"
+                    aria-label="Map layers"
+                    aria-haspopup="menu"
+                    aria-expanded={isMapTypeMenuOpen}
+                    aria-controls="checkout-map-type-options"
+                    onClick={() => setIsMapTypeMenuOpen((open) => !open)}
+                    className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#E5E9E7] bg-white/95 text-[#17201B] shadow-md backdrop-blur-sm transition hover:bg-[#E9F7EF]"
+                  >
+                    <Layers className="h-5 w-5" />
+                  </button>
+                  {isMapTypeMenuOpen && (
+                    <div
+                      id="checkout-map-type-options"
+                      role="menu"
+                      aria-label="Map type options"
+                      className="absolute right-0 mt-2 min-w-32 overflow-hidden rounded-lg border border-[#E5E9E7] bg-white shadow-lg"
+                    >
+                      {([
+                        { key: 'streets', label: 'Street map' },
+                        { key: 'satellite', label: 'Satellite map' },
+                      ] as const).map(({ key, label }) => (
+                        <button
+                          key={key}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={mapType === key}
+                          onClick={() => {
+                            setMapType(key)
+                            setIsMapTypeMenuOpen(false)
+                          }}
+                          className={`block w-full px-3 py-2 text-left text-xs font-semibold transition-colors ${
+                            mapType === key ? 'bg-[#E9F7EF] text-[#087F3F]' : 'text-gray-700 hover:bg-gray-100'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="absolute bottom-1 left-2 z-[1000] rounded bg-white/80 px-1.5 py-0.5 text-[10px] text-gray-700">
+                  {mapType === 'streets'
+                    ? <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a>
+                    : 'Imagery © Esri'}
+                </div>
 
                 {/* Use My Location button */}
                 <button
@@ -567,10 +882,43 @@ export default function TouristFoodCart() {
                 {/* Map tap hint */}
                 {!markerPos && (
                   <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[1000] px-3 py-1.5 bg-white/90 backdrop-blur-sm border border-[#E5E9E7] rounded-full shadow-sm">
-                    <p className="text-[11px] text-[#6B7280] font-medium">Tap the map to set delivery point</p>
+                    <p className="text-[11px] text-[#6B7280] font-medium">Tap the map or search, then drag the pin to adjust</p>
                   </div>
                 )}
               </div>
+
+              {(locationSource || locationError || isReverseGeocoding) && (
+                <div className="mx-4 mt-4 rounded-xl border border-[#E5E9E7] bg-[#F8FAF9] p-3 text-xs">
+                  {locationSource && (
+                    <p className="font-semibold text-[#17201B]">
+                      {locationSource === 'gps'
+                        ? 'GPS-detected location'
+                        : locationSource === 'search'
+                          ? 'Search result — review the pin'
+                          : 'Manually adjusted map pin'}
+                      {locationSource === 'gps' && gpsAccuracy !== null && ` · accuracy ±${Math.round(gpsAccuracy)} m`}
+                    </p>
+                  )}
+                  {locationSource === 'gps' && (
+                    <p className={`mt-1 ${isLowAccuracyGps ? 'text-amber-800' : 'text-[#567064]'}`}>
+                      {gpsAccuracy === null
+                        ? 'GPS accuracy is unavailable. Check the pin and confirm it manually.'
+                        : isLowAccuracyGps
+                          ? 'GPS accuracy is over 50 m. Adjust the pin or confirm after checking the address.'
+                          : 'GPS accuracy is within the 50 m guideline. Check the pin and address before confirming.'}
+                    </p>
+                  )}
+                  {addressEditedManually && (
+                    <p className="mt-1 text-[#567064]">Address text was edited manually; the map pin remains unchanged.</p>
+                  )}
+                  {isReverseGeocoding && (
+                    <p className="mt-1 text-[#567064]">Looking up a suggested address…</p>
+                  )}
+                  {locationError && (
+                    <p role="status" className="mt-1 text-amber-800">{locationError}</p>
+                  )}
+                </div>
+              )}
 
               {/* Search + Address */}
               <div className="p-4 space-y-3">
@@ -587,13 +935,33 @@ export default function TouristFoodCart() {
                     <input
                       type="text"
                       value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
+                      onChange={(e) => handleSearchQueryChange(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && searchAddress()}
                       placeholder="Search address..."
                       className="w-full pl-9 pr-8 py-2.5 bg-[#F8FAF9] border border-[#E5E9E7] rounded-xl text-sm text-[#17201B] placeholder-[#6B7280] focus:ring-2 focus:ring-[#087F3F]/40 focus:border-[#087F3F] outline-none transition"
                     />
                     {searchQuery && (
-                      <button onClick={() => { setSearchQuery(''); setDeliveryAddress(''); setMarkerPos(null) }} className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-[#E5E9E7] transition">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          locationRequestId.current += 1
+                          clearTimeout(searchTimer.current)
+                          setSearchQuery('')
+                          setDeliveryAddress('')
+                          setMarkerPos(null)
+                          setLocationSource(null)
+                          setGpsAccuracy(null)
+                          setLocationConfirmed(false)
+                          setAddressEditedManually(false)
+                          setIsSearching(false)
+                          setIsReverseGeocoding(false)
+                          setLocationError('')
+                          setSearchError('')
+                          setGeocodedAddressComponents(null)
+                          setServiceAreaAssessment({ status: 'unknown', municipality: null })
+                        }}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-[#E5E9E7] transition"
+                      >
                         <X className="w-3.5 h-3.5 text-[#6B7280]" />
                       </button>
                     )}
@@ -606,15 +974,59 @@ export default function TouristFoodCart() {
                     {isSearching ? '...' : 'Search'}
                   </button>
                 </div>
+                {searchError && <p role="status" className="text-xs text-amber-800">{searchError}</p>}
 
                 {/* Address Display */}
                 <textarea
                   value={deliveryAddress}
-                  onChange={(e) => setDeliveryAddress(e.target.value)}
-                  placeholder="Tap the map or search to set your delivery address..."
+                  onChange={(e) => handleDeliveryAddressChange(e.target.value)}
+                  placeholder="Enter your barangay and complete delivery address..."
                   className="w-full px-4 py-3 bg-white border border-[#E5E9E7] rounded-xl text-sm text-[#17201B] placeholder-[#6B7280] focus:ring-2 focus:ring-[#087F3F]/40 focus:border-[#087F3F] outline-none transition resize-none"
                   rows={2}
                 />
+                <p className="text-[11px] leading-relaxed text-[#6B7280]">
+                  The suggested barangay/address may be approximate. Correct it here and adjust the pin if needed; your typed address will not move the pin.
+                </p>
+
+                {markerPos && (
+                  <div className="space-y-2">
+                    <div className={`rounded-lg px-3 py-2 text-[11px] leading-relaxed ${
+                      serviceAreaAssessment.status === 'approximate_match'
+                        ? 'bg-[#F3F8F5] text-[#567064]'
+                        : 'bg-amber-50 text-amber-900'
+                    }`}>
+                      {municipalitiesQuery.isError
+                        ? 'The municipality list could not be loaded. Service area is unverified; review the address manually.'
+                        : serviceAreaAssessment.status === 'approximate_match'
+                        ? `Approximate service-area match: ${serviceAreaAssessment.municipality}. Based on OpenStreetMap address data, not an official boundary.`
+                        : serviceAreaAssessment.status === 'ambiguous'
+                          ? 'The map suggestion names more than one municipality. Review the address; service coverage is not verified.'
+                          : serviceAreaAssessment.status === 'outside'
+                            ? `The map suggests ${serviceAreaAssessment.municipality}, which is not in the current municipality list. This advisory is not a boundary check; review the address before continuing.`
+                            : 'Service area could not be verified from the map suggestion. Check the municipality and address manually.'}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setLocationConfirmed(true)}
+                      disabled={!deliveryAddress.trim() || isReverseGeocoding}
+                      className={`w-full flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                        locationConfirmed
+                          ? 'border border-[#087F3F]/30 bg-[#E9F7EF] text-[#087F3F]'
+                          : 'bg-[#087F3F] text-white hover:bg-[#056B35]'
+                      }`}
+                    >
+                      <Check className="h-4 w-4" />
+                      {locationConfirmed
+                        ? 'Delivery location confirmed'
+                        : isLowAccuracyGps
+                          ? 'Confirm location manually'
+                          : 'Confirm delivery location'}
+                    </button>
+                    {!deliveryAddress.trim() && (
+                      <p className="text-[11px] text-[#9CA3AF]">Enter a barangay and address before confirming the pin.</p>
+                    )}
+                  </div>
+                )}
 
                 {/* Landmark / Description */}
                 <div>

@@ -321,32 +321,13 @@ class RiderCashFundService
         $netRemittance = $isLegacyPolicyDate ? null : max(0.0, $netBeforeFloor);
         $riderPayable = $isLegacyPolicyDate ? null : max(0.0, -$netBeforeFloor);
 
-        $fundIds = RiderCashFund::query()
-            ->where('rider_id', $rider->id)
-            ->when($rider->municipality_id !== null, fn ($query) => $query->where('municipality_id', $rider->municipality_id))
-            ->where('opened_at', '<', $end->utc())
-            ->pluck('id');
-        $fundTransactions = RiderCashFundTransaction::query()
-            ->whereIn('rider_cash_fund_id', $fundIds)
-            ->where('occurred_at', '<', $end->utc())
-            ->with('expense')
-            ->get();
-        $totalOfficeCashIssued = (float) $fundTransactions
-            ->whereIn('type', [
-                RiderCashFundTransaction::TYPE_CASH_ISSUED,
-                RiderCashFundTransaction::TYPE_ADDITIONAL_CASH_ISSUED,
-            ])->sum('amount');
-        $totalOfficeCashUsed = (float) $fundTransactions
-            ->filter(fn (RiderCashFundTransaction $transaction) => $transaction->type === RiderCashFundTransaction::TYPE_PURCHASE_OFFICE_CASH_USED
-                && $transaction->expense?->status === CodPurchaseExpense::STATUS_VERIFIED
-            )->sum('amount');
-        $officeCashBalanceBeforeReturns = round($totalOfficeCashIssued - $totalOfficeCashUsed, 2);
-        $cashReturnsToDate = round((float) RiderDailyCashMovement::query()
-            ->where('rider_id', $rider->id)
-            ->whereDate('business_date', '<=', $date)
-            ->whereRaw('COALESCE(affects_type, movement_type) = ?', [RiderDailyCashMovement::TYPE_OFFICE_CASH_RETURNED])
-            ->sum('amount'), 2);
-        $unreturnedFundBalance = round($officeCashBalanceBeforeReturns - $cashReturnsToDate, 2);
+        [
+            'issued' => $totalOfficeCashIssued,
+            'used' => $totalOfficeCashUsed,
+            'before_returns' => $officeCashBalanceBeforeReturns,
+            'returned' => $cashReturnsToDate,
+            'unreturned' => $unreturnedFundBalance,
+        ] = $this->officeCashBalance($rider, $date);
         if ($unreturnedFundBalance < 0) {
             throw new ConflictHttpException('Recorded cash returns exceed the authoritative Tourism Office cash-fund balance; review the movement ledger.');
         }
@@ -514,6 +495,197 @@ class RiderCashFundService
             'fund_balance_is_carried_forward' => true,
             'cash_movement_reference_namespaces' => $this->cashMovementReferenceNamespaces(),
         ];
+    }
+
+    /**
+     * Tourism Office cash the rider still holds at the end of $date (Manila):
+     * cash issued (daily advances + any legacy per-delivery issues) minus
+     * VERIFIED Tourism-Office-funded purchases minus cash returned. One
+     * formula for the daily receipt and the office overview.
+     *
+     * @return array{issued: float, used: float, before_returns: float, returned: float, unreturned: float}
+     */
+    public function officeCashBalance(User $rider, string $date): array
+    {
+        $end = CarbonImmutable::createFromFormat('!Y-m-d', $date, 'Asia/Manila')->startOfDay()->addDay();
+        $fundIds = RiderCashFund::query()
+            ->where('rider_id', $rider->id)
+            ->when($rider->municipality_id !== null, fn ($query) => $query->where('municipality_id', $rider->municipality_id))
+            ->where('opened_at', '<', $end->utc())
+            ->pluck('id');
+        $fundTransactions = RiderCashFundTransaction::query()
+            ->whereIn('rider_cash_fund_id', $fundIds)
+            ->where('occurred_at', '<', $end->utc())
+            ->with('expense')
+            ->get();
+        $issued = (float) $fundTransactions
+            ->whereIn('type', [
+                RiderCashFundTransaction::TYPE_CASH_ISSUED,
+                RiderCashFundTransaction::TYPE_ADDITIONAL_CASH_ISSUED,
+            ])->sum('amount');
+        $used = (float) $fundTransactions
+            ->filter(fn (RiderCashFundTransaction $transaction) => $transaction->type === RiderCashFundTransaction::TYPE_PURCHASE_OFFICE_CASH_USED
+                && $transaction->expense?->status === CodPurchaseExpense::STATUS_VERIFIED
+            )->sum('amount');
+        $beforeReturns = round($issued - $used, 2);
+        $returned = round((float) RiderDailyCashMovement::query()
+            ->where('rider_id', $rider->id)
+            ->whereDate('business_date', '<=', $date)
+            ->whereRaw('COALESCE(affects_type, movement_type) = ?', [RiderDailyCashMovement::TYPE_OFFICE_CASH_RETURNED])
+            ->sum('amount'), 2);
+
+        return [
+            'issued' => round($issued, 2),
+            'used' => round($used, 2),
+            'before_returns' => $beforeReturns,
+            'returned' => $returned,
+            'unreturned' => round($beforeReturns - $returned, 2),
+        ];
+    }
+
+    /**
+     * Daily cash advance (decision 2026-11-08): the Tourism Office hands the
+     * rider purchasing cash for the day and records it ONCE here, instead of
+     * issuing cash per delivery. Recorded as cash issued into the rider's
+     * open fund with no delivery; COD deliveries draw on that fund. Unused
+     * cash comes back through the existing cash-fund return, and the COD
+     * remittance through the daily receipt. Idempotent on $idempotencyKey.
+     */
+    public function recordDailyAdvance(User $officer, User $rider, float $amount, string $idempotencyKey, ?string $note = null): RiderCashFundTransaction
+    {
+        if ($amount <= 0) {
+            throw new InvalidArgumentException('The cash advance must be more than zero.');
+        }
+
+        $transaction = DB::transaction(function () use ($officer, $rider, $amount, $idempotencyKey, $note) {
+            $lockedRider = User::query()->lockForUpdate()->findOrFail($rider->id);
+            $this->assertMunicipalityAccess($officer, $lockedRider);
+
+            $existing = RiderCashFundTransaction::query()->where('idempotency_key', $idempotencyKey)->first();
+            if ($existing) {
+                $fund = RiderCashFund::find($existing->rider_cash_fund_id);
+                if ((int) $fund?->rider_id !== (int) $lockedRider->id
+                    || round((float) $existing->amount, 2) !== round($amount, 2)
+                    || $existing->type !== RiderCashFundTransaction::TYPE_CASH_ISSUED) {
+                    throw new ConflictHttpException('This idempotency key was already used for a different cash record.');
+                }
+
+                return $existing;
+            }
+
+            $fund = $this->openFundFor($lockedRider, $officer);
+
+            $transaction = RiderCashFundTransaction::create([
+                'rider_cash_fund_id' => $fund->id,
+                'reference_number' => 'RCFT-ADVANCE-'.now('Asia/Manila')->format('Ymd').'-'.Str::upper(Str::random(8)),
+                'idempotency_key' => $idempotencyKey,
+                'type' => RiderCashFundTransaction::TYPE_CASH_ISSUED,
+                'amount' => round($amount, 2),
+                'occurred_at' => now(),
+                'delivery_id' => null,
+                'recorded_by' => $officer->id,
+                // Handed over in person at the office: received when recorded.
+                'received_by' => $lockedRider->id,
+                'received_at' => now(),
+                'metadata' => ['kind' => 'daily_advance', 'note' => $note],
+            ]);
+
+            ActivityLog::record(
+                'rider_cash.advance_issued',
+                sprintf('Issued a ₱%s daily cash advance to rider #%s (fund %s).', number_format($amount, 2), (string) $lockedRider->id, $fund->fund_number),
+                $lockedRider,
+                ActivityLog::TYPE_FINANCIAL
+            );
+
+            return $transaction;
+        });
+
+        // COD deliveries the rider already holds now draw on the advance.
+        $active = Delivery::query()
+            ->where('rider_id', $rider->id)
+            ->whereNull('rider_cash_fund_id')
+            ->whereIn('status', PurchasingCashService::ISSUABLE_STATUSES)
+            ->get();
+        foreach ($active as $delivery) {
+            app(PurchasingCashService::class)->linkDailyAdvance($delivery);
+        }
+
+        return $transaction;
+    }
+
+    /**
+     * Office overview for $date: every rider of the officer's municipality with
+     * the day's advances, Tourism Office cash still with the rider, and COD
+     * deliveries completed that day.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function advanceOverview(User $officer, string $date): array
+    {
+        $municipalityId = $this->officerMunicipalityId($officer);
+        $start = CarbonImmutable::createFromFormat('!Y-m-d', $date, 'Asia/Manila')->startOfDay();
+        $end = $start->addDay();
+
+        return User::query()
+            ->where('role', User::ROLE_RIDER)
+            ->where('municipality_id', $municipalityId)
+            ->orderBy('name')
+            ->get()
+            ->map(function (User $rider) use ($date, $start, $end) {
+                $advances = RiderCashFundTransaction::query()
+                    ->whereHas('fund', fn ($q) => $q->where('rider_id', $rider->id))
+                    ->where('type', RiderCashFundTransaction::TYPE_CASH_ISSUED)
+                    ->whereNull('delivery_id')
+                    ->where('occurred_at', '>=', $start->utc())
+                    ->where('occurred_at', '<', $end->utc())
+                    ->orderBy('occurred_at')
+                    ->get();
+                $balance = $this->officeCashBalance($rider, $date);
+                $codDeliveries = Delivery::query()
+                    ->where('rider_id', $rider->id)
+                    ->whereNotNull('purchasing_cash')
+                    ->whereRaw('COALESCE(delivered_at, cash_settled_at) >= ?', [$start->utc()])
+                    ->whereRaw('COALESCE(delivered_at, cash_settled_at) < ?', [$end->utc()])
+                    ->count();
+
+                return [
+                    'rider_id' => $rider->id,
+                    'name' => $rider->name ?? $rider->email,
+                    'rider_status' => $rider->riderDetail?->rider_status ?? $rider->rider_status ?? null,
+                    'advance_today' => round((float) $advances->sum('amount'), 2),
+                    'advances' => $advances->map(fn (RiderCashFundTransaction $t) => [
+                        'id' => $t->id,
+                        'reference_number' => $t->reference_number,
+                        'amount' => (float) $t->amount,
+                        'occurred_at' => $t->occurred_at,
+                        'note' => $t->metadata['note'] ?? null,
+                    ])->values()->all(),
+                    'cash_with_rider' => $balance['unreturned'],
+                    'returned_to_date' => $balance['returned'],
+                    'cod_deliveries_today' => $codDeliveries,
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    /** The rider's open cash fund, opened on first use (one open fund per rider). */
+    private function openFundFor(User $rider, User $officer): RiderCashFund
+    {
+        $fund = RiderCashFund::query()
+            ->where('active_rider_key', $rider->id)
+            ->lockForUpdate()
+            ->first();
+
+        return $fund ?? RiderCashFund::create([
+            'fund_number' => 'RCF-'.now('Asia/Manila')->format('Ymd').'-'.Str::upper(Str::random(8)),
+            'rider_id' => $rider->id,
+            'municipality_id' => $rider->municipality_id,
+            'status' => RiderCashFund::STATUS_OPEN,
+            'active_rider_key' => $rider->id,
+            'opened_by' => $officer->id,
+            'opened_at' => now(),
+        ]);
     }
 
     public function recordDeliveryIssuance(Delivery $delivery, User $officer, float $amount): RiderCashFund
@@ -720,8 +892,11 @@ class RiderCashFundService
                 ->lockForUpdate()
                 ->firstOrFail();
 
+            if (! $lockedDelivery->rider_cash_fund_id && app(PurchasingCashService::class)->linkDailyAdvance($lockedDelivery)) {
+                $lockedDelivery->refresh();
+            }
             if (! $lockedDelivery->rider_cash_fund_id || $lockedDelivery->purchasing_cash_received_at === null) {
-                throw new InvalidArgumentException('Confirm receipt of the Tourism Office cash before submitting a purchase.');
+                throw new InvalidArgumentException('The Tourism Office has not recorded your cash advance yet.');
             }
             if ($this->hasUnreceivedIssuance($lockedDelivery)) {
                 throw new InvalidArgumentException('Confirm receipt of all purchasing-cash issuances before submitting a purchase.');

@@ -141,20 +141,35 @@ describe('GlobalRiderAlert — COD pickup-gate behaviour', () => {
     expect(onMarkPickedUp).not.toHaveBeenCalled()
   })
 
-  it('confirms the drop-off leg via the confirm button outside the pickup stage', () => {
+  it('completes the drop-off only with a proof photo (reconciled 2026-11-08: rider photo replaces tourist confirm)', () => {
     const onConfirmDelivery = vi.fn()
     h.setOverrides({
       arrivalAlert: 'DROPOFF',
       tripState: 'ARRIVED_AT_DROP',
       actionError: null,
       onConfirmDelivery,
+      pickupStopsData: { is_cod: true, stops: [], fully_collected: true },
     })
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:proof'), revokeObjectURL: vi.fn() }))
 
     render(<GlobalRiderAlert />)
 
-    expect(screen.getByRole('button', { name: /i delivered the food/i })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /i delivered the food/i }))
-    expect(onConfirmDelivery).toHaveBeenCalledTimes(1)
+    // No photo yet: Confirm Delivered is disabled, nothing is sent.
+    const confirm = screen.getByRole('button', { name: /confirm delivered/i })
+    expect(confirm).toBeDisabled()
+    expect(screen.getByText(/paid you in cash/i)).toBeInTheDocument()
+    fireEvent.click(confirm)
+    expect(onConfirmDelivery).not.toHaveBeenCalled()
+
+    // Take the photo (rear camera), then confirm.
+    const input = screen.getByLabelText('Take a photo of the delivered food')
+    expect(input).toHaveAttribute('capture', 'environment')
+    const photo = new File(['x'], 'delivered.jpg', { type: 'image/jpeg' })
+    fireEvent.change(input, { target: { files: [photo] } })
+    expect(screen.getByAltText('Delivered food')).toHaveAttribute('src', 'blob:proof')
+
+    fireEvent.click(screen.getByRole('button', { name: /confirm delivered/i }))
+    expect(onConfirmDelivery).toHaveBeenCalledWith(photo)
   })
 
   it('surfaces the real server message instead of the old generic text', () => {

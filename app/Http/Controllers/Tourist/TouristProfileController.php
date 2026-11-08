@@ -9,6 +9,7 @@ use App\Services\UserService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
 
 class TouristProfileController extends Controller
 {
@@ -51,19 +52,48 @@ class TouristProfileController extends Controller
         );
     }
 
-    public function uploadPhoto(Request $request)
+    /**
+     * POST /api/tourist/profile/photo — the tourist's profile picture
+     * (sidebar avatar, profile page, map "you are here" pin). Stored on
+     * user_profiles.avatar, the column UserResource exposes as profile_photo;
+     * the previous file is deleted so replacements don't pile up.
+     */
+    public function uploadPhoto(Request $request): JsonResponse
     {
         $request->validate([
-            'photo' => ['required', 'image', 'max:2048'],
+            'photo' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
         ]);
 
-        $user = Auth::user();
-        $path = $request->file('photo')->store('profiles', 'public');
+        $user = $request->user();
+        $old = $user->profile?->avatar;
 
-        if ($user->profile) {
-            $user->profile->update(['profile_photo' => $path]);
+        $path = $request->file('photo')->store('profiles', 'public');
+        $user->profile()->updateOrCreate([], ['avatar' => $path]);
+
+        if ($old) {
+            Storage::disk('public')->delete($old);
         }
 
-        return back()->with('success', 'Profile photo updated.');
+        return $this->successResponse(
+            UserResource::make($user->fresh()->load('profile')),
+            'Profile photo updated.'
+        );
+    }
+
+    /** DELETE /api/tourist/profile/photo — back to the initials avatar. */
+    public function deletePhoto(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $old = $user->profile?->avatar;
+
+        if ($old) {
+            $user->profile->update(['avatar' => null]);
+            Storage::disk('public')->delete($old);
+        }
+
+        return $this->successResponse(
+            UserResource::make($user->fresh()->load('profile')),
+            'Profile photo removed.'
+        );
     }
 }

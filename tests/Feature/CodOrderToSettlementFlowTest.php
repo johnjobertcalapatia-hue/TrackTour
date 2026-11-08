@@ -22,6 +22,7 @@ use App\Services\NearestRiderService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Hash;
+use Tests\Concerns\CompletesDeliveriesWithProof;
 use Tests\TestCase;
 
 /**
@@ -60,6 +61,7 @@ use Tests\TestCase;
  */
 class CodOrderToSettlementFlowTest extends TestCase
 {
+    use CompletesDeliveriesWithProof;
     use RefreshDatabase;
 
     private User $tourist;
@@ -433,22 +435,25 @@ class CodOrderToSettlementFlowTest extends TestCase
 
         $this->assertSame('assigned', $delivery->fresh()->status->value);
 
-        // ---- 6. Restaurant readies every item; the trip stays bound ----
-        foreach ($order->fresh()->items as $flowItem) {
-            $this->be($this->owner)
-                ->patchJson("/api/business-owner/orders/{$order->id}/items/{$flowItem->id}/status", ['status' => 'ready'])
-                ->assertOk();
-        }
-
-        $this->assertSame('ready', $order->fresh()->status, 'All items ready → order ready.');
+        // ---- 6. Restaurant can't ready COD food before the rider's payment ----
+        // Reconciled 2026-11-08 (Stage B, AGENTS.md §12): COD food becomes
+        // ready only after the restaurant confirms "Payment received", which
+        // needs the rider at the restaurant — so readiness now happens per
+        // stop in step 8, after the rider arrives and pays.
+        $firstItem = $order->fresh()->items->first();
+        $this->be($this->owner)
+            ->patchJson("/api/business-owner/orders/{$order->id}/items/{$firstItem->id}/status", ['status' => 'ready'])
+            ->assertStatus(422)
+            ->assertJsonPath('message', "Waiting for the rider's payment. Confirm \"Payment received\" before marking this food ready.");
+        $this->assertSame('preparing', $order->fresh()->status);
         $this->assertSame($this->riderA->id, $delivery->fresh()->rider_id, 'Restaurant work never rebinds the delivery (AGENTS §4.4).');
 
         $this->be($this->tourist)
             ->getJson("/api/tourist/food/order/{$order->id}/status")
             ->assertOk()
             ->assertJsonPath('data.delivery_route_active', false)
-            ->assertJsonPath('data.pickup_stops.0.is_ready', true)
-            ->assertJsonPath('data.pickup_stops.1.is_ready', true);
+            ->assertJsonPath('data.pickup_stops.0.is_ready', false)
+            ->assertJsonPath('data.pickup_stops.1.is_ready', false);
 
         // ---- 7. Rider receives the cash issued by the Tourism Office ----
         $this->assertNotNull($delivery->purchasing_cash_issued_at);
@@ -481,10 +486,22 @@ class CodOrderToSettlementFlowTest extends TestCase
             $this->be($this->riderA)
                 ->postJson("/api/rider/deliveries/{$delivery->id}/purchases/{$purchase->id}/mark", ['status' => 'purchased'])
                 ->assertOk();
+
+            // The restaurant confirms it received the rider's payment, then readies its food.
+            $this->be($this->owner)
+                ->postJson("/api/business-owner/orders/{$order->id}/cod-payment-received", ['business_id' => $business->id])
+                ->assertOk();
+            foreach ($order->fresh()->items->where('business_id', $business->id) as $flowItem) {
+                $this->be($this->owner)
+                    ->patchJson("/api/business-owner/orders/{$order->id}/items/{$flowItem->id}/status", ['status' => 'ready'])
+                    ->assertOk();
+            }
+
             $this->be($this->riderA)
                 ->postJson("/api/rider/deliveries/{$delivery->id}/purchases/{$purchase->id}/mark", ['status' => 'collected'])
                 ->assertOk();
         }
+        $this->assertSame($this->riderA->id, $delivery->fresh()->rider_id);
 
         $this->assertSame('picked_up', $delivery->fresh()->status->value, 'The final restaurant pickup transitions the shared delivery.');
         $this->be($this->tourist)
@@ -512,47 +529,22 @@ class CodOrderToSettlementFlowTest extends TestCase
             ->assertStatus(422)
             ->assertJsonPath('message', 'Delivery must be marked as delivered before cash settlement.');
 
-        // P14 — the rider cannot mark a food delivery delivered; the tourist must
-        // confirm receipt at the drop-off.
+        // Reconciled 2026-11-08 (AGENTS.md §12; product decision): the rider completes a food delivery with a proof photo at the drop-off, which also records the COD cash; the tourist confirm-delivery step is retired.
         $this->be($this->riderA)
             ->patchJson($this->riderStatusUrl($delivery), ['status' => 'delivered'])
             ->assertStatus(422)
-            ->assertJsonPath('message', 'The tourist must confirm the delivery before it can be marked as delivered.');
-
-        $this->be($this->tourist)
-            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
-            ->assertOk()
-            ->assertJsonPath('data.new_status', 'delivered');
-
-        $delivery->refresh();
-        $this->assertSame('delivered', $delivery->status->value, 'COD stays delivered until cash is settled — never auto-completed.');
-        $this->assertNotNull($delivery->delivered_at);
-        $this->assertNotNull($delivery->delivery_confirmed_at, 'Tourist confirmation is stamped.');
-        $this->assertSame((int) $this->tourist->id, (int) $delivery->delivery_confirmed_by);
-        $this->assertSame('busy', $this->riderA->fresh()->riderDetail->rider_status, 'COD keeps the rider busy until cash is collected.');
-        $this->assertSame('pending', $order->fresh()->payment_status, 'Still unpaid between delivery and cash settlement.');
-        $this->assertNotSame('completed', $order->fresh()->status);
-        $this->assertSame(0, CodSettlement::count(), 'No settlement is booked before cash is collected.');
-        $this->assertSame(1, Delivery::where('status', 'delivered')->count());
-
-        // Short cash is rejected server-side; nothing is booked.
-        $this->be($this->riderA)
-            ->postJson($this->settleUrl($delivery), ['cash_received' => $cashDue - 1])
-            ->assertStatus(422)
-            ->assertJsonPath('success', false);
-
-        $this->assertSame(0, CodSettlement::count());
+            ->assertJsonPath('message', 'Take a photo of the delivered food at the drop-off to complete this delivery.');
+        $this->assertSame(0, CodSettlement::count(), 'No settlement is booked before the rider completes the delivery.');
         $this->assertSame('pending', $order->fresh()->payment_status);
-        $this->assertSame('delivered', $delivery->fresh()->status->value);
 
-        // ---- 10. Exact-cash settlement completes the flow ----
-        $settle = $this->be($this->riderA)
-            ->postJson($this->settleUrl($delivery), ['cash_received' => $cashDue])
+        // ---- 10. Rider confirms delivery with a photo = tourist paid: exact-cash settlement completes the flow ----
+        $this->riderCompletesDelivery($delivery, $this->riderA)
             ->assertOk()
-            ->assertJsonPath('message', 'Cash on delivery settled successfully.')
-            ->assertJsonPath('data.success', true);
-
-        $this->assertEquals(0.0, (float) $settle->json('data.change_given'), 'Change is computed server-side.');
+            ->assertJsonPath('data.cod_settled', true)
+            ->assertJsonPath('data.new_status', 'completed');
+        $this->be($this->riderA);
+        $this->assertSame((int) $this->riderA->id, (int) $delivery->fresh()->delivery_confirmed_by, 'Confirmed by the rider.');
+        $this->assertNotNull($delivery->fresh()->delivery_proof_path, 'Proof photo kept.');
 
         $delivery->refresh();
         $order->refresh();

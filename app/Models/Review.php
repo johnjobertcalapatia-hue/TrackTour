@@ -65,4 +65,34 @@ class Review extends Model
 
         return count($ratings) > 0 ? round(array_sum($ratings) / count($ratings), 1) : null;
     }
+
+    /**
+     * Rating summary over ALL approved reviews of a business, so the average,
+     * the count and the per-star breakdown always describe the same set.
+     *
+     * @return array{average: float, count: int, breakdown: array<string, int>}
+     */
+    public static function approvedSummaryFor(int $businessId): array
+    {
+        $counts = static::query()
+            ->where('business_id', $businessId)
+            ->where('status', 'approved')
+            ->selectRaw('rating, COUNT(*) as total')
+            ->groupBy('rating')
+            ->pluck('total', 'rating');
+
+        $breakdown = [];
+        $weighted = 0;
+        foreach ([5, 4, 3, 2, 1] as $star) {
+            $breakdown[(string) $star] = (int) ($counts[$star] ?? 0);
+            $weighted += $star * $breakdown[(string) $star];
+        }
+        $count = array_sum($breakdown);
+
+        return [
+            'average' => $count > 0 ? round($weighted / $count, 2) : 0.0,
+            'count' => $count,
+            'breakdown' => $breakdown,
+        ];
+    }
 }

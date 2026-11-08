@@ -41,7 +41,8 @@ class PickupSequenceService
 
     /**
      * Idempotently seed one delivery_pickup_stops row per fulfilling
-     * restaurant, in drive order (ascending preparation time). Transport rides
+     * restaurant, in drive order (farthest from the tourist first; see
+     * PurchasingCashService::routeStops). Transport rides
      * and item-less deliveries seed nothing. Stops never overwrite existing
      * rows, so re-confirms and re-reads are harmless.
      */
@@ -211,7 +212,13 @@ class PickupSequenceService
      */
     public function latestRiderLocation(int $riderId): ?array
     {
-        $location = RiderLocation::where('rider_id', $riderId)->latest('recorded_at')->first();
+        // Deterministic tie-breaker: when two rows share the newest recorded_at
+        // (e.g. Carbon::setTestNow freezes time in tests), fall back to the
+        // highest id so the most recently inserted fix always wins.
+        $location = RiderLocation::where('rider_id', $riderId)
+            ->latest('recorded_at')
+            ->orderByDesc('id')
+            ->first();
 
         if (! $location) {
             return null;
@@ -290,6 +297,12 @@ class PickupSequenceService
 
         if ($stop->arrived_at === null) {
             return ['can_confirm' => false, 'reason' => 'waiting_arrival', 'distance_meters' => $distance];
+        }
+
+        // COD "paid before ready" (Stage B): the restaurant must confirm it
+        // received the rider's payment before the food can be picked up.
+        if ($this->paymentConfirmation($delivery, (int) $stop->business_id) === false) {
+            return ['can_confirm' => false, 'reason' => 'waiting_payment', 'distance_meters' => $distance];
         }
 
         if ($readiness['label'] !== 'ready' && $readiness['label'] !== 'none') {
@@ -415,9 +428,12 @@ class PickupSequenceService
                 throw new InvalidArgumentException('You are not assigned to this delivery.');
             }
 
+            // Daily cash advance (2026-11-08): the rider already holds the
+            // Tourism Office cash for the day, so a pickup is never held for a
+            // per-delivery cash issue. The delivery draws on the open advance.
             $isCod = app(NearestRiderService::class)->isCodDelivery($locked);
             if ($isCod) {
-                app(PurchasingCashService::class)->assertCashReceived($locked);
+                app(PurchasingCashService::class)->linkDailyAdvance($locked);
             }
 
             $statusNow = $locked->status->value ?? $locked->status;
@@ -447,6 +463,12 @@ class PickupSequenceService
 
                 if ($stop->arrived_at === null) {
                     throw new InvalidArgumentException('Confirm your arrival at this restaurant before confirming pickup.');
+                }
+
+                // COD "paid before ready" (Stage B): never collect food the
+                // restaurant hasn't confirmed payment for.
+                if ($this->paymentConfirmation($locked, $businessId) === false) {
+                    throw new InvalidArgumentException('Pay the restaurant first and wait for it to confirm "Payment received".');
                 }
 
                 $readiness = $this->businessReadiness($locked, $businessId);
@@ -547,6 +569,22 @@ class PickupSequenceService
      *
      * @return array<string, mixed>
      */
+    /**
+     * COD restaurant payment confirmation for a stop: true/false for COD
+     * deliveries, null when the rule doesn't apply (prepaid).
+     */
+    public function paymentConfirmation(Delivery $delivery, int $businessId): ?bool
+    {
+        if (! app(NearestRiderService::class)->isCodDelivery($delivery)) {
+            return null;
+        }
+
+        return CodPurchase::where('delivery_id', $delivery->id)
+            ->where('business_id', $businessId)
+            ->whereNotNull('payment_confirmed_at')
+            ->exists();
+    }
+
     public function stopPayload(Delivery $delivery, DeliveryPickupStop $stop): array
     {
         $confirmability = $this->confirmability($delivery, $stop->fresh());
@@ -556,6 +594,8 @@ class PickupSequenceService
             'id' => $stop->id,
             'business_id' => (int) $stop->business_id,
             'business_name' => $stop->business?->business_name ?? $stop->business?->name,
+            // Restaurant photo for the rider map pin (logo, else cover), as on the tourist map.
+            'business_logo' => $stop->business?->logo ?: $stop->business?->cover_photo,
             'sequence' => (int) $stop->sequence,
             'preparation_time' => $stop->preparation_time !== null ? (int) $stop->preparation_time : null,
             'pickup_lat' => $stop->pickup_latitude !== null ? (float) $stop->pickup_latitude : null,
@@ -567,6 +607,8 @@ class PickupSequenceService
                 : null,
             'status' => $this->stopConfirmed($delivery, $stop) ? DeliveryPickupStop::STATUS_COLLECTED : DeliveryPickupStop::STATUS_PENDING,
             'pickup_confirmed_at' => $stop->pickup_confirmed_at,
+            // COD only (null for prepaid): has the restaurant confirmed the rider's payment?
+            'payment_confirmed' => $this->paymentConfirmation($delivery, (int) $stop->business_id),
             'is_ready' => $readiness['ready'],
             'ready_label' => $readiness['label'],
             'ready_item_count' => $readiness['ready_item_count'],

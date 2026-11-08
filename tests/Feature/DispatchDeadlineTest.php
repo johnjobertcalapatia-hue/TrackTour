@@ -248,28 +248,57 @@ class DispatchDeadlineTest extends TestCase
 
     // ---------- 60-minute cycle deadline ----------
 
-    public function test_scheduler_terminates_an_expired_cycle_with_reason_and_no_new_attempt(): void
+    public function test_expired_cycle_on_the_manual_board_terminates_with_reason_and_no_new_attempt(): void
     {
+        // Reconciled 2026-11-07 (AGENTS.md §12; docs/dispatch-escalation-plan.md):
+        // a food delivery with no eligible rider now waits on the manual board
+        // instead of the retry loop, so the retry scheduler no longer selects
+        // it. The 60-minute deadline is enforced by the server worker
+        // (dispatch:process-offer-timeouts → SequentialDispatchService::
+        // expireOverdue) with the same observable terminal state.
         $business = $this->makeBusiness('Expired'); // No riders exist.
         $order = $this->makeCashOrder($business);
         app(SmartDispatchService::class)->scheduleDispatch($order->fresh());
 
         $delivery = $order->fresh()->delivery;
-        $this->assertSame('no_rider_available', $delivery->dispatch_status);
+        $this->assertSame('manual', $delivery->dispatch_phase);
 
-        $this->makeDueForRetry($delivery);
+        // Not expired yet: the worker leaves it on the board.
+        $this->expireCycle($order, 59);
+        $this->artisan('dispatch:process-offer-timeouts')->assertSuccessful();
+        $this->assertSame('waiting_for_rider', $delivery->fresh()->dispatch_status);
+
         $this->expireCycle($order, 61);
-
-        $this->assertSame(1, $this->processor->process());
+        $this->artisan('dispatch:process-offer-timeouts')->assertSuccessful();
 
         $this->assertTerminal($delivery, 'no_rider_accepted');
-        $this->assertEquals(
-            0,
-            $delivery->fresh()->dispatch_attempts,
-            'A pre-claim deadline termination never burns an attempt (master spec §54).'
-        );
+        $this->assertEquals(0, $delivery->fresh()->dispatch_attempts, 'No retry attempt is burned.');
         $this->assertSame(0, BookingDispatchLog::where('delivery_id', $delivery->id)->count());
         $this->assertSame(0, $this->processor->process(), 'An expired cycle is never retried again.');
+        $this->assertFalse(app(NearestRiderService::class)->deliveryIsClaimable($delivery->fresh()), 'Expired deliveries leave the board.');
+    }
+
+    public function test_expiry_withdraws_a_live_targeted_offer_but_never_touches_an_accepted_delivery(): void
+    {
+        $business = $this->makeBusiness('Expired Live Offer');
+        $rider = $this->makeEligibleRider($business);
+        $delivery = $this->dispatchCheckout($business);
+        $this->assertSame('notified', $delivery->fresh()->dispatch_status);
+
+        $this->expireCycle($delivery->order, 61);
+        $this->artisan('dispatch:process-offer-timeouts')->assertSuccessful();
+
+        $this->assertTerminal($delivery, 'no_rider_accepted');
+        $this->assertSame('timeout', BookingDispatchLog::where('delivery_id', $delivery->id)->where('rider_id', $rider->id)->value('response'));
+        $this->assertNull($delivery->fresh()->rider_id);
+
+        // An accepted delivery is never expired.
+        $other = $this->dispatchCheckout($this->makeBusiness('Accepted Before Deadline'));
+        DB::table('deliveries')->where('id', $other->id)->update(['rider_id' => $rider->id, 'status' => 'assigned', 'dispatch_phase' => 'targeted']);
+        $this->expireCycle($other->order, 61);
+        $this->artisan('dispatch:process-offer-timeouts')->assertSuccessful();
+        $this->assertNotSame('dispatch_failed', $other->fresh()->dispatch_status);
+        $this->assertSame($rider->id, (int) $other->fresh()->rider_id);
     }
 
     public function test_direct_dispatch_entry_respects_the_cycle_deadline(): void

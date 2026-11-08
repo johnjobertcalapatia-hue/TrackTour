@@ -50,6 +50,7 @@ class TouristDestinationController extends Controller
         $attractions = Business::query()
             ->where('status', 'approved')
             ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Spot))
+            ->when($municipality, fn ($q) => $q->where('municipality_id', $municipality))
             ->with(['category', 'municipality', 'details', 'media'])
             ->when($search, function ($q) use ($search) {
                 $q->where(function ($query) use ($search) {

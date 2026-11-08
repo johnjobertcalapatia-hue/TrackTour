@@ -8,6 +8,11 @@ return [
     'arrival_radius_meters' => env('TRACKING_ARRIVAL_RADIUS_METERS', 100),
     // Restaurant pickup-confirmation radius; separate from general arrival.
     'pickup_radius_meters' => env('TRACKING_PICKUP_RADIUS_METERS', 50),
+    // Drop-off completion radius: the rider must be within this distance of
+    // the delivery address to upload the proof photo and confirm delivered.
+    'dropoff_radius_meters' => env('TRACKING_DROPOFF_RADIUS_METERS', 50),
+    // The rider's saved GPS fix used for that check must be this fresh.
+    'proof_location_max_age_seconds' => env('TRACKING_PROOF_LOCATION_MAX_AGE_SECONDS', 120),
     // Teleport guard: a location fix implying a speed above this ceiling is
     // rejected before it can trigger an arrival or be persisted.
     'max_speed_kph' => env('TRACKING_MAX_SPEED_KPH', 150),

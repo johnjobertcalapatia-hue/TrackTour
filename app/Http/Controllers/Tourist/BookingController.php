@@ -28,11 +28,13 @@ class BookingController extends Controller
         })->pluck('id');
 
         $accommodations = Business::where('status', 'approved')
+            ->where('accepts_reservation', true)
             ->whereIn('business_category_id', $accommodationCategories)
             ->with('category', 'municipality')
             ->paginate(12);
 
         $rentals = Business::where('status', 'approved')
+            ->where('accepts_reservation', true)
             ->whereIn('business_category_id', $rentalCategories)
             ->with('category', 'municipality')
             ->paginate(12);
@@ -66,6 +68,10 @@ class BookingController extends Controller
 
     public function store(CreateBookingRequest $request, Business $business)
     {
+        if (! $business->accepts_reservation) {
+            return $this->errorResponse('This business is not currently accepting bookings.', 422);
+        }
+
         $validated = $request->validated();
 
         $booking = Booking::create([

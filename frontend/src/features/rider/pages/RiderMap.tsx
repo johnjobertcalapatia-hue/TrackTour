@@ -1,22 +1,57 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { Fragment, memo, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { get, patch, post } from '@/shared/services/api'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { useAuthStore } from '@/features/auth/services/auth-store'
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, Popup, Polyline } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
-import { Navigation, MapPin, Play, Truck, CheckCircle, Radio, Wallet, Package, Car } from 'lucide-react'
+import { Navigation, MapPin, Play, Truck, CheckCircle, Radio, Package, Car, LocateFixed } from 'lucide-react'
+import { RiderMapFollow } from '@/features/rider/components/RiderMapFollow'
+import { MapZoomOutLimit } from '@/features/rider/components/MapZoomOutLimit'
+import { RiderMapStyleSwitcher } from '@/features/rider/components/RiderMapStyleSwitcher'
+import { RiderMapViewToggle } from '@/features/rider/components/RiderMapViewToggle'
+import { RiderNavPuck } from '@/features/rider/components/RiderNavPuck'
+import { NavigationCamera } from '@/shared/components/map/NavigationCamera'
+import { requestCompassPermission, useNavigationBearing } from '@/features/tourist/hooks/use-navigation-bearing'
+import { routeProgress } from '@/features/tourist/utils/route-progress'
+import {
+  NAV_PERSPECTIVE_PX,
+  NAV_TILT_DEG,
+  NAV_TILT_SIZE_FACTOR,
+  navPuckScreenOffset,
+  planeOffsetForScreenY,
+  type RiderMapViewMode,
+} from '@/features/rider/navigation-view'
+import { MAP_STYLES, loadMapStyle, saveMapStyle, type MapStyleId } from '@/shared/utils/map-tiles'
+
+const RIDER_MAP_STYLE_KEY = 'rider_map_style'
 import { useRiderActiveTrip } from '@/features/rider/context/RiderActiveTripContext'
 import { useOsrmRoute } from '@/features/rider/hooks/useOsrmRoute'
+import { useAboveRiderStatus } from '@/features/rider/hooks/useAboveRiderStatus'
 import { resolvePickupRoute } from '@/features/rider/pickup-route'
-import { riderNavigationMarkerIcon, pickupMarkerIcon, destinationMarkerIcon } from '@/shared/utils/map-markers'
+import { riderNavigationMarkerIcon, destinationMarkerIcon } from '@/shared/utils/map-markers'
+import { businessLogoIcon, pinIcon } from '@/shared/utils/pin-icon'
+import { toAssetUrl } from '@/shared/utils'
 import { RiderHeadingController } from '@/shared/utils/rider-heading'
 
-const pickupIcon = pickupMarkerIcon
 const deliveryDestIcon = destinationMarkerIcon
+
+/**
+ * Restaurant pins: the same business marker as the tourist map (round photo
+ * pin with the name beside it; the plain green pin when there is no photo).
+ * In the navigation view they lie on the tilted map and stay turned to the
+ * screen like the tourist map's pins.
+ */
+function restaurantIcon(photo: string | null | undefined, label: string): L.DivIcon {
+  return photo ? businessLogoIcon(toAssetUrl(photo), label) : pinIcon(label)
+}
+const WORLD_BOUNDS: L.LatLngBoundsExpression = [
+  [-85.05112878, -180],
+  [85.05112878, 180],
+]
 
 interface RiderLocation {
   latitude: number
@@ -25,30 +60,6 @@ interface RiderLocation {
   speed?: number
   accuracy?: number
 }
-
-const stopNumberIcon = (n: number) =>
-  L.divIcon({
-    className: 'custom-pickup-marker',
-    html: `
-      <div style="
-        width: 30px;
-        height: 30px;
-        background: #D97706;
-        border: 2px solid #ffffff;
-        border-radius: 50%;
-        box-shadow: 0 3px 10px rgba(217, 119, 6, 0.4);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: #ffffff;
-        font-size: 13px;
-        font-weight: 800;
-      ">${n}</div>
-    `,
-    iconSize: [30, 30],
-    iconAnchor: [15, 15],
-    popupAnchor: [0, -15],
-  })
 
 function formatEta(distanceKm: number | null, durationMin: number | null): string {
   if (distanceKm == null && durationMin == null) return ''
@@ -63,12 +74,13 @@ interface Delivery {
   order_id: number
   status: string
   pickup_address: string
-  pickup_lat: number | null
-  pickup_lng: number | null
+  pickup_lat: number | string | null
+  pickup_lng: number | string | null
   delivery_address: string
-  delivery_lat: number | null
-  delivery_lng: number | null
+  delivery_lat: number | string | null
+  delivery_lng: number | string | null
   business_name?: string | null
+  business_logo?: string | null
   customer_name?: string | null
   created_at: string
 }
@@ -78,66 +90,156 @@ interface LocationData {
   deliveries: Delivery[]
 }
 
-interface PurchaseStop {
-  id: number
-  business_id: number
-  business_name: string | null
-  purchase_amount: number
-  status: 'pending' | 'purchased' | 'collected'
-  purchased_at?: string | null
-  collected_at?: string | null
-}
-
-interface PurchasesData {
-  delivery_id: number
-  is_cod: boolean
-  purchasing_cash: number | null
-  purchasing_cash_issued_at: string | null
-  purchasing_cash_received_at: string | null
-  fully_collected: boolean
-  purchases: PurchaseStop[]
-}
-
-function RecenterMap({ center }: { center: [number, number] }) {
-  const map = useMap()
-  const lastRef = useRef<[number, number] | null>(null)
+function AnimatedRiderMarker({
+  position,
+  icon,
+  eventHandlers,
+  children,
+}: {
+  position: [number, number]
+  icon: L.DivIcon
+  eventHandlers: L.LeafletEventHandlerFnMap
+  children: ReactNode
+}) {
+  const markerRef = useRef<L.Marker | null>(null)
+  const initialPositionRef = useRef(position)
 
   useEffect(() => {
-    const handler = () => {
-      const [lat, lng] = center
-      if (!lat || !lng || lat === 0 && lng === 0) return
-      lastRef.current = [lat, lng]
-      map.setView(center, 16, { animate: true })
-    }
-    window.addEventListener('rider-go-online', handler)
-    return () => window.removeEventListener('rider-go-online', handler)
-  }, [center, map])
+    const marker = markerRef.current
+    if (!marker) return
 
-  useEffect(() => {
-    const [lat, lng] = center
-    if (lat === 0 && lng === 0) return
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return
+    const from = marker.getLatLng()
+    const startedAt = performance.now()
+    const duration = 650
+    let frameId = 0
 
-    const last = lastRef.current
-    if (last) {
-      const dLat = lat - last[0]
-      const dLng = lng - last[1]
-      const distMeters = Math.sqrt(dLat * dLat + dLng * dLng) * 111320
-      if (distMeters < 150) return
+    const animate = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / duration)
+      const eased = progress * progress * (3 - 2 * progress)
+      marker.setLatLng([
+        from.lat + (position[0] - from.lat) * eased,
+        from.lng + (position[1] - from.lng) * eased,
+      ])
+      if (progress < 1) frameId = requestAnimationFrame(animate)
     }
 
-    lastRef.current = [lat, lng]
-    map.setView(center, map.getZoom(), { animate: false })
-  }, [center, map])
+    frameId = requestAnimationFrame(animate)
+    return () => cancelAnimationFrame(frameId)
+  }, [position])
 
-  return null
+  return (
+    <Marker
+      ref={markerRef}
+      position={initialPositionRef.current}
+      icon={icon}
+      eventHandlers={eventHandlers}
+    >
+      {children}
+    </Marker>
+  )
 }
+
+const DeliveryEndpointMarker = memo(function DeliveryEndpointMarker({
+  latitude,
+  longitude,
+  icon,
+  title,
+  address,
+  tone,
+}: {
+  latitude: number | string
+  longitude: number | string
+  icon: L.DivIcon
+  title: string
+  address: string
+  tone: 'pickup' | 'destination'
+}) {
+  const position = useMemo(
+    () => L.latLng(Number(latitude), Number(longitude)),
+    [latitude, longitude],
+  )
+  const titleClass = tone === 'pickup' ? 'text-emerald-600' : 'text-red-600'
+
+  return (
+    <Marker position={position} icon={icon}>
+      <Popup>
+        <div className="text-sm">
+          <p className={`font-semibold ${titleClass}`}>{title}</p>
+          <p>{address}</p>
+        </div>
+      </Popup>
+    </Marker>
+  )
+})
+
+const PickupStopMapMarker = memo(function PickupStopMapMarker({
+  sequence,
+  totalStops,
+  latitude,
+  longitude,
+  businessName,
+  businessLogo,
+  address,
+  preparationTime,
+}: {
+  sequence: number
+  totalStops: number
+  latitude: number
+  longitude: number
+  businessName: string | null
+  businessLogo: string | null | undefined
+  address: string | null
+  preparationTime: number | null
+}) {
+  const position = useMemo<[number, number]>(() => [latitude, longitude], [latitude, longitude])
+  // With several restaurants the label keeps the pickup order ("#1 …").
+  const label = totalStops > 1 ? `#${sequence} ${businessName ?? 'Restaurant'}` : (businessName ?? 'Restaurant')
+  const icon = useMemo(() => restaurantIcon(businessLogo, label), [businessLogo, label])
+
+  return (
+    <Marker position={position} icon={icon}>
+      <Popup>
+        <div className="text-sm">
+          <p className="font-semibold text-emerald-600">#{sequence} {businessName}</p>
+          <p className="text-gray-500">{address}</p>
+          {preparationTime != null && (
+            <p className="text-gray-500">~{preparationTime} min prep</p>
+          )}
+        </div>
+      </Popup>
+    </Marker>
+  )
+})
 
 export default function RiderMap() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.user)
+  // Placeholder until a real location exists; never focused on (see hasFix).
   const [riderPosition, setRiderPosition] = useState<[number, number]>([12.8667, 121.4500])
+  // Where the position came from: none (placeholder), server (last saved fix),
+  // gps (this device). The map only focuses once it is server or gps.
+  const [locationSource, setLocationSource] = useState<'none' | 'server' | 'gps'>('none')
+  const [following, setFollowing] = useState(true)
+  const [focusSignal, setFocusSignal] = useState(0)
+  const [gpsError, setGpsError] = useState<string | null>(null)
+  // Overview (flat bird's-eye of the route) vs Navigation (tilted, heading-up
+  // driving view). Stage C of the rider trip flow.
+  const [viewMode, setViewMode] = useState<RiderMapViewMode>('overview')
+  const [overviewSignal, setOverviewSignal] = useState(0)
+  // GPS course over ground (only trusted while moving).
+  const [course, setCourse] = useState<number | null>(null)
+  const mapAreaRef = useRef<HTMLDivElement | null>(null)
+  // Map buttons sit 8 px above the Rider Status panel (same as their own gap).
+  const [mapControlsRef, controlsBottom] = useAboveRiderStatus()
+  const controlsStyle = controlsBottom != null ? { bottom: controlsBottom } : undefined
+  // Map type (Standard / Dark / Satellite), remembered on this device.
+  const [mapStyle, setMapStyleState] = useState<MapStyleId>(() => loadMapStyle(RIDER_MAP_STYLE_KEY))
+  const setMapStyle = useCallback((style: MapStyleId) => {
+    setMapStyleState(style)
+    saveMapStyle(RIDER_MAP_STYLE_KEY, style)
+  }, [])
+  const tiles = MAP_STYLES[mapStyle]
   const watchIdRef = useRef<number | null>(null)
   const headingControllerRef = useRef<RiderHeadingController | null>(null)
   if (!headingControllerRef.current) {
@@ -177,6 +279,11 @@ export default function RiderMap() {
   const locationMutation = useMutation({
     mutationFn: (location: RiderLocation) => post('/rider/map/location', location),
   })
+  // useMutation returns a new object every render; reading `mutate` through a
+  // ref keeps sendLocation stable, so the GPS watch below is set up once
+  // instead of being torn down and re-requested on every render.
+  const sendLocationMutateRef = useRef(locationMutation.mutate)
+  sendLocationMutateRef.current = locationMutation.mutate
 
   const statusMutation = useMutation({
     mutationFn: ({ id, status }: { id: number; status: string }) =>
@@ -224,33 +331,6 @@ export default function RiderMap() {
     }
   }
 
-  const isPickupStage = !!activeDelivery && ['assigned', 'arrived_pickup'].includes(activeDelivery.status)
-  const isFoodService = user?.current_service !== 'transport'
-
-  const { data: purchasesData } = useQuery({
-    queryKey: ['rider-delivery-purchases', activeDelivery?.id],
-    queryFn: async () => {
-      if (!activeDelivery) return null
-      return (await get<PurchasesData>(`/rider/deliveries/${activeDelivery.id}/purchases`)) ?? null
-    },
-    enabled: !!activeDelivery && isPickupStage && isFoodService,
-    refetchInterval: 10000,
-    staleTime: 5000,
-  })
-
-  const markPurchaseMutation = useMutation({
-    mutationFn: ({ purchaseId, status }: { purchaseId: number; status: 'purchased' | 'collected' }) =>
-      post(`/rider/deliveries/${activeDelivery!.id}/purchases/${purchaseId}/mark`, { status }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['rider-delivery-purchases', activeDelivery?.id] })
-      queryClient.invalidateQueries({ queryKey: ['rider-map-location'] })
-    },
-  })
-
-  const receiveCashMutation = useMutation({
-    mutationFn: () => post(`/rider/deliveries/${activeDelivery!.id}/purchasing-cash/receive`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rider-delivery-purchases', activeDelivery?.id] }),
-  })
 
   const lastLocationSent = useRef(0)
   const locationInFlight = useRef(false)
@@ -283,6 +363,9 @@ export default function RiderMap() {
       timestamp: position.timestamp,
     })
     setRiderPosition([latitude, longitude])
+    if (heading !== null && Number.isFinite(heading) && (speed ?? 0) > 0.5) setCourse(heading)
+    setLocationSource('gps')
+    setGpsError(null)
     setTripRiderPosition(latitude, longitude)
     if (locationInFlight.current) return
     const now = Date.now()
@@ -293,7 +376,7 @@ export default function RiderMap() {
     if (heading !== null && Number.isFinite(heading)) location.heading = heading
     if (speed !== null && Number.isFinite(speed)) location.speed = speed
     if (accuracy !== null && Number.isFinite(accuracy)) location.accuracy = accuracy
-    locationMutation.mutate(
+    sendLocationMutateRef.current(
       location,
       {
         onSettled: () => {
@@ -301,7 +384,7 @@ export default function RiderMap() {
         },
       }
     )
-  }, [headingController, locationMutation, setTripRiderPosition])
+  }, [headingController, setTripRiderPosition])
 
   useEffect(() => {
     if (!user?.id) {
@@ -314,15 +397,23 @@ export default function RiderMap() {
 
     if (!navigator.geolocation) return
 
+    const onGpsError = (err: GeolocationPositionError) => {
+      setGpsError(
+        err.code === err.PERMISSION_DENIED
+          ? 'Location access is blocked. Allow location for this site so the map can follow you.'
+          : 'Waiting for your GPS location…',
+      )
+    }
+
     navigator.geolocation.getCurrentPosition(
       sendLocation,
-      undefined,
-      { enableHighAccuracy: true }
+      onGpsError,
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
     )
 
     watchIdRef.current = navigator.geolocation.watchPosition(
       sendLocation,
-      undefined,
+      onGpsError,
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
     )
 
@@ -335,12 +426,32 @@ export default function RiderMap() {
 
   useEffect(() => () => headingController.destroy(), [headingController])
 
+  // Until this device reports GPS, start from the rider's last saved location
+  // (server) instead of the placeholder town centre.
+  const serverLat = data?.rider?.latitude != null ? Number(data.rider.latitude) : null
+  const serverLng = data?.rider?.longitude != null ? Number(data.rider.longitude) : null
+  useEffect(() => {
+    if (locationSource !== 'none' || serverLat === null || serverLng === null) return
+    if (!Number.isFinite(serverLat) || !Number.isFinite(serverLng) || (serverLat === 0 && serverLng === 0)) return
+    setRiderPosition([serverLat, serverLng])
+    setLocationSource('server')
+  }, [locationSource, serverLat, serverLng])
+
+  // Going online re-centres on the rider (DashboardLayout dispatches this).
+  useEffect(() => {
+    const onGoOnline = () => setFocusSignal((n) => n + 1)
+    window.addEventListener('rider-go-online', onGoOnline)
+    return () => window.removeEventListener('rider-go-online', onGoOnline)
+  }, [])
+
   const deliveries = data?.deliveries ?? []
   const isRideHailing = user?.current_service === 'transport'
 
   const isPickupLeg = tripState === 'EN_ROUTE_TO_PICKUP' || tripState === 'ARRIVED_AT_PICKUP'
   const isDropLeg = tripState === 'OUT_FOR_DELIVERY' || tripState === 'ARRIVED_AT_DROP'
-  const hasRouteLeg = !!activeDelivery && (isPickupLeg || isDropLeg)
+  // Route only from a real position (device GPS or last saved location),
+  // never from the placeholder town centre.
+  const hasRouteLeg = !!activeDelivery && (isPickupLeg || isDropLeg) && locationSource !== 'none'
 
   const purchaseStops = pickupStopsData?.stops ?? []
   const fullyCollected = pickupStopsData?.fully_collected ?? false
@@ -377,6 +488,16 @@ export default function RiderMap() {
         : null,
   })
 
+  // After accepting an offer (and again when the drop-off leg starts), frame
+  // the rider and the next target (restaurant, then tourist) once.
+  const tripOverview = useMemo(
+    () => (activeDelivery && hasRouteLeg && routeWaypoints.length >= 2
+      ? { key: `${activeDelivery.id}:${isDropLeg ? 'drop' : 'pickup'}:${overviewSignal}`, points: routeWaypoints }
+      : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeDelivery?.id, hasRouteLeg, isDropLeg, overviewSignal, routeWaypoints.length >= 2 ? routeWaypoints[routeWaypoints.length - 1]?.join(',') : ''],
+  )
+
   const osrmRoute = useOsrmRoute(hasRouteLeg ? routeWaypoints : null, hasRouteLeg)
 
   const routeEtaLabel = formatEta(osrmRoute.distanceKm, osrmRoute.durationMin)
@@ -387,6 +508,62 @@ export default function RiderMap() {
       : routeWaypoints.length >= 2
         ? routeWaypoints
         : []
+
+  // The route is "consumed" as the rider moves: draw only what's left, from
+  // his snapped position on the road to the current target.
+  const hasRealPosition = locationSource !== 'none'
+  const progress = useMemo(
+    () => (hasRealPosition && polylinePoints.length >= 2
+      ? routeProgress(polylinePoints, { lat: riderPosition[0], lng: riderPosition[1] })
+      : null),
+    [hasRealPosition, polylinePoints, riderPosition],
+  )
+  const drawnRoute: [number, number][] = progress && progress.remaining.length >= 2 ? progress.remaining : polylinePoints
+
+  const navActive = viewMode === 'navigation' && hasRealPosition
+  const bearing = useNavigationBearing({
+    active: navActive,
+    location: hasRealPosition ? { lat: riderPosition[0], lng: riderPosition[1] } : null,
+    course,
+    route: drawnRoute.length >= 2 ? drawnRoute : null,
+  })
+
+  // Tilted, rotated map plane: a square much larger than the screen so no
+  // blank corner shows while it turns and tips back toward the horizon.
+  const [areaSize, setAreaSize] = useState({ w: 0, h: 0 })
+  const [puckScreenY, setPuckScreenY] = useState(0)
+  useEffect(() => {
+    const el = mapAreaRef.current
+    if (!el) return
+    const measure = () => {
+      setAreaSize({ w: el.clientWidth, h: el.clientHeight })
+      setPuckScreenY(navPuckScreenOffset(el).y)
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    window.visualViewport?.addEventListener('resize', measure)
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null
+    ro?.observe(el)
+    return () => {
+      window.removeEventListener('resize', measure)
+      window.visualViewport?.removeEventListener('resize', measure)
+      ro?.disconnect()
+    }
+  }, [navActive])
+  const planeSize = Math.ceil(Math.hypot(areaSize.w, areaSize.h) * NAV_TILT_SIZE_FACTOR)
+  const navPlaneOffset = useMemo(() => ({ x: 0, y: Math.round(planeOffsetForScreenY(puckScreenY)) }), [puckScreenY])
+
+  const changeView = (mode: RiderMapViewMode) => {
+    if (mode === 'navigation') {
+      requestCompassPermission()
+    } else {
+      setOverviewSignal((n) => n + 1) // re-frame the whole route
+    }
+    setViewMode(mode)
+  }
+
+  // Collected restaurants disappear from the map (their route leg is done).
+  const visibleStops = purchaseStops.filter((stop) => stop.status !== 'collected')
       
   const tripStatus = (() => {
     if (!activeDelivery) {
@@ -456,31 +633,75 @@ export default function RiderMap() {
     }
   })()
 
-  const purchaseItems = purchasesData?.purchases ?? []
-  const purchasingCash = purchasesData?.purchasing_cash ?? null
-  const cashIssued = purchasesData?.purchasing_cash_issued_at != null
-  const cashReceived = purchasesData?.purchasing_cash_received_at != null
-  const collectedCount = purchaseItems.filter((p) => p.status === 'collected').length
-  const allPurchaseItemsCollected = purchaseItems.length > 0 && collectedCount === purchaseItems.length
 
   if (isLoading) return <DashboardSkeleton />
 
   return (
-    <div className="fixed inset-0 z-0">
+    // Sized to the DYNAMIC viewport (100dvh): on phones `inset-0` alone spans
+    // the area behind the browser bars, which put the map's centre (and so the
+    // rider marker) below the middle of what the rider actually sees.
+    // The map-type class lives on this wrapper: react-leaflet applies the
+    // MapContainer className only once, at creation.
+    <div
+      ref={mapAreaRef}
+      data-view-mode={navActive ? 'navigation' : 'overview'}
+      className={`fixed top-0 left-0 w-full h-[100dvh] z-0 overflow-hidden ${tiles.containerClass ?? ''}`}
+      style={navActive ? { perspective: `${NAV_PERSPECTIVE_PX}px` } : undefined}
+    >
+      {/* Rotator/tilter: in the navigation view the map becomes a large square,
+          turned so the road ahead points up and tipped back like the ground. */}
+      <div
+        data-testid="rider-map-rotator"
+        data-bearing={Math.round(navActive ? bearing : 0)}
+        className={navActive && planeSize > 0 ? 'map-rotator map-rotator--nav' : 'map-rotator'}
+        style={navActive && planeSize > 0
+          ? ({
+              width: planeSize,
+              height: planeSize,
+              transform: `translate(-50%, -50%) rotateX(${NAV_TILT_DEG}deg) rotate(${-bearing}deg)`,
+              '--map-bearing': `${bearing}deg`,
+            } as React.CSSProperties)
+          : undefined}
+      >
       <MapContainer
         center={riderPosition}
-        zoom={14}
-        minZoom={2}
+        zoom={12}
+        // Zoom-out / pan limits: the whole Philippines (see MapZoomOutLimit).
+        minZoom={5}
         className="h-full w-full"
         zoomControl={false}
       >
           <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            key={tiles.id}
+            attribution={tiles.attribution}
+            url={tiles.url}
+            {...(tiles.subdomains ? { subdomains: tiles.subdomains } : {})}
+            maxNativeZoom={tiles.maxNativeZoom}
+            maxZoom={20}
+            noWrap
+            bounds={WORLD_BOUNDS}
           />
-          <RecenterMap center={riderPosition} />
+          <MapZoomOutLimit />
+          {navActive ? (
+            <NavigationCamera
+              active
+              location={{ lat: riderPosition[0], lng: riderPosition[1] }}
+              bearing={bearing}
+              screenOffset={navPlaneOffset}
+              recenterSignal={focusSignal}
+            />
+          ) : (
+            <RiderMapFollow
+              center={riderPosition}
+              hasFix={locationSource !== 'none'}
+              following={following}
+              focusSignal={focusSignal}
+              onFollowChange={setFollowing}
+              overview={tripOverview}
+            />
+          )}
 
-          <Marker
+          {!navActive && <AnimatedRiderMarker
             position={riderPosition}
             icon={riderNavigationMarkerIcon}
             eventHandlers={riderMarkerEvents}
@@ -491,79 +712,131 @@ export default function RiderMap() {
                 <p className="text-gray-500">{Number(riderPosition[0]).toFixed(5)}, {Number(riderPosition[1]).toFixed(5)}</p>
               </div>
             </Popup>
-          </Marker>
+          </AnimatedRiderMarker>}
 
           {deliveries.map((d) => (
-            <div key={d.id}>
-              {d.pickup_lat && d.pickup_lng && (
-                <Marker position={[d.pickup_lat, d.pickup_lng]} icon={pickupIcon}>
-                  <Popup>
-                    <div className="text-sm">
-                      <p className="font-semibold text-emerald-600">{d.business_name || `Pickup - Order #${d.order_id}`}</p>
-                      <p>{d.pickup_address}</p>
-                    </div>
-                  </Popup>
-                </Marker>
+            <Fragment key={d.id}>
+              {d.pickup_lat != null && d.pickup_lng != null && purchaseStops.length === 0 && !isDropLeg && (
+                <DeliveryEndpointMarker
+                  key={`delivery-${d.id}-pickup`}
+                  latitude={d.pickup_lat}
+                  longitude={d.pickup_lng}
+                  icon={restaurantIcon(d.business_logo, d.business_name || 'Restaurant')}
+                  title={d.business_name || `Pickup - Order #${d.order_id}`}
+                  address={d.pickup_address}
+                  tone="pickup"
+                />
               )}
-              {d.delivery_lat && d.delivery_lng && (
-                <Marker position={[d.delivery_lat, d.delivery_lng]} icon={deliveryDestIcon}>
-                  <Popup>
-                    <div className="text-sm">
-                      <p className="font-semibold text-red-600">{d.customer_name || `Delivery - Order #${d.order_id}`}</p>
-                      <p>{d.delivery_address}</p>
-                    </div>
-                  </Popup>
-                </Marker>
+              {d.delivery_lat != null && d.delivery_lng != null && (
+                <DeliveryEndpointMarker
+                  key={`delivery-${d.id}-dropoff`}
+                  latitude={d.delivery_lat}
+                  longitude={d.delivery_lng}
+                  icon={deliveryDestIcon}
+                  title={d.customer_name || `Delivery - Order #${d.order_id}`}
+                  address={d.delivery_address}
+                  tone="destination"
+                />
               )}
-            </div>
+            </Fragment>
           ))}
 
-          {purchaseStops.map((stop) =>
+          {visibleStops.map((stop) =>
             stop.pickup_lat != null && stop.pickup_lng != null ? (
-              <Marker
+              <PickupStopMapMarker
                 key={`stop-${stop.id}`}
-                position={[stop.pickup_lat, stop.pickup_lng]}
-                icon={stopNumberIcon(stop.sequence)}
-              >
-                <Popup>
-                  <div className="text-sm">
-                    <p className="font-semibold text-emerald-600">#{stop.sequence} {stop.business_name}</p>
-                    <p className="text-gray-500">{stop.pickup_address}</p>
-                    {stop.preparation_time != null && (
-                      <p className="text-gray-500">~{stop.preparation_time} min prep</p>
-                    )}
-                  </div>
-                </Popup>
-              </Marker>
+                sequence={stop.sequence}
+                totalStops={purchaseStops.length}
+                latitude={stop.pickup_lat}
+                longitude={stop.pickup_lng}
+                businessName={stop.business_name}
+                businessLogo={stop.business_logo}
+                address={stop.pickup_address}
+                preparationTime={stop.preparation_time}
+              />
             ) : null
           )}
 
-          {polylinePoints.length >= 2 && (
+          {drawnRoute.length >= 2 && (
             <Polyline
-              positions={polylinePoints}
+              positions={drawnRoute}
               color="#DFFF00"
               weight={6}
               opacity={1}
             />
           )}
         </MapContainer>
+      </div>
+
+        {navActive && (
+          <>
+            {/* Soft horizon where the tilted map fades into the distance. */}
+            <div aria-hidden="true" className="nav-horizon pointer-events-none absolute inset-x-0 top-0 z-[400] h-[22%]" />
+            <RiderNavPuck offsetY={puckScreenY} />
+          </>
+        )}
+
+        {/* Map controls, stacked: view buttons, then map type, then "My location". */}
+        <div ref={mapControlsRef} style={controlsStyle} className="rider-map-controls-bottom absolute right-3 sm:right-4 z-[1000] flex flex-col items-center gap-2">
+          {/* Overview / Navigation view. */}
+          <RiderMapViewToggle value={viewMode} onChange={changeView} />
+          {/* Map type: Standard / Dark / Satellite. */}
+          <RiderMapStyleSwitcher value={mapStyle} onChange={setMapStyle} />
+
+          {/* My location: re-centre on the rider and resume following. */}
+          <button
+            type="button"
+            onClick={() => setFocusSignal((n) => n + 1)}
+            aria-label="Center map on my location"
+            // The navigation view always follows the rider.
+            aria-pressed={navActive || following}
+            className={`w-11 h-11 rounded-full border shadow-md flex items-center justify-center backdrop-blur transition ${
+              navActive || following ? 'bg-[#16803C] border-[#16803C] text-white' : 'bg-white/95 border-[#E4E9E6] text-[#16803C] hover:bg-white'
+            }`}
+          >
+            <LocateFixed className="w-5 h-5" aria-hidden="true" />
+          </button>
+        </div>
+
+        {gpsError && locationSource !== 'gps' && (
+          <div role="status" className="absolute left-1/2 -translate-x-1/2 top-16 z-[1000] max-w-[90%] rounded-xl bg-[#FEF3C7] border border-[#FCD34D] px-3 py-2 text-xs font-semibold text-[#92400E] shadow">
+            {gpsError}
+          </div>
+        )}
 
         <div className="absolute top-3 left-3 sm:top-4 sm:left-4 z-[1000] flex flex-col items-start gap-2 max-w-[calc(100%-5rem)]">
-          <div className="rounded-full border border-[#E4E9E6] bg-white/95 pl-1 sm:pl-1.5 pr-3 sm:pr-4 py-1 sm:py-1.5 shadow-lg backdrop-blur">
-            <div className="flex items-center gap-1.5 sm:gap-2">
-              <span className={`w-6 h-6 sm:w-7 sm:h-7 shrink-0 rounded-full bg-[#F5FBF7] border border-[#E4E9E6] flex items-center justify-center ${tripStatus.accent}`}>
-                <tripStatus.icon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-              </span>
-              <p className="text-[10px] sm:text-xs font-bold text-[#17202A] whitespace-nowrap">
-                {tripStatus.title}
-                {tripStatus.meta && <span className={`font-semibold ${tripStatus.accent}`}>{tripStatus.meta}</span>}
-              </p>
-            </div>
-          </div>
+          {/* Trip status. During a trip it is also the quickest way back to the
+              whole route: tapping it frames the rider and the next stop. */}
+          {(() => {
+            const pill = (
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <span className={`w-6 h-6 sm:w-7 sm:h-7 shrink-0 rounded-full bg-[#F5FBF7] border border-[#E4E9E6] flex items-center justify-center ${tripStatus.accent}`}>
+                  <tripStatus.icon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                </span>
+                <p className="text-[10px] sm:text-xs font-bold text-[#17202A] whitespace-nowrap">
+                  {tripStatus.title}
+                  {tripStatus.meta && <span className={`font-semibold ${tripStatus.accent}`}>{tripStatus.meta}</span>}
+                </p>
+              </div>
+            )
+            const shell = 'clay-menu-item rounded-full border bg-[#F8FAF6]/95 pl-1 sm:pl-1.5 pr-3 sm:pr-4 py-1 sm:py-1.5 backdrop-blur'
+            return activeDelivery && hasRouteLeg ? (
+              <button
+                type="button"
+                onClick={() => changeView('overview')}
+                aria-label={`${tripStatus.title}${tripStatus.meta}. Show the whole route`}
+                className={`${shell} text-left transition hover:bg-white`}
+              >
+                {pill}
+              </button>
+            ) : (
+              <div className={shell}>{pill}</div>
+            )
+          })()}
           <button
             type="button"
             onClick={() => setEarningsOpen((o) => !o)}
-            className="flex items-center gap-1.5 sm:gap-2 rounded-full border border-[#E4E9E6] bg-white/95 pl-1 sm:pl-1.5 pr-3 sm:pr-4 py-1 sm:py-1.5 shadow-lg backdrop-blur transition hover:bg-white"
+            className="clay-menu-item flex items-center gap-1.5 sm:gap-2 rounded-full border bg-[#F8FAF6]/95 pl-1 sm:pl-1.5 pr-3 sm:pr-4 py-1 sm:py-1.5 backdrop-blur transition hover:bg-white"
           >
             <span className="w-6 h-6 sm:w-7 sm:h-7 shrink-0 rounded-full bg-[#E9F7EF] border border-[#D7E8DB] flex items-center justify-center">
               <span className="text-[13px] sm:text-sm font-extrabold leading-none text-[#087F3F]">₱</span>
@@ -573,7 +846,7 @@ export default function RiderMap() {
             </p>
           </button>
           {earningsOpen && (
-            <div className="w-44 rounded-xl border border-white/40 bg-white/30 backdrop-blur-xl p-2 shadow-xl space-y-1.5">
+            <div className="clay-card w-44 border backdrop-blur-xl p-2 space-y-1.5">
               <button
                 type="button"
                 onClick={() => navigate('/rider/earnings')}
@@ -591,8 +864,9 @@ export default function RiderMap() {
           )}
           <button
             type="button"
-            onClick={() => navigate('/rider/deliveries/pending')}
-            className="flex items-center gap-1.5 sm:gap-2 rounded-full border border-[#E4E9E6] bg-white/95 pl-1 sm:pl-1.5 pr-3 sm:pr-4 py-1 sm:py-1.5 shadow-lg backdrop-blur transition hover:bg-white"
+            // With a trip in progress, "Orders" opens its stage-by-stage status page.
+            onClick={() => navigate(activeDelivery ? `/rider/deliveries/${activeDelivery.id}/status` : '/rider/deliveries/pending')}
+            className="clay-menu-item flex items-center gap-1.5 sm:gap-2 rounded-full border bg-[#F8FAF6]/95 pl-1 sm:pl-1.5 pr-3 sm:pr-4 py-1 sm:py-1.5 backdrop-blur transition hover:bg-white"
           >
             <span className="w-6 h-6 sm:w-7 sm:h-7 shrink-0 rounded-full border bg-[#E9F7EF] border-[#D7E8DB] flex items-center justify-center">
               {isRideHailing
@@ -610,112 +884,16 @@ export default function RiderMap() {
           </button>
         </div>
 
-      {isPickupStage && purchaseItems.length > 0 && (
-        <div className="absolute left-3 bottom-[calc(80px+env(safe-area-inset-bottom))] z-[1200] w-[330px] max-w-[calc(100%-1.5rem)] max-h-[46vh] overflow-y-auto rounded-2xl border border-[#E4E9E6] bg-white/95 p-3 sm:p-4 shadow-2xl backdrop-blur">
-          <div className="flex items-center gap-2">
-            <span className="w-8 h-8 shrink-0 rounded-full bg-[#E9F7EF] border border-[#D7E8DB] flex items-center justify-center">
-              <Wallet className="w-4 h-4 text-[#B45309]" />
-            </span>
-            <div className="flex-1">
-              <p className="text-xs font-bold text-[#17202A]">Purchasing Cash · {collectedCount}/{purchaseItems.length} collected</p>
-              <p className="text-[10px] text-[#6B7280] font-semibold">
-                Tourism Office funds the food · paid by tourist at delivery
-              </p>
-            </div>
-            {cashIssued && (
-              <span className="text-sm font-extrabold text-[#B45309]">
-                ₱{(purchasingCash ?? 0).toFixed(2)}
-              </span>
-            )}
-          </div>
-
-          {!cashIssued && (
-            <div className="mt-3 rounded-xl bg-amber-50 border border-amber-200 px-3 py-2.5 text-xs font-medium text-amber-800">
-              Waiting for the Tourism Office to issue the purchasing cash…
-            </div>
-          )}
-
-          {cashIssued && !cashReceived && (
-            <button
-              type="button"
-              onClick={() => receiveCashMutation.mutate()}
-              disabled={receiveCashMutation.isPending}
-              className="mt-3 w-full inline-flex items-center justify-center gap-2 bg-[#B45309] hover:bg-amber-700 disabled:opacity-50 text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition"
-            >
-              <Wallet className="w-4 h-4" />
-              {receiveCashMutation.isPending ? 'Confirming…' : `Confirm Cash Received (₱${(purchasingCash ?? 0).toFixed(2)})`}
-            </button>
-          )}
-
-          {cashIssued && cashReceived && !allPurchaseItemsCollected && (
-            <p className="mt-3 rounded-xl bg-[#EAF6ED] border border-[#D7E8DB] px-3 py-2.5 text-xs font-semibold text-[#087F3F]">
-              Cash received — buy &amp; collect the food at every restaurant below.
-            </p>
-          )}
-
-          {cashIssued && (
-            <div className="mt-3 space-y-2">
-              {purchaseItems.map((stop) => (
-                <div key={stop.id} className="flex items-center gap-3 rounded-xl border border-[#E4E9E6] bg-[#FAFBFB] px-3 py-2.5">
-                  <span className={`w-8 h-8 shrink-0 rounded-full flex items-center justify-center ${
-                    stop.status === 'collected' ? 'bg-[#087F3F]/15' : stop.status === 'purchased' ? 'bg-amber-100' : 'bg-gray-100'
-                  }`}>
-                    {stop.status === 'collected'
-                      ? <CheckCircle className="w-4 h-4 text-[#087F3F]" />
-                      : <Package className={`w-4 h-4 ${stop.status === 'purchased' ? 'text-amber-600' : 'text-[#9CA3AF]'}`} />}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-semibold text-[#17202A] truncate">{stop.business_name || `Business #${stop.business_id}`}</p>
-                    <p className="text-[10px] text-[#6B7280] font-medium">₱{stop.purchase_amount.toFixed(2)}</p>
-                  </div>
-                  <div className="shrink-0 flex gap-1.5">
-                    {stop.status === 'pending' && (
-                      <button
-                        type="button"
-                        onClick={() => markPurchaseMutation.mutate({ purchaseId: stop.id, status: 'purchased' })}
-                        disabled={markPurchaseMutation.isPending}
-                        className="text-[11px] font-semibold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 px-2.5 py-1.5 rounded-lg transition"
-                      >
-                        Buy
-                      </button>
-                    )}
-                    {stop.status === 'purchased' && (
-                      <>
-                        <span className="text-[11px] font-semibold text-amber-700 self-center">Bought ✓</span>
-                        <button
-                          type="button"
-                          onClick={() => markPurchaseMutation.mutate({ purchaseId: stop.id, status: 'collected' })}
-                          disabled={markPurchaseMutation.isPending}
-                          className="text-[11px] font-semibold text-white bg-[#087F3F] hover:bg-emerald-700 disabled:opacity-50 px-2.5 py-1.5 rounded-lg transition"
-                        >
-                          Collect
-                        </button>
-                      </>
-                    )}
-                    {stop.status === 'collected' && (
-                      <span className="text-[11px] font-semibold text-[#087F3F] self-center">Collected ✓</span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {allPurchaseItemsCollected && (
-            <div className="mt-3 rounded-xl bg-[#087F3F] px-3 py-2.5 text-xs font-bold text-white text-center">
-              All food collected — you can now leave for delivery.
-            </div>
-          )}
-        </div>
-      )}
-
+      {/* Daily cash advance (2026-11-08): the rider already holds the Tourism
+          Office cash for the day, so there is no per-delivery purchasing-cash
+          panel; pickups are confirmed per restaurant on the trip status page. */}
       {!activeDelivery && deliveries.length > 0 && (
-          <div className="fixed bottom-[calc(80px+env(safe-area-inset-bottom))] left-0 right-0 z-[1200] max-h-[35vh] sm:max-h-[40vh] overflow-y-auto rounded-t-2xl border-t border-[#E4E9E6] bg-white/95 p-3 sm:p-4 shadow-2xl backdrop-blur lg:p-5">
+          <div className="clay-card fixed bottom-[calc(80px+env(safe-area-inset-bottom))] left-0 right-0 z-[1200] max-h-[35vh] sm:max-h-[40vh] overflow-y-auto rounded-t-2xl border-t p-3 sm:p-4 backdrop-blur lg:p-5">
             <div className="space-y-3">
               {deliveries.map((d) => (
                 <div
                   key={d.id}
-                  className="bg-[#F5FBF7] border rounded-xl p-4 transition border-[#E4E9E6]"
+                  className="clay-menu-item bg-[#F5FBF7] border rounded-xl p-4 transition"
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center gap-3">
                     <div className="flex-1 space-y-2">

@@ -102,6 +102,13 @@ describe('Rider go-online chrome — mid-trip state', () => {
     useAuthStore.setState({ user: null, loading: false })
   })
 
+  it('keeps the rider header and profile trigger free of shared clay panel styling', () => {
+    const { container } = renderChrome()
+
+    expect(container.querySelector('.rider-layout-header')).toBeInTheDocument()
+    expect(container.querySelector('.rider-header-profile-trigger')).toBeInTheDocument()
+  })
+
   it('rider marked offline but holding an active in-trip delivery shows "On a trip" with the toggle locked — no toggle request fires', async () => {
     api.store.locationDeliveries = [
       {
@@ -139,6 +146,14 @@ describe('Rider go-online chrome — mid-trip state', () => {
 
     await waitFor(() => expect(screen.getByRole('button', { name: /go online/i })).toBeEnabled())
     expect(screen.getByText('Offline')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /go online/i })).toHaveClass('rider-availability-button')
+    // Offline keeps the same size and footprint as online (no "shrinking"):
+    // same h-12 w-12 button, a static ring like the online pulse ring, and a
+    // light surface that stays visible on the dark map.
+    const offlineButton = screen.getByRole('button', { name: /go online/i })
+    expect(offlineButton).toHaveClass('h-12', 'w-12', 'bg-[#F8FAF6]')
+    expect(offlineButton).not.toHaveClass('bg-[#17201B]')
+    expect(screen.getByTestId('rider-offline-ring')).toHaveClass('offline-ring')
 
     fireEvent.click(screen.getByRole('button', { name: /go online/i }))
 

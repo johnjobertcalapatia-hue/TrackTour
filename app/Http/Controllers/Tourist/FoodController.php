@@ -9,10 +9,12 @@ use App\Models\Business;
 use App\Models\BusinessCategory;
 use App\Models\Offering;
 use App\Models\Order;
+use App\Models\OrderItem;
 use App\Models\Review;
 use App\Services\OrderService;
 use App\Services\OrderRefundService;
 use App\Services\DeliveryFeeService;
+use App\Services\FoodPopularityService;
 use App\Services\OrderTrackingService;
 use App\Services\NearestRiderService;
 use App\Services\TouristService;
@@ -47,6 +49,11 @@ class FoodController extends Controller
             $query->whereHas('category', fn ($q) => $q->where('name', $category));
         }
 
+        // Home "Popular Food" scopes to the tourist's current municipality.
+        if (filter_var($request->input('municipality_id'), FILTER_VALIDATE_INT)) {
+            $query->whereHas('business', fn ($q) => $q->where('municipality_id', (int) $request->input('municipality_id')));
+        }
+
         if ($search) {
             $query->where(function ($q) use ($search) {
                 $q->where('name', 'like', "%{$search}%")
@@ -55,12 +62,27 @@ class FoodController extends Controller
             });
         }
 
-        $offerings = $query
-            ->orderByDesc('bestseller')
-            ->orderBy('sort_order')
-            ->paginate(12);
+        // Sort options shown on the tourist Food page. "popular" (default) ranks by
+        // ratings + sales (offerings.popularity_score, FoodPopularityService),
+        // then the bestseller flag and menu order. Within each page, items from
+        // restaurants accepting orders are still listed first (stable sort below).
+        match ($request->input('sort')) {
+            'price_low' => $query->orderBy('price')->orderBy('id'),
+            'price_high' => $query->orderByDesc('price')->orderBy('id'),
+            'newest' => $query->orderByDesc('created_at')->orderByDesc('id'),
+            default => $query->orderByDesc('popularity_score')->orderByDesc('bestseller')->orderBy('sort_order')->orderBy('id'),
+        };
 
-        $items = $offerings->map(function ($food) {
+        $offerings = $query->paginate(12);
+
+        // Real per-dish stats for this page, batched (no per-item queries), with
+        // the same definitions the popularity score uses (FoodPopularityService):
+        //   sold: units of the dish in delivered/completed orders
+        //   food rating: approved dish reviews, else older whole-order food ratings
+        $pageIds = $offerings->getCollection()->pluck('id')->all();
+        ['sold' => $soldByOffering, 'ratings' => $foodRatings] = app(FoodPopularityService::class)->stats($pageIds);
+
+        $items = $offerings->map(function ($food) use ($soldByOffering, $foodRatings) {
             return (object) [
                 'id' => $food->id,
                 'name' => $food->name,
@@ -80,6 +102,9 @@ class FoodController extends Controller
                 'open_status' => $food->business->openStatusLabel(),
                 'schedule_summary' => $food->business->scheduleSummary(),
                 'created_at' => $food->created_at,
+                'sold_count' => (int) ($soldByOffering[$food->id] ?? 0),
+                'food_rating' => $foodRatings[$food->id]['average'] ?? null,
+                'food_rating_count' => $foodRatings[$food->id]['count'] ?? 0,
             ];
         })
         ->sortByDesc(fn ($food) =>
@@ -116,31 +141,85 @@ class FoodController extends Controller
 
     public function show(Offering $offering, Request $request): JsonResponse
     {
-        $offering->load('business.category', 'category');
+        $offering->load('business.category', 'business.municipality', 'category', 'variations');
 
-        if ($offering->business->status !== 'approved' || ! $offering->is_available) {
+        $business = $offering->business;
+
+        // Mirror the listing visibility rules from index() so a direct URL can
+        // never surface an unapproved business or a non-available offering.
+        if ($business->status !== 'approved'
+            || ! $offering->is_available
+            || $offering->status !== 'available') {
             abort(404);
         }
+
+        $images = array_values(array_filter(array_merge(
+            [$offering->image],
+            is_array($offering->images) ? $offering->images : [],
+        ), fn ($image) => filled($image)));
+
+        // Reviews are business-level only (reviews carry no offering_id), so they
+        // are returned strictly as restaurant context — never as an item rating.
+        $reviews = Review::query()
+            ->where('business_id', $business->id)
+            ->where('status', 'approved')
+            ->with('user')
+            ->latest()
+            ->take(3)
+            ->get()
+            ->map(fn (Review $review) => [
+                'id' => $review->id,
+                'rating' => $review->rating,
+                'review' => $review->review,
+                'user_name' => $review->user?->name,
+                'created_at' => $review->created_at,
+            ])
+            ->values();
 
         return $this->successResponse([
             'id' => $offering->id,
             'name' => $offering->name,
             'description' => $offering->description,
             'price' => $offering->price,
-            'category' => $offering->category->name ?? $offering->business->category->name ?? 'General',
+            'compare_price' => $offering->compare_price,
+            'category' => $offering->category->name ?? $business->category->name ?? 'General',
             'image' => $offering->image,
+            'images' => $images,
             'is_available' => $offering->is_available,
             'is_featured' => (bool) $offering->bestseller,
-            'business_id' => $offering->business_id,
-            'business_name' => $offering->business->name,
-            'business_latitude' => $offering->business->latitude,
-            'business_longitude' => $offering->business->longitude,
-            'rating' => $offering->business->average_rating ?? null,
-            'is_open' => $offering->business->isOpenNow(),
-            'is_accepting_orders' => $offering->business->isAcceptingOrders(),
-            'availability' => $offering->business->availability(),
-            'open_status' => $offering->business->openStatusLabel(),
-            'schedule_summary' => $offering->business->scheduleSummary(),
+            'has_variations' => (bool) $offering->has_variations,
+            'variations' => $offering->variations->map(fn ($variation) => [
+                'id' => $variation->id,
+                'name' => $variation->name,
+                'price' => (float) $variation->price,
+                'is_available' => (bool) $variation->is_available,
+            ])->values(),
+            'preparation_time' => $offering->preparation_time,
+            'unit' => $offering->unit,
+            'business_id' => $business->id,
+            'business_name' => $business->name,
+            'business_logo' => $business->logo,
+            'business_address' => $business->address,
+            'business_latitude' => $business->latitude,
+            'business_longitude' => $business->longitude,
+            'business_review_count' => (int) ($business->review_count ?? 0),
+            'business_reviews' => $reviews,
+            // Restaurant strip + review summary on the food page. All values are
+            // read from stored data; the summary covers every approved review.
+            'business_category' => $business->category?->name,
+            'business_municipality' => $business->municipality?->name,
+            'business_contact_number' => $business->contact_number,
+            'business_opening_time' => $business->opening_time,
+            'business_closing_time' => $business->closing_time,
+            'business_rating_summary' => Review::approvedSummaryFor($business->id),
+            // average_rating defaults to 0 for unrated businesses; expose null so
+            // clients hide the rating instead of rendering a fabricated "0.0".
+            'rating' => $business->average_rating > 0 ? $business->average_rating : null,
+            'is_open' => $business->isOpenNow(),
+            'is_accepting_orders' => $business->isAcceptingOrders(),
+            'availability' => $business->availability(),
+            'open_status' => $business->openStatusLabel(),
+            'schedule_summary' => $business->scheduleSummary(),
         ]);
     }
 
@@ -495,21 +574,55 @@ class FoodController extends Controller
             'reason' => 'nullable|string|max:500',
         ]);
 
-        $previousStatus = $order->status;
-        $order->update([
-            'status' => 'cancelled_by_tourist',
-            'cancelled_by' => Auth::id(),
-            'cancellation_reason' => $validated['reason'] ?? null,
-            'cancelled_at' => now(),
-        ]);
+        // Cancellation and rider acceptance serialize on the delivery row lock
+        // (docs/dispatch-escalation-plan.md §2): exactly one of them wins.
+        // Before a rider accepts, the tourist may cancel and every outstanding
+        // offer is withdrawn; once a rider has accepted, this pre-assignment
+        // cancellation is refused.
+        $outcome = \Illuminate\Support\Facades\DB::transaction(function () use ($order, $validated, $cancellableStatuses) {
+            $delivery = $order->activeDelivery();
+            $lockedDelivery = $delivery ? \App\Models\Delivery::lockForUpdate()->find($delivery->id) : null;
+            $locked = Order::lockForUpdate()->find($order->id);
+
+            if (! $locked || ! in_array($locked->status, $cancellableStatuses, true)) {
+                return ['error' => 'This order can no longer be cancelled.'];
+            }
+            if ($lockedDelivery && $lockedDelivery->rider_id !== null) {
+                return ['error' => 'A rider has already accepted this order, so it can no longer be cancelled here.'];
+            }
+
+            $previous = $locked->status;
+            $locked->update([
+                'status' => 'cancelled_by_tourist',
+                'cancelled_by' => Auth::id(),
+                'cancellation_reason' => $validated['reason'] ?? null,
+                'cancelled_at' => now(),
+            ]);
+
+            // Withdraw the delivery and its offers (group children only when no
+            // sibling still needs the shared trip — cancelDeliveryForOrder).
+            app(\App\Services\NearestRiderService::class)->cancelDeliveryForOrder($locked);
+
+            return ['previous' => $previous];
+        });
+
+        if (isset($outcome['error'])) {
+            if ($request->expectsJson()) {
+                return $this->errorResponse($outcome['error'], 422);
+            }
+
+            return back()->withErrors(['order' => $outcome['error']]);
+        }
+
+        $previousStatus = $outcome['previous'];
+        $order->refresh();
 
         // Group children share one group-level payment. Cancelling one child only
         // affects that restaurant: cancel the shared trip (only when no sibling
         // still needs it) and record a local partial refund. Sibling orders
         // continue normally.
         if ($order->group_order_id) {
-            app(\App\Services\NearestRiderService::class)->cancelDeliveryForOrder($order);
-
+            // The shared trip was already handled under the lock above.
             app(OrderRefundService::class)->refundPaidGroupChild(
                 $order,
                 $validated['reason'] ?? 'Cancelled by tourist'
@@ -649,25 +762,19 @@ class FoodController extends Controller
             ->with('success', 'Thank you for your feedback!');
     }
 
+    /**
+     * Retired (decision 2026-11-08): the RIDER now completes a food delivery
+     * with a proof photo at the drop-off (POST /rider/deliveries/{d}/complete),
+     * which also records the tourist's COD cash payment. The tourist no longer
+     * confirms receipt; the endpoint stays to answer old clients clearly.
+     */
     public function confirmDelivery(Request $request, Order $order): JsonResponse
     {
         if ($order->user_id && $order->user_id !== Auth::id()) {
             abort(403);
         }
 
-        try {
-            $result = $this->nearestRiderService->confirmDeliveryByTourist($order, Auth::id());
-        } catch (\InvalidArgumentException $exception) {
-            return $this->errorResponse($exception->getMessage(), 422);
-        }
-
-        $delivery = $order->activeDelivery()?->fresh()->load('order.business');
-
-        if ($delivery) {
-            DeliveryStatusChanged::dispatch($delivery, $result['old_status'], $result['new_status']);
-        }
-
-        return $this->successResponse($result, 'Delivery confirmed. Thank you!');
+        return $this->errorResponse('Your rider completes the delivery with a photo when your food arrives. No action is needed from you.', 422);
     }
 
 }

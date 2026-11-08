@@ -1,5 +1,13 @@
 # Rider Dispatch Business Rules
 
+## Business Owner Assignment Boundary
+
+Business owners do not manually select or assign riders. The backend dispatch
+pipeline offers deliveries to eligible riders, and the rider's canonical offer
+acceptance flow binds the rider to the delivery. Business owners continue to
+manage their own order preparation and readiness; delivery assignment and rider
+ownership remain part of the shared dispatch lifecycle.
+
 ## 1. Nearest Rider Dispatch Engine
 
 Rider dispatch is orchestrated by `NearestRiderService` and `SmartDispatchService`. When an order is created, the system locates candidate riders based on proximity, online status, and credit eligibility.
@@ -82,3 +90,66 @@ Large orders are flagged (`orders.size_class = 'large'`) to notify dispatchers, 
 - A rejected auto-attempt — 409 (already claimed / already on a trip) or 422 (ineligible) — falls back to the normal manual offer UI and is **not retried for that same delivery**, so the 4-second offer poll can never loop.
 - The rider must be online and the app open (it must be open anyway for GPS tracking). Closing it means no auto-accept, exactly like a rider who never taps.
 - Toggling the flag is **state only**: it never accepts an offer, never assigns a delivery, and never moves `rider_status`. Pinned by `tests/Feature/RiderAutoAcceptTest.php`.
+
+## 6. Exclusive Offer Review Hold (2026-11-07)
+
+The first rider to open an offer reserves it while they decide.
+
+- `POST /rider/deliveries/{id}/review` gives that rider an exclusive hold
+  for `delivery.offer_review_seconds` (default 90 s, env
+  `RIDER_OFFER_REVIEW_SECONDS`).
+- The review page shows **no timer** (decision 2026-11-07). While it is
+  open it renews the hold every 30 s (`PATCH /rider/deliveries/{id}/review`).
+  An abandoned page stops renewing and the hold lapses; a live hold is never
+  stolen.
+- While the hold is live, other riders:
+  - see "Another rider is reviewing this offer" on the list and the offer
+    page;
+  - get no customer drop-off or items;
+  - cannot accept, through any path: board claim, ping accept, the ping
+    popup or auto-accept. All of these return 409 "Another rider is
+    reviewing this offer. Try another delivery."
+- The reviewer accepts, or chooses "Find other offers" / Decline, which
+  releases the hold (`DELETE /rider/deliveries/{id}/review`). Leaving the
+  page releases it as well.
+- Holds expire on their own, so an abandoned screen never blocks an order.
+  Re-opening an offer (POST) keeps the original expiry; only the open page's
+  heartbeat extends it.
+- A rider holds at most one offer; opening another releases the first.
+- Authority: `deliveries.review_rider_id` and `review_expires_at`, written
+  under the delivery row lock (`OfferReviewService`). Both accept paths in
+  `NearestRiderService` check `isHeldByOther()` inside their existing
+  delivery lock.
+  - The ping of a blocked rider stays `pending`, so it can still be
+    accepted after the hold ends.
+  - A successful assignment clears the hold.
+- After another rider accepts, the offer stays listed for 10 minutes as
+  "Already accepted by another rider" (read-only, no customer details) for
+  riders who could see it.
+
+## 7. Sequential Targeted Dispatch — food (2026-11-07)
+
+Food deliveries are no longer broadcast to every rider. Full record:
+docs/dispatch-escalation-plan.md §7.
+
+1. The pickup sequence is planned first: the farthest restaurant from the
+   tourist is stop 1. The rider search is centred on stop 1.
+2. Offers go to **one** nearest eligible rider at a time for **30 s**
+   (server-owned). A reject, or no answer, moves to the next nearest eligible
+   rider. A rider is never offered the same order twice, and eligibility is
+   re-checked before each offer.
+3. After **4** unsuccessful targeted offers, or when no eligible targeted
+   rider remains, the delivery moves to the manual Available Deliveries
+   board (`dispatch_phase = manual`). Until then it is **not** on the board,
+   and other riders cannot claim it (enforced server-side). On the board:
+   - every eligible rider in range sees it, including riders who declined
+     the targeted offer;
+   - it is sorted per rider, nearest first, by distance to the first
+     pickup;
+   - once accepted it disappears for everyone else (Stage 3, 2026-11-08).
+4. Acceptance is the existing atomic accept. Cancelled orders can never be
+   accepted. One active delivery per rider is unchanged.
+5. The dispatch-cycle deadline (60 min) is enforced by the 5-second worker
+   (`dispatch:process-offer-timeouts`).
+
+Transport (ride-hailing) keeps the simultaneous wave (decision D1).

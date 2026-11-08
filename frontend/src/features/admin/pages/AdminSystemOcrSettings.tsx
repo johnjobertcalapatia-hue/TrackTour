@@ -63,7 +63,7 @@ export default function AdminSystemOcrSettings() {
                     mutation.mutate({ ocr_enabled: !settings.ocr_enabled })
                   }}
                 />
-                <div className="w-11 h-6 bg-[#E2E8E3] peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-[#16803C]/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-[#E2E8E3] after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#16803C]"></div>
+                <div className="w-11 h-6 bg-[#AEBBB1] peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-[#078B43]/50 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-[#E2E8E3] after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#078B43]"></div>
               </label>
             </div>
 

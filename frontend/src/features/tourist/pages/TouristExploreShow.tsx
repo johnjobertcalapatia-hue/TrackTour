@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import ResortDetail, { type ResortBusiness, type ResortInfo, type ResortReview } from '@/features/tourist/components/resort/ResortDetail'
+import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { get, post } from '@/shared/services/api'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
@@ -96,6 +97,9 @@ interface BusinessDetailResponse {
   promotions?: { id: number; name: string; description?: string; type?: string; value?: string }[]
   menu_items?: MenuItem[]
   gallery?: MediaItem[]
+  /** Dynamic resort system: present only for Resort businesses (→ ResortDetail). */
+  resort?: ResortInfo | null
+  isFavorited?: boolean
 }
 
 function getCart(): CartItem[] {
@@ -107,111 +111,11 @@ function saveCart(cart: CartItem[]) {
   window.dispatchEvent(new Event('cart-updated'))
 }
 
-function FoodDetailModal({ item, business, onClose, onAdd, accepting }: {
-  item: MenuItem
-  business: BusinessDetail
-  onClose: () => void
-  onAdd: (item: MenuItem, qty: number, variation?: Variation) => void
-  accepting: boolean
-}) {
-  const [qty, setQty] = useState(1)
-  const [selectedVariation, setSelectedVariation] = useState<Variation | null>(
-    item.has_variations && item.variations?.length ? item.variations[0] : null
-  )
-
-  const price = selectedVariation?.price ?? item.price
-  const variations = item.variations ?? []
-
-  return (
-    <div className="fixed inset-0 z-[3000] flex items-end sm:items-center justify-center">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl max-h-[90vh] overflow-y-auto z-10">
-        <div className="relative h-56 sm:h-64">
-          {item.image ? (
-            <img src={toAssetUrl(item.image)} alt={item.name} className="w-full h-full object-cover" />
-          ) : (
-            <div className="w-full h-full bg-gradient-to-br from-[#E9F7EF] to-[#DDF4E6] flex items-center justify-center">
-              <UtensilsCrossed className="w-12 h-12 text-[#087F3F]/30" />
-            </div>
-          )}
-          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
-          <button onClick={onClose} className="absolute top-3 right-3 p-2 bg-white/80 backdrop-blur-sm rounded-full hover:bg-white transition">
-            <X className="w-4 h-4 text-[#17201B]" />
-          </button>
-          <div className="absolute bottom-3 left-3 right-3">
-            <div className="flex items-center gap-2 mb-1">
-              {item.bestseller && (
-                <span className="px-2 py-0.5 bg-[#F4B400] text-[#17201B] text-[10px] font-bold rounded-full">BESTSELLER</span>
-              )}
-              {isNewItem(item.created_at) && (
-                <span className="px-2 py-0.5 bg-[#087F3F] text-white text-[10px] font-bold rounded-full">NEW</span>
-              )}
-            </div>
-            <h2 className="text-xl font-bold text-white">{item.name}</h2>
-            <p className="text-lg font-bold text-[#86EFAC]">{formatCurrency(price)}</p>
-          </div>
-        </div>
-
-        <div className="p-5 space-y-5">
-          {item.description && (
-            <p className="text-sm text-[#6B7280] leading-relaxed">{item.description}</p>
-          )}
-
-          {item.has_variations && variations.length > 0 && (
-            <div>
-              <p className="text-sm font-semibold text-[#17201B] mb-3">Choose a variation</p>
-              <div className="space-y-2">
-                {variations.filter((v) => v.is_available).map((v) => (
-                  <button
-                    key={v.id}
-                    onClick={() => setSelectedVariation(v)}
-                    className={`w-full flex items-center justify-between p-3 rounded-xl border-2 transition text-left ${
-                      selectedVariation?.id === v.id
-                        ? 'border-[#087F3F] bg-[#E9F7EF]'
-                        : 'border-[#E5E9E7] hover:border-[#087F3F]/40'
-                    }`}
-                  >
-                    <span className="text-sm font-medium text-[#17201B]">{v.name}</span>
-                    <span className="text-sm font-semibold text-[#087F3F]">{formatCurrency(v.price)}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div>
-            <p className="text-sm font-semibold text-[#17201B] mb-3">Quantity</p>
-            <div className="flex items-center gap-4">
-              <button onClick={() => setQty(Math.max(1, qty - 1))} className="w-10 h-10 rounded-xl bg-[#E5E9E7] flex items-center justify-center hover:bg-[#d1d5db] transition">
-                <Minus className="w-4 h-4 text-[#17201B]" />
-              </button>
-              <span className="text-lg font-bold text-[#17201B] w-8 text-center">{qty}</span>
-              <button onClick={() => setQty(qty + 1)} className="w-10 h-10 rounded-xl bg-[#087F3F] flex items-center justify-center hover:bg-[#056B35] transition">
-                <Plus className="w-4 h-4 text-white" />
-              </button>
-            </div>
-          </div>
-
-          <button
-            onClick={() => { onAdd(item, qty, selectedVariation ?? undefined); onClose() }}
-            disabled={!accepting}
-            className="w-full flex items-center justify-center gap-2 py-3.5 bg-[#087F3F] hover:bg-[#056B35] text-white rounded-xl font-semibold transition disabled:bg-gray-300 disabled:cursor-not-allowed"
-          >
-            <ShoppingCart className="w-4 h-4" />
-            {accepting ? `Add to Cart — ${formatCurrency(price * qty)}` : 'Restaurant is closed'}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 export default function TouristExploreShow() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [cart, setCart] = useState<CartItem[]>(getCart)
-  const [detailItem, setDetailItem] = useState<MenuItem | null>(null)
   const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null)
   const [shareSuccess, setShareSuccess] = useState(false)
 
@@ -237,6 +141,8 @@ export default function TouristExploreShow() {
       const b = data.business
       const rawCat = categoryName(b.category)
       const group: DiscoveryGroup = getDiscoveryGroup(rawCat, b.business_category_id)
+      // Restaurants are shown (and recorded) by TouristFoodShow; see the redirect below.
+      if (group === 'dining') return
       recordBrowsedPlace({
         id: b.id,
         name: b.name || b.business_name || '',
@@ -327,7 +233,33 @@ export default function TouristExploreShow() {
   }, [data?.gallery, business])
 
   if (isLoading) return <DashboardSkeleton />
+  // One restaurant page everywhere: Home (Recently Viewed), search, map and old
+  // links all reach /tourist/explore/:id, so dining businesses are forwarded to
+  // the canonical restaurant page used by Explore → Food.
+  if (business && getDiscoveryGroup(categoryName(business.category), business.business_category_id) === 'dining') {
+    return <Navigate to={`/tourist/food/${business.id}`} replace />
+  }
   if (!business) return <div className="text-center py-20 text-[#6B7280]">Business not found.</div>
+
+  // Resorts: the reusable, data-driven resort page (sections hidden when empty).
+  if (data?.resort) {
+    const resortPhotos = allMedia
+      .filter((m) => !m.file_path.endsWith('.mp4') && !m.file_path.endsWith('.mov') && m.type !== 'Promotional Video')
+      .map((m) => m.file_path)
+    return (
+      <ResortDetail
+        business={business as unknown as ResortBusiness}
+        resort={data.resort}
+        photos={resortPhotos}
+        reviews={(data.reviews ?? []) as unknown as ResortReview[]}
+        avgRating={data.avgRating ?? null}
+        reviewsCount={data.reviewsCount ?? 0}
+        isFavorited={data.isFavorited ?? business.is_favorited}
+        onToggleFavorite={() => favoriteMutation.mutate()}
+        onShare={handleShare}
+      />
+    )
+  }
 
   const catLabel = categoryName(business.category)
   const discoveryGroup: DiscoveryGroup = getDiscoveryGroup(catLabel, business.business_category_id)
@@ -692,43 +624,51 @@ export default function TouristExploreShow() {
               return (
                 <div
                   key={item.id}
-                  className="bg-white border border-[#E5E9E7] rounded-2xl overflow-hidden hover:shadow-lg hover:shadow-[#087F3F]/8 transition group cursor-pointer"
-                  onClick={() => item.is_available && accepting && setDetailItem(item)}
+                  className="bg-white border border-[#E5E9E7] rounded-2xl overflow-hidden hover:shadow-lg hover:shadow-[#087F3F]/8 transition group"
                 >
-                  <div className="relative aspect-[4/3] overflow-hidden">
-                    {item.image ? (
-                      <img src={toAssetUrl(item.image)} alt={item.name} className="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
-                    ) : (
-                      <div className="w-full h-full bg-gradient-to-br from-[#E9F7EF] to-[#DDF4E6] flex items-center justify-center">
-                        <UtensilsCrossed className="w-8 h-8 text-[#087F3F]/30" />
-                      </div>
-                    )}
-                    {item.has_variations && item.variations && item.variations.length > 0 && (
-                      <div className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm text-[#087F3F] text-[10px] font-bold px-2 py-0.5 rounded-full">
-                        {item.variations.length} options
-                      </div>
-                    )}
-                    {isNewItem(item.created_at) && (
-                      <div className="absolute top-2 left-2 bg-[#087F3F] text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
-                        NEW
-                      </div>
-                    )}
-                    {!item.is_available && (
-                      <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                        <span className="text-xs font-semibold text-white bg-black/60 px-3 py-1 rounded-full">Unavailable</span>
-                      </div>
-                    )}
-                  </div>
-                  <div className="p-3">
-                    <p className="text-sm font-semibold text-[#17201B] truncate">{item.name}</p>
-                    <p className="text-sm font-extrabold text-[#087F3F] mt-1">
-                      {item.has_variations && item.variations?.length
-                        ? `${formatCurrency(Math.min(...item.variations.filter(v => v.is_available).map(v => v.price)))} – ${formatCurrency(Math.max(...item.variations.filter(v => v.is_available).map(v => v.price)))}`
-                        : formatCurrency(item.price)
-                      }
-                    </p>
+                  <button
+                    type="button"
+                    aria-label={`View details for ${item.name}`}
+                    disabled={!item.is_available}
+                    onClick={() => navigate(`/tourist/food/item/${item.id}`)}
+                    className="block w-full text-left disabled:cursor-not-allowed"
+                  >
+                    <div className="relative aspect-[4/3] overflow-hidden">
+                      {item.image ? (
+                        <img src={toAssetUrl(item.image)} alt={item.name} className="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
+                      ) : (
+                        <div className="w-full h-full bg-gradient-to-br from-[#E9F7EF] to-[#DDF4E6] flex items-center justify-center">
+                          <UtensilsCrossed className="w-8 h-8 text-[#087F3F]/30" />
+                        </div>
+                      )}
+                      {item.has_variations && item.variations && item.variations.length > 0 && (
+                        <div className="absolute top-2 right-2 bg-white/90 backdrop-blur-sm text-[#087F3F] text-[10px] font-bold px-2 py-0.5 rounded-full">
+                          {item.variations.length} options
+                        </div>
+                      )}
+                      {isNewItem(item.created_at) && (
+                        <div className="absolute top-2 left-2 bg-[#087F3F] text-white text-[10px] font-bold px-2 py-0.5 rounded-full">
+                          NEW
+                        </div>
+                      )}
+                      {!item.is_available && (
+                        <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                          <span className="text-xs font-semibold text-white bg-black/60 px-3 py-1 rounded-full">Unavailable</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className="p-3">
+                      <p className="text-sm font-semibold text-[#17201B] truncate">{item.name}</p>
+                      <p className="text-sm font-extrabold text-[#087F3F] mt-1">
+                        {item.has_variations && item.variations?.length
+                          ? `${formatCurrency(Math.min(...item.variations.filter(v => v.is_available).map(v => v.price)))} – ${formatCurrency(Math.max(...item.variations.filter(v => v.is_available).map(v => v.price)))}`
+                          : formatCurrency(item.price)
+                        }
+                      </p>
+                    </div>
+                  </button>
                     {item.is_available && !item.has_variations && (
-                      <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+                      <div className="px-3 pb-3">
                         {qty === 0 ? (
                           <button
                             onClick={() => addToCart(item)}
@@ -750,7 +690,6 @@ export default function TouristExploreShow() {
                         )}
                       </div>
                     )}
-                  </div>
                 </div>
               )
             })}
@@ -782,17 +721,6 @@ export default function TouristExploreShow() {
             </button>
           </div>
         </div>
-      )}
-
-      {/* Food Detail Modal (ONLY FOR DINING) */}
-      {!isSpot && !isAccommodation && detailItem && business && (
-        <FoodDetailModal
-          item={detailItem}
-          business={business}
-          accepting={accepting}
-          onClose={() => setDetailItem(null)}
-          onAdd={addToCart}
-        />
       )}
 
       {/* Photo Lightbox Modal */}

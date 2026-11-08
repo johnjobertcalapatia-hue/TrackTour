@@ -7,10 +7,7 @@ import L from 'leaflet'
 
 const riderArrowSvg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
-  <filter id="mkr-shadow" x="-20%" y="-20%" width="140%" height="140%">
-    <feDropShadow dx="0" dy="2" stdDeviation="2.5" flood-color="#000000" flood-opacity="0.4"/>
-  </filter>
-  <g filter="url(#mkr-shadow)">
+  <g>
     <circle cx="22" cy="22" r="18" fill="#087F3F" stroke="#ffffff" stroke-width="3"/>
     <path d="M 22 10 L 30 29 L 22 24 L 14 29 Z" fill="#ffffff"/>
   </g>
@@ -27,7 +24,7 @@ export const riderMarkerIcon = L.icon({
 export const riderNavigationMarkerIcon = L.divIcon({
   className: 'custom-rider-navigation-marker',
   html: `
-    <div style="width:44px;height:44px;position:relative;filter:drop-shadow(0 2px 2.5px rgba(0,0,0,0.4))">
+    <div style="width:44px;height:44px;position:relative;">
       <div style="position:absolute;left:4px;top:4px;width:36px;height:36px;box-sizing:border-box;border:3px solid #ffffff;border-radius:50%;background:#087F3F"></div>
       <svg class="rider-navigation-arrow" xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44" style="position:absolute;inset:0;transform-origin:22px 22px;will-change:transform">
         <path d="M 22 10 L 30 29 L 22 24 L 14 29 Z" fill="#ffffff"/>
@@ -48,7 +45,6 @@ export const pickupMarkerIcon = L.divIcon({
       background: #D97706;
       border: 2px solid #ffffff;
       border-radius: 50%;
-      box-shadow: 0 3px 10px rgba(217, 119, 6, 0.4);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -73,7 +69,6 @@ export const destinationMarkerIcon = L.divIcon({
       background: #DC2626;
       border: 2px solid #ffffff;
       border-radius: 50%;
-      box-shadow: 0 3px 10px rgba(220, 38, 38, 0.4);
       display: flex;
       align-items: center;
       justify-content: center;

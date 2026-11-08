@@ -34,6 +34,8 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Http\UploadedFile;
+use Tests\Concerns\CompletesDeliveriesWithProof;
+use Tests\Concerns\ConfirmsCodRestaurantPayments;
 use Tests\TestCase;
 
 /**
@@ -51,6 +53,8 @@ use Tests\TestCase;
  */
 class PurchasingCashFlowTest extends TestCase
 {
+    use ConfirmsCodRestaurantPayments;
+    use CompletesDeliveriesWithProof;
     use RefreshDatabase;
 
     private User $owner;
@@ -246,11 +250,19 @@ class PurchasingCashFlowTest extends TestCase
             'current_service' => 'food',
         ]);
 
+        // Baseline position only: it must never outrank a location the test
+        // records later. setUp() runs BEFORE the test freezes Carbon's clock,
+        // so a real now() here would land AFTER the frozen noon the
+        // cash-receipt tests use, making latestRiderLocation() keep returning
+        // this stale restaurant-A fix and pushing the arrival gate ~1.5 km off
+        // restaurant B (422). Seed it a day back so any in-test fix wins; the
+        // position itself (restaurant A) is unchanged, so distance-based
+        // assertions are unaffected.
         RiderLocation::create([
             'rider_id' => $rider->id,
             'latitude' => $this->restaurantA->latitude,
             'longitude' => $this->restaurantA->longitude,
-            'recorded_at' => now(),
+            'recorded_at' => now()->subDay(),
         ]);
 
         return $rider;
@@ -309,6 +321,57 @@ class PurchasingCashFlowTest extends TestCase
         return [$group, $order, $delivery, $order->rider_financed_amount];
     }
 
+    /**
+     * A three-restaurant COD group whose per-restaurant subtotals deliberately
+     * expose independent-rounding drift in the system-fee proration:
+     * 33.34 + 33.33 + 33.33 = ₱100.00 subtotal, ₱10.00 system fee,
+     * ₱110.00 rider-financed. Rounding each fee share on its own yields
+     * 3.33 + 3.33 + 3.33 = ₱9.99 (a ₱0.01 shortfall); the remainder strategy
+     * must produce exactly ₱110.00.
+     */
+    private function createThreeRestaurantCodOrder(): array
+    {
+        $category = BusinessCategory::firstWhere('name', 'Restaurant');
+        $municipality = Municipality::firstWhere('name', 'Bansud');
+        $allDays = array_fill_keys(
+            ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'],
+            [['open' => '00:00', 'close' => '23:59']]
+        );
+
+        $restaurantC = Business::create([
+            'owner_id' => $this->owner->id,
+            'business_category_id' => $category->id,
+            'municipality_id' => $municipality->id,
+            'business_name' => 'Restaurant C',
+            'status' => 'approved',
+            'force_closed' => false,
+            'business_hours' => $allDays,
+            'latitude' => 12.53,
+            'longitude' => 121.33,
+        ]);
+
+        $itemA = $this->makeOffering($this->restaurantA, 'Adobo', 33.34);
+        $itemB = $this->makeOffering($this->restaurantB, 'Sinigang', 33.33);
+        $itemC = $this->makeOffering($restaurantC, 'Kare-Kare', 33.33);
+
+        $group = $this->groupService->createGroup($this->tourist, $this->basePayload([
+            ['business_id' => $this->restaurantA->id, 'items' => [
+                ['offering_id' => $itemA->id, 'quantity' => 1, 'notes' => null],
+            ]],
+            ['business_id' => $this->restaurantB->id, 'items' => [
+                ['offering_id' => $itemB->id, 'quantity' => 1, 'notes' => null],
+            ]],
+            ['business_id' => $restaurantC->id, 'items' => [
+                ['offering_id' => $itemC->id, 'quantity' => 1, 'notes' => null],
+            ]],
+        ]));
+
+        $order = $group->orders()->sole()->load('items');
+        $delivery = $group->fresh()->delivery;
+
+        return [$group, $order, $delivery, $order->rider_financed_amount];
+    }
+
     private function acceptDelivery(Delivery $delivery): void
     {
         $result = $this->dispatchService()->handleRiderResponse($delivery->id, $this->riderA->id, 'accepted');
@@ -318,6 +381,11 @@ class PurchasingCashFlowTest extends TestCase
 
     private function markRestaurantReady(Order $order, Business $business): void
     {
+        // Stage B (2026-11-08): COD food may only become ready after the
+        // restaurant confirmed the rider's payment. These ledger tests mark food
+        // ready ahead of the rider's arrival, so the confirmation is recorded
+        // here; the confirmation endpoint is pinned by CodPaidBeforeReadyTest.
+        $this->confirmRestaurantPayments($order, $business->id);
         foreach ($order->items()->where('business_id', $business->id)->get() as $item) {
             $this->be($this->owner)
                 ->patchJson("/api/business-owner/orders/{$order->id}/items/{$item->id}/status", ['status' => 'ready'])
@@ -396,14 +464,10 @@ class PurchasingCashFlowTest extends TestCase
         $this->be($this->riderA);
         $this->patchJson($deliveryUrl.'/status', ['status' => 'in_transit'])->assertOk();
         $this->patchJson($deliveryUrl.'/status', ['status' => 'arrived_destination'])->assertOk();
-        $this->be($this->tourist)
-            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
-            ->assertOk();
+        // Reconciled 2026-11-08 (AGENTS.md §12; product decision): the rider completes a food delivery with a proof photo at the drop-off, which also records the COD cash; the tourist confirm-delivery step is retired.
+        $this->riderCompletesDelivery($delivery, $this->riderA)->assertOk();
         $delivery->refresh();
-        $this->be($this->riderA)
-            ->postJson($deliveryUrl.'/settle-cod', ['cash_received' => (float) $delivery->cash_due])
-            ->assertOk();
-        $delivery->refresh();
+        $this->be($this->riderA);
 
         $date = $delivery->delivered_at->copy()->setTimezone('Asia/Manila')->toDateString();
 
@@ -1714,12 +1778,12 @@ class PurchasingCashFlowTest extends TestCase
         $this->assertSame($first->json('data.reference_number'), $retry->json('data.reference_number'));
         $this->assertCount(1, RiderCashFundTransaction::where('idempotency_key', $key)->get());
 
+        // Daily cash advance (decision 2026-11-08): marking a purchase is no
+        // longer held for the receipt acknowledgement; the acknowledgement
+        // itself still records the additional issuance as received.
         $purchase = CodPurchase::where('delivery_id', $delivery->id)->orderBy('id')->firstOrFail();
-        $this->be($this->riderA)
-            ->postJson('/api/rider/deliveries/'.$delivery->id.'/purchases/'.$purchase->id.'/mark', ['status' => 'purchased'])
-            ->assertStatus(422);
-
-        $this->postJson('/api/rider/deliveries/'.$delivery->id.'/purchasing-cash/receive')->assertOk();
+        $this->be($this->riderA)->postJson('/api/rider/deliveries/'.$delivery->id.'/purchasing-cash/receive')->assertOk();
+        $this->assertSame(0, RiderCashFundTransaction::where('idempotency_key', $key)->whereNull('received_at')->count());
         $this->postJson('/api/rider/deliveries/'.$delivery->id.'/purchases/'.$purchase->id.'/mark', ['status' => 'purchased'])->assertOk();
     }
 
@@ -1887,10 +1951,9 @@ class PurchasingCashFlowTest extends TestCase
 
         $purchaseIds = collect($list['purchases'])->pluck('id');
 
-        // Cannot mark before the purchasing cash is issued.
-        $this->postJson($purchasesUrl . '/purchases/' . $purchaseIds[0] . '/mark', ['status' => 'purchased'])
-            ->assertStatus(422)
-            ->assertJsonFragment(['message' => 'Purchasing cash has not been issued yet.']);
+        // Daily cash advance (decision 2026-11-08): marking is no longer held
+        // for a per-delivery cash issue (the rider holds the day's advance).
+        // This test still covers the legacy per-delivery issue + receipt.
 
         // Tourism Office issues the cash.
         $this->be($this->admin);
@@ -1995,30 +2058,24 @@ class PurchasingCashFlowTest extends TestCase
             $this->postJson($purchasesUrl . '/purchases/' . $purchase->id . '/mark', ['status' => 'collected'])->assertOk();
         }
 
-        // 4) Leave after ALL COLLECTED, then deliver (P14 — the TOURIST confirms
-        //    receipt at the drop-off; the rider's own delivered is rejected).
+        // 4) Leave after ALL COLLECTED, then deliver.
+        //    Reconciled 2026-11-08 (AGENTS.md §12; product decision): the rider completes a food delivery with a proof photo at the drop-off, which also records the COD cash; the tourist confirm-delivery step is retired.
         $this->assertSame('picked_up', $delivery->fresh()->status->value, 'The final restaurant pickup transitions the shared delivery.');
         foreach (['in_transit', 'arrived_destination'] as $status) {
             $this->patchJson($purchasesUrl . '/status', ['status' => $status])->assertOk();
         }
         $this->patchJson($purchasesUrl . '/status', ['status' => 'delivered'])
             ->assertStatus(422)
-            ->assertJsonFragment(['message' => 'The tourist must confirm the delivery before it can be marked as delivered.']);
+            ->assertJsonFragment(['message' => 'Take a photo of the delivered food at the drop-off to complete this delivery.']);
 
-        $this->be($this->tourist)
-            ->postJson('/api/tourist/food/order/' . $order->id . '/confirm-delivery')
+        // 5) Rider photographs the delivered food: the tourist has paid cash, so
+        //    the canonical settlement runs for exactly the cash due.
+        $this->riderCompletesDelivery($delivery, $this->riderA)
             ->assertOk()
-            ->assertJsonPath('data.new_status', 'delivered');
+            ->assertJsonPath('data.cod_settled', true);
         $this->be($this->riderA);
-
-        $delivery->refresh();
-        $this->assertSame('delivered', $delivery->status->value);
-        $this->assertNotNull($delivery->cash_due);
-        $this->assertSame('busy', $this->riderA->fresh()->riderDetail->rider_status);
-
-        // 5) Tourist pays cash at the door; rider settles through the canonical API.
-        $cashDue = (float) $delivery->cash_due;
-        $this->postJson($purchasesUrl . '/settle-cod', ['cash_received' => $cashDue])->assertOk();
+        $cashDue = (float) $delivery->fresh()->cash_due;
+        $this->assertGreaterThan(0, $cashDue);
 
         $delivery->refresh();
         $order->refresh();
@@ -2365,6 +2422,182 @@ class PurchasingCashFlowTest extends TestCase
         ]);
     }
 
+    // ───────────────────────────────────────────────────────────────
+    // Stage 1 — COD purchasing-cash hardening regressions.
+    // ───────────────────────────────────────────────────────────────
+
+    public function test_latest_rider_location_prefers_newest_id_when_timestamps_are_equal(): void
+    {
+        $frozen = \Carbon\Carbon::parse('2026-05-05 12:00:00');
+        \Carbon\Carbon::setTestNow($frozen);
+
+        // Drop the setUp-seeded fix so every remaining row shares the frozen stamp.
+        RiderLocation::where('rider_id', $this->riderA->id)->delete();
+
+        RiderLocation::create([
+            'rider_id' => $this->riderA->id,
+            'latitude' => $this->restaurantA->latitude,
+            'longitude' => $this->restaurantA->longitude,
+            'recorded_at' => $frozen,
+        ]);
+        RiderLocation::create([
+            'rider_id' => $this->riderA->id,
+            'latitude' => $this->restaurantB->latitude,
+            'longitude' => $this->restaurantB->longitude,
+            'recorded_at' => $frozen,
+        ]);
+
+        $latest = app(\App\Services\PickupSequenceService::class)->latestRiderLocation($this->riderA->id);
+
+        $this->assertNotNull($latest);
+        $this->assertEquals(
+            (float) $this->restaurantB->latitude,
+            (float) $latest['latitude'],
+            'On equal recorded_at the later-inserted (higher id) fix must win.'
+        );
+        $this->assertEquals((float) $this->restaurantB->longitude, (float) $latest['longitude']);
+    }
+
+    public function test_three_restaurant_allocation_rounding_sums_exactly_to_rider_financed_amount(): void
+    {
+        [, $order, , $financed] = $this->createThreeRestaurantCodOrder();
+
+        $this->assertEquals(100.00, (float) $order->subtotal);
+        $this->assertEquals(110.00, (float) $financed, '₱100 subtotal + ₱10 system fee.');
+
+        $bases = app(\App\Services\CodSettlementService::class)->businessBases($order);
+
+        $this->assertCount(3, $bases);
+        $this->assertEquals(
+            (float) $financed,
+            round($bases->sum(), 2),
+            'Independently-rounded fee shares must not drift from the rider-financed total.'
+        );
+        // Deterministic remainder assignment (businesses ordered by id; the
+        // final/highest id absorbs the extra cent): 3.33 + 3.33 + 3.34 = ₱10.00.
+        $this->assertEquals(36.67, (float) $bases->get($this->restaurantA->id)); // 33.34 + 3.33
+        $this->assertEquals(36.66, (float) $bases->get($this->restaurantB->id)); // 33.33 + 3.33
+        $this->assertEquals(36.67, (float) $bases->last());                       // 33.33 + 3.34 (remainder)
+    }
+
+    public function test_issued_purchasing_cash_equals_exact_sum_of_restaurant_purchase_allocations(): void
+    {
+        [, , $delivery, $financed] = $this->createTwoRestaurantCodOrder();
+        $this->acceptDelivery($delivery);
+
+        $this->be($this->admin)
+            ->postJson('/api/admin/deliveries/'.$delivery->id.'/issue-purchasing-cash')
+            ->assertOk();
+
+        $delivery->refresh();
+        $purchases = CodPurchase::where('delivery_id', $delivery->id)->get();
+
+        $this->assertCount(2, $purchases);
+        $this->assertEquals(
+            (float) $financed,
+            round($purchases->sum(fn ($p) => (float) $p->purchase_amount), 2),
+            'The purchase ledger sums exactly to the rider-financed amount.'
+        );
+        $this->assertEquals((float) $financed, (float) $delivery->purchasing_cash);
+    }
+
+    public function test_issuance_is_rejected_when_purchase_allocations_violate_the_financial_invariant(): void
+    {
+        [, , $delivery] = $this->createTwoRestaurantCodOrder();
+        $this->acceptDelivery($delivery);
+
+        // Corrupt one ledger row so Σ purchases no longer equals rider_financed.
+        $purchase = CodPurchase::where('delivery_id', $delivery->id)->orderBy('id')->firstOrFail();
+        $purchase->update(['purchase_amount' => (float) $purchase->purchase_amount + 1.00]);
+
+        $response = $this->be($this->admin)
+            ->postJson('/api/admin/deliveries/'.$delivery->id.'/issue-purchasing-cash');
+
+        $response->assertStatus(422);
+        $this->assertStringContainsString('invariant', (string) $response->json('message'));
+
+        $delivery->refresh();
+        $this->assertNull($delivery->purchasing_cash_issued_at, 'No cash is issued while the invariant is violated.');
+        $this->assertNull($delivery->purchasing_cash);
+    }
+
+    public function test_group_cod_allocation_is_split_per_restaurant_and_sums_to_the_canonical_total(): void
+    {
+        [, , $delivery, $financed] = $this->createTwoRestaurantCodOrder();
+
+        $allocations = app(\App\Services\PurchasingCashService::class)->allocation($delivery);
+
+        $this->assertCount(2, $allocations);
+        // Restaurant A: 250 subtotal + 25 fee = 275. Restaurant B: 650 + 65 = 715.
+        $this->assertEquals(275.00, (float) $allocations->get((string) $this->restaurantA->id));
+        $this->assertEquals(715.00, (float) $allocations->get((string) $this->restaurantB->id));
+        $this->assertEquals(
+            (float) $financed,
+            round($allocations->sum(), 2),
+            'Group allocations sum to the canonical rider-financed total.'
+        );
+    }
+
+    public function test_item_cancellation_is_blocked_after_rider_acceptance(): void
+    {
+        [, $order, $delivery, $financed] = $this->createTwoRestaurantCodOrder();
+        $this->acceptDelivery($delivery);
+
+        $order->refresh();
+        $this->assertContains(
+            $order->status,
+            ['accepted', 'preparing', 'ready', 'picked_up', 'in_transit'],
+            'Rider acceptance moves the order out of the cancellable window.'
+        );
+
+        $item = $order->items()->first();
+
+        $this->be($this->tourist)
+            ->postJson('/api/tourist/food/order/'.$order->id.'/cancel-item', [
+                'item_id' => $item->id,
+                'quantity' => 1,
+                'reason' => 'No longer needed',
+            ])
+            ->assertStatus(422);
+
+        $item->refresh();
+        $this->assertSame(0, (int) $item->cancelled_quantity, 'An accepted order keeps its item quantities frozen.');
+        $this->assertEquals(
+            (float) $financed,
+            (float) $order->fresh()->rider_financed_amount,
+            'The financed amount is never silently reduced after acceptance.'
+        );
+    }
+
+    public function test_existing_eighty_twenty_settlement_remains_consistent_after_the_rounding_fix(): void
+    {
+        [, $order, , $financed] = $this->createTwoRestaurantCodOrder();
+        $service = app(\App\Services\CodSettlementService::class);
+
+        $bases = $service->businessBases($order);
+        $this->assertCount(2, $bases);
+        $this->assertEquals(
+            (float) $financed,
+            round($bases->sum(), 2),
+            'Settlement bases still reconcile to the rider-financed total.'
+        );
+
+        $platformTotal = 0.0;
+        foreach ($bases as $base) {
+            $split = $service->split($base);
+            $this->assertEquals(round($base - round($base * 0.20, 2), 2), (float) $split['restaurant_share']);
+            $this->assertEquals(round($base * 0.20, 2), (float) $split['platform_fee']);
+            $this->assertEquals(
+                round($base, 2),
+                round((float) $split['restaurant_share'] + (float) $split['platform_fee'], 2)
+            );
+            $platformTotal = round($platformTotal + (float) $split['platform_fee'], 2);
+        }
+
+        // The Tourism Office keeps exactly 20% of the whole financed base.
+        $this->assertEquals(round((float) $financed * 0.20, 2), $platformTotal);
+    }
+
     private function recordTestCashFundReturn(User $rider, string $date, string $reference, float $amount): RiderDailyCashMovement
     {
         $transactionAt = \Carbon\CarbonImmutable::createFromFormat('!Y-m-d', $date, 'Asia/Manila')->setTime(12, 0);
@@ -2495,5 +2728,119 @@ class PurchasingCashFlowTest extends TestCase
         ]);
 
         return $fund;
+    }
+
+    // ---------- daily cash advance (decision 2026-11-08) ----------
+
+    private function recordAdvance(User $rider, float $amount, ?string $key = null): \Illuminate\Testing\TestResponse
+    {
+        return $this->be($this->admin)->postJson("/api/admin/riders/{$rider->id}/cash-fund/advances", [
+            'amount' => $amount,
+            'note' => 'Morning advance',
+            'idempotency_key' => $key ?? (string) \Illuminate\Support\Str::uuid(),
+        ]);
+    }
+
+    public function test_the_office_records_a_daily_advance_once_and_retries_are_harmless(): void
+    {
+        $key = (string) \Illuminate\Support\Str::uuid();
+        $first = $this->recordAdvance($this->riderA, 2000, $key)->assertOk();
+        $this->recordAdvance($this->riderA, 2000, $key)->assertOk()
+            ->assertJsonPath('data.reference_number', $first->json('data.reference_number'));
+        // Same key, different amount: refused.
+        $this->recordAdvance($this->riderA, 1500, $key)->assertStatus(409);
+
+        $advance = RiderCashFundTransaction::where('idempotency_key', $key)->sole();
+        $this->assertSame(RiderCashFundTransaction::TYPE_CASH_ISSUED, $advance->type);
+        $this->assertNull($advance->delivery_id, 'A daily advance belongs to no delivery.');
+        $this->assertNotNull($advance->received_at, 'Handed over in person when recorded.');
+        $this->assertSame('daily_advance', $advance->metadata['kind']);
+
+        $this->recordAdvance($this->riderA, 0)->assertStatus(422);
+    }
+
+    public function test_cod_deliveries_draw_on_the_advance_without_a_per_delivery_issue(): void
+    {
+        $this->recordAdvance($this->riderA, 2000)->assertOk();
+        [, $order, $delivery, $financed] = $this->createTwoRestaurantCodOrder();
+        $this->acceptDelivery($delivery);
+
+        $fresh = $delivery->fresh();
+        $fund = RiderCashFund::where('active_rider_key', $this->riderA->id)->sole();
+        $this->assertSame($fund->id, (int) $fresh->rider_cash_fund_id, 'Linked to the open advance on acceptance.');
+        $this->assertNotNull($fresh->purchasing_cash_issued_at);
+        $this->assertNotNull($fresh->purchasing_cash_received_at);
+        $this->assertEqualsWithDelta((float) $financed, (float) $fresh->purchasing_cash, 0.001);
+        // No second cash-issued row: the advance already counted the money.
+        $this->assertSame(1, RiderCashFundTransaction::where('rider_cash_fund_id', $fund->id)
+            ->whereIn('type', [RiderCashFundTransaction::TYPE_CASH_ISSUED, RiderCashFundTransaction::TYPE_ADDITIONAL_CASH_ISSUED])->count());
+
+        // The pickup is not held for cash: arrive, restaurant ready, confirm.
+        $this->markRestaurantReady($order, $this->restaurantA);
+        $this->arriveAtRestaurant($delivery, $this->restaurantA);
+        $this->be($this->riderA)
+            ->postJson("/api/rider/deliveries/{$delivery->id}/pickup-stops/{$this->restaurantA->id}/confirm")
+            ->assertOk();
+
+        // The office balance counts the advance exactly once.
+        $balance = app(\App\Services\RiderCashFundService::class)->officeCashBalance($this->riderA, now('Asia/Manila')->toDateString());
+        $this->assertEquals(2000, $balance['issued']);
+        $this->assertEquals(2000, $balance['unreturned']);
+    }
+
+    public function test_an_advance_recorded_after_acceptance_links_the_riders_active_delivery(): void
+    {
+        [, , $delivery] = $this->createTwoRestaurantCodOrder();
+        $this->acceptDelivery($delivery);
+        $this->assertNull($delivery->fresh()->rider_cash_fund_id, 'No advance yet.');
+
+        $this->recordAdvance($this->riderA, 1500)->assertOk();
+        $this->assertNotNull($delivery->fresh()->rider_cash_fund_id);
+        $this->assertNotNull($delivery->fresh()->purchasing_cash_received_at);
+    }
+
+    public function test_the_office_overview_lists_advances_and_cash_still_with_each_rider(): void
+    {
+        $this->recordAdvance($this->riderA, 2000)->assertOk();
+        $this->recordAdvance($this->riderA, 500)->assertOk();
+
+        $riders = collect($this->be($this->admin)->getJson('/api/admin/cash-advances')->assertOk()->json('data.riders'))->keyBy('rider_id');
+        $this->assertEquals(2500, $riders[$this->riderA->id]['advance_today']);
+        $this->assertCount(2, $riders[$this->riderA->id]['advances']);
+        $this->assertEquals(2500, $riders[$this->riderA->id]['cash_with_rider']);
+        $this->assertEquals(0, $riders[$this->riderB->id]['advance_today']);
+
+        // The existing cash-fund return brings the unused cash back (it is
+        // part of the daily COD cash policy, active from its effective date).
+        $this->enableDailyCashPolicy(now('Asia/Manila')->toDateString());
+        $this->be($this->admin)->postJson("/api/admin/riders/{$this->riderA->id}/cash-fund/returns", [
+            'amount' => 2500,
+            'transaction_at' => now('Asia/Manila')->subMinute()->format('Y-m-d\TH:i'),
+            'reference' => 'OR-ADV-1',
+            'evidence_details' => 'Unused advance returned at the office.',
+            'reference_namespace' => 'office-receipts',
+            'idempotency_key' => (string) \Illuminate\Support\Str::uuid(),
+        ])->assertOk();
+        $after = collect($this->getJson('/api/admin/cash-advances')->assertOk()->json('data.riders'))->keyBy('rider_id');
+        $this->assertEquals(0, $after[$this->riderA->id]['cash_with_rider']);
+        $this->assertEquals(2500, $after[$this->riderA->id]['returned_to_date']);
+    }
+
+    public function test_only_the_tourism_office_of_the_riders_municipality_can_record_advances(): void
+    {
+        $this->be($this->riderA)->postJson("/api/admin/riders/{$this->riderA->id}/cash-fund/advances", [
+            'amount' => 100, 'idempotency_key' => (string) \Illuminate\Support\Str::uuid(),
+        ])->assertForbidden();
+        $this->be($this->riderA)->getJson('/api/admin/cash-advances')->assertForbidden();
+
+        $otherMunicipality = Municipality::create(['name' => 'Gloria', 'district' => '2nd', 'province' => 'Oriental Mindoro']);
+        $outsider = User::create([
+            'email' => 'gloria-office@example.com', 'password' => Hash::make('Password123!'),
+            'role' => 'bansud_tourism_office', 'account_status' => 'approved', 'municipality_id' => $otherMunicipality->id,
+        ]);
+        $this->be($outsider)->postJson("/api/admin/riders/{$this->riderA->id}/cash-fund/advances", [
+            'amount' => 100, 'idempotency_key' => (string) \Illuminate\Support\Str::uuid(),
+        ])->assertForbidden();
+        $this->assertSame(0, RiderCashFundTransaction::count());
     }
 }

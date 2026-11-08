@@ -54,7 +54,7 @@ export default function TouristGcashBind() {
   }
 
   return (
-    <div className="min-h-[calc(100vh-72px)] flex items-center justify-center p-4">
+    <div className="min-h-[calc(100vh-var(--tourist-header-h))] flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <button onClick={() => navigate(-1)} className="inline-flex items-center gap-2 text-sm text-[#6B7280] hover:text-[#17201B] mb-6 transition">
           <ArrowLeft className="w-4 h-4" /> Back

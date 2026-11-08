@@ -54,5 +54,6 @@
         <env name="NIGHTWATCH_ENABLED" value="false" force="true"/>
         <env name="SOCKET_BRIDGE_SECRET" value="test-bridge-secret" force="true"/>
         <env name="TRIP_GPS_TOKEN_SECRET" value="test-trip-gps-secret" force="true"/>
+        <env name="DISPATCH_ROAD_DISTANCE" value="false" force="true"/>
     </php>
 </phpunit>

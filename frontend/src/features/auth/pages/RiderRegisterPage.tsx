@@ -306,7 +306,9 @@ export default function RiderRegisterPage() {
       if (data.referral_code) fd.append('referral_code', data.referral_code)
 
       const user = await registerUser(fd as unknown as Record<string, unknown>)
-      navigate(getRoleDashboardPath(user.role))
+      navigate('/verify-email', {
+        state: { email: user.email, returnTo: getRoleDashboardPath(user.role) },
+      })
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { message?: string; errors?: Record<string, string[]> } } }
       const fieldErrors = axiosErr.response?.data?.errors

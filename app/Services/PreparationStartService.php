@@ -277,6 +277,20 @@ class PreparationStartService
      * Flip one due order to 'ready'. Runs under the row lock so a manual
      * mark-ready racing the scheduler can never double-fire the transition.
      */
+    /**
+     * Ready an order whose preparation timer already ran out (e.g. right after
+     * a restaurant confirms a COD payment). The COD guard inside
+     * completePreparation() still decides which items may become ready.
+     */
+    public function completeIfDue(Order $order): bool
+    {
+        if ($order->status !== 'preparing' || $order->predicted_ready_at === null || $order->predicted_ready_at->isFuture()) {
+            return false;
+        }
+
+        return $this->completePreparation((int) $order->id);
+    }
+
     private function completePreparation(int $orderId): bool
     {
         try {
@@ -290,12 +304,29 @@ class PreparationStartService
                     return false; // Already readied manually or cancelled.
                 }
 
-                $locked->items()
+                // COD "paid before ready": the timer readies only the items of
+                // restaurants that confirmed the rider's payment. Unpaid stops
+                // stay 'preparing' (the order too) and are readied by a later
+                // run — or immediately — once their payment is confirmed.
+                $unpaid = app(CodPickupPaymentGuard::class)->unpaidBusinessIds($locked);
+
+                $readyIds = $locked->items()
                     ->whereNotIn('status', ['cancelled', 'rejected'])
-                    ->update([
+                    ->get(['id', 'business_id'])
+                    ->reject(fn ($item) => in_array((int) ($item->business_id ?: $locked->business_id), $unpaid, true))
+                    ->pluck('id');
+
+                if ($readyIds->isNotEmpty()) {
+                    // Bulk update (skips model hooks): only paid restaurants' items.
+                    $locked->items()->whereIn('id', $readyIds)->update([
                         'status' => 'ready',
                         'ready_at' => now(),
                     ]);
+                }
+
+                if ($unpaid !== []) {
+                    return false; // Order stays 'preparing' until every stop is paid.
+                }
 
                 $locked->update([
                     'status' => 'ready',

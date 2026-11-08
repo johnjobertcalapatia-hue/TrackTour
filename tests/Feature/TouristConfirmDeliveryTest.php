@@ -13,18 +13,26 @@ use App\Models\RiderEarning;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use App\Models\RiderLocation;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 /**
- * P14 — the tourist delivery-confirmation gate.
+ * Food delivery completion — reconciled 2026-11-08 (AGENTS.md §12; product
+ * decision: the rider's proof photo replaces the P14 tourist confirmation).
  *
- * A food delivery only becomes 'delivered' when the TOURIST confirms receipt at
- * the drop-off. The rider may never mark a food delivery 'delivered' on their
- * own (422 tourist_confirmation_required). Standalone transport rides remain
- * rider-driven and never hit the tourist gate.
- *
- *   COD    confirm -> delivered  (cash_due frozen; completes at settle-cod)
- *   Prepaid confirm -> completed (canonical terminal state, rider released)
+ * A food delivery is completed by the RIDER at the drop-off:
+ *   - within tracking.dropoff_radius_meters (50 m) of the delivery address,
+ *     judged from the rider's own fresh saved GPS fix
+ *   - with a photo of the delivered food (POST /rider/deliveries/{d}/complete)
+ * Confirming means the tourist has paid: COD is settled for exactly the cash
+ * due through the canonical settleCodDelivery() (no separate settle step).
+ *   COD     -> completed, order paid, cash Payment + settlement booked
+ *   Prepaid -> completed, rider released
+ * The rider still can't PATCH a food delivery to 'delivered' without proof,
+ * and the old tourist confirm endpoint is retired (422, no state change).
+ * Standalone transport rides stay rider-driven.
  */
 class TouristConfirmDeliveryTest extends TestCase
 {
@@ -141,7 +149,27 @@ class TouristConfirmDeliveryTest extends TestCase
         return $this->customer->createToken('test')->plainTextToken;
     }
 
-    public function test_rider_cannot_mark_a_food_delivery_delivered_without_tourist_confirmation(): void
+    /** Saved GPS fix for the rider, $metresNorth from the drop-off, $ageSeconds old. */
+    private function riderAt(float $metresNorth, int $ageSeconds = 5): void
+    {
+        RiderLocation::create([
+            'rider_id' => $this->rider->id,
+            'latitude' => 12.60 + $metresNorth / 111_320,
+            'longitude' => 121.40,
+            'recorded_at' => now()->subSeconds($ageSeconds),
+        ]);
+    }
+
+    private function completeWithPhoto(Delivery $delivery, ?User $as = null, bool $withPhoto = true)
+    {
+        $token = ($as ?? $this->rider)->createToken('test')->plainTextToken;
+        $payload = $withPhoto ? ['photo' => UploadedFile::fake()->image('delivered.jpg', 800, 600)] : [];
+
+        return $this->withHeader('Authorization', 'Bearer '.$token)
+            ->post('/api/rider/deliveries/'.$delivery->id.'/complete', $payload, ['Accept' => 'application/json']);
+    }
+
+    public function test_rider_cannot_mark_a_food_delivery_delivered_without_proof(): void
     {
         $order = $this->makeOrder('gcash', 'TT-CONFIRM-GATE');
         $delivery = $this->makeDelivery($order);
@@ -149,66 +177,60 @@ class TouristConfirmDeliveryTest extends TestCase
         $this->withHeader('Authorization', 'Bearer '.$this->riderToken())
             ->patchJson('/api/rider/deliveries/'.$delivery->id.'/status', ['status' => 'delivered'])
             ->assertStatus(422)
-            ->assertJsonPath('message', 'The tourist must confirm the delivery before it can be marked as delivered.');
+            ->assertJsonPath('message', 'Take a photo of the delivered food at the drop-off to complete this delivery.');
 
-        $this->assertSame('arrived_destination', $delivery->fresh()->status->value ?? $delivery->fresh()->status,
-            'The delivery stays at the destination until the tourist confirms.');
+        $this->assertSame('arrived_destination', $delivery->fresh()->status->value ?? $delivery->fresh()->status);
         $this->assertNull($delivery->fresh()->delivered_at);
     }
 
-    public function test_tourist_confirms_prepaid_delivery_to_completed(): void
+    public function test_rider_completes_a_prepaid_delivery_with_a_photo_within_50_m(): void
     {
+        Storage::fake('public');
         $order = $this->makeOrder('gcash', 'TT-CONFIRM-PREPAID');
         $delivery = $this->makeDelivery($order);
+        $this->riderAt(30);
 
-        $this->withHeader('Authorization', 'Bearer '.$this->customerToken())
-            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
+        $this->completeWithPhoto($delivery)
             ->assertOk()
             ->assertJsonPath('data.new_status', 'completed')
-            ->assertJsonPath('message', 'Delivery confirmed. Thank you!');
+            ->assertJsonPath('data.cod_settled', false)
+            ->assertJsonPath('message', 'Delivery completed. Thank you!');
 
         $delivery->refresh();
         $this->assertSame('completed', $delivery->status->value ?? $delivery->status);
         $this->assertNotNull($delivery->delivered_at);
-        $this->assertNotNull($delivery->delivery_confirmed_at, 'Tourist confirmation is stamped.');
-        $this->assertSame($this->customer->id, (int) $delivery->delivery_confirmed_by);
+        $this->assertSame($this->rider->id, (int) $delivery->delivery_confirmed_by, 'Confirmed by the rider.');
+        $this->assertNotNull($delivery->delivery_proof_path);
+        $this->assertNotNull($delivery->delivery_proof_at);
+        $this->assertEqualsWithDelta(30, (float) $delivery->delivery_proof_distance_m, 1.0);
+        Storage::disk('public')->assertExists($delivery->delivery_proof_path);
 
-        $this->assertSame('completed', $order->fresh()->status, 'Prepaid order completes on confirmation.');
+        $this->assertSame('completed', $order->fresh()->status);
         $this->assertNotNull($order->fresh()->completed_at);
         $this->assertSame(1, RiderEarning::where('rider_id', $this->rider->id)->where('order_id', $order->id)->count());
         $this->assertSame('available', $this->rider->fresh()->riderDetail->rider_status, 'Rider is released.');
     }
 
-    public function test_tourist_confirms_cod_delivery_to_delivered_then_settlement_completes(): void
+    public function test_confirming_a_cod_delivery_means_the_tourist_paid_and_settles_it_in_one_step(): void
     {
+        Storage::fake('public');
         $order = $this->makeOrder('cash', 'TT-CONFIRM-COD');
         $delivery = $this->makeDelivery($order);
+        $this->riderAt(10);
 
-        $this->withHeader('Authorization', 'Bearer '.$this->customerToken())
-            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
+        $this->completeWithPhoto($delivery)
             ->assertOk()
-            ->assertJsonPath('data.new_status', 'delivered');
+            ->assertJsonPath('data.cod_settled', true)
+            ->assertJsonPath('data.new_status', 'completed');
 
         $delivery->refresh();
-        $this->assertSame('delivered', $delivery->status->value ?? $delivery->status,
-            'COD stays delivered until the cash is settled — never auto-completed.');
-        $this->assertNotNull($delivery->delivered_at);
-        $this->assertNotNull($delivery->delivery_confirmed_at);
+        $this->assertSame('completed', $delivery->status->value ?? $delivery->status);
         $this->assertSame((float) $order->total, (float) $delivery->cash_due, 'Cash due snapshot frozen.');
-        $this->assertSame('delivered', $order->fresh()->status);
-        $this->assertNull($order->fresh()->completed_at, 'COD order is not terminal while cash is pending.');
+        $this->assertSame((float) $order->total, (float) $delivery->cash_received, 'Exactly the cash due was received.');
+        $this->assertEquals(0, (float) $delivery->change_given);
+        $this->assertNotNull($delivery->cash_settled_at);
 
-        $token = $this->riderToken();
-        $this->withHeader('Authorization', 'Bearer '.$token)
-            ->postJson('/api/rider/deliveries/'.$delivery->id.'/settle-cod', [
-                'cash_received' => (float) $order->total,
-            ])
-            ->assertOk()
-            ->assertJson(['success' => true]);
-
-        $this->assertSame('completed', $delivery->fresh()->status->value ?? $delivery->fresh()->status);
         $this->assertSame('completed', $order->fresh()->status);
-        $this->assertNotNull($order->fresh()->completed_at);
         $this->assertSame('paid', $order->fresh()->payment_status);
         $this->assertSame(1, Payment::where('payable_type', Order::class)
             ->where('payable_id', $order->id)
@@ -216,68 +238,87 @@ class TouristConfirmDeliveryTest extends TestCase
             ->where('status', 'paid')
             ->count());
         $this->assertSame('available', $this->rider->fresh()->riderDetail->rider_status);
-    }
 
-    public function test_reconfirming_an_already_confirmed_delivery_is_idempotent(): void
-    {
-        $order = $this->makeOrder('gcash', 'TT-CONFIRM-IDEMPOTENT');
-        $this->makeDelivery($order);
-
-        $token = $this->customerToken();
-
-        $this->withHeader('Authorization', 'Bearer '.$token)
-            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
-            ->assertOk()
-            ->assertJsonPath('data.new_status', 'completed');
-
-        $this->withHeader('Authorization', 'Bearer '.$token)
-            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
-            ->assertOk()
-            ->assertJsonPath('data.new_status', 'completed');
-
-        $this->assertSame('completed', $order->fresh()->status);
-    }
-
-    public function test_other_tourist_cannot_confirm_someone_elses_delivery(): void
-    {
-        $order = $this->makeOrder('gcash', 'TT-CONFIRM-403');
-        $this->makeDelivery($order);
-
-        $this->withHeader('Authorization', 'Bearer '.$this->otherCustomer->createToken('test')->plainTextToken)
-            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
-            ->assertStatus(403);
-
-        $this->assertNotSame('completed', $order->fresh()->status);
-    }
-
-    public function test_rider_role_cannot_call_the_tourist_confirm_endpoint(): void
-    {
-        $order = $this->makeOrder('gcash', 'TT-CONFIRM-ROLE');
-        $this->makeDelivery($order);
-
+        // No separate settle step is left (and it can't run twice).
         $this->withHeader('Authorization', 'Bearer '.$this->riderToken())
-            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
-            ->assertStatus(403);
+            ->postJson('/api/rider/deliveries/'.$delivery->id.'/settle-cod', ['cash_received' => (float) $order->total])
+            ->assertStatus(422);
+        $this->assertSame(1, Payment::where('payable_type', Order::class)->where('payable_id', $order->id)->where('method', 'cash')->count());
     }
 
-    public function test_confirmation_before_arrival_is_rejected(): void
+    public function test_completion_requires_being_within_50_m_of_the_delivery_address(): void
     {
-        $order = $this->makeOrder('gcash', 'TT-CONFIRM-EARLY');
-        $this->makeDelivery($order, 'in_transit');
+        Storage::fake('public');
+        $order = $this->makeOrder('cash', 'TT-CONFIRM-FAR');
+        $delivery = $this->makeDelivery($order);
+        $this->riderAt(80);
+
+        $this->completeWithPhoto($delivery)
+            ->assertStatus(422)
+            ->assertJsonPath('message', 'You must be within 50 m of the delivery address to complete it (you are 80 m away).');
+
+        $this->assertSame('arrived_destination', $delivery->fresh()->status->value ?? $delivery->fresh()->status);
+        $this->assertNull($delivery->fresh()->delivery_proof_path);
+        $this->assertSame([], Storage::disk('public')->allFiles('delivery-proofs'), 'No photo is kept for a refused completion.');
+        $this->assertNull($delivery->fresh()->cash_received);
+    }
+
+    public function test_completion_needs_a_fresh_location_and_a_photo_and_picked_up_food(): void
+    {
+        Storage::fake('public');
+
+        $stale = $this->makeDelivery($this->makeOrder('gcash', 'TT-CONFIRM-STALE'));
+        $this->riderAt(5, 600);
+        $this->completeWithPhoto($stale)->assertStatus(422)
+            ->assertJsonPath('message', 'We need your current location. Keep the map open with location on, then try again.');
+
+        $this->riderAt(5);
+        $this->completeWithPhoto($stale, withPhoto: false)->assertStatus(422)->assertJsonValidationErrors('photo');
+
+        $notPickedUp = $this->makeDelivery($this->makeOrder('gcash', 'TT-CONFIRM-EARLY'), 'arrived_pickup');
+        $this->completeWithPhoto($notPickedUp)->assertStatus(422)
+            ->assertJsonPath('message', 'Pick up the food before completing the delivery.');
+        $this->assertSame([], Storage::disk('public')->allFiles('delivery-proofs'));
+    }
+
+    public function test_only_the_assigned_rider_completes_and_only_once(): void
+    {
+        Storage::fake('public');
+        $order = $this->makeOrder('gcash', 'TT-CONFIRM-403');
+        $delivery = $this->makeDelivery($order);
+        $this->riderAt(5);
+
+        $otherRider = User::create(['email' => 'other-rider@example.com', 'password' => Hash::make('x'), 'role' => 'rider', 'account_status' => 'approved']);
+        $this->completeWithPhoto($delivery, $otherRider)->assertStatus(403);
+        $this->completeWithPhoto($delivery, $this->customer)->assertStatus(403);
+
+        $this->completeWithPhoto($delivery)->assertOk();
+        $this->completeWithPhoto($delivery)->assertStatus(422)->assertJsonPath('message', 'This delivery is already completed.');
+        $this->assertSame(1, RiderEarning::where('order_id', $order->id)->count(), 'Completion happens once.');
+    }
+
+    public function test_the_old_tourist_confirm_endpoint_is_retired_and_changes_nothing(): void
+    {
+        $order = $this->makeOrder('cash', 'TT-CONFIRM-RETIRED');
+        $delivery = $this->makeDelivery($order);
 
         $this->withHeader('Authorization', 'Bearer '.$this->customerToken())
             ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
             ->assertStatus(422)
-            ->assertJsonPath('message', 'Your order has not arrived yet. Please confirm once the rider reaches you.');
+            ->assertJsonPath('message', 'Your rider completes the delivery with a photo when your food arrives. No action is needed from you.');
+
+        $this->assertSame('arrived_destination', $delivery->fresh()->status->value ?? $delivery->fresh()->status);
+        $this->assertNull($delivery->fresh()->delivery_confirmed_at);
+
+        // Still guarded: another tourist / unauthenticated.
+        $this->withHeader('Authorization', 'Bearer '.$this->otherCustomer->createToken('t')->plainTextToken)
+            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')->assertStatus(403);
     }
 
-    public function test_unauthenticated_request_is_rejected(): void
+    public function test_unauthenticated_completion_is_rejected(): void
     {
-        $order = $this->makeOrder('gcash', 'TT-CONFIRM-UNAUTH');
-        $this->makeDelivery($order);
-
-        $this->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
-            ->assertStatus(401);
+        $delivery = $this->makeDelivery($this->makeOrder('gcash', 'TT-CONFIRM-UNAUTH'));
+        $this->post('/api/rider/deliveries/'.$delivery->id.'/complete', [], ['Accept' => 'application/json'])->assertStatus(401);
     }
 
     public function test_transport_rides_stay_rider_driven_and_are_not_gated(): void

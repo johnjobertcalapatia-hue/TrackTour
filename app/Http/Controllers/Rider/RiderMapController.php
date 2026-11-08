@@ -76,12 +76,14 @@ class RiderMapController extends Controller
                 'order_id' => $delivery->order_id,
                 'status' => $delivery->status->value ?? $delivery->status,
                 'pickup_address' => $delivery->pickup_address,
-                'pickup_lat' => $delivery->pickup_latitude,
-                'pickup_lng' => $delivery->pickup_longitude,
+                'pickup_lat' => $delivery->pickup_latitude !== null ? (float) $delivery->pickup_latitude : null,
+                'pickup_lng' => $delivery->pickup_longitude !== null ? (float) $delivery->pickup_longitude : null,
                 'delivery_address' => $delivery->delivery_address,
-                'delivery_lat' => $delivery->delivery_latitude,
-                'delivery_lng' => $delivery->delivery_longitude,
+                'delivery_lat' => $delivery->delivery_latitude !== null ? (float) $delivery->delivery_latitude : null,
+                'delivery_lng' => $delivery->delivery_longitude !== null ? (float) $delivery->delivery_longitude : null,
                 'business_name' => $delivery->primaryOrder()?->business?->business_name,
+                // Restaurant photo for the map pin (logo, else cover), as on the tourist map.
+                'business_logo' => $delivery->primaryOrder()?->business?->logo ?: $delivery->primaryOrder()?->business?->cover_photo,
                 'customer_name' => $delivery->primaryOrder()?->customer_name,
                 'created_at' => $delivery->created_at,
             ]);

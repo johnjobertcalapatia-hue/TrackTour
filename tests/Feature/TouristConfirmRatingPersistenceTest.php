@@ -13,18 +13,19 @@ use App\Models\RiderDetail;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use Tests\Concerns\CompletesDeliveriesWithProof;
 use Tests\TestCase;
 
 /**
- * Rating persistence/flow on the tourist-confirmation gate's completion path.
+ * Rating persistence after delivery completion.
  *
- * The tourist-confirmation gate is the only way a food delivery becomes
- * terminal:
+ * Since 2026-11-08 a food delivery is completed by the RIDER with a proof
+ * photo at the drop-off (which also records the COD cash):
  *
- *   prepaid confirm -> order 'completed' (canonical prepaid terminal)
- *   COD    confirm -> delivery 'delivered' (stays until cash settlement)
+ *   prepaid -> order 'completed'
+ *   COD     -> order 'completed' + cash settled in the same step
  *
- * Rating is part of that completion path: once the gate closes, the tourist
+ * Rating follows completion: once the delivery is complete, the tourist
  * must be able to rate the trip and the delivery_rating must persist so the
  * rider's average rating reflects it (rider stats read orders.delivery_rating).
  *
@@ -35,6 +36,7 @@ use Tests\TestCase;
  */
 class TouristConfirmRatingPersistenceTest extends TestCase
 {
+    use CompletesDeliveriesWithProof;
     use RefreshDatabase;
 
     private User $owner;
@@ -165,9 +167,8 @@ class TouristConfirmRatingPersistenceTest extends TestCase
         $this->confirmPayment($order);
         $delivery = $this->makeDelivery($order);
 
-        // Gate closes prepaid: tourist confirms receipt -> terminal 'completed'.
-        $this->withHeaders($this->customerHeader())
-            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
+        // Reconciled 2026-11-08 (AGENTS.md §12; product decision): the rider completes a food delivery with a proof photo at the drop-off, which also records the COD cash; the tourist confirm-delivery step is retired.
+        $this->riderCompletesDelivery($delivery, $this->rider)
             ->assertOk()
             ->assertJsonPath('data.new_status', 'completed');
 
@@ -209,21 +210,17 @@ class TouristConfirmRatingPersistenceTest extends TestCase
         );
     }
 
-    public function test_cod_exposes_delivered_to_rating_then_settlement_completes(): void
+    public function test_cod_rider_proof_completes_and_settles_then_the_tourist_rates(): void
     {
         $order = $this->makeOrder('cash', 'TT-RATE-COD');
         $delivery = $this->makeDelivery($order);
-        $cashDue = (float) $order->total;
 
-        // Gate closes COD: tourist confirms -> 'delivered' (NOT terminal yet).
-        $this->withHeaders($this->customerHeader())
-            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
+        // Reconciled 2026-11-08 (AGENTS.md §12; product decision): the rider completes a food delivery with a proof photo at the drop-off, which also records the COD cash; the tourist confirm-delivery step is retired.
+        $this->riderCompletesDelivery($delivery, $this->rider)
             ->assertOk()
-            ->assertJsonPath('data.new_status', 'delivered');
+            ->assertJsonPath('data.cod_settled', true);
+        $this->assertSame('completed', $order->fresh()->status);
 
-        $this->assertSame('delivered', $order->fresh()->status);
-
-        // The tourist may rate the trip while the COD order sits at 'delivered'.
         $this->withHeaders($this->customerHeader())
             ->postJson('/api/tourist/food/order/'.$order->id.'/rate', [
                 'rating' => 4,
@@ -234,18 +231,8 @@ class TouristConfirmRatingPersistenceTest extends TestCase
             ->assertJsonPath('message', 'Thank you for your review!');
 
         $order->refresh();
-        $this->assertSame(3, (int) $order->delivery_rating, 'Delivery rating persisted at the COD delivered gate.');
-        $this->assertSame('delivered', $order->status, 'Rating keeps COD delivered until cash settlement.');
-
-        // Settlement then reaches the canonical completed terminal.
-        $this->withHeaders(['Authorization' => 'Bearer '.$this->riderToken()])
-            ->postJson('/api/rider/deliveries/'.$delivery->id.'/settle-cod', ['cash_received' => $cashDue])
-            ->assertOk()
-            ->assertJsonPath('success', true);
-
-        $this->assertSame('completed', $order->fresh()->status);
-        $this->assertSame(3, (int) $order->fresh()->delivery_rating, 'Delivery rating survives the COD settlement.');
-
+        $this->assertSame(3, (int) $order->delivery_rating, 'Delivery rating persisted for the rider.');
+        $this->assertSame('completed', $order->status, 'Rating keeps the terminal state.');
         $this->assertSame(
             1,
             Payment::where('payable_type', Order::class)
@@ -253,7 +240,7 @@ class TouristConfirmRatingPersistenceTest extends TestCase
                 ->where('method', 'cash')
                 ->where('status', 'paid')
                 ->count(),
-            'Cash payment recorded only after settlement.'
+            'Cash payment recorded once, at the rider confirmation.'
         );
     }
 
@@ -276,11 +263,9 @@ class TouristConfirmRatingPersistenceTest extends TestCase
     public function test_only_the_owning_tourist_can_rate_the_order(): void
     {
         $order = $this->makeOrder('gcash', 'TT-RATE-OWNER');
-        $this->makeDelivery($order, 'arrived_destination');
+        $delivery = $this->makeDelivery($order, 'arrived_destination');
 
-        $this->withHeaders($this->customerHeader())
-            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
-            ->assertOk();
+        $this->riderCompletesDelivery($delivery, $this->rider)->assertOk();
 
         $this->withHeaders(['Authorization' => 'Bearer '.$this->otherCustomerToken()])
             ->postJson('/api/tourist/food/order/'.$order->id.'/rate', [
@@ -302,11 +287,9 @@ class TouristConfirmRatingPersistenceTest extends TestCase
     public function test_rating_after_the_gate_is_idempotent_and_does_not_fork_orders(): void
     {
         $order = $this->makeOrder('gcash', 'TT-RATE-IDEMP');
-        $this->makeDelivery($order);
+        $delivery = $this->makeDelivery($order);
 
-        $this->withHeaders($this->customerHeader())
-            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
-            ->assertOk();
+        $this->riderCompletesDelivery($delivery, $this->rider)->assertOk();
 
         $rateBody = ['rating' => 4, 'delivery_rating' => 4, 'review' => 'Good ride.'];
 

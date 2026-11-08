@@ -245,6 +245,13 @@ class PickupSequenceFlowTest extends TestCase
         return $latitude;
     }
 
+    private function restaurantConfirmsPayment(Order $order, Business $business): void
+    {
+        $this->be($this->owner)
+            ->postJson("/api/business-owner/orders/{$order->id}/cod-payment-received", ['business_id' => $business->id])
+            ->assertOk();
+    }
+
     private function stopsUrl(Delivery $delivery): string
     {
         return "/api/rider/deliveries/{$delivery->id}/pickup-stops";
@@ -605,16 +612,16 @@ class PickupSequenceFlowTest extends TestCase
         // The pickup-stop ledger seeds lazily for the COD trip too.
         $this->assertCount(2, app(\App\Services\PickupSequenceService::class)->stops($delivery));
 
+        // Daily cash advance (decision 2026-11-08) supersedes the per-delivery
+        // cash gate: a pickup is no longer refused for missing purchasing
+        // cash. It is refused here only because the rider hasn't arrived yet.
         $this->be($this->rider)
             ->postJson($this->confirmUrl($delivery, $this->restaurantA))
             ->assertStatus(422)
-            ->assertJsonPath('message', 'Purchasing cash has not been issued yet.');
+            ->assertJsonPath('message', 'Confirm your arrival at this restaurant before confirming pickup.');
 
+        // The legacy per-delivery issue + receipt still work (kept for existing records).
         $this->issuePurchasingCash($delivery);
-        $this->be($this->rider)
-            ->postJson($this->confirmUrl($delivery, $this->restaurantA))
-            ->assertStatus(422)
-            ->assertJsonPath('message', 'Confirm receipt of the purchasing cash before purchasing food.');
 
         $this->be($this->rider)
             ->postJson("/api/rider/deliveries/{$delivery->id}/purchasing-cash/receive")
@@ -625,6 +632,8 @@ class PickupSequenceFlowTest extends TestCase
         $this->be($this->rider)
             ->postJson($this->arriveUrl($delivery, $this->restaurantA))
             ->assertOk();
+        // Stage B (2026-11-08): the restaurant confirms the rider's COD payment.
+        $this->restaurantConfirmsPayment($order, $this->restaurantA);
         $this->be($this->rider)
             ->postJson($this->confirmUrl($delivery, $this->restaurantA))
             ->assertOk()
@@ -651,6 +660,8 @@ class PickupSequenceFlowTest extends TestCase
         $this->be($this->rider)
             ->postJson($this->arriveUrl($delivery, $this->restaurantB))
             ->assertOk();
+        // Stage B (2026-11-08): the restaurant confirms the rider's COD payment.
+        $this->restaurantConfirmsPayment($order, $this->restaurantB);
 
         $this->be($this->rider)
             ->postJson($this->confirmUrl($delivery, $this->restaurantB))
@@ -692,6 +703,8 @@ class PickupSequenceFlowTest extends TestCase
         $this->be($this->rider)
             ->postJson($this->arriveUrl($delivery, $this->restaurantA))
             ->assertOk();
+        // Stage B (2026-11-08): the restaurant confirms the rider's COD payment.
+        $this->restaurantConfirmsPayment($order, $this->restaurantA);
 
         $this->be($this->rider)
             ->postJson("/api/rider/deliveries/{$delivery->id}/purchases/{$purchases[0]->id}/mark", ['status' => 'collected'])
@@ -700,6 +713,8 @@ class PickupSequenceFlowTest extends TestCase
         $this->be($this->rider)
             ->postJson($this->arriveUrl($delivery, $this->restaurantB))
             ->assertOk();
+        // Stage B (2026-11-08): the restaurant confirms the rider's COD payment.
+        $this->restaurantConfirmsPayment($order, $this->restaurantB);
         $this->be($this->rider)
             ->postJson("/api/rider/deliveries/{$delivery->id}/purchases/{$purchases[1]->id}/mark", ['status' => 'collected'])
             ->assertOk();

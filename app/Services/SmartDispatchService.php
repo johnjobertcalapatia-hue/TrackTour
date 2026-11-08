@@ -182,6 +182,10 @@ class SmartDispatchService
         // now parked/failed by dispatchToNearest with an observable reason.
         $order->update(['dispatch_started_at' => now()]);
 
+        // Plan the pickup sequence (farthest restaurant from the tourist first)
+        // BEFORE the row lock, so road-distance lookups never hold a lock.
+        $this->planPickupSequence($delivery);
+
         try {
             DB::transaction(function () use ($order, $delivery, $business) {
                 $lockedDelivery = Delivery::with('order')->lockForUpdate()->find($delivery->id);
@@ -300,6 +304,8 @@ class SmartDispatchService
      */
     public function dispatchGroupNow(Delivery $delivery, ?int $municipalityId): void
     {
+        $this->planPickupSequence($delivery);
+
         try {
             DB::transaction(function () use ($delivery, $municipalityId) {
                 $lockedDelivery = Delivery::with('order', 'groupCheckout')->lockForUpdate()->find($delivery->id);
@@ -321,6 +327,22 @@ class SmartDispatchService
         } catch (\Exception $e) {
             Log::warning('Group smart dispatch failed', [
                 'group_checkout_id' => $delivery->group_checkout_id,
+                'delivery_id' => $delivery->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /** Best-effort pre-lock pickup planning; dispatch never depends on it succeeding. */
+    private function planPickupSequence(Delivery $delivery): void
+    {
+        try {
+            $fresh = $delivery->fresh();
+            if ($fresh && $fresh->rider_id === null) {
+                app(PickupSequencePlanner::class)->ensurePlanned($fresh, allowRoad: true);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Pickup sequence planning failed (straight-line plan at offer time)', [
                 'delivery_id' => $delivery->id,
                 'error' => $e->getMessage(),
             ]);

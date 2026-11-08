@@ -17,6 +17,18 @@ class Order extends Model
 {
     use SoftDeletes;
 
+    protected static function booted(): void
+    {
+        // COD "paid before ready" (rider trip flow, Stage B): whatever path
+        // saves an order as READY, a COD delivery order may only get there
+        // once every restaurant confirmed the rider's payment.
+        static::saving(function (Order $order) {
+            if ($order->isDirty('status') && $order->status === 'ready') {
+                app(\App\Services\CodPickupPaymentGuard::class)->assertCanMarkReady($order);
+            }
+        });
+    }
+
     protected $fillable = [
         'order_number',
         'business_id',

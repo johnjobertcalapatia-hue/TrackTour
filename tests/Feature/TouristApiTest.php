@@ -150,6 +150,55 @@ class TouristApiTest extends TestCase
         $response->assertOk();
     }
 
+    public function test_explore_show_rating_summary_covers_all_approved_reviews(): void
+    {
+        // 12 approved reviews (more than the 10 returned in `reviews`) plus
+        // pending ones that must be excluded from every aggregate.
+        $ratings = [5, 5, 5, 5, 5, 5, 4, 4, 4, 3, 2, 1];
+        foreach ($ratings as $rating) {
+            Review::create([
+                'business_id' => $this->business->id,
+                'user_id' => $this->tourist->id,
+                'rating' => $rating,
+                'review' => 'Review',
+                'status' => 'approved',
+            ]);
+        }
+        Review::create([
+            'business_id' => $this->business->id,
+            'user_id' => $this->tourist->id,
+            'rating' => 1,
+            'review' => 'Pending',
+            'status' => 'pending',
+        ]);
+
+        $response = $this->actingAs($this->tourist, 'sanctum')
+            ->getJson("/api/tourist/explore/{$this->business->id}");
+
+        $response->assertOk()
+            ->assertJsonPath('data.reviewsCount', 12)
+            ->assertJsonPath('data.ratingBreakdown.5', 6)
+            ->assertJsonPath('data.ratingBreakdown.4', 3)
+            ->assertJsonPath('data.ratingBreakdown.3', 1)
+            ->assertJsonPath('data.ratingBreakdown.2', 1)
+            ->assertJsonPath('data.ratingBreakdown.1', 1)
+            ->assertJsonCount(10, 'data.reviews');
+
+        // (6*5 + 3*4 + 3 + 2 + 1) / 12 = 48 / 12 = 4.0 over all approved reviews.
+        $this->assertEquals(4.0, $response->json('data.avgRating'));
+    }
+
+    public function test_explore_show_rating_summary_is_zero_without_reviews(): void
+    {
+        $this->actingAs($this->tourist, 'sanctum')
+            ->getJson("/api/tourist/explore/{$this->business->id}")
+            ->assertOk()
+            ->assertJsonPath('data.reviewsCount', 0)
+            ->assertJsonPath('data.avgRating', 0)
+            ->assertJsonPath('data.ratingBreakdown.5', 0)
+            ->assertJsonPath('data.ratingBreakdown.1', 0);
+    }
+
     public function test_tourist_can_list_reviews(): void
     {
         Review::create([
@@ -287,6 +336,77 @@ class TouristApiTest extends TestCase
             ->assertJsonMissing(['data.data.1' => ['name' => 'Legacy Active Dish']]);
     }
 
+    public function test_tourist_food_list_honours_sort_and_real_category_names(): void
+    {
+        $category = \App\Models\OfferingCategory::create(['business_id' => $this->business->id, 'name' => 'Grilled Specialties']);
+        $mk = fn (string $name, float $price, bool $bestseller, ?int $categoryId = null) => Offering::create([
+            'business_id' => $this->business->id,
+            'offering_category_id' => $categoryId,
+            'name' => $name,
+            'price' => $price,
+            'is_available' => true,
+            'status' => 'available',
+            'bestseller' => $bestseller,
+        ]);
+        $mk('Mid', 150, false, $category->id);
+        $mk('Cheap', 70, false);
+        $mk('Pricey', 220, true, $category->id);
+
+        $names = fn (string $query) => collect(
+            $this->actingAs($this->tourist, 'sanctum')->getJson('/api/tourist/food'.$query)->assertOk()->json('data.data')
+        )->pluck('name')->all();
+
+        $this->assertSame(['Cheap', 'Mid', 'Pricey'], $names('?sort=price_low'));
+        $this->assertSame(['Pricey', 'Mid', 'Cheap'], $names('?sort=price_high'));
+        $this->assertSame('Pricey', $names('')[0], 'popular (default) lists bestsellers first');
+        // Category chips send the real category name returned in `categories`.
+        $this->assertEqualsCanonicalizing(['Mid', 'Pricey'], $names('?category=Grilled%20Specialties'));
+        $this->assertContains(
+            'Grilled Specialties',
+            $this->actingAs($this->tourist, 'sanctum')->getJson('/api/tourist/food')->json('data.categories')
+        );
+    }
+
+    public function test_tourist_explore_map_includes_only_available_business_menu_items(): void
+    {
+        $availableDish = Offering::create([
+            'business_id' => $this->business->id,
+            'name' => 'Chicken BBQ',
+            'description' => 'Grilled chicken served with rice.',
+            'price' => 180.00,
+            'image' => 'offerings/chicken-bbq.jpg',
+            'is_available' => true,
+            'status' => 'available',
+            'bestseller' => true,
+            'sort_order' => 1,
+        ]);
+        Offering::create([
+            'business_id' => $this->business->id,
+            'name' => 'Unavailable Dish',
+            'price' => 100.00,
+            'is_available' => false,
+            'status' => 'unavailable',
+            'sort_order' => 2,
+        ]);
+        Offering::create([
+            'business_id' => $this->business->id,
+            'name' => 'Legacy Active Dish',
+            'price' => 80.00,
+            'is_available' => true,
+            'status' => 'active',
+            'sort_order' => 3,
+        ]);
+
+        $response = $this->actingAs($this->tourist, 'sanctum')
+            ->getJson('/api/tourist/explore/map');
+
+        $response->assertOk()
+            ->assertJsonPath('businesses.0.menu_items.0.id', $availableDish->id)
+            ->assertJsonPath('businesses.0.menu_items.0.name', 'Chicken BBQ')
+            ->assertJsonPath('businesses.0.menu_items.0.image', 'offerings/chicken-bbq.jpg')
+            ->assertJsonCount(1, 'businesses.0.menu_items');
+    }
+
     public function test_tourist_favorites_return_favoritable_payload(): void
     {
         Favorite::create([
@@ -410,11 +530,14 @@ class TouristApiTest extends TestCase
 
     public function test_landing_map_reports_accepting_orders_for_approved_businesses(): void
     {
+        $this->business->update(['logo' => 'businesses/logos/test-logo.png']);
+
         $response = $this->actingAs($this->tourist, 'sanctum')
             ->getJson('/api/map/businesses');
 
         $response->assertOk()
             ->assertJsonPath('data.0.name', 'Test Restaurant')
+            ->assertJsonPath('data.0.logo', '/storage/businesses/logos/test-logo.png')
             ->assertJsonStructure([
                 'data' => [
                     [

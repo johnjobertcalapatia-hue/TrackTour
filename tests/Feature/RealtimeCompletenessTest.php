@@ -21,6 +21,7 @@ use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
+use Tests\Concerns\ConfirmsCodRestaurantPayments;
 use Tests\TestCase;
 
 /**
@@ -44,6 +45,7 @@ use Tests\TestCase;
  */
 class RealtimeCompletenessTest extends TestCase
 {
+    use ConfirmsCodRestaurantPayments;
     use RefreshDatabase;
 
     private User $ownerA;
@@ -330,6 +332,8 @@ class RealtimeCompletenessTest extends TestCase
         $this->assertSame('preparing', $order->fresh()->status, 'Rider acceptance auto-started preparation.');
 
         // Ready reaches the rider + kitchen so pickup can start without a refresh.
+        // Stage B (2026-11-08): COD food becomes ready only after the restaurant confirms the rider's payment.
+        $this->confirmRestaurantPayments($order);
         $this->postJson("/api/business-owner/orders/{$order->id}/mark-ready", [], $this->authHeaders($this->ownerA))
             ->assertOk();
         $this->assertSame('ready', $order->fresh()->status);

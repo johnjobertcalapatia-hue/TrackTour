@@ -24,6 +24,11 @@ return [
     // Rider order board: the read-only radius (km) used to surface nearby
     // deliveries the rider was not offered, and the cap on those read-only rows.
     'board_radius_km' => (float) env('RIDER_BOARD_RADIUS_KM', 5.00),
+
+    // Exclusive offer review hold (seconds): one rider reviews an offer at a
+    // time; others cannot view or accept it until it is accepted, released
+    // or expires.
+    'offer_review_seconds' => (int) env('RIDER_OFFER_REVIEW_SECONDS', 90),
     'board_claimed_limit' => (int) env('RIDER_BOARD_CLAIMED_LIMIT', 8),
     // B2 (Option C, master spec §14): a live socket-radar entry is trusted as
     // the GPS freshness source only when the rider reported within this window.
@@ -38,6 +43,25 @@ return [
         'large_item_quantity' => (int) env('DELIVERY_LARGE_ORDER_ITEM_QUANTITY', 12),
         'large_line_items' => (int) env('DELIVERY_LARGE_ORDER_LINE_ITEMS', 6),
     ],
+    // Sequential targeted dispatch (docs/dispatch-escalation-plan.md). Food
+    // deliveries are offered to ONE nearest eligible rider at a time for
+    // offer_seconds (30 s, product decision 2026-11-07); after max_attempts unsuccessful offers (or when no
+    // eligible targeted rider remains) the delivery moves to the manual
+    // Available Deliveries board. Transport rides keep the wave dispatch.
+    'sequential' => [
+        'offer_seconds' => (int) env('DISPATCH_TARGETED_OFFER_SECONDS', 30),
+        'max_attempts' => (int) env('DISPATCH_TARGETED_MAX_ATTEMPTS', 4),
+        'candidate_pool' => (int) env('DISPATCH_TARGETED_CANDIDATE_POOL', 10),
+        // Offer popup "Pickup: N min": rider → first pickup at this average
+        // motorbike speed (an estimate shown to the rider, never billed).
+        'offer_eta_speed_kmh' => (float) env('DISPATCH_OFFER_ETA_SPEED_KMH', 25),
+    ],
+    // Road distance (OSRM via DeliveryFeeService) for the pickup sequence and
+    // ranking the closest targeted candidates. Always falls back to
+    // straight-line distance and never blocks dispatch.
+    'dispatch_road_distance' => (bool) env('DISPATCH_ROAD_DISTANCE', true),
+    'dispatch_routing_timeout' => (int) env('DISPATCH_ROUTING_TIMEOUT', 2),
+    'dispatch_road_candidates' => (int) env('DISPATCH_ROAD_CANDIDATES', 3),
     'scheduler' => [
         // Total allowed attempts = 1 initial + max_retries retries.
         // Default sized so the retry loop can span the full dispatch cycle:

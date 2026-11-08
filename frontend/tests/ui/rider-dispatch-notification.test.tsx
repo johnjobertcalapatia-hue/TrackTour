@@ -131,7 +131,7 @@ describe('RiderDispatchNotification — real incoming order ping renders rider U
 
     await waitFor(() => expect(apiMock.get).toHaveBeenCalledWith('/rider/dispatch/offers'))
 
-    expect(screen.queryByText(/new booking request/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/new delivery offer/i)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /accept order request/i })).not.toBeInTheDocument()
   })
 
@@ -145,7 +145,7 @@ describe('RiderDispatchNotification — real incoming order ping renders rider U
 
     renderDispatch()
     await waitFor(() => expect(apiMock.get).toHaveBeenCalledWith('/rider/dispatch/offers'))
-    expect(screen.queryByText(/new booking request/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/new delivery offer/i)).not.toBeInTheDocument()
 
     // A rider backend offer now exists for THIS rider.
     offersResponse = [OFFER]
@@ -164,17 +164,19 @@ describe('RiderDispatchNotification — real incoming order ping renders rider U
     await screen.findByText(/new booking detected/i)
     // …and the HTTP-recovered receipt card follows.
     revealReceipt()
-    await screen.findByRole('heading', { name: /new booking request/i })
+    await screen.findByRole('heading', { name: 'Restaurant A' })
 
     // Order details the rider actually sees.
-    expect(screen.getByText(/TT-00099/)).toBeInTheDocument()
-    expect(screen.getAllByText('Restaurant A').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getByText(/new delivery offer/i)).toBeInTheDocument()
     expect(screen.getByText('123 Aquino St, Bansud')).toBeInTheDocument()
     expect(screen.getByText('456 Mabini St, Bansud')).toBeInTheDocument()
+    expect(screen.getByText(/2.4 km/)).toBeInTheDocument()
+    expect(screen.getByText(/Drop-off: 15 min/)).toBeInTheDocument()
+    // Items, order number and payout behind the minutes bar.
+    fireEvent.click(screen.getByRole('button', { name: /Pickup: .* Drop-off: 15 min/ }))
+    expect(screen.getByText(/TT-00099/)).toBeInTheDocument()
     expect(screen.getByText('Burger')).toBeInTheDocument()
     expect(screen.getByText('Fries')).toBeInTheDocument()
-    expect(screen.getByText(/2.4 km/)).toBeInTheDocument()
-    expect(screen.getByText('15 mins')).toBeInTheDocument()
     expect(screen.getByText(/₱\s*60\.00/)).toBeInTheDocument()
 
     const accept = screen.getByRole('button', { name: /accept order request/i })
@@ -195,7 +197,7 @@ describe('RiderDispatchNotification — real incoming order ping renders rider U
     renderDispatch()
     await screen.findByText(/new booking detected/i)
     revealReceipt()
-    await screen.findByRole('heading', { name: /new booking request/i })
+    await screen.findByRole('heading', { name: 'Restaurant A' })
     await screen.findByRole('button', { name: /accept order request/i })
 
     fireEvent.click(screen.getByRole('button', { name: /accept order request/i }))
@@ -223,7 +225,7 @@ describe('RiderDispatchNotification — real incoming order ping renders rider U
     await screen.findByText(/new booking detected/i)
     revealReceipt()
 
-    await screen.findByRole('heading', { name: /new booking request/i })
+    await screen.findByRole('heading', { name: 'Restaurant A' })
     expect(screen.getByText('456 Mabini St, Bansud')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /accept order request/i })).toBeInTheDocument()
 
@@ -255,7 +257,7 @@ describe('RiderDispatchNotification — real incoming order ping renders rider U
 
     await screen.findByText(/new booking detected/i)
     revealReceipt()
-    await screen.findByRole('heading', { name: /new booking request/i })
+    await screen.findByRole('heading', { name: 'Restaurant A' })
 
     // A repeated ping for an already-shown delivery just reconciles the same
     // single offer — exactly one accept action, one card.
@@ -264,7 +266,7 @@ describe('RiderDispatchNotification — real incoming order ping renders rider U
     })
 
     expect(screen.getAllByRole('button', { name: /accept order request/i })).toHaveLength(1)
-    expect(screen.getAllByRole('heading', { name: /new booking request/i })).toHaveLength(1)
+    expect(screen.getAllByRole('heading', { name: 'Restaurant A' })).toHaveLength(1)
   })
 
   it('a rider with no server-side offer never renders the ping card (wrong-rider isolation)', async () => {
@@ -285,7 +287,7 @@ describe('RiderDispatchNotification — real incoming order ping renders rider U
       socketMock.emit('order_received_ping', { deliveryId: '999', restaurantName: 'Other Rider Offer', timeoutSeconds: 30, distanceKm: 5 })
     })
 
-    expect(screen.queryByRole('heading', { name: /new booking request/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Restaurant A' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /accept order request/i })).not.toBeInTheDocument()
   })
 })

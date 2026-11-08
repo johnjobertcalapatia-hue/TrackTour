@@ -91,6 +91,8 @@ class BusinessOwnerKitchenController extends Controller
         $previousStatus = (string) $order->status;
 
         if ($validated['status'] === 'ready') {
+            // COD: refuse before any item is touched (bulk update skips model hooks).
+            app(\App\Services\CodPickupPaymentGuard::class)->assertCanMarkReady($order);
             $order->items()
                 ->whereNotIn('status', ['cancelled', 'rejected'])
                 ->update([

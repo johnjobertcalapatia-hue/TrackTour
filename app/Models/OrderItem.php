@@ -15,6 +15,17 @@ class OrderItem extends Model
 
         static::saved($syncOrderSize);
         static::deleted($syncOrderSize);
+
+        // COD "paid before ready" (rider trip flow, Stage B): an item may only
+        // be saved READY once its restaurant confirmed the rider's payment.
+        // (Bulk query updates bypass this hook; those call sites check the
+        // guard explicitly first.)
+        static::saving(function (OrderItem $item) {
+            if ($item->isDirty('status') && $item->status === 'ready' && $item->order) {
+                $guard = app(\App\Services\CodPickupPaymentGuard::class);
+                $guard->assertCanMarkReady($item->order, $guard->itemBusinessId($item, $item->order));
+            }
+        });
     }
 
     protected $fillable = [

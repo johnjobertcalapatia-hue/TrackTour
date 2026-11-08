@@ -30,7 +30,6 @@ use App\Http\Controllers\BusinessRegistrationController;
 use App\Http\Controllers\BusinessOwnerBookingManageController;
 use App\Http\Controllers\BusinessOwnerBusinessController;
 use App\Http\Controllers\BusinessOwnerBusinessManageController;
-use App\Http\Controllers\BusinessOwnerCustomerController;
 use App\Http\Controllers\BusinessOwnerDashboardController;
 use App\Http\Controllers\BusinessOwnerFoodController;
 use App\Http\Controllers\BusinessOwnerMenuController;
@@ -67,6 +66,7 @@ use App\Http\Controllers\TourismOffice\TourismManagementController;
 use App\Http\Controllers\TourismOffice\TourismOfficeDocumentController;
 use App\Http\Controllers\TourismOffice\TourismOfficeFullController;
 use App\Http\Controllers\Tourist\BookingController;
+use App\Http\Controllers\Tourist\StaysController;
 use App\Http\Controllers\Tourist\EventController;
 use App\Http\Controllers\Tourist\EventShowController;
 use App\Http\Controllers\Tourist\ExploreController;
@@ -104,6 +104,15 @@ Route::get('/payments/return', [PaymentController::class, 'paymongoReturn']);
 
 // Public: approved businesses for the landing page map
 Route::get('/map/businesses', [ExploreController::class, 'landingMap']);
+
+// Public: which covered municipality is the visitor in (nearest centre, ≤ 25 km)
+// Public: resort type + facility catalogue (dynamic resort system)
+Route::get('/resort-catalogue', [\App\Http\Controllers\ResortProfileController::class, 'catalogue']);
+
+Route::get('/municipalities/locate', \App\Http\Controllers\Api\MunicipalityLocateController::class)
+    ->middleware('throttle:30,1');
+// Public: real photos of a municipality (cover → attractions → businesses) for the tourist UI
+Route::get('/municipalities/{municipality}/photos', \App\Http\Controllers\Api\MunicipalityPhotosController::class);
 
 Route::get('/municipalities', function () {
     $municipalities = Municipality::with('barangays:id,municipality_id,name')
@@ -151,6 +160,8 @@ Route::prefix('tourist')->group(function () {
 
     // Stays listing & Events
     Route::get('/booking', [BookingController::class, 'index']);
+    // Stays & Deals browse page (all approved accommodations + attraction/resort promotions)
+    Route::get('/stays', [StaysController::class, 'index']);
     Route::get('/events', [EventController::class, 'index']);
     Route::get('/events/{id}', EventShowController::class);
 });
@@ -159,7 +170,10 @@ Route::prefix('tourist')->group(function () {
 Route::middleware('token.only')->group(function () {
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/user', [AuthController::class, 'user']);
-    Route::post('/email/verification-notification', [AuthController::class, 'sendVerificationEmail']);
+    Route::post('/email/verification-notification', [AuthController::class, 'sendVerificationEmail'])
+        ->middleware('throttle:5,1');
+    Route::post('/email/verification-otp', [AuthController::class, 'verifyEmailOtp'])
+        ->middleware('throttle:10,1');
     Route::post('/password/confirm', [AuthController::class, 'confirmPassword']);
 
     // Realtime socket room token (user:{id}) for the Zero-DB socket engine.
@@ -213,6 +227,8 @@ Route::middleware('token.only')->group(function () {
         Route::post('/food/order/{order}/cancel', [FoodController::class, 'cancelOrder']);
         Route::post('/food/order/{order}/cancel-item', [FoodController::class, 'cancelItem']);
         Route::post('/food/order/{order}/rate', [FoodController::class, 'rateOrder']);
+        // Per-dish review (My Orders → To Review → Write review): stars, feedback, photos
+        Route::post('/food/order/{order}/items/{item}/review', [\App\Http\Controllers\Tourist\OrderItemReviewController::class, 'store']);
         Route::post('/food/order/{order}/confirm-delivery', [FoodController::class, 'confirmDelivery']);
 
         // Multi-restaurant group checkout
@@ -259,10 +275,16 @@ Route::middleware('token.only')->group(function () {
 
         // History
         Route::get('/history', [HistoryController::class, 'index']);
+        // My Orders: tabbed, item-by-item (To pay / Preparing / In transit / To receive / To review)
+        Route::get('/orders', \App\Http\Controllers\Tourist\TouristOrderListController::class);
+        // My Activities → Travels: municipalities visited (deliveries, stays, rides)
+        Route::get('/travels', \App\Http\Controllers\Tourist\TouristTravelsController::class);
 
         // Profile
         Route::get('/profile', [TouristProfileController::class, 'show']);
         Route::put('/profile', [TouristProfileController::class, 'update']);
+        Route::post('/profile/photo', [TouristProfileController::class, 'uploadPhoto']);
+        Route::delete('/profile/photo', [TouristProfileController::class, 'deletePhoto']);
     });
 
     // ═══════════════════════════════════════════════════════════════════
@@ -298,6 +320,16 @@ Route::middleware('token.only')->group(function () {
             Route::get('/businesses/{business}', [BusinessOwnerBusinessManageController::class, 'show']);
             Route::put('/businesses/{business}', [BusinessOwnerBusinessManageController::class, 'update']);
             Route::put('/businesses/{business}/hours', [BusinessOwnerBusinessManageController::class, 'updateHours']);
+            Route::put('/businesses/{business}/accept-settings', [BusinessOwnerBusinessManageController::class, 'updateAcceptSettings']);
+            // Dynamic resort system (Stage 1): resort types + facilities
+            Route::get('/businesses/{business}/resort-profile', [\App\Http\Controllers\ResortProfileController::class, 'show']);
+            Route::put('/businesses/{business}/resort-profile', [\App\Http\Controllers\ResortProfileController::class, 'update']);
+            // Dynamic resort system (Stage 4): bookable offerings
+            Route::get('/businesses/{business}/resort-offerings', [\App\Http\Controllers\ResortOfferingController::class, 'index']);
+            Route::post('/businesses/{business}/resort-offerings', [\App\Http\Controllers\ResortOfferingController::class, 'store']);
+            Route::get('/businesses/{business}/resort-offerings/{offering}', [\App\Http\Controllers\ResortOfferingController::class, 'show']);
+            Route::put('/businesses/{business}/resort-offerings/{offering}', [\App\Http\Controllers\ResortOfferingController::class, 'update']);
+            Route::delete('/businesses/{business}/resort-offerings/{offering}', [\App\Http\Controllers\ResortOfferingController::class, 'destroy']);
             Route::put('/businesses/{business}/payment-methods', [BusinessOwnerBusinessManageController::class, 'updatePaymentMethods']);
             Route::get('/businesses/{business}/payments', [BusinessOwnerPaymentController::class, 'index']);
             Route::get('/businesses/{business}/payments/{order}', [BusinessOwnerPaymentController::class, 'show']);
@@ -348,9 +380,9 @@ Route::middleware('token.only')->group(function () {
             Route::get('/orders/deliveries', [BusinessOwnerOrderController::class, 'deliveryTracking']);
             Route::get('/orders/{order}', [BusinessOwnerOrderController::class, 'show']);
             Route::patch('/orders/{order}/status', [BusinessOwnerOrderController::class, 'updateStatus']);
-            Route::post('/orders/{order}/assign-rider', [BusinessOwnerOrderController::class, 'assignRider']);
             Route::post('/orders/{order}/start-preparation', [BusinessOwnerOrderController::class, 'startPreparation']);
             Route::post('/orders/{order}/mark-ready', [BusinessOwnerOrderController::class, 'markReady']);
+            Route::post('/orders/{order}/cod-payment-received', [BusinessOwnerOrderController::class, 'codPaymentReceived']);
             Route::patch('/orders/{order}/items/{item}/status', [BusinessOwnerOrderController::class, 'updateItemStatus']);
 
             // Realtime socket room token (business:{id}) for the Zero-DB socket engine.
@@ -416,12 +448,6 @@ Route::middleware('token.only')->group(function () {
             Route::get('/sales/payments', [$salesCtrl, 'payments']);
             Route::get('/sales/summary', [$salesCtrl, 'summary']);
 
-            // Customer Management
-            $customerCtrl = BusinessOwnerCustomerController::class;
-            Route::get('/customers', [$customerCtrl, 'index']);
-            Route::get('/customers/summary', [$customerCtrl, 'summary']);
-            Route::get('/customers/{customerId}', [$customerCtrl, 'show']);
-
             // Archive Vault
             $archiveCtrl = BusinessOwnerArchiveController::class;
             Route::get('/archive', [$archiveCtrl, 'index']);
@@ -459,6 +485,7 @@ Route::middleware('token.only')->group(function () {
         Route::get('/dashboard', [$ctrl, 'dashboard']);
         Route::get('/orders', [$ctrl, 'orders']);
         Route::patch('/orders/{order}/status', [$ctrl, 'updateOrderStatus']);
+        Route::post('/orders/{order}/cod-payment-received', [$ctrl, 'codPaymentReceived']);
         Route::get('/bookings', [$ctrl, 'bookings']);
         Route::patch('/bookings/{booking}/status', [$ctrl, 'updateBookingStatus']);
         Route::get('/menu', [\App\Http\Controllers\Staff\StaffMenuController::class, 'index']);
@@ -484,11 +511,16 @@ Route::middleware('token.only')->group(function () {
         Route::post('/service', [RiderController::class, 'switchService']);
         Route::patch('/auto-accept', [RiderController::class, 'switchAutoAccept']);
         Route::get('/deliveries/pending', [RiderDeliveryController::class, 'pending']);
+        Route::get('/deliveries/{delivery}/offer', [RiderDeliveryController::class, 'offer']);
+        Route::post('/deliveries/{delivery}/review', [RiderDeliveryController::class, 'review']);
+        Route::patch('/deliveries/{delivery}/review', [RiderDeliveryController::class, 'renewReview']);
+        Route::delete('/deliveries/{delivery}/review', [RiderDeliveryController::class, 'releaseReview']);
         Route::get('/deliveries/active', [RiderDeliveryController::class, 'active']);
         Route::get('/deliveries/completed', [RiderDeliveryController::class, 'completed']);
         Route::patch('/deliveries/{delivery}/status', [RiderDeliveryController::class, 'updateStatus']);
         Route::post('/deliveries/{delivery}/cancel-ride', [RiderDeliveryController::class, 'cancelRide']);
         Route::post('/deliveries/{delivery}/settle-cod', [RiderDeliveryController::class, 'settleCod']);
+        Route::post('/deliveries/{delivery}/complete', [RiderDeliveryController::class, 'complete']);
         Route::get('/deliveries/{delivery}/purchases', [RiderPurchasingController::class, 'purchases']);
         Route::get('/deliveries/{delivery}/pickup-route', [RiderDeliveryController::class, 'pickupRoute']);
         Route::get('/deliveries/{delivery}/pickup-stops', [RiderPickupStopController::class, 'index']);
@@ -586,6 +618,9 @@ Route::middleware('token.only')->group(function () {
         // Purchasing-cash (COD)
         Route::post('/deliveries/{delivery}/issue-purchasing-cash', [AdminPurchasingCashController::class, 'issue']);
         Route::post('/deliveries/{delivery}/purchasing-cash/additional', [AdminPurchasingCashController::class, 'issueAdditional']);
+        // Daily cash advance (2026-11-08): issued once per day, remitted after.
+        Route::get('/cash-advances', [AdminPurchasingCashController::class, 'advanceOverview']);
+        Route::post('/riders/{rider}/cash-fund/advances', [AdminPurchasingCashController::class, 'recordAdvance']);
         Route::get('/riders/{rider}/cash-fund', [AdminPurchasingCashController::class, 'riderLedger']);
         Route::get('/riders/{rider}/cash-fund/daily-receipt', [AdminPurchasingCashController::class, 'riderDailyReceipt']);
         Route::post('/riders/{rider}/cash-fund/returns', [AdminPurchasingCashController::class, 'recordCashFundReturn']);

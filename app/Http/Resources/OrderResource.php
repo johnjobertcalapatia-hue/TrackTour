@@ -58,6 +58,14 @@ class OrderResource extends JsonResource
             'discount' => $this->discount,
             'paid_amount' => $this->paid_amount,
             'payment_method' => $this->payment_method,
+            'payment_status' => $this->when(
+                $request->attributes->has('business_owner_restaurant_purchases'),
+                $this->payment_status
+            ),
+            'restaurant_purchases' => $this->when(
+                $request->attributes->has('business_owner_restaurant_purchases'),
+                fn () => $request->attributes->get('business_owner_restaurant_purchases')[$this->id] ?? []
+            ),
             'special_instructions' => $this->notes,
             'delivery' => new DeliveryResource($this->whenLoaded('delivery')),
             'cancelled_by' => $this->cancelled_by,

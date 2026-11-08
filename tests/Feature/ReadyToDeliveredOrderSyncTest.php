@@ -11,6 +11,7 @@ use App\Models\RiderDetail;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use Tests\Concerns\CompletesDeliveriesWithProof;
 use Tests\TestCase;
 
 /**
@@ -20,6 +21,7 @@ use Tests\TestCase;
  */
 class ReadyToDeliveredOrderSyncTest extends TestCase
 {
+    use CompletesDeliveriesWithProof;
     use RefreshDatabase;
 
     private User $owner;
@@ -135,8 +137,8 @@ class ReadyToDeliveredOrderSyncTest extends TestCase
             ->assertStatus(422)
             ->assertJson(['success' => false]);
 
-        $this->withHeader('Authorization', 'Bearer '.$this->customer->createToken('test')->plainTextToken)
-            ->postJson('/api/tourist/food/order/'.$this->order->id.'/confirm-delivery')
+        // Reconciled 2026-11-08 (AGENTS.md §12; product decision): the rider completes a food delivery with a proof photo at the drop-off, which also records the COD cash; the tourist confirm-delivery step is retired.
+        $this->riderCompletesDelivery($this->delivery, $this->rider)
             ->assertOk()
             ->assertJson(['success' => true]);
 

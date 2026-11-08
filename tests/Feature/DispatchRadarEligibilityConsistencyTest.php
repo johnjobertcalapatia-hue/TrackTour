@@ -250,12 +250,19 @@ class DispatchRadarEligibilityConsistencyTest extends TestCase
         );
     }
 
+    /**
+     * Reconciled 2026-11-07 (AGENTS.md §12; docs/dispatch-escalation-plan.md, approved): with no eligible
+     * rider a FOOD delivery now waits on the manual Available Deliveries board
+     * (sequential dispatch) instead of parking in the 5-minute retry loop. The
+     * eligibility exclusions under test are unchanged: the excluded rider
+     * receives NO offer, and the delivery is never a dead end (claimable).
+     */
     private function assertParked(Delivery $delivery): void
     {
         $delivery->refresh();
-        $this->assertSame('no_rider_available', $delivery->dispatch_status);
-        $this->assertNotNull($delivery->dispatch_retry_at, 'No candidate still parks with a retry — never a dead end.');
-        $this->assertTrue($delivery->dispatch_retry_at->isFuture());
+        $this->assertSame('waiting_for_rider', $delivery->dispatch_status);
+        $this->assertSame('manual', $delivery->dispatch_phase, 'No eligible targeted rider → manual board, never a dead end.');
+        $this->assertNull($delivery->dispatch_retry_at);
         $this->assertSame(0, BookingDispatchLog::where('delivery_id', $delivery->id)->count());
     }
 

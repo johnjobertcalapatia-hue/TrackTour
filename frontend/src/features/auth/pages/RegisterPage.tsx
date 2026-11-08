@@ -273,11 +273,10 @@ export default function RegisterPage() {
 
       const user = await registerUser(fd as unknown as Record<string, unknown>)
       clearDraft()
-      if (user.role === 'business_owner') {
-        navigate('/business-owner/account-status', { state: { registered: true } })
-      } else {
-        navigate(resolvePostAuthDestination(user.role))
-      }
+      const returnTo = user.role === 'business_owner'
+        ? '/business-owner/account-status'
+        : resolvePostAuthDestination(user.role)
+      navigate('/verify-email', { state: { email: user.email, returnTo } })
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { message?: string; errors?: Record<string, string[]> } } }
       if (axiosErr.response?.data?.errors) {

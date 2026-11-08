@@ -247,8 +247,10 @@ class DeliveryOfferConcurrencyTest extends TestCase
 
     // ---------- tests ----------
 
-    public function test_dispatch_offers_to_every_eligible_rider_in_a_single_wave(): void
+    public function test_food_dispatch_offers_only_the_nearest_eligible_rider(): void
     {
+        // Reconciled 2026-11-07 (AGENTS.md §12; docs/dispatch-escalation-plan.md, approved): food deliveries
+        // use sequential targeted offers: ONE nearest eligible rider at a time.
         $business = $this->makeBusiness('Wave Test');
         $riderA = $this->makeRider('wave-a@example.com');
         $riderB = $this->makeRider('wave-b@example.com');
@@ -259,10 +261,34 @@ class DeliveryOfferConcurrencyTest extends TestCase
 
         $nearest = $this->service->dispatchToNearest($delivery, 'food');
 
-        $this->assertSame($riderA->id, $nearest->id, 'Nearest candidate is returned as the wave representative.');
-        $this->assertSame(3, $this->pendingLogs($delivery)->where('response', 'pending')->count());
+        $this->assertSame($riderA->id, $nearest->id);
+        $this->assertSame(1, $this->pendingLogs($delivery)->where('response', 'pending')->count());
+        $this->assertSame($riderA->id, (int) $this->pendingLogs($delivery)->where('response', 'pending')->value('rider_id'));
         $this->assertSame('notified', $delivery->fresh()->dispatch_status);
         $this->assertNotNull($delivery->fresh()->dispatch_expires_at);
+    }
+
+    public function test_transport_dispatch_still_offers_every_eligible_rider_in_a_single_wave(): void
+    {
+        // Ride-hailing keeps the simultaneous wave (approved decision D1).
+        $business = $this->makeBusiness('Transport Wave');
+        $riders = collect(['tw-a', 'tw-b', 'tw-c'])->map(fn ($e) => $this->makeRider("{$e}@example.com", ['current_service' => 'transport']));
+        $this->setCandidates($riders->all());
+
+        $delivery = $this->makeManualDelivery($this->makeTransportOrder($business));
+
+        $nearest = $this->service->dispatchToNearest($delivery, 'transport');
+
+        $this->assertSame($riders[0]->id, $nearest->id, 'Nearest candidate is returned as the wave representative.');
+        $this->assertSame(3, $this->pendingLogs($delivery)->where('response', 'pending')->count());
+    }
+
+    private function makeTransportOrder(Business $business): Order
+    {
+        $order = $this->makeOrder($business);
+        $order->update(['order_type' => 'transport', 'status' => 'pending']);
+
+        return $order->fresh();
     }
 
     public function test_first_accepted_offer_wins_and_loser_gets_conflict_and_cancelled(): void
@@ -327,16 +353,19 @@ class DeliveryOfferConcurrencyTest extends TestCase
 
     public function test_three_riders_each_offered_and_losers_cancelled_and_notified(): void
     {
+        // Reconciled 2026-11-07 (AGENTS.md §12; docs/dispatch-escalation-plan.md, approved): the multi-offer
+        // wave now exists only for transport (D1), so this loser-cancellation
+        // contract is exercised on a transport ride.
         $business = $this->makeBusiness('C Three Riders');
-        $riderA = $this->makeRider('three-a@example.com');
-        $riderB = $this->makeRider('three-b@example.com');
-        $riderC = $this->makeRider('three-c@example.com');
+        $riderA = $this->makeRider('three-a@example.com', ['current_service' => 'transport']);
+        $riderB = $this->makeRider('three-b@example.com', ['current_service' => 'transport']);
+        $riderC = $this->makeRider('three-c@example.com', ['current_service' => 'transport']);
         $this->setCandidates([$riderA, $riderB, $riderC]);
 
-        $delivery = $this->makeManualDelivery($this->makeOrder($business));
+        $delivery = $this->makeManualDelivery($this->makeTransportOrder($business));
 
         // Real wave: everyone gets their own offer.
-        $this->service->dispatchToNearest($delivery, 'food');
+        $this->service->dispatchToNearest($delivery, 'transport');
         $this->assertSame(3, $this->pendingLogs($delivery)->where('response', 'pending')->count());
 
         // Rider C (whoever is chosen) accepts.
@@ -509,24 +538,14 @@ class DeliveryOfferConcurrencyTest extends TestCase
         $this->assertTrue($result['timeout']);
         $this->assertTrue($result['conflict']);
 
-        // Reconciled (AGENTS §12 — test drifted from the authoritative rule).
-        //
-        // This previously asserted A stayed 'timeout'. A timed-out offer means
-        // the rider NEVER ANSWERED (missed ping, closed app, dropped socket),
-        // so once the wave is exhausted the same rider is offerable again: the
-        // re-dispatch reopens A's own row back to 'pending'. Keeping A
-        // permanently excluded was an artifact of filtering on `response =
-        // ANY` in alreadyDispatchedRiderIds — and because UNIQUE(delivery_id,
-        // rider_id) forbids a second row, it left a single-candidate delivery
-        // with NO re-offer path at all (the verified missed-ping failure).
-        //
-        // The documented rule that IS preserved: live offers are left alone
-        // (redispatchIfOffered only runs once no 'pending' offer remains), and
-        // a DECLINE is still never re-offered — see
-        // test_rider_decline_reoffers_delivery_to_next_eligible_rider.
-        $this->assertSame('pending', $this->pendingLogs($delivery, $riderA)->first()->response);
+        // Reconciled 2026-11-07 (AGENTS.md §12; docs/dispatch-escalation-plan.md, approved): the spec forbids
+        // selecting the same rider again for the same order, so A's timed-out
+        // offer STAYS 'timeout' (the 2026-10 reopen rule applied to the legacy
+        // wave; food now uses sequential targeted offers). The missed-ping dead
+        // end is covered by the manual board instead. The next nearest
+        // eligible rider (B) receives the single targeted offer.
+        $this->assertSame('timeout', $this->pendingLogs($delivery, $riderA)->first()->response);
 
-        // The delivery was re-offered to a fresh rider once the wave was empty.
         $this->assertNull($delivery->fresh()->rider_id);
         $this->assertSame('notified', $delivery->fresh()->dispatch_status);
         $this->assertTrue($this->pendingLogs($delivery, $riderB)->where('response', 'pending')->exists());

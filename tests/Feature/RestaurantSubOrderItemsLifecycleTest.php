@@ -17,6 +17,7 @@ use App\Services\NearestRiderService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Hash;
+use Tests\Concerns\ConfirmsCodRestaurantPayments;
 use Tests\TestCase;
 
 /**
@@ -34,6 +35,7 @@ use Tests\TestCase;
  */
 class RestaurantSubOrderItemsLifecycleTest extends TestCase
 {
+    use ConfirmsCodRestaurantPayments;
     use RefreshDatabase;
 
     private User $ownerA;
@@ -305,6 +307,8 @@ public function test_one_order_item_readiness_gate_and_shared_delivery_rules(): 
         $itemPasta = $order->items->firstWhere('product_name', 'Pasta');
 
         // 5. Restaurant A readies Burger + Coke; Fries stays preparing.
+        // Stage B (2026-11-08): COD food becomes ready only after the restaurant confirms the rider's payment.
+        $this->confirmRestaurantPayments($order);
         $this->patchJson("/api/business-owner/orders/{$order->id}/items/{$itemBurger->id}/status", [
             'status' => 'ready',
         ], $this->authHeaders($this->ownerA))->assertOk();

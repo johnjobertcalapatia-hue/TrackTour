@@ -19,7 +19,7 @@ export interface ResolvePickupRouteInput {
   hasPickupStops: boolean
   /** True once every restaurant pickup stop has been confirmed. */
   allCollected: boolean
-  /** Per-restaurant stops in drive order (ascending preparation time). */
+  /** Per-restaurant stops in drive order (farthest from the tourist first). */
   stops: StagedRouteStop[]
   /** The tourist drop-off destination. */
   destination: StagedRoutePoint | null

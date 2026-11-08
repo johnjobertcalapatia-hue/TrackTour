@@ -15,7 +15,7 @@
 
 export type PickupStopStatus = 'pending' | 'collected'
 export type PickupStopReadyLabel = 'ready' | 'preparing' | 'accepted' | 'none'
-export type PickupStopBlockReason = 'not_current' | 'waiting_arrival' | 'waiting_ready' | 'too_far' | 'gps_unavailable' | 'already_confirmed' | null
+export type PickupStopBlockReason = 'not_current' | 'waiting_arrival' | 'waiting_payment' | 'waiting_ready' | 'too_far' | 'gps_unavailable' | 'already_confirmed' | null
 
 export interface PickupStopItem {
   id: number
@@ -37,9 +37,13 @@ export interface PickupStopCodPurchase {
 }
 
 export interface PickupStop {
+  /** COD only (null for prepaid): the restaurant confirmed the rider's payment. */
+  payment_confirmed?: boolean | null
   id: number
   business_id: number
   business_name: string | null
+  /** Restaurant photo (logo, else cover) for the map pin, as on the tourist map. */
+  business_logo?: string | null
   sequence: number
   preparation_time: number | null
   pickup_lat: number | null
@@ -92,6 +96,8 @@ export function pickupStopReasonLabel(reason: PickupStopBlockReason): string | n
       return 'Confirm arrival before pickup.'
     case 'not_current':
       return 'Confirm the pickups in route order.'
+    case 'waiting_payment':
+      return 'Pay the restaurant, then wait for it to confirm "Payment received".'
     case 'waiting_ready':
       return 'The restaurant is still preparing your order.'
     case 'too_far':

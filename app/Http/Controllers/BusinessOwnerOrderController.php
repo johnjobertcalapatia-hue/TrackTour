@@ -5,15 +5,16 @@ namespace App\Http\Controllers;
 use App\Http\Requests\BusinessOwner\UpdateOrderStatusRequest;
 use App\Events\OrderStatusChanged;
 use App\Http\Resources\OrderResource;
+use App\Models\CodPurchase;
 use App\Models\Order;
 use App\Models\OrderItem;
-use App\Models\User;
 use App\Services\OrderService;
 use App\Services\PreparationPredictionService;
 use App\Services\PreparationStartService;
 use App\Services\SmartDispatchService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 
 class BusinessOwnerOrderController extends Controller
@@ -38,6 +39,8 @@ class BusinessOwnerOrderController extends Controller
             ->latest()
             ->paginate($perPage);
 
+        $this->attachRestaurantPurchases($request, collect($orders->items()), $businessIds);
+
         return $this->paginatedResponse(
             $orders->through(fn ($o) => OrderResource::make($o))
         );
@@ -49,9 +52,67 @@ class BusinessOwnerOrderController extends Controller
             return $this->forbiddenResponse('You do not own this business.');
         }
 
+        $businessIds = $request->user()->businesses()->pluck('id');
         $order->load('items.offering', 'business', 'delivery.rider.profile', 'groupOrder');
+        $this->attachRestaurantPurchases($request, collect([$order]), $businessIds);
 
         return $this->successResponse(OrderResource::make($order));
+    }
+
+    private function attachRestaurantPurchases(Request $request, Collection $orders, Collection $businessIds): void
+    {
+        $deliveryIds = $orders->map(fn (Order $order) => $order->delivery?->id)->filter()->values();
+        $purchases = CodPurchase::query()
+            ->whereIn('delivery_id', $deliveryIds)
+            ->whereIn('business_id', $businessIds)
+            ->get()
+            ->keyBy(fn (CodPurchase $purchase) => "{$purchase->delivery_id}:{$purchase->business_id}");
+
+        $records = [];
+        foreach ($orders as $order) {
+            if ($order->payment_method !== 'cash' || $order->order_type !== 'delivery') {
+                $records[$order->id] = [];
+                continue;
+            }
+
+            $participatingBusinessIds = collect([$order->business_id])
+                ->merge($order->items->pluck('business_id'))
+                ->filter(fn ($businessId) => $businessIds->contains($businessId))
+                ->unique()
+                ->values();
+
+            $records[$order->id] = $participatingBusinessIds->map(function ($businessId) use ($order, $purchases) {
+                $purchase = $order->delivery
+                    ? $purchases->get("{$order->delivery->id}:{$businessId}")
+                    : null;
+                $paid = in_array($purchase?->status, [
+                    CodPurchase::STATUS_PURCHASED,
+                    CodPurchase::STATUS_COLLECTED,
+                ], true);
+
+                // Stage B: the restaurant's own confirmation is what unlocks
+                // READY; the rider must have checked in at this restaurant first.
+                $stop = $order->delivery
+                    ? \App\Models\DeliveryPickupStop::where('delivery_id', $order->delivery->id)->where('business_id', $businessId)->first()
+                    : null;
+                $deliveryStatus = $order->delivery?->status?->value ?? $order->delivery?->status;
+
+                return [
+                    'business_id' => $businessId,
+                    'status' => $paid ? 'paid' : 'pending',
+                    'paid_at' => $purchase?->purchased_at?->toISOString(),
+                    'purchase_amount' => $purchase ? (float) $purchase->purchase_amount : null,
+                    'payment_confirmed_at' => $purchase?->payment_confirmed_at?->toISOString(),
+                    'rider_arrived_at' => $stop?->arrived_at?->toISOString(),
+                    'can_confirm_payment' => $purchase !== null
+                        && $purchase->payment_confirmed_at === null
+                        && $stop?->arrived_at !== null
+                        && in_array($deliveryStatus, \App\Services\CodPaymentConfirmationService::PICKUP_STAGE, true),
+                ];
+            })->all();
+        }
+
+        $request->attributes->set('business_owner_restaurant_purchases', $records);
     }
 
     public function updateStatus(UpdateOrderStatusRequest $request, Order $order): JsonResponse
@@ -264,54 +325,6 @@ class BusinessOwnerOrderController extends Controller
         );
     }
 
-    public function assignRider(Request $request, Order $order): JsonResponse
-    {
-        if (! $order->isManagedBy($request->user())) {
-            return $this->forbiddenResponse('You do not own this business.');
-        }
-
-        $validated = $request->validate([
-            'rider_id' => ['required', 'integer', 'exists:users,id'],
-        ]);
-
-        $previousStatus = (string) $order->status;
-
-        $rider = User::findOrFail($validated['rider_id']);
-
-        // Standalone orders own their delivery; group sub-orders ride on the
-        // group's single physical delivery (4.4).
-        if ($order->group_order_id !== null) {
-            $delivery = $order->activeDelivery()
-                ?? app(\App\Services\SmartDispatchService::class)->createOrGetGroupDelivery($order->groupOrder);
-
-            if (! $delivery) {
-                return $this->errorResponse('Unable to create a delivery for this group order.', 409);
-            }
-        } else {
-            $delivery = $order->delivery()->firstOrNew();
-        }
-
-        $delivery->rider_id = $rider->id;
-        $delivery->status = 'assigned';
-        $delivery->assigned_at = now();
-        $delivery->delivery_address = $order->delivery_address;
-        $delivery->save();
-
-        $order->update(['status' => 'accepted']);
-
-        OrderStatusChanged::dispatch(
-            $order->fresh(),
-            $previousStatus,
-            'accepted',
-            $request->user(),
-        );
-
-        return $this->successResponse(
-            OrderResource::make($order->fresh()->load('business', 'items.offering', 'delivery.rider.profile')),
-            'Rider assigned successfully.'
-        );
-    }
-
     public function deliveryTracking(Request $request): JsonResponse
     {
         $businessIds = $request->user()->businesses()->pluck('id');
@@ -384,6 +397,9 @@ class BusinessOwnerOrderController extends Controller
         }
 
         $previousStatus = (string) $order->status;
+
+        // COD: refuse before any item is touched (bulk update skips model hooks).
+        app(\App\Services\CodPickupPaymentGuard::class)->assertCanMarkReady($order);
 
         // Mark all active items as ready
         $order->items()
@@ -754,5 +770,55 @@ class BusinessOwnerOrderController extends Controller
     private function requiresAcceptedRider(Order $order): bool
     {
         return $order->order_type === 'delivery' && ! $order->hasAcceptedRider();
+    }
+
+    /**
+     * POST /business-owner/orders/{order}/cod-payment-received  {business_id?}
+     *
+     * The restaurant confirms it received the rider's COD payment for its
+     * pickup stop (rider trip flow, Stage B). Only this unlocks READY for the
+     * restaurant's items. business_id is required only when the owner runs
+     * more than one restaurant in the same (multi-restaurant) order.
+     */
+    public function codPaymentReceived(Request $request, Order $order): JsonResponse
+    {
+        $user = $request->user();
+        $validated = $request->validate(['business_id' => ['nullable', 'integer']]);
+
+        $owned = \App\Models\Business::where('owner_id', $user->id)->pluck('id')->map(fn ($id) => (int) $id);
+        $inOrder = $order->items()
+            ->whereNotIn('status', ['cancelled', 'rejected'])
+            ->get(['business_id'])
+            ->map(fn ($i) => (int) ($i->business_id ?: $order->business_id))
+            ->push((int) $order->business_id)
+            ->filter()
+            ->unique();
+        $candidates = $inOrder->intersect($owned)->values();
+
+        if ($candidates->isEmpty()) {
+            return $this->forbiddenResponse('You do not own a restaurant in this order.');
+        }
+        if (! empty($validated['business_id'])) {
+            if (! $candidates->contains((int) $validated['business_id'])) {
+                return $this->forbiddenResponse('You do not own that restaurant in this order.');
+            }
+            $businessId = (int) $validated['business_id'];
+        } elseif ($candidates->count() === 1) {
+            $businessId = $candidates->first();
+        } else {
+            return $this->errorResponse('Choose which of your restaurants received the payment.', 422);
+        }
+
+        try {
+            $result = app(\App\Services\CodPaymentConfirmationService::class)
+                ->confirm($order, \App\Models\Business::findOrFail($businessId), $user);
+        } catch (\InvalidArgumentException $e) {
+            return $this->errorResponse($e->getMessage(), 422);
+        }
+
+        return $this->successResponse(
+            $result + ['order' => OrderResource::make($order->fresh()->load('business', 'items.offering', 'delivery.rider.profile'))],
+            $result['already_confirmed'] ? 'Payment was already confirmed.' : 'Payment received. You can now mark the food ready.'
+        );
     }
 }

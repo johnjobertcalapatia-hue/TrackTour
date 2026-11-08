@@ -51,7 +51,7 @@ interface DashboardLayoutProps {
   roleLabel: string
   children?: ReactNode
   sidebarTopSlot?: ReactNode
-  theme?: 'default' | 'tourism' | 'admin'
+  theme?: 'default' | 'tourism' | 'tourism-office' | 'admin'
   profilePath?: string
   preferExpanded?: boolean
   bottomNavigation?: boolean
@@ -59,7 +59,8 @@ interface DashboardLayoutProps {
 }
 
 export default function DashboardLayout({ navItems, roleLabel, sections, sidebarTopSlot, theme = 'default', profilePath, preferExpanded = false, bottomNavigation = false, bottomPanelSlot }: DashboardLayoutProps) {
-  const tourism = theme === 'tourism'
+  const tourismOffice = theme === 'tourism-office'
+  const tourism = theme === 'tourism' || tourismOffice
   const admin = theme === 'admin'
   const user = useAuthStore((s) => s.user)
   const setUser = useAuthStore((s) => s.setUser)
@@ -276,16 +277,20 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                     }
                   }}
                   className={cn(
-                    'flex items-center gap-3 py-2.5 text-sm font-medium transition-all duration-150',
+                    'flex w-full min-w-0 items-center gap-3 py-2.5 text-sm font-medium transition-all duration-150',
                     collapsed ? 'justify-center px-0 mx-1' : 'px-3',
                     isActive(item.to)
                       ? admin
-                        ? 'bg-[#087F3F] text-white border-l-[3px] border-[#F4B400] rounded-r-[10px] shadow-sm'
+                        ? 'tourism-office-active-nav bg-[#E9F7EF] text-[#087F3F]'
+                        : tourismOffice
+                        ? 'tourism-office-active-nav bg-[#E9F7EF] text-[#087F3F] shadow-[3px_3px_7px_rgba(45,80,55,0.10),-3px_-3px_7px_rgba(255,255,255,0.48)]'
+                        : roleLabel === 'Business Owner'
+                        ? 'tourism-office-active-nav bg-[#E9F7EF] text-[#087F3F] shadow-[3px_3px_7px_rgba(45,80,55,0.10),-3px_-3px_7px_rgba(255,255,255,0.48)]'
                         : tourism
                         ? 'bg-[#E9F7EF] text-[#087F3F] border-l-[3px] border-[#087F3F] rounded-r-[10px]'
                         : 'bg-primary/10 text-primary border-l-4 border-primary'
                       : admin
-                        ? 'text-[#087F3F] hover:bg-[#E9F7EF] hover:text-[#056B35]'
+                        ? 'text-[#68736D] hover:bg-[#F3F8F4] hover:text-[#087F3F]'
                         : tourism
                         ? 'text-[#68736D] hover:bg-[#F3F8F4] hover:text-[#087F3F]'
                         : 'text-ink-soft hover:bg-white/70 hover:text-ink',
@@ -293,7 +298,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                   )}
                 >
                   {item.icon && <span className="w-5 h-5 shrink-0">{item.icon}</span>}
-                  {!collapsed && <span>{item.label}</span>}
+                  {!collapsed && <span className="truncate">{item.label}</span>}
                 </Link>
                 {collapsed && (
                   <div className="absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2.5 py-1 bg-white text-ink text-xs font-medium rounded-md whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50 shadow-lg border border-ink/5">
@@ -311,23 +316,27 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
         <Link
           to={item.to}
           className={cn(
-            'flex items-center gap-3 py-2.5 text-sm font-medium transition-all duration-150',
+            'flex w-full min-w-0 items-center gap-3 py-2.5 text-sm font-medium transition-all duration-150',
             collapsed ? 'justify-center px-0 mx-1' : 'px-3',
             isActive(item.to)
                 ? admin
-                  ? 'bg-[#087F3F] text-white border-l-[3px] border-[#F4B400] rounded-r-[10px] shadow-sm'
-                  : tourism
+                  ? 'tourism-office-active-nav bg-[#E9F7EF] text-[#087F3F]'
+                  : tourismOffice
+                  ? 'tourism-office-active-nav bg-[#E9F7EF] text-[#087F3F] shadow-[3px_3px_7px_rgba(45,80,55,0.10),-3px_-3px_7px_rgba(255,255,255,0.48)]'
+                : roleLabel === 'Business Owner'
+                ? 'tourism-office-active-nav bg-[#E9F7EF] text-[#087F3F] shadow-[3px_3px_7px_rgba(45,80,55,0.10),-3px_-3px_7px_rgba(255,255,255,0.48)]'
+                : tourism
                   ? 'bg-[#E9F7EF] text-[#087F3F] border-l-[3px] border-[#087F3F] rounded-r-[10px]'
                   : 'bg-primary/10 text-primary border-l-4 border-primary'
               : admin
-                ? 'text-[#087F3F] hover:bg-[#E9F7EF] hover:text-[#056B35]'
+                ? 'text-[#68736D] hover:bg-[#F3F8F4] hover:text-[#087F3F]'
                 : tourism
                 ? 'text-[#68736D] hover:bg-[#F3F8F4] hover:text-[#087F3F]'
                 : 'text-ink-soft hover:bg-white/70 hover:text-ink'
           )}
         >
           {item.icon && <span className="w-5 h-5 shrink-0">{item.icon}</span>}
-          {!collapsed && <span>{item.label}</span>}
+          {!collapsed && <span className="truncate">{item.label}</span>}
         </Link>
 {collapsed && (
           <div className="absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2.5 py-1 bg-white text-ink text-xs font-medium rounded-md whitespace-nowrap opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity z-50 shadow-lg border border-ink/5">
@@ -518,7 +527,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
   }
 
   return (
-    <div className={cn('flex h-[100dvh] w-full min-w-0 overflow-x-hidden text-ink', tourism ? 'tourism-bg text-[#17201B]' : 'glass-bg')}>
+    <div className={cn('flex h-[100dvh] w-full min-w-0 overflow-x-hidden text-ink', tourism ? 'tourism-bg text-[#17201B]' : 'glass-bg', riderMapPage && 'rider-map-flat')}>
       <aside
         className={cn(
           'fixed inset-y-0 left-0 z-50 flex flex-col transition-all duration-300 ease-in-out',
@@ -554,8 +563,8 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                 )}
               </div>
               <div className="min-w-0">
-                <p className={cn('text-sm font-medium truncate', admin ? 'text-[#17201B]' : tourism ? 'text-[#17201B]' : 'text-ink-soft')}>{user?.name}</p>
-                <p className={cn('text-[11px] truncate', admin ? 'text-[#68736D]' : tourism ? 'text-[#68736D]' : 'text-ink-soft')}>{roleLabel}</p>
+                <p className={cn('text-sm font-medium truncate', admin ? 'text-[#087F3F]' : tourism ? 'text-[#17201B]' : 'text-ink-soft')}>{user?.name}</p>
+                <p className={cn('text-[11px] truncate', admin ? 'text-[#16803C]' : tourism ? 'text-[#68736D]' : 'text-ink-soft')}>{roleLabel}</p>
               </div>
             </div>
           </div>
@@ -569,7 +578,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
           </div>
         )}
 
-        <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5 scrollbar-thin scrollbar-thumb-gray-300">
+        <nav className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto py-3 px-2 space-y-0.5 scrollbar-thin scrollbar-thumb-gray-300">
           {renderNavItems()}
         </nav>
 
@@ -630,6 +639,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
         <header className={cn(
           'relative z-40 h-16 shrink-0 flex items-center w-full px-4 sm:px-6 gap-4',
           bottomNavigation && 'max-w-[480px] mx-auto',
+          bottomNavigation && 'rider-layout-header',
           !bottomNavigation && (tourism ? 'tourism-nav' : 'glass-nav')
         )}>
           {!bottomNavigation && (
@@ -644,7 +654,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                   className="flex items-center gap-3 rounded-xl p-1.5 text-left transition hover:bg-black/5"
                 >
 <div className="flex flex-col items-center gap-1 mt-2">
-                      <div className={cn('w-11 h-11 rounded-full flex items-center justify-center text-base font-bold overflow-hidden', tourism ? 'bg-[#087F3F] text-white' : 'bg-white/70 backdrop-blur-md border border-white/50 shadow-glass text-primary')}>
+                      <div className={cn('w-11 h-11 rounded-full flex items-center justify-center text-base font-bold overflow-hidden', admin || tourism ? 'bg-[#087F3F] text-white' : 'bg-white/70 backdrop-blur-md border border-white/50 text-primary')}>
                         {toAssetUrl(user?.profile_photo) ? (
                           <img src={toAssetUrl(user?.profile_photo)} alt={user?.name} className="w-full h-full object-cover" />
                         ) : (
@@ -659,8 +669,8 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                       )}
                     </div>
                   <div className="hidden sm:block">
-                    <p className={cn('text-sm font-semibold', tourism ? 'text-[#17201B]' : 'text-ink')}>{user?.name}</p>
-                    <p className={cn('text-xs', tourism ? 'text-[#68736D]' : 'text-ink-soft')}>{roleLabel}</p>
+                    <p className={cn('text-sm font-semibold', admin ? 'text-[#087F3F]' : tourism ? 'text-[#17201B]' : 'text-ink')}>{user?.name}</p>
+                    <p className={cn('text-xs', admin ? 'text-[#16803C]' : tourism ? 'text-[#68736D]' : 'text-ink-soft')}>{roleLabel}</p>
                   </div>
                 </button>
                 {profileMenuOpen && (
@@ -692,7 +702,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
             ) : (
               <>
 <div className="flex flex-col items-center gap-1 mt-2">
-                    <div className={cn('w-11 h-11 rounded-full flex items-center justify-center text-base font-bold overflow-hidden', tourism ? 'bg-[#087F3F] text-white' : 'bg-white/70 backdrop-blur-md border border-white/50 shadow-glass text-primary')}>
+                    <div className={cn('w-11 h-11 rounded-full flex items-center justify-center text-base font-bold overflow-hidden', admin || tourism ? 'bg-[#087F3F] text-white' : 'bg-white/70 backdrop-blur-md border border-white/50 text-primary')}>
         {toAssetUrl(user?.profile_photo) ? (
           <img src={toAssetUrl(user?.profile_photo)} alt={user?.name} className="w-full h-full object-cover" />
         ) : (
@@ -707,8 +717,8 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                     )}
                   </div>
                 <div className="hidden sm:block">
-                  <p className={cn('text-sm font-semibold', tourism ? 'text-[#17201B]' : 'text-ink')}>{user?.name}</p>
-                  <p className={cn('text-xs', tourism ? 'text-[#68736D]' : 'text-ink-soft')}>{roleLabel}</p>
+                  <p className={cn('text-sm font-semibold', admin ? 'text-[#087F3F]' : tourism ? 'text-[#17201B]' : 'text-ink')}>{user?.name}</p>
+                  <p className={cn('text-xs', admin ? 'text-[#16803C]' : tourism ? 'text-[#68736D]' : 'text-ink-soft')}>{roleLabel}</p>
                 </div>
               </>
             )}
@@ -725,7 +735,8 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
             riderChromeHidden
               ? 'pb-6 sm:pb-8'
               : bottomNavigation
-                ? 'pb-24'
+                // Clears the fixed rider bar (+10 px bottom margin, safe area).
+                ? 'rider-content-bottom-pad'
                 : 'pb-5 sm:pb-6 lg:pb-6'
           )}>
             <Suspense
@@ -748,7 +759,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
 
       {bottomNavigation && !riderChromeHidden && (
         <div className={cn(
-          'fixed bottom-6 left-2 right-2 sm:left-4 sm:right-4 z-[1150] max-w-[480px] mx-auto flex flex-col gap-3 transition-all duration-[1000ms] ease-[cubic-bezier(0.25,0.1,0.25,1)]'
+          'rider-bottom-bar fixed left-2 right-2 sm:left-4 sm:right-4 z-[1150] max-w-[480px] mx-auto flex flex-col gap-3 transition-all duration-[1000ms] ease-[cubic-bezier(0.25,0.1,0.25,1)]'
         )}>
           {toggleError && (
             <div role="alert" className="absolute -top-14 left-1/2 -translate-x-1/2 max-w-[90vw] rounded-lg bg-[#B3261E] px-4 py-2.5 text-xs font-medium text-white shadow-lg">
@@ -761,26 +772,30 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
               onClick={toggleRiderAvailability}
               disabled={toggling || inTrip}
               aria-busy={toggling}
+              aria-label={inTrip ? 'On a trip' : effectivelyOnline ? 'Go Offline' : 'Go Online'}
               className={cn(
-                'group flex items-center gap-2 shadow-lg transition-all duration-[1000ms] ease-[cubic-bezier(0.25,0.1,0.25,1)] disabled:cursor-wait disabled:opacity-60',
+                'rider-availability-button group relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full shadow-lg transition-all duration-[1000ms] ease-[cubic-bezier(0.25,0.1,0.25,1)] disabled:cursor-wait disabled:opacity-60',
+                // Same 48 px button in both states. Offline is a light surface
+                // with a dark icon so it never blends into the (dark) map.
                 effectivelyOnline
-                  ? 'h-12 w-12 justify-center rounded-full bg-[#16803C] text-white rider-circle-bounce'
-                  : 'h-11 sm:h-12 rounded-full bg-[#17201B] px-4 sm:px-5 text-xs sm:text-sm font-semibold text-white border border-[#17201B] hover:bg-black'
+                  ? 'bg-[#16803C] text-white rider-circle-bounce'
+                  : 'border-2 border-[#17201B] bg-[#F8FAF6] text-[#17201B] hover:bg-white'
               )}
             >
-              {effectivelyOnline && (
+              {effectivelyOnline ? (
                 <>
                   <span className="online-pulse-ring" aria-hidden="true" />
                   <span className="online-pulse-ring online-pulse-ring-delayed" aria-hidden="true" />
                 </>
+              ) : (
+                // Static ring with the same footprint as the online pulse
+                // ring, so going offline never looks like the button shrank.
+                <span className="offline-ring" aria-hidden="true" data-testid="rider-offline-ring" />
               )}
-              <Power className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 relative z-10 text-white" />
-              {!effectivelyOnline && <span>Go Online</span>}
-              {effectivelyOnline && (
-                <span className="pointer-events-none absolute left-full ml-3 whitespace-nowrap rounded-lg bg-[#17201B] px-3 py-1.5 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100">
-                  {inTrip ? 'On a trip — complete the delivery to go offline' : 'Go Offline'}
-                </span>
-              )}
+              <Power className={cn('w-4 h-4 sm:w-5 sm:h-5 shrink-0 relative z-10', effectivelyOnline ? 'text-white' : 'text-[#17201B]')} />
+              <span className="pointer-events-none absolute left-full ml-3 whitespace-nowrap rounded-lg bg-[#17201B] px-3 py-1.5 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100">
+                {inTrip ? 'On a trip — complete the delivery to go offline' : effectivelyOnline ? 'Go Offline' : 'Go Online'}
+              </span>
             </button>
           </div>
           {/* Rider status readout — mirrors the button: it follows the online
@@ -792,7 +807,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
             aria-live="polite"
             aria-busy={toggling}
             className={cn(
-              'flex w-full items-center justify-between gap-3 rounded-2xl border p-4 shadow-lg backdrop-blur-md transition-all duration-[1000ms] ease-[cubic-bezier(0.25,0.1,0.25,1)]',
+              'rider-status-panel flex w-full items-center justify-between gap-3 rounded-2xl border p-4 shadow-lg backdrop-blur-md transition-all duration-[1000ms] ease-[cubic-bezier(0.25,0.1,0.25,1)]',
               effectivelyOnline
                 ? 'border-[#16803C] bg-[#16803C] text-white'
                 : 'border-[#E5E9E7] bg-white/95 text-[#6B7280]'
@@ -822,13 +837,13 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
             ref={serviceMenuRef}
             role="region"
             aria-label="Rider quick actions"
-            className="relative w-full min-h-[10vh] rounded-2xl border border-[#E5E9E7] bg-white/95 backdrop-blur-md p-4 shadow-lg"
+            className="clay-card relative w-full min-h-[10vh] border backdrop-blur-md p-4"
           >
             {serviceMenuOpen && (
               <div
                 role="dialog"
                 aria-label="Choose service type"
-                className="rider-auto-accept-slide absolute bottom-full left-0 right-0 z-[10] mb-2 rounded-2xl border border-[#E5E9E7] bg-white p-3 shadow-xl"
+                className="clay-card rider-auto-accept-slide absolute bottom-full left-0 right-0 z-[10] mb-2 border p-3"
               >
                 <p className="px-1 pb-2 text-xs font-semibold uppercase tracking-wide text-[#6B7280]">Service Types</p>
                 <div className="grid grid-cols-2 gap-2">
@@ -842,7 +857,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                         disabled={serviceSwitching}
                         aria-pressed={selected}
                         className={cn(
-                          'flex flex-col items-start gap-1.5 rounded-xl border p-3 text-left transition disabled:cursor-wait disabled:opacity-60',
+                          'clay-menu-item flex flex-col items-start gap-1.5 rounded-xl border p-3 text-left transition disabled:cursor-wait disabled:opacity-60',
                           selected
                             ? 'border-emerald-500/60 bg-emerald-500/10'
                             : 'border-[#E5E9E7] bg-[#F3F8F5] hover:border-emerald-500/40 hover:bg-emerald-500/10'
@@ -882,7 +897,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                   }}
                   aria-expanded={action.label === 'Service Types' ? serviceMenuOpen : undefined}
                   className={cn(
-                    'flex flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center transition',
+                    'clay-menu-item flex flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center transition',
                     action.label === 'Service Types' && serviceMenuOpen
                       ? 'border-emerald-500/60 bg-emerald-500/15'
                       : 'border-[#E5E9E7] bg-[#F3F8F5] hover:border-emerald-500/40 hover:bg-emerald-500/10'
@@ -904,7 +919,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                   aria-busy={autoAcceptSaving}
                   title={autoAcceptEnabled ? 'Auto accept is ON — the first ping is accepted automatically.' : 'Auto accept is OFF — tap to accept every ping automatically.'}
                   className={cn(
-                    'rider-auto-accept-slide flex flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center transition disabled:cursor-wait disabled:opacity-60',
+                    'clay-menu-item rider-auto-accept-slide flex flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center transition disabled:cursor-wait disabled:opacity-60',
                     autoAcceptEnabled
                       ? 'border-[#16803C] bg-[#16803C] shadow-lg hover:bg-[#126B32] hover:border-[#126B32]'
                       : 'border-[#E5E9E7] bg-[#F3F8F5] hover:border-emerald-500/40 hover:bg-emerald-500/10'
@@ -941,8 +956,9 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
             onClick={() => setProfileMenuOpen((open) => !open)}
             aria-expanded={profileMenuOpen}
             aria-haspopup="menu"
+            className="rider-header-profile-trigger"
           >
-            <div className={cn('w-11 h-11 rounded-full flex items-center justify-center text-base font-bold overflow-hidden', tourism ? 'bg-[#087F3F] text-white' : 'bg-white/70 backdrop-blur-md border border-white/50 shadow-glass text-primary')}>
+            <div className={cn('w-11 h-11 rounded-full flex items-center justify-center text-base font-bold overflow-hidden', tourism ? 'bg-[#087F3F] text-white' : 'bg-white/70 backdrop-blur-md border border-white/50 text-primary')}>
               {toAssetUrl(user?.profile_photo) ? (
                 <img src={toAssetUrl(user?.profile_photo)} alt={user?.name} className="w-full h-full object-cover" />
               ) : (
@@ -955,7 +971,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
             <span className="text-[10px] font-bold text-[#087F3F]">{(user?.rider_rating ?? 5.00).toFixed(2)}</span>
           </div>
           {profileMenuOpen && (
-            <div role="menu" className="absolute right-0 top-full z-[1300] mt-2 w-44 overflow-hidden rounded-xl border border-[#E5E9E7] bg-white py-1 shadow-xl">
+            <div role="menu" className="clay-card absolute right-0 top-full z-[1300] mt-2 w-44 overflow-hidden border py-1">
               <Link to={profilePath ?? '/rider/profile'} onClick={() => setProfileMenuOpen(false)} className="flex items-center gap-2 px-4 py-2.5 text-sm text-[#17201B] transition hover:bg-[#F3F8F4]" role="menuitem">
                 <User className="h-4 w-4 text-[#087F3F]" />
                 Profile

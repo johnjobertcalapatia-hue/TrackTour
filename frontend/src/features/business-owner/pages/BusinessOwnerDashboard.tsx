@@ -167,7 +167,6 @@ function getShortcuts(category: string, stats: DashboardData['stats']): Shortcut
   const shop: Shortcut[] = [
     { label: 'Manage Orders', path: '/business-owner/orders', icon: ShoppingBag, count: `${pending} pending` },
     { label: 'Products', path: '/business-owner/offerings', icon: Package, count: `${items} products` },
-    { label: 'Delivery', path: '/business-owner/dispatch', icon: Truck, count: 'Dispatch' },
   ]
 
   const transport: Shortcut[] = [
@@ -179,7 +178,6 @@ function getShortcuts(category: string, stats: DashboardData['stats']): Shortcut
   const facilities: Shortcut[] = [
     { label: 'Bookings', path: '/business-owner/bookings', icon: CalendarCheck, count: `${active} active` },
     { label: 'Gallery', path: '/business-owner/gallery', icon: MapPin, count: 'Manage' },
-    { label: 'Customers', path: '/business-owner/customers', icon: Users, count: 'View' },
   ]
 
   switch (category) {

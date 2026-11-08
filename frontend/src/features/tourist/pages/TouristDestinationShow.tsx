@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
+import { recordBrowsedPlace } from '@/shared/services/browsing-history'
 import { get, post } from '@/shared/services/api'
 import {
   ArrowLeft,
@@ -93,6 +94,22 @@ export default function TouristDestinationShow() {
     queryKey: ['tourist-destination-v2', id],
     queryFn: () => get<Destination>(`/tourist/destinations/${id}`),
   })
+
+  // My Activities → Explored: remember attractions the tourist looked at.
+  useEffect(() => {
+    if (!destination) return
+    recordBrowsedPlace({
+      id: destination.id,
+      name: destination.name,
+      category: destination.category?.name || 'Tourist Spot',
+      discoveryGroup: 'spot',
+      cover_photo: destination.images?.[0] ?? null,
+      logo: null,
+      municipality: destination.municipality?.name || destination.address || '',
+      rating: null,
+      url: `/tourist/destinations/${destination.id}`,
+    })
+  }, [destination?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!destination?.latitude || !destination?.longitude) return
