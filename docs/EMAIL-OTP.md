@@ -7,7 +7,7 @@ failed attempts (15-minute lockout). Codes are single-use and are never
 returned by the API or written to application logs.
 
 Email delivery uses Laravel's existing mail transport. To send through
-`johnjobertcalapatia@gmail.com`, configure the Laravel environment locally or
+your Gmail account, configure the Laravel environment locally or
 in the deployment secret store:
 
 ```dotenv
@@ -16,9 +16,9 @@ MAIL_SCHEME=null
 MAIL_HOST=smtp.gmail.com
 MAIL_PORT=587
 MAIL_ENCRYPTION=tls
-MAIL_USERNAME=johnjobertcalapatia@gmail.com
+MAIL_USERNAME=your-address@gmail.com
 MAIL_PASSWORD=your_google_app_password
-MAIL_FROM_ADDRESS=johnjobertcalapatia@gmail.com
+MAIL_FROM_ADDRESS=your-address@gmail.com
 MAIL_FROM_NAME="TrackTour"
 ```
 

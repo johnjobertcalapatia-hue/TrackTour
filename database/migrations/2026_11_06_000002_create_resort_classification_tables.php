@@ -51,7 +51,8 @@ return new class extends Migration
                 $table->foreignId('business_id')->constrained('businesses')->cascadeOnDelete();
                 $table->foreignId('resort_facility_id')->constrained('resort_facilities')->cascadeOnDelete();
                 $table->timestamps();
-                $table->unique(['business_id', 'resort_facility_id']);
+                // Explicit name: the generated one is exactly MySQL's 64-char limit.
+                $table->unique(['business_id', 'resort_facility_id'], 'biz_resort_facilities_unique');
             });
         }
 
