@@ -1,91 +1,70 @@
-﻿import { Suspense, useMemo, useState } from 'react'
+﻿import { Suspense } from 'react'
 import { Outlet, useLocation, Link } from 'react-router-dom'
 import TouristHeader from '@/features/tourist/components/layout/TouristHeader'
 import TouristSidebar from '@/features/tourist/components/layout/TouristSidebar'
-import { X, Home, Map, Package, Compass, User } from 'lucide-react'
-
-const MOBILE_NAV = [
-  { to: '/tourist/dashboard', label: 'Home', icon: Home },
-  { to: '/tourist/explore', label: 'Explore', icon: Compass },
-  { to: '/tourist/explore/map', label: 'Map', icon: Map },
-  { to: '/tourist/orders', label: 'Orders', icon: Package },
-  { to: '/tourist/profile', label: 'Profile', icon: User },
-]
+import { TOURIST_NAV_ITEMS, useActiveTouristNav } from '@/features/tourist/components/layout/tourist-nav'
+import { cn } from '@/shared/utils'
 
 export default function TouristLayout() {
   const location = useLocation()
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
-  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(false)
-
-  const activeMobileNav = useMemo(() => {
-    const current = location.pathname
-    const candidates = MOBILE_NAV
-      .map((i) => i.to)
-      .filter((to) => current === to || current.startsWith(to + '/'))
-    if (candidates.length === 0) return null
-    return candidates.sort((a, b) => b.length - a.length)[0]
-  }, [location.pathname])
+  const activeTo = useActiveTouristNav()
 
   return (
-    <div className="min-h-screen bg-[#F7FAF7]">
-      {/* Header */}
-      <TouristHeader />
-
-      {/* Body */}
-      <div className="flex">
-        {/* Desktop sidebar */}
-        <TouristSidebar
-          collapsed={desktopSidebarCollapsed}
-          onToggleCollapse={() => setDesktopSidebarCollapsed((collapsed) => !collapsed)}
-        />
-
-        {/* Mobile sidebar overlay */}
-        {mobileSidebarOpen && (
-          <div className="fixed inset-0 z-[2001] lg:hidden">
-            <div className="absolute inset-0 bg-black/30" onClick={() => setMobileSidebarOpen(false)} />
-            <div className="absolute left-0 top-0 bottom-0 w-[280px] bg-white shadow-xl z-10 overflow-y-auto">
-              <div className="flex items-center justify-between px-4 py-3 border-b border-[#E5E9E7]">
-                <span className="text-sm font-bold text-[#17201B]">Menu</span>
-                <button onClick={() => setMobileSidebarOpen(false)} className="p-1.5 rounded-lg hover:bg-[#E9F7EF]">
-                  <X className="w-5 h-5 text-[#68736D]" />
-                </button>
-              </div>
-              <div className="[&>aside]:border-r-0 [&>aside]:h-auto">
-                <TouristSidebar />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Main content area */}
-        <div className="flex-1 min-w-0">
-          <main className="flex-1 min-w-0 p-6 pb-24 lg:pb-6">
-            <Suspense fallback={
-              <div className="flex items-center justify-center py-20">
-                <div className="w-6 h-6 border-2 border-[#087F3F] border-t-transparent rounded-full animate-spin" />
-              </div>
-            }>
-              <Outlet key={location.pathname + location.search} />
-            </Suspense>
-          </main>
-        </div>
+    <div className="tourist-ui clay-ui min-h-screen bg-[#F4F8F3] lg:flex">
+      {/* Desktop sidebar: full height, brand + navigation */}
+      <div className="hidden lg:block sticky top-0 h-screen overflow-y-auto shrink-0 z-[2001]">
+        <TouristSidebar />
       </div>
 
-      {/* Mobile Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 z-[2000] bg-white border-t border-[#E5E9E7] lg:hidden safe-bottom">
-        <div className="flex items-center justify-around h-16 px-2">
-          {MOBILE_NAV.map((item) => {
-            const active = item.to === activeMobileNav
+      {/* Header + page content */}
+      <div className="flex-1 min-w-0">
+        <TouristHeader />
+        <main className="tourist-main min-w-0 px-4 pt-4 pb-24 sm:px-6 sm:pt-6 lg:pb-8">
+          <Suspense fallback={
+            <div className="flex items-center justify-center py-20">
+              <div className="w-6 h-6 border-2 border-[#087F3F] border-t-transparent rounded-full animate-spin" />
+            </div>
+          }>
+            {/* Keyed wrapper re-runs the enter animation on every page change. */}
+            <div key={location.pathname + location.search} className="tourist-page-enter">
+              <Outlet />
+            </div>
+          </Suspense>
+        </main>
+      </div>
+
+      {/* Mobile / tablet bottom navigation: same items as the desktop sidebar. */}
+      <nav
+        aria-label="Tourist bottom navigation"
+        className="tourist-bottom-nav fixed bottom-0 left-0 right-0 z-[2000] bg-white border-t border-[#E5E9E7] lg:hidden safe-bottom"
+      >
+        <div className="grid grid-cols-7 h-16 px-1 max-w-3xl mx-auto">
+          {TOURIST_NAV_ITEMS.map((item) => {
+            const active = item.to === activeTo
             return (
               <Link
                 key={item.to}
                 to={item.to}
-                className={`flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl transition-all ${
-                  active ? 'text-[#087F3F]' : 'text-[#9CA3AF]'
-                }`}
+                aria-label={item.label}
+                aria-current={active ? 'page' : undefined}
+                className={cn(
+                  'tourist-bottom-nav-link min-w-0 flex flex-col items-center justify-center gap-0.5 px-0.5 transition-colors',
+                  active ? 'text-[#087F3F]' : 'text-[#56615B] hover:text-[#17201B]',
+                )}
               >
-                <item.icon className={`w-5 h-5 ${active ? 'text-[#087F3F]' : ''}`} />
-                <span className={`text-[10px] font-medium ${active ? 'text-[#087F3F]' : ''}`}>{item.label}</span>
+                <span
+                  className={cn(
+                    'flex items-center justify-center w-11 h-7 rounded-full transition-colors',
+                    active && 'bg-[#E3F4E9]',
+                  )}
+                  aria-hidden="true"
+                >
+                  <item.icon className="w-[20px] h-[20px]" />
+                </span>
+                <span className={cn('max-w-full truncate text-[10px] leading-tight', active ? 'font-bold' : 'font-medium')}>
+                  <span className="sm:hidden">{item.shortLabel}</span>
+                  <span className="hidden sm:inline">{item.label}</span>
+                </span>
               </Link>
             )
           })}

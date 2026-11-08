@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
-import { Truck, Clock, Navigation, CheckCircle, XCircle, Zap } from 'lucide-react'
+import { useEffect, useId, useState } from 'react'
+import { Banknote, BellRing, Check, ChevronRight, Clock, MapPin, Navigation, Users, UtensilsCrossed, XCircle } from 'lucide-react'
+import { cn, toAssetUrl } from '@/shared/utils'
 
 export interface ModifierLine {
   name: string
@@ -36,6 +37,16 @@ export interface RiderDeliveryRequestData {
   expires_in?: number
   initial_timeout?: number
   dispatched_at?: string
+  /** Offer card facts (RiderDispatchController::offerCardFacts). */
+  image?: string | null
+  items_count?: number
+  payment_method?: string | null
+  is_cod?: boolean
+  is_group?: boolean
+  /** Rider → first pickup estimate (minutes). */
+  pickup_minutes?: number | null
+  /** Restaurant → tourist route duration (minutes). */
+  dropoff_minutes?: number | null
 }
 
 interface Props {
@@ -46,6 +57,37 @@ interface Props {
   declinePending?: boolean
 }
 
+/** Fallback rider speed for "Pickup: N min" when the server sent no estimate. */
+const FALLBACK_SPEED_KMH = 25
+
+/** Seconds → "00:01:25". */
+export function formatCountdown(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds))
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`
+}
+
+/** "Pickup: 3 min • Drop-off: 8 min" (parts without data are left out). */
+export function offerMinutesLine(o: Pick<RiderDeliveryRequestData, 'pickup_minutes' | 'dropoff_minutes' | 'duration_minutes' | 'distance_km'>): string | null {
+  const pickup = o.pickup_minutes
+    ?? (o.distance_km != null ? Math.max(1, Math.ceil((Number(o.distance_km) / FALLBACK_SPEED_KMH) * 60)) : null)
+  const dropoff = o.dropoff_minutes ?? (o.duration_minutes ? o.duration_minutes : null)
+  const parts = [
+    pickup != null ? `Pickup: ${pickup} min` : null,
+    dropoff != null ? `Drop-off: ${dropoff} min` : null,
+  ].filter(Boolean)
+  return parts.length ? parts.join(' • ') : null
+}
+
+const peso = (n: number | null | undefined) => `₱${Number(n ?? 0).toFixed(2)}`
+
+/**
+ * The rider's live delivery offer popup (targeted 30 s offer). A white bottom
+ * card: offer + countdown pills, food photo, restaurant, distance, tourist
+ * location, item / group / payment chips, pickup and drop-off minutes (tap to
+ * see the items and payout), then Decline / Accept. The countdown declines
+ * automatically at 0 (the server owns the real deadline).
+ */
 export default function RiderDeliveryRequestAlert({
   orderData,
   onAccept,
@@ -54,10 +96,15 @@ export default function RiderDeliveryRequestAlert({
   declinePending = false,
 }: Props) {
   const [timeLeft, setTimeLeft] = useState<number | null>(null)
+  const [showDetails, setShowDetails] = useState(false)
+  const [imageFailed, setImageFailed] = useState(false)
+  const titleId = useId()
 
   useEffect(() => {
-    const initial = orderData?.initial_timeout ?? 45
+    const initial = orderData?.initial_timeout ?? 30
     setTimeLeft(initial)
+    setShowDetails(false)
+    setImageFailed(false)
   }, [orderData?.delivery_id])
 
   useEffect(() => {
@@ -77,159 +124,146 @@ export default function RiderDeliveryRequestAlert({
   if (!orderData) return null
 
   const items = orderData.items ?? []
-  const itemCount = items.reduce((acc, item) => acc + (item.quantity || 0), 0)
-  const initialTimeout = orderData.initial_timeout ?? 45
-  const currentSeconds = timeLeft ?? initialTimeout
-  const progressPercentage = Math.max(0, Math.min(100, (currentSeconds / initialTimeout) * 100))
+  const itemCount = orderData.items_count ?? items.reduce((acc, item) => acc + (item.quantity || 0), 0)
+  const currentSeconds = timeLeft ?? orderData.initial_timeout ?? 30
   const isUrgent = currentSeconds <= 7
+  const isGroup = orderData.is_group ?? (orderData.restaurant_count ?? 1) > 1
+  const isCod = orderData.is_cod ?? false
+  const minutes = offerMinutesLine(orderData)
+  const image = orderData.image && !imageFailed ? toAssetUrl(orderData.image) : null
+  const address = orderData.business_address ?? orderData.pickup_address ?? null
 
   return (
-    <div className="fixed inset-0 z-[9999] bg-black/60 flex items-end justify-center p-4 backdrop-blur-sm animate-fade-in">
-      <div className="bg-zinc-950/70 backdrop-blur-2xl w-full max-w-md rounded-2xl border border-white/10 shadow-2xl flex flex-col max-h-[85vh] animate-slide-up">
-        {/* HEADER PANEL BANNER */}
-        <div className="p-4 border-b border-white/10 text-center bg-white/5 rounded-t-2xl">
-          <div className="inline-flex items-center gap-2 px-3 py-1 bg-amber-500/10 border border-amber-500/30 text-amber-500 rounded-full text-xs font-bold uppercase tracking-wider mb-1">
-            <Zap className="w-3 h-3" />
-            Live Delivery Offer
-          </div>
-          <h2 className="text-lg font-extrabold text-white tracking-tight">New Booking Request</h2>
-          <p className="text-xs text-zinc-400">Review parameters inside the receipt slot below</p>
+    <div
+      className="fixed inset-0 z-[9999] flex items-end justify-center bg-black/40 p-3 animate-fade-in"
+      style={{ paddingBottom: 'calc(12px + env(safe-area-inset-bottom, 0px))' }}
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="w-full max-w-md rounded-[24px] bg-white p-4 shadow-2xl animate-slide-up max-h-[85vh] overflow-y-auto"
+      >
+        <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-[#D1D5DB]" aria-hidden="true" />
+
+        {/* Offer + countdown */}
+        <div className="flex items-center justify-between gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-[#16803C] px-3 py-1.5 text-sm font-semibold text-white">
+            <BellRing className="h-4 w-4" aria-hidden="true" /> New Delivery Offer
+          </span>
+          <span
+            role="timer"
+            aria-label={`Offer expires in ${currentSeconds} seconds`}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm font-semibold tabular-nums',
+              isUrgent ? 'border-[#FCA5A5] bg-[#FEF2F2] text-[#B91C1C]' : 'border-[#BBF7D0] bg-[#F0FDF4] text-[#166534]',
+            )}
+          >
+            <Clock className="h-4 w-4" aria-hidden="true" /> {formatCountdown(currentSeconds)}
+          </span>
         </div>
 
-        {/* SCROLLABLE DIGITAL RECEIPT CONTAINER AREA */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-          {/* THE FOOD/ITEM DIGITAL SPECIFICATION SLATE */}
-          <div className="bg-white/5 border border-white/10 rounded-xl p-4 shadow-inner">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-xs font-mono text-zinc-400">ID: {orderData.order_number ?? `TT-${String(orderData.order_id ?? 0).padStart(5, '0')}`}</span>
-              <span className="text-xs bg-white/10 px-2 py-0.5 rounded text-white font-medium">{itemCount} Items</span>
-            </div>
-            <h3 className="text-base font-bold text-white mb-3 truncate">{orderData.business_name ?? 'Merchant Store'}</h3>
-
-            {items.length > 0 ? (
-              <div className="space-y-2.5 border-t border-b border-dashed border-white/15 py-3 text-sm">
-                {items.map((item, idx) => (
-                  <div key={idx} className="space-y-0.5">
-                    <div className="flex justify-between text-zinc-300">
-                      <div className="flex gap-2">
-                        <span className="font-bold text-emerald-500">{item.quantity}×</span>
-                        <span className="truncate max-w-[200px] font-medium">{item.name}</span>
-                      </div>
-                      <span className="font-mono text-white">
-                        ₱{(item.subtotal ?? item.price * item.quantity).toFixed(2)}
-                      </span>
-                    </div>
-                    {item.modifiers?.map((mod, mIdx) => (
-                      <div key={mIdx} className="pl-6 text-xs text-zinc-500 flex justify-between">
-                        <span>+ {mod.name} (×{mod.quantity || 1})</span>
-                        <span>₱{((mod.price || 0) * (mod.quantity || 1)).toFixed(2)}</span>
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
+        {/* Photo + restaurant + route */}
+        <div className="mt-4 flex gap-3">
+          <div className="h-[92px] w-[92px] shrink-0 overflow-hidden rounded-xl bg-[#F0FDF4]">
+            {image ? (
+              <img src={image} alt="" className="h-full w-full object-cover" onError={() => setImageFailed(true)} />
             ) : (
-              <div className="border-t border-b border-dashed border-white/15 py-4 text-sm text-zinc-500 text-center">
-                No item details provided for this order.
+              <div className="flex h-full w-full items-center justify-center text-[#16803C]">
+                <UtensilsCrossed className="h-8 w-8" aria-hidden="true" />
               </div>
             )}
-
-            <div className="flex justify-between items-center mt-3 pt-1 text-sm font-semibold">
-              <span className="text-zinc-400">Store Subtotal Reference</span>
-              <span className="text-white font-mono">₱{Number(orderData.subtotal ?? 0).toFixed(2)}</span>
-            </div>
           </div>
-
-          {/* WAYPOINT DIRECTION PATH SUMMARY */}
-          <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-4">
-            {/* Pickup Segment */}
-            <div className="flex items-start gap-3">
-              <div className="w-6 h-6 rounded-full bg-emerald-500/10 border border-emerald-500 flex items-center justify-center text-emerald-400 text-xs shrink-0 mt-0.5 font-bold">
-                P
-              </div>
-              <div className="flex flex-col min-w-0">
-                <span className="text-xs text-zinc-500 font-bold uppercase tracking-wide">Pickup Location</span>
-                <span className="text-sm text-white font-bold truncate">{orderData.business_name ?? 'Merchant Store'}</span>
-                <span className="text-xs text-zinc-400 truncate mt-0.5">{orderData.business_address ?? orderData.pickup_address ?? 'Pickup Location'}</span>
-              </div>
+          <div className="min-w-0 flex-1">
+            <h2 id={titleId} className="truncate text-lg font-bold text-[#17201B]">
+              {orderData.business_name ?? 'Restaurant'}
+            </h2>
+            <div className="mt-1 flex items-center gap-2 text-sm text-[#4B5563]">
+              <MapPin className="h-4 w-4 shrink-0 text-[#6B7280]" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">{address ?? 'Pickup location'}</span>
+              {orderData.distance_km != null && (
+                <span className="flex shrink-0 items-center gap-1 border-l border-[#E5E7EB] pl-2 font-semibold text-[#17201B]">
+                  <Navigation className="h-3.5 w-3.5" aria-hidden="true" /> {Number(orderData.distance_km).toFixed(1)} km
+                </span>
+              )}
             </div>
-
-            {/* Connecting Route Indicator Dot Trail */}
-            <div className="w-0.5 h-5 bg-gradient-to-b from-emerald-500 to-blue-500 ml-[11px] -my-3 opacity-60" />
-
-            {/* Dropoff Segment */}
-            <div className="flex items-start gap-3">
-              <div className="w-6 h-6 rounded-full bg-blue-500/10 border border-blue-500 flex items-center justify-center text-blue-400 text-xs shrink-0 mt-0.5 font-bold">
-                D
-              </div>
-              <div className="flex flex-col min-w-0">
-                <span className="text-xs text-zinc-500 font-bold uppercase tracking-wide">Dropoff Destination</span>
-                <span className="text-sm text-white font-bold truncate">Customer Landmark</span>
-                <span className="text-xs text-zinc-400 truncate mt-0.5">{orderData.delivery_address ?? 'Destination Location'}</span>
-              </div>
+            <div className="mt-1 flex items-center gap-2 text-sm text-[#4B5563]">
+              <MapPin className="h-4 w-4 shrink-0 text-[#16803C]" aria-hidden="true" />
+              <span className="truncate">{orderData.delivery_address || 'Tourist Location'}</span>
             </div>
-          </div>
-
-          {/* TRIP PARAMETERS & METRICS SLAT */}
-          <div className="grid grid-cols-2 gap-3 text-center">
-            <div className="bg-white/5 border border-white/10 rounded-xl p-3">
-              <Clock className="w-4 h-4 text-zinc-500 mx-auto mb-1" />
-              <span className="block text-[10px] text-zinc-500 font-bold uppercase tracking-wider">Distance</span>
-              <span className="text-base font-mono font-extrabold text-white mt-0.5 block">
-                {orderData.distance_km != null ? `${Number(orderData.distance_km).toFixed(1)} km` : 'N/A'}
-              </span>
-            </div>
-            <div className="bg-white/5 border border-white/10 rounded-xl p-3">
-              <Navigation className="w-4 h-4 text-zinc-500 mx-auto mb-1" />
-              <span className="block text-[10px] text-zinc-500 font-bold uppercase tracking-wider">Est. Trip Time</span>
-              <span className="text-base font-mono font-extrabold text-white mt-0.5 block">{orderData.duration_minutes ?? 0} mins</span>
-            </div>
+            <ul className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#4B5563]" aria-label="Order facts">
+              <li className="flex items-center gap-1">
+                <UtensilsCrossed className="h-3.5 w-3.5" aria-hidden="true" /> {itemCount} {itemCount === 1 ? 'item' : 'items'}
+              </li>
+              {isGroup && (
+                <li className="flex items-center gap-1">
+                  <Users className="h-3.5 w-3.5" aria-hidden="true" /> Group Order
+                </li>
+              )}
+              <li className="flex items-center gap-1">
+                <Banknote className="h-3.5 w-3.5" aria-hidden="true" /> {isCod ? 'COD' : 'Paid online'}
+              </li>
+            </ul>
           </div>
         </div>
 
-        {/* LOCKED REVENUE & INTERACTIVE CONTROL CONSOLE */}
-        <div className="p-4 border-t border-white/10 bg-white/5 rounded-b-2xl space-y-3">
-          {/* Prominent Rider Revenue Highlight Block */}
-          <div className="bg-emerald-950/30 border border-emerald-500/20 rounded-xl p-3 flex justify-between items-center">
-            <span className="text-sm text-emerald-400 font-bold flex items-center gap-2">
-              <Truck className="w-4 h-4" /> Guaranteed Rider Payout
-            </span>
-            <span className="text-2xl font-mono font-black text-emerald-400">₱{Number(orderData.rider_payout ?? 0).toFixed(2)}</span>
-          </div>
+        {/* Pickup / drop-off minutes; tap for the items and payout */}
+        <button
+          type="button"
+          onClick={() => setShowDetails((v) => !v)}
+          aria-expanded={showDetails}
+          className="mt-3 flex w-full items-center gap-2 rounded-xl border border-[#BBF7D0] bg-[#F0FDF4] px-3 py-2.5 text-left text-sm font-semibold text-[#166534]"
+        >
+          <Clock className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <span className="flex-1">{minutes ?? 'Trip details'}</span>
+          <ChevronRight className={cn('h-4 w-4 shrink-0 transition-transform', showDetails && 'rotate-90')} aria-hidden="true" />
+        </button>
 
-          {/* Progressive Ticking Countdown Bar */}
-          <div className="space-y-1">
-            <div className="flex justify-between text-xs font-mono font-semibold text-zinc-400 px-0.5">
-              <span>Offer Expiration Warning</span>
-              <span className={isUrgent ? 'text-red-500 animate-pulse font-bold' : ''}>{currentSeconds}s</span>
+        {showDetails && (
+          <div className="mt-2 rounded-xl border border-[#E5E7EB] p-3 text-sm" data-testid="offer-details">
+            <div className="flex items-center justify-between text-xs text-[#6B7280]">
+              <span>Order {orderData.order_number ?? `TT-${String(orderData.order_id ?? 0).padStart(5, '0')}`}</span>
+              {orderData.subtotal != null && <span>Food {peso(orderData.subtotal)}</span>}
             </div>
-            <div className="w-full bg-white/10 h-1.5 rounded-full overflow-hidden">
-              <div
-                className={`h-full transition-all duration-1000 ease-linear rounded-full ${isUrgent ? 'bg-red-500' : 'bg-emerald-500'}`}
-                style={{ width: `${progressPercentage}%` }}
-              />
+            {items.length > 0 && (
+              <ul className="mt-2 space-y-1">
+                {items.map((item, idx) => (
+                  <li key={idx} className="flex justify-between gap-2 text-[#17201B]">
+                    <span className="min-w-0 truncate"><span className="font-semibold text-[#16803C]">{item.quantity}×</span> {item.name}</span>
+                    <span className="shrink-0 tabular-nums">{peso(item.subtotal ?? item.price * item.quantity)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="mt-2 flex justify-between border-t border-[#EEF1EF] pt-2 font-semibold text-[#166534]">
+              <span>Your payout</span>
+              <span className="tabular-nums">{peso(orderData.rider_payout)}</span>
             </div>
           </div>
+        )}
 
-          {/* Interactive Trigger Operation Grid */}
-          <div className="flex flex-col gap-2 pt-1">
-            <button
-              onClick={onAccept}
-              disabled={acceptPending}
-              className="w-full bg-emerald-500 hover:bg-emerald-600 text-neutral-950 font-extrabold py-3.5 px-4 rounded-xl shadow-lg transition active:scale-[0.99] uppercase tracking-wider text-sm disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              {acceptPending ? <span>Processing...</span> : (<><CheckCircle className="w-4 h-4" /> Accept Order Request</>)}
-            </button>
-            <button
-              onClick={onDecline}
-              disabled={declinePending}
-              className="w-full bg-white/10 hover:bg-white/15 text-zinc-300 font-bold py-2.5 px-4 rounded-xl transition active:scale-[0.99] text-xs disabled:opacity-60 flex items-center justify-center gap-2"
-            >
-              <XCircle className="w-4 h-4" /> Decline Offer
-            </button>
-          </div>
+        {/* Decline / Accept */}
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={onDecline}
+            disabled={declinePending}
+            aria-label="Decline offer"
+            className="flex h-12 items-center justify-center gap-2 rounded-full border-2 border-[#16803C] bg-white text-base font-bold text-[#16803C] transition active:scale-[0.99] disabled:opacity-60"
+          >
+            <XCircle className="h-5 w-5" aria-hidden="true" /> Decline
+          </button>
+          <button
+            type="button"
+            onClick={onAccept}
+            disabled={acceptPending}
+            aria-label="Accept order request"
+            className="flex h-12 items-center justify-center gap-2 rounded-full bg-[#16803C] text-base font-bold text-white shadow-md transition hover:bg-[#126B32] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {acceptPending ? 'Accepting…' : (<><Check className="h-5 w-5" aria-hidden="true" /> Accept</>)}
+          </button>
         </div>
-      </div>
+      </section>
     </div>
   )
 }

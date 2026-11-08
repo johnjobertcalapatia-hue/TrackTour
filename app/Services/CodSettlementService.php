@@ -60,8 +60,19 @@ class CodSettlementService
      */
     public function settlementBaseFor(Delivery $delivery, ?Order $order = null): float
     {
-        $order = $order ?? $delivery->primaryOrder();
-        $financed = (float) ($order?->rider_financed_amount ?? 0);
+        if ($order !== null) {
+            $financed = (float) $order->rider_financed_amount;
+        } else {
+            // Canonical group-order total: sum every order this delivery
+            // fulfils. A group checkout holds one canonical order, so this
+            // equals that order's rider_financed_amount; summing keeps the
+            // total correct if a delivery ever spans multiple orders and
+            // matches PurchasingCashService::allocation()'s summation.
+            $orders = $delivery->childOrders();
+            $financed = $orders->isEmpty()
+                ? (float) ($delivery->primaryOrder()?->rider_financed_amount ?? 0)
+                : (float) $orders->sum(fn (Order $o) => (float) $o->rider_financed_amount);
+        }
 
         if ($financed <= 0) {
             throw new \InvalidArgumentException(
@@ -70,6 +81,55 @@ class CodSettlementService
         }
 
         return round($financed, 2);
+    }
+
+    /**
+     * Per-business bases for ONE order that sum EXACTLY to the canonical
+     * rider-financed amount round(subtotal + system_fee, 2) whenever no item
+     * has been cancelled.
+     *
+     * The system-fee proration is rounded for every business EXCEPT the final
+     * one (highest business id, via sortKeys()), which absorbs the exact
+     * remainder so the individually-rounded shares can never drift a fraction
+     * away from the total. This is the single canonical allocation formula
+     * shared by the settlement ledger (recordAllocations) and the
+     * purchasing-cash ledger (PurchasingCashService::allocation), keeping the
+     * two ledgers reconciled (AGENTS.md §5.3).
+     *
+     * @return Collection<int, float> business_id => base
+     */
+    public function businessBases(Order $order): Collection
+    {
+        $orderSubtotal = max(0.01, (float) $order->subtotal);
+        $systemFee = round((float) $order->system_fee, 2);
+
+        $groups = $order->items()->get()
+            ->groupBy(fn ($item) => $item->business_id ?: $order->business_id)
+            ->sortKeys();
+
+        $bases = collect();
+        $assignedFee = 0.0;
+        $lastIndex = $groups->count() - 1;
+        $index = 0;
+
+        foreach ($groups as $businessId => $items) {
+            $businessSubtotal = round($items->sum(fn ($item) =>
+                (float) $item->unit_price * max(0, (int) $item->quantity - (int) $item->cancelled_quantity)
+            ), 2);
+
+            if ($index === $lastIndex) {
+                // Final restaurant takes the exact fee remainder.
+                $feeShare = round($systemFee - $assignedFee, 2);
+            } else {
+                $feeShare = round($systemFee * ($businessSubtotal / $orderSubtotal), 2);
+                $assignedFee = round($assignedFee + $feeShare, 2);
+            }
+
+            $bases->put((int) $businessId, round($businessSubtotal + $feeShare, 2));
+            $index++;
+        }
+
+        return $bases;
     }
 
     /**
@@ -104,23 +164,16 @@ class CodSettlementService
             return new Collection;
         }
 
-        $items = $order->items()->get();
-        $groups = $items->groupBy(fn ($item) => $item->business_id ?: $order->business_id);
-        $orderSubtotal = max(0.01, (float) $order->subtotal);
-
-        return $groups->map(function (Collection $businessItems, $businessId) use ($delivery, $order, $riderId, $orderSubtotal) {
-            $businessSubtotal = round($businessItems->sum(fn ($item) =>
-                (float) $item->unit_price * max(0, (int) $item->quantity - (int) $item->cancelled_quantity)
-            ), 2);
-            $systemFeeShare = round((float) $order->system_fee * ($businessSubtotal / $orderSubtotal), 2);
-            $base = round($businessSubtotal + $systemFeeShare, 2);
+        // One canonical allocation (businessBases) shared with the
+        // purchasing-cash ledger so both always reconcile to the same total.
+        return $this->businessBases($order)->map(function (float $base, int $businessId) use ($delivery, $order, $riderId) {
             $split = $this->split($base);
 
             $settlement = CodSettlement::create([
                 'settlement_number' => 'COD-STL-' . Str::upper(Str::random(10)),
                 'order_id' => $order->id,
                 'delivery_id' => $delivery->id,
-                'business_id' => (int) $businessId,
+                'business_id' => $businessId,
                 'rider_id' => $riderId,
                 'settlement_base' => $split['settlement_base'],
                 'restaurant_share' => $split['restaurant_share'],

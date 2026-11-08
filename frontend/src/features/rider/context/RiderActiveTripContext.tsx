@@ -60,6 +60,8 @@ interface RiderActiveTripContextValue {
   activeDelivery: TripDelivery | null
   tripState: TripState
   riderPosition: [number, number]
+  /** True once this device has reported a real GPS position (never the placeholder). */
+  positionKnown: boolean
   setRiderPosition: (lat: number, lng: number) => void
   arrivalAlert: ArrivalAlertKind
   dismissArrivalAlert: () => void
@@ -70,7 +72,8 @@ interface RiderActiveTripContextValue {
   onArrivedPickup: () => void
   onMarkPickedUp: () => void
   onArrivedDrop: () => void
-  onConfirmDelivery: () => void
+  /** Complete the delivery with a proof photo (rider ≤50 m from the drop-off). For COD this records the tourist's cash payment. */
+  onConfirmDelivery: (photo: File) => void
   /** Unified pickup-stops payload for the assigned delivery (COD + prepaid). */
   pickupStopsData: PickupStopsData | null
   confirmArrivalStop: (businessId: number) => void
@@ -138,7 +141,13 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
       void queryClient.invalidateQueries({ queryKey: ['rider-map-location'] })
     }, [queryClient]),
   })
+  // Placeholder until the device reports GPS. NEVER used for proximity: the
+  // placeholder (Bansud town centre) can coincide with a restaurant, which
+  // used to mark the rider "near pickup" and post the placeholder to the
+  // server as the rider's location (wrongly moving the delivery to
+  // arrived_pickup). Everything location-based waits for positionKnown.
   const [riderPosition, setRiderPositionState] = useState<[number, number]>([12.8667, 121.45])
+  const [positionKnown, setPositionKnown] = useState(false)
   const [arrivalAlert, setArrivalAlert] = useState<ArrivalAlertKind>(null)
   // Optimistic status override: while a pickup-confirm PATCH is in flight (or
   // has succeeded but the authoritative poll has not caught up yet), tripState
@@ -148,7 +157,9 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
   const lastAlertStatus = useRef<string | null>(null)
 
   const setRiderPosition = useCallback((lat: number, lng: number) => {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) return
     setRiderPositionState([lat, lng])
+    setPositionKnown(true)
   }, [])
 
   const { data } = useQuery({
@@ -187,8 +198,15 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
     mutationFn: (id: number) => patch(`/rider/deliveries/${id}/status`, { status: 'arrived_destination' }),
     onSuccess: arrivalsRefetch,
   })
+  // Food deliveries complete with a proof photo at the drop-off (decision
+  // 2026-11-08): POST /rider/deliveries/{id}/complete. The server checks the
+  // 50 m radius from the rider's saved GPS and, for COD, settles the cash due.
   const completeMutation = useMutation({
-    mutationFn: (id: number) => patch(`/rider/deliveries/${id}/status`, { status: 'delivered' }),
+    mutationFn: ({ id, photo }: { id: number; photo: File }) => {
+      const body = new FormData()
+      body.append('photo', photo)
+      return post(`/rider/deliveries/${id}/complete`, body)
+    },
     onSuccess: () => {
       lastAlertStatus.current = 'delivered'
       setArrivalAlert(null)
@@ -262,6 +280,7 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
   // naturally re-targets the next stop after each confirm and disappears once
   // every stop is collected.
   const pickupArrivalPrompt = useMemo<PickupArrivalPrompt | null>(() => {
+    if (!positionKnown) return null
     if (!isPickupStage || !activeDelivery || !pickupStopsData) return null
     const stops = pickupStopsData.stops ?? []
     if (stops.length === 0 || pickupStopsData.fully_collected) return null
@@ -292,14 +311,11 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
       totalStops: stops.length,
       distanceMeters,
     }
-  }, [isPickupStage, activeDelivery, pickupStopsData, riderPosition])
+  }, [isPickupStage, activeDelivery, pickupStopsData, riderPosition, positionKnown])
 
   const pickupStopPrompt = useMemo<PickupStopPrompt | null>(() => {
     if (!isPickupStage || !activeDelivery || !pickupStopsData) return null
-    if (
-      pickupStopsData.is_cod &&
-      (!pickupStopsData.purchasing_cash_issued_at || !pickupStopsData.purchasing_cash_received_at)
-    ) return null
+    // Daily cash advance (2026-11-08): no per-delivery purchasing-cash wait.
     const current = pickupStopsData.stops?.find((stop) => stop.status === 'pending' && stop.arrived_at !== null)
     if (!current?.can_confirm) return null
 
@@ -379,13 +395,13 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
   }, [activeDelivery, fetchUser])
 
   const nearPickup =
-    activeDelivery?.pickup_lat != null && activeDelivery?.pickup_lng != null
+    positionKnown && activeDelivery?.pickup_lat != null && activeDelivery?.pickup_lng != null
       ? haversineMeters(riderPosition[0], riderPosition[1], activeDelivery.pickup_lat, activeDelivery.pickup_lng) <=
         GEOFENCE_METERS
       : false
 
   const nearDropoff =
-    activeDelivery?.delivery_lat != null && activeDelivery?.delivery_lng != null
+    positionKnown && activeDelivery?.delivery_lat != null && activeDelivery?.delivery_lng != null
       ? haversineMeters(riderPosition[0], riderPosition[1], activeDelivery.delivery_lat, activeDelivery.delivery_lng) <=
         GEOFENCE_METERS
       : false
@@ -459,13 +475,13 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
   // Also nudge the backend when arriving at a geofence so the authoritative
   // proximity controller transitions the status (keeps server truth in sync).
   useEffect(() => {
-    if (user?.id && nearPickup && activeDelivery?.status === 'assigned' && locationMutation.isIdle) {
+    if (user?.id && positionKnown && nearPickup && activeDelivery?.status === 'assigned' && locationMutation.isIdle) {
       locationMutation.mutate({ latitude: riderPosition[0], longitude: riderPosition[1] })
     }
   }, [nearPickup]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (user?.id && nearDropoff && (activeDelivery?.status === 'picked_up' || activeDelivery?.status === 'in_transit') && locationMutation.isIdle) {
+    if (user?.id && positionKnown && nearDropoff && (activeDelivery?.status === 'picked_up' || activeDelivery?.status === 'in_transit') && locationMutation.isIdle) {
       locationMutation.mutate({ latitude: riderPosition[0], longitude: riderPosition[1] })
     }
   }, [nearDropoff]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -491,6 +507,7 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
     activeDelivery,
     tripState,
     riderPosition,
+    positionKnown,
     setRiderPosition,
     arrivalAlert,
     dismissArrivalAlert,
@@ -503,7 +520,7 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
       if (activeDelivery && !pickupGate.blocked) pickupMutation.mutate(activeDelivery.id)
     },
     onArrivedDrop: () => activeDelivery && arrivedDropMutation.mutate(activeDelivery.id),
-    onConfirmDelivery: () => activeDelivery && completeMutation.mutate(activeDelivery.id),
+    onConfirmDelivery: (photo: File) => { if (activeDelivery) completeMutation.mutate({ id: activeDelivery.id, photo }) },
     pickupStopsData: pickupStopsData ?? null,
     confirmArrivalStop: (businessId) => {
       if (activeDelivery) confirmArrivalStopMutation.mutate(businessId)

@@ -57,6 +57,8 @@ class Business extends Model
         'price_range',
         'dining_style',
         'accepts_reservation',
+        'accepts_orders',
+        'accepts_walk_ins',
         'reservation_required',
         'average_wait_time',
         'facilities',
@@ -123,6 +125,8 @@ class Business extends Model
             'latitude' => 'decimal:7',
             'longitude' => 'decimal:7',
             'accepts_reservation' => 'boolean',
+            'accepts_orders' => 'boolean',
+            'accepts_walk_ins' => 'boolean',
             'reservation_required' => 'boolean',
             'average_wait_time' => 'integer',
             'popularity_score' => 'integer',
@@ -161,6 +165,30 @@ class Business extends Model
     public function details(): HasMany
     {
         return $this->hasMany(BusinessDetail::class);
+    }
+
+    /** Resort classifications (a resort can have several). */
+    public function resortTypes(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return $this->belongsToMany(ResortType::class, 'business_resort_types')->withTimestamps()->orderBy('sort_order');
+    }
+
+    /** Catalogue facilities this resort offers. */
+    public function resortFacilities(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return $this->belongsToMany(ResortFacility::class, 'business_resort_facilities')->withTimestamps()->orderBy('sort_order');
+    }
+
+    /** Bookable resort offerings (cottages, activities, packages, …). */
+    public function resortOfferings(): HasMany
+    {
+        return $this->hasMany(ResortOffering::class)->orderBy('sort_order')->orderBy('id');
+    }
+
+    /** Owner-added facilities outside the catalogue. */
+    public function resortCustomFacilities(): HasMany
+    {
+        return $this->hasMany(BusinessResortCustomFacility::class)->orderBy('name');
     }
 
     public function documents(): HasMany
@@ -369,7 +397,7 @@ class Business extends Model
      */
     public function isAcceptingOrders(): bool
     {
-        return $this->status === 'approved' && $this->isOpenNow();
+        return $this->status === 'approved' && $this->accepts_orders !== false && $this->isOpenNow();
     }
 
     /**

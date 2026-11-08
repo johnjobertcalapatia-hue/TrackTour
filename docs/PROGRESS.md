@@ -1,5 +1,61 @@
 # Project Progress — Tourism Management Portal
 
+## Home Food Menu Item Details — IMPLEMENTED & VERIFIED (2026-11-04)
+
+- The signed-in Tourist Home's Recommended Food cards now open `/tourist/food/item/:id` using the food offering ID, not `business_id`; clicking a dish no longer opens the restaurant detail page. Home's map business detail panel menu cards also open that offering detail page. Existing business/restaurant cards and Tourist Explore business listings retain their prior routes.
+- The Tourist Explore Map API now includes each business's menu items that are both available and in the canonical `available` status. The marker panel's Menu tab can display those items, and selecting a card opens that offering's details page with its existing Add to Cart and Checkout actions.
+- Each Tourist Explore Map menu card now also has its own **Add to Cart** and **Checkout** buttons. Add increments the existing `food_cart` line; Checkout adds one unit and opens the existing cart page. Both controls follow the business's `is_accepting_orders` state. The map API now provides that state for gating.
+- From Tourist Explore, clicking a restaurant still opens its restaurant/menu page; clicking a menu-item card on that page now opens the matching offering's details page. The restaurant page's separate **Add** action and cart behavior remain intact.
+- The item detail page continues to show persisted information when present (description, images, variation prices, business context, quantity and calculated item total). Its existing Add to Cart and Checkout actions were left unchanged.
+- The current schema has restaurant reviews only; it has no offering-specific review, structured ingredient, or included-item data. The detail page must not present restaurant reviews as reviews of a specific dish or invent missing ingredients/inclusions. Existing variation/add-to-cart behavior remains unchanged.
+- **Tests:** full Laravel suite **735 passed / 4,529 assertions / 0 failures / 2 skipped** and full frontend UI suite **30 files / 208 tests passed** at the previous map-menu checkpoint. For map-card actions: focused Laravel Tourist API suite **21 passed / 74 assertions / 1 skipped**, focused UI navigation/cart suite **5 passed**, production frontend build passed, focused Oxlint no errors (two existing hook dependency warnings in `TouristExploreMap.tsx`), and `git diff --check` passed.
+- **Database:** no migration or data changes.
+
+## Tourist Food Item Detail Page — IMPLEMENTED & VERIFIED (2026-11-04)
+
+- Every card on the Tourist Food Ordering page (`TouristFood.tsx`) navigates to the dedicated `/tourist/food/item/:id` details page (`TouristFoodItemDetail.tsx`) rather than opening a modal. The existing restaurant page at `/tourist/food/:id` remains unchanged. The item page shows real menu/restaurant data: name, image gallery (primary + up to 2 gallery images with thumbnails), description, price (with strikethrough `compare_price` when present), restaurant info (name/logo/address), preparation time, availability, variation/size options when the offering has them, quantity stepper, and the restaurant's latest three approved reviews under an honest "Restaurant reviews" heading. Sections whose data is absent are hidden — no fabricated ratings, reviews, prices, or add-ons (add-ons have no end-to-end support; the schema field has no readers).
+- Backend: the previously unused public `GET /api/tourist/food/{offering}` (`FoodController::show()`) was extended additively (no new route) with gallery images, compare price, preparation time, `has_variations`/`variations[]`, business logo/address, review count, and latest approved reviews. `rating` is normalized to `null` when 0 so clients never render "0.0". Detail 404s now mirror the listing endpoint's visibility rules (only `available` offerings of visible businesses) — safe after the 2026-09-24 status normalization. All pre-existing response keys were preserved, so `RouteModelBindingTest` stays green.
+- Ordering actions: **Add to Cart** keeps tourists on the item page; **Checkout** adds the selected item and navigates to the existing cart. The page writes through the existing `localStorage['food_cart']` + `cart-updated` event contract with a stable merge key (offering id + display name, variation price baked into `price` — same pattern as `TouristExploreShow`), so group checkout, `order_items.business_id`, one-canonical-order checkout, restaurant-specific availability/pricing, and existing auth/RBAC are untouched. First available variation is pre-selected, matching the existing explore-page behavior. Card rating badges no longer fall back to a fabricated "4.5".
+- **Tests:** focused backend `TouristFoodDetailTest` **6 passed / 30 assertions**; focused frontend item-detail page suite **12 passed**. **Full Laravel suite: 734 passed / 4,524 assertions / 0 failures / 2 skipped** (known SQLite-only skips; backend unchanged in the page-navigation follow-up). **Full frontend suite: 29 files / 204 tests / 0 failures** after the dedicated-page update (ran with `--maxWorkers=1` due to machine memory limits). `npm run build` clean; `npm run lint` reports no new issues from the changed files (three existing unused-variable warnings in `App.tsx` and `TouristFood.tsx`).
+- **Database:** no migration was run; no schema or data changes; nothing committed, pushed, or deployed.
+- **Deferred (pre-existing defects found during inspection — need separate approval):** (1) variation prices shown in the cart are not charged at checkout — `FoodController::orderFlat`/`GroupOrderService` recompute from base `offerings.price`; (2) `TouristExploreShow.addToCart` merge-key mismatch (variation.id vs variation.name) can create duplicate cart rows; (3) `TouristFoodCart` legacy cart migration drops the `variation` field.
+
+## Tourist Food Delivery Location Confirmation — IMPLEMENTED & VERIFIED (2026-11-04)
+
+- Food-delivery checkout now distinguishes GPS-detected, searched, and manually adjusted pin locations. The map pin can be dragged or repositioned by tapping the map; manually entered address text does not move the pin. Location changes require an explicit confirmation before delivery checkout, and changing the pin or address clears that confirmation.
+- Checkout's location map now has Street and Satellite basemaps using the existing OpenStreetMap and Esri tile sources. A top-right Layers icon opens an accessible map-style dropdown, and map-provider attribution is visible.
+- Removed the drop-shadow shape from the checkout location pin and suppress Leaflet's background, border, box shadow, and filter using the rendered marker class, preventing a square backdrop on satellite tiles. Other map pins retain their existing appearance.
+- GPS readings with accuracy greater than 50 m or missing accuracy are labeled low accuracy and require manual confirmation. Address search, reverse-geocoding, GPS errors, and unavailable geolocation are surfaced in the checkout UI. Stale asynchronous GPS/search/geocoding results cannot overwrite a newer manual selection.
+- Service-area feedback compares the reverse-geocoded municipality name with the existing municipality registry. It is explicitly advisory—not an authoritative boundary check—and does not block checkout. Order submission continues to use the confirmed address and coordinates through the existing order APIs.
+- **Tests:** the full frontend UI suite passed **192 tests / 0 failures** (28 files) with Street/Satellite map switching; after the Layers dropdown update, focused location tests passed **6/6**. Focused Oxlint and the frontend production build passed. Workspace-wide `tsc --noEmit` still reports diagnostics in other frontend files, but none in the changed location component or test. Laravel tests were not run because no backend code changed.
+- **Database:** no migration, import, or database write; existing municipality and barangay records and IDs remain unchanged.
+- **Deferred:** authoritative service-area enforcement and persisted location provenance require an agreed service-area source/policy. No barangay boundary data was imported.
+
+## Business Owner COD Restaurant Purchase Tracking — IMPLEMENTED & VERIFIED (2026-11-04)
+
+- Business Owner order list/detail and Payment Tracking now show Tourism Office-funded restaurant purchase status separately from the tourist's payment status. The restaurant purchase becomes **Paid** when its matching `cod_purchases` ledger entry is `purchased` or `collected`; pending or missing purchase entries remain **Awaiting rider payment**. Online payments and non-delivery orders are marked not applicable.
+- Purchase data is scoped by both delivery and the current business, including multi-restaurant orders. The purchase timestamp is shown when available. This does not change `orders.payment_status`, COD settlement allocation, or tourist COD collection state.
+- **Tests:** full Laravel suite **728 passed / 4,486 assertions / 0 failures / 2 existing environment skips**; focused payment-tracking tests **15 passed / 91 assertions**. Frontend UI suite **183 passed** (26 files); focused owner UI tests **20 passed**; production build clean. Focused UI lint completed with 3 existing unused-symbol warnings in `BusinessOwnerSettings.tsx`.
+- **Database:** no schema or migration changes; the feature reads the existing `cod_purchases` ledger. No live database migration or schema probe was needed or performed.
+- **Deferred:** none.
+
+## Business Owner Acceptance Settings — IMPLEMENTED & VERIFIED (2026-11-04)
+
+- The Business Owner Visibility page now auto-saves Accept Bookings, Accept Orders, and Accept Walk-ins through an owner-authorized API. Failed saves restore the prior toggle and display an error. New `accepts_orders` and `accepts_walk_ins` columns default to enabled to preserve existing behavior; Accept Bookings uses the existing `accepts_reservation` field.
+- Order availability now honors `accepts_orders` through the canonical `Business::isAcceptingOrders()` check used by existing food/group-order flows. The booking directory hides businesses with bookings disabled, and direct booking submission returns 422 when `accepts_reservation` is false. Accept Walk-ins is persisted and returned by the business API; the application currently has no walk-in booking/check-in flow to gate.
+- **Tests:** full Laravel suite **726 passed / 4,457 assertions / 0 failures / 2 skipped**; frontend UI suite **181 passed** (26 files); production build clean. Focused acceptance tests: **7 passed / 21 assertions**; acceptance/payment settings UI tests: **12 passed**.
+- **Database:** migration `2026_11_04_000001_add_business_acceptance_settings` applied locally and recorded (batch 7). Verified both new columns are non-null `tinyint(1)` with default `1`; `migrate:status` reports the migration as Ran with no pending rows.
+- **Deferred:** there is no walk-in check-in/booking workflow, so the saved Walk-ins preference is available to future consumers but cannot yet gate a workflow.
+
+## Email OTP Verification — IMPLEMENTED & VERIFIED (2026-11-03)
+
+- Added authenticated email OTP send/verify endpoints. Laravel generates six-digit codes, stores only a password hash in cache, expires them after 10 minutes, limits sends to once per minute, locks verification after five failures for 15 minutes, and consumes valid codes once before setting `email_verified_at`.
+- Tourist, business-owner, and rider registration now lead to the OTP screen. OTP is registration-only; sign-in continues directly through the existing email/password flow without requiring verification. Rider mobile OTP remains separate. Google Sign-In was not added.
+- Gmail delivery uses Laravel's existing SMTP configuration. Setup for `johnjobertcalapatia@gmail.com` and the Google App Password requirement are documented in `docs/EMAIL-OTP.md`; no credential was added to the repository. Gmail delivery itself remains unverified until the App Password is configured in the target environment.
+- **Tests:** full Laravel suite **715 passed / 4,419 assertions / 0 failures / 2 existing environment skips**; frontend UI suite **167 passed / 0 failures** (25 files); frontend production build clean. Focused email/auth regression: **17 passed / 90 assertions**. OTP UI tests: **2 passed**.
+- **Database:** no schema or migration change was needed; `email_verified_at` is existing. No live database migration/probe was performed for this phase.
+- **Deferred:** Google Sign-In remains optional and separate; production Gmail SMTP smoke test awaits environment-only App Password setup.
+
 ## Railway Production Migration Recovery — VERIFIED (2026-11-01)
 
 - **Root cause (2026-10-31 Railway crash loop):** migration `2026_10_30_000003` let Laravel derive a 71-character implicit foreign-key name (`rider_daily_reconciliation_events_rider_daily_reconciliation_id_foreign`); MySQL rejects identifiers longer than 64 characters (error 1059). MySQL DDL auto-commits, so both `CREATE TABLE` statements persisted but the first subsequent `ALTER TABLE` aborted, leaving `rider_daily_reconciliation_events` with columns and PRIMARY only — no foreign keys, no unique idempotency key, no history index. The migration was never recorded in `migrations`, so every later boot re-ran it and died with error 1050 ("table already exists"), crash-looping the service. Three further migrations carried the same violation class (implicit names of 64, 65, and 76 characters).
@@ -2359,3 +2415,698 @@ routes/
 ├── auth.php                 # Auth routes (Breeze)
 └── console.php
 ```
+
+## Dynamic Resort System, Stage 1: resort types and facilities (2026-11-06)
+
+* Architecture and Stage 0 audit: `docs/resort-reservation-architecture.md`.
+  Decisions: reuse businesses, bookings, booking_items and payments; keep
+  resort_offerings separate from food offerings; Resort category first.
+* Implemented: migration `2026_11_06_000002_create_resort_classification_tables`
+  (resort_types, business_resort_types, resort_facilities,
+  business_resort_facilities, business_resort_custom_facilities, all with
+  UNIQUE keys), the seeded catalogue, the backfill from business_details,
+  the public catalogue API, the owner resort-profile API, and the resort
+  types and facilities on the tourist place page.
+* DB verified: SHOW CREATE TABLE checked, and a live UNIQUE probe hit error
+  1062 and was rolled back.
+* Tests: ResortClassificationTest, 5 tests and 29 assertions.
+  * Laravel: 790 passed, 2 skipped (known environment skips), 0 failures.
+  * Frontend: 375 passed. Build clean.
+
+## Dynamic Resort System, Stage 2: resort cards and filters (2026-11-06)
+
+* Stays & Deals cards show the resort types and facilities from Stage 1.
+  Cottage count and starting price stay null until real data exists.
+* Filters: resort types (any of), facilities (all of, including
+  owner-created ones), location, and minimum rating (only offered once
+  reviews exist). Filter options and counts come from `/tourist/stays`
+  `filters`.
+* Changed: `app/Http/Controllers/Tourist/StaysController.php` and
+  `frontend/src/features/tourist/pages/TouristStays.tsx`.
+* Tests: TouristStaysResortFiltersTest has 4 tests; the frontend has 5 new
+  tests.
+  * Laravel: 794 passed, 2 skipped (known environment skips), 0 failures.
+  * Frontend: 380 passed. Build clean.
+* No schema change in this stage.
+
+## Dynamic Resort System, Stage 3: reusable resort detail page (2026-11-07)
+
+* `ResortDetail` is rendered for Resort businesses on
+  `/tourist/explore/:id`. Sections appear only with real content: gallery
+  and overview, facilities, about, activities, availability, reviews,
+  location (in-app route) and contact.
+* Offerings and reservations are not shown until Stages 4–7. Other
+  categories are unchanged.
+* Tests: `resort-detail-page.test.tsx` (3 tests).
+  * Laravel: 794 passed, 2 skipped (known environment skips), 0 failures.
+  * Frontend: 383 passed. Build clean.
+* No schema change in this stage.
+
+## Dynamic Resort System, Stage 4: bookable offerings (2026-11-07)
+
+* New tables `resort_offerings` and `resort_offering_images` (migration
+  `2026_11_07_000001`), applied to dev MySQL and verified with SHOW CREATE
+  TABLE and live FK and unsigned probes (1452, 1264, 1452), rolled back.
+* Owner CRUD API with structured booking configuration and coherence rules,
+  one-level dependencies, photos (up to 8), and soft delete blocked by
+  dependents.
+* Tourists see published offerings on the resort page. Stays cards show the
+  real cottage count and "From ₱X / unit".
+* Tests: ResortOfferingTest (6) and 2 frontend tests.
+  * Laravel: 800 passed, 2 skipped (known environment skips), 0 failures.
+  * Frontend: 385 passed. Build clean.
+
+
+## Dynamic Resort System, Stage 5: owner screens (2026-11-07)
+
+* Frontend only: it uses the Stage 1 and Stage 4 APIs, with no migrations or
+  endpoints.
+* Resort owners get sidebar "Resort — Setup" links and three pages:
+  * Resort Types & Facilities (types, catalogue facilities, custom
+    facilities);
+  * Cottages & Offerings list (publish toggle, edit, delete with
+    confirmation);
+  * an offering form that offers only coherent booking, pricing and
+    inventory combinations, one-level "only available with" choices, and up
+    to 8 photos.
+* Non-resort businesses are gated in the UI. Restaurants, food ordering,
+  attractions and hotels are unchanged.
+* Tests: `business-owner-resort-setup.test.tsx` (17).
+  * Frontend: 405 passed. Build clean.
+  * Laravel: 800 passed, 2 skipped (known environment skips), 0 failures. The first full run had 1 intermittent failure in `EmailVerificationTest` (line 76, a mail count); it passes alone and on the rerun. No backend code changed.
+
+
+## Rider Available Deliveries cards + delivery offer page (2026-11-07)
+
+* Cards on the Available Deliveries page show:
+  * the order number (it was blank because `DeliveryResource` has no
+    `order_id`);
+  * a Priority or Standard badge, from `orders.delivery_speed`;
+  * the pickup restaurant(s), pickup address and drop-off address;
+  * distance, delivery fee, customer tip and food item count.
+* Each card opens `/rider/deliveries/offer/:id`. That page shows the order
+  number and type, an overview (distance, fee, tip, items, estimated time,
+  payment), each pickup restaurant with its address, the destination, and
+  ordered items (photo, quantity, line total, notes, food total).
+* Accept uses the canonical `PATCH /rider/dispatch/accept`. Decline
+  (`/rider/dispatch/decline`) appears only for a live ping
+  (`offered_to_me`); open board offers show "Back to offers". A 409 or 422
+  explains why the accept failed. A rider who already accepted gets an
+  "Open trip" link.
+* Backend:
+  * new read-only `RiderOfferPresenter` (summary and detail), which adds the
+    summary fields to `GET /rider/deliveries/pending`;
+  * new `GET /rider/deliveries/{delivery}/offer`, visible only when the
+    canonical pending query lists the delivery for this rider, or the rider
+    already accepted it; otherwise 404.
+  * Money comes only from `deliveries.delivery_fee` and `orders.rider_tip`.
+    Cancelled item lines are excluded. Multi-restaurant orders list each
+    pickup with its own items.
+  * No dispatch, acceptance or schema changes.
+* Test reconciliation: `rider-deliveries-pending.test.tsx` accepted
+  directly from the list. Accepting now happens on the offer page, so the
+  test was rewritten for list → offer → accept → map (7 tests).
+* Tests: `RiderDeliveryOfferTest` (7): summary fields, detail payload,
+  multi-restaurant pickups, ping flag, visibility (other rider, out of
+  range, owner), role gate, and read-only (no dispatch state change).
+* Laravel: 807 passed, 2 skipped (known environment skips), 0 failures (4,988 assertions). Frontend: 411 passed. Build clean.
+
+
+## Rider trip flow — Stage C: Overview / Navigation views (2026-11-08)
+
+* The rider map gets **Overview** and **Navigation** buttons above the
+  map-type button, plus a **Start** button for each trip leg.
+* Navigation view: heading-up, a 3D tilt like the ground (CSS perspective on
+  the rotated plane), a horizon fade, street zoom, and a Google-style puck 30
+  px above the Go Online button.
+* Overview frames the whole route leg. Only the remaining route is drawn, and
+  collected restaurants disappear.
+* `NavigationCamera` is now shared by the tourist and rider maps.
+* Fixed: the GPS watch was re-created on every render (an unstable
+  `useMutation` dependency).
+* Tests: +10 frontend. Frontend 454 passed; build clean. Full record:
+  `docs/rider-trip-flow-plan.md` (Stage C).
+
+
+## Rider trip flow — Stage B: COD "paid before ready" (2026-11-08)
+
+* For COD, a restaurant's food may only become ready after the
+  **restaurant** confirms "Payment received". The rider must have checked in
+  at that restaurant (≤ 50 m).
+* One authority (`CodPickupPaymentGuard`), enforced in three layers:
+  * `Order`/`OrderItem` saving guards cover every path, present and future;
+  * explicit pre-checks run before bulk item updates;
+  * the preparation timer readies only paid restaurants.
+* The confirmation is stored separately from the rider's ledger
+  (`cod_purchases.payment_confirmed_at/_by`), so the rider can't unlock ready.
+* Owner and staff endpoints, the rider `waiting_payment` reason with the
+  pickup confirm refused, and the restaurant UI (Payment received, Ready
+  locks, error display).
+* Also fixed: the staff web status path lacked the AGENTS.md §4.2
+  rider-accepted gate.
+* Migration `2026_11_08_000002` applied to dev MySQL and verified (FK probe
+  1452, rolled back).
+* Tests: `CodPaidBeforeReadyTest` (10). 8 suites reconciled to the rule; the
+  COD e2e flow was restructured to arrive → pay → confirm → ready → collect.
+* Final: Laravel 839 passed, 2 skipped (known environment skips), 0 failures (5,259 assertions); frontend 444 passed; build clean.
+* Full record: `docs/rider-trip-flow-plan.md` (Stage B).
+
+
+## Rider trip flow — Stage A: delivery completion with proof photo (2026-11-08)
+
+* Full plan, approved decisions and stages: `docs/rider-trip-flow-plan.md`.
+* The rider completes a food delivery at the drop-off:
+  * within 50 m, judged from the rider's own fresh saved GPS;
+  * with a photo of the delivered food (`POST
+    /rider/deliveries/{d}/complete`).
+* Confirming means the tourist paid. COD is settled for exactly the cash due
+  in the same transaction via the existing `settleCodDelivery`. Prepaid uses
+  the existing completion.
+* The tourist confirm-delivery endpoint is retired (422, no state change).
+  The tourist sees the proof photo on Order details.
+* Migration `2026_11_08_000001_add_delivery_proof_to_deliveries` applied to
+  dev MySQL and verified.
+* Tests:
+  * `TouristConfirmDeliveryTest` rewritten (9);
+  * 5 suites reconciled (CodOrderToSettlementFlow, CompletionConsistency,
+    PurchasingCashFlow, ReadyToDeliveredOrderSync,
+    TouristConfirmRatingPersistence) via
+    `Tests\Concerns\CompletesDeliveriesWithProof`;
+  * frontend: rider photo flow, My Orders, proof on details.
+* Laravel: 829 passed, 2 skipped, 0 failures (5,171 assertions). Frontend:
+  441 passed. Build clean.
+* Next: B (COD payment before ready), C (navigation/overview views + tilt),
+  D (rating-based popularity), E (dispatch board Stage 3).
+
+
+## Rider accepts an offer → map shows the route to the restaurant (2026-11-08)
+
+* Accepting on the offer page already went to `/rider/map`. The route now
+  appears reliably:
+  * it is drawn only from a real position (device GPS, or the last saved
+    location), never the placeholder;
+  * once both the rider and the next target are known, the map frames them
+    once (`RiderMapFollow` overview, padded above the bottom panel). Then it
+    keeps following;
+  * the same happens when the drop-off leg starts.
+* **Defect fixed (data integrity):** before the device reported GPS,
+  `RiderActiveTripContext` used a placeholder (Bansud town centre, 12.8667,
+  121.45) for proximity.
+  * A restaurant at those coordinates (e.g. "Pag-asa, Bansud") made the
+    rider look "near pickup" right after accepting.
+  * The context then POSTed the placeholder to `/rider/map/location`, so the
+    server moved the delivery to `arrived_pickup` without the rider being
+    there. This likely explains delivery 6 stuck at `arrived_pickup`.
+  * Fix: a new `positionKnown` (true only after a real fix; 0,0 ignored)
+    gates nearPickup/nearDropoff, arrival prompts, location nudges and the
+    info-sheet distance.
+* Tests:
+  * `rider-trip-placeholder-position.test.tsx` (3): fails on the old
+    behaviour, passes now;
+  * `rider-map-follow.test.tsx`: overview framing (+1).
+  * Frontend: 440 passed. Build clean.
+
+
+## Fix: rider power button looked like it shrank when offline (2026-11-08)
+
+* The button is the same size (48 px) online and offline. It looked smaller
+  offline because the green pulse rings (8 px around it) disappeared, and
+  the near-black offline fill (#17201B) blended into the dark map once
+  shadows were removed.
+* Offline is now a light surface (#F8FAF6) with a dark border and icon,
+  plus a static `.offline-ring` with the same 8 px footprint as the online
+  pulse ring. Online is unchanged.
+* Test: `rider-chrome-trip-state.test.tsx` asserts the offline size,
+  surface and ring. Frontend: 436 passed. Build clean.
+
+
+## Rider map zoom-out limit: the whole Philippines (2026-11-08)
+
+* The rider map could zoom out to the whole world (minZoom 2, world
+  bounds).
+* New `MapZoomOutLimit`:
+  * `PHILIPPINES_BOUNDS` covers Batanes to Tawi-Tawi and Palawan to Davao;
+  * the minimum zoom is `getBoundsZoom(bounds)`, so the farthest view fits
+    the whole country, recomputed on resize because it depends on screen
+    size;
+  * panning is kept inside the Philippines plus a 15% margin;
+  * a map zoomed out too far snaps back.
+* Tests: `map-zoom-out-limit.test.tsx` (5). Frontend: 436 passed. Build
+  clean.
+
+
+## Rider map: flat controls, no shadows (2026-11-08)
+
+* On the rider map (especially the dark map) the clay/neumorphic shadows
+  read as dark halos and white glows around the status chips, avatar, map
+  buttons, power button, Rider Status bar and quick-action panel.
+* `DashboardLayout` adds `rider-map-flat` on `/rider/map` only. CSS removes
+  `box-shadow`/`text-shadow` there and drops only the drop-shadow part of
+  Tailwind's filter.
+* The online pulse ring (drawn with a border) and the dark-map tile filter
+  are unaffected. Other pages keep their styling.
+* Frontend: 431 passed. Build clean.
+
+
+## Fix: square glow around map markers and the profile avatar (2026-11-08)
+
+* Three causes, fixed globally in `index.css`:
+  1. The mobile tap highlight (a translucent square flash on any tapped
+     element) is now transparent.
+  2. Leaflet markers are focusable, so a tap/click left a square focus box.
+     That outline is removed for pointer focus; keyboard focus shows a round
+     green ring (`:focus-visible`).
+  3. Leaflet's default `.leaflet-div-icon` white square with a grey border
+     was rendering behind the pickup/delivery markers. It is now reset for
+     all custom markers; every app marker draws its own visuals.
+* No marker shapes changed. Frontend: 431 passed. Build clean.
+* Follow-up ("remove the shadow"): all marker and avatar shadows removed:
+  * the rider arrow's SVG/CSS drop-shadow;
+  * pickup/destination `box-shadow` (shared markers and RiderMap's own
+    pickup icon);
+  * the grey shadow shape under the restaurant pins and the pin-label shadow;
+  * the profile-photo pin shadow;
+  * `shadow-glass` on the header profile avatar.
+
+  The business-owner location pickers keep Leaflet's default pin.
+
+
+## Rider map types: Standard / Dark / Satellite (2026-11-08)
+
+* The rider map has a "Map type" button above "My location" with three
+  options:
+  * **Standard**: OpenStreetMap.
+  * **Dark**: CARTO Dark Matter with a subtle navy night tint on the tiles
+    only, for the night-navigation look requested.
+  * **Satellite**: Esri World Imagery.
+* The choice is remembered per device (`localStorage.rider_map_style`).
+* Presets live in `shared/utils/map-tiles.ts` for reuse. Google/Mapbox
+  navigation styles were not used: their tiles can't be loaded in Leaflet
+  without their SDK or key. CARTO free use requires attribution; heavy
+  commercial traffic needs a CARTO plan.
+* The dark class sits on the map wrapper because react-leaflet applies the
+  `MapContainer` className only once.
+* Tests: `rider-map-style.test.tsx` (5). Frontend: 431 passed. Build clean.
+* Follow-up (same day, "use free dark map"): Dark no longer uses CARTO. It
+  is the same free OpenStreetMap tiles, inverted into a navy night style by
+  CSS (`.map-style-dark .leaflet-tile-pane` filter). No extra provider, key or
+  plan; OSM attribution only. Markers, routes and popups keep their colours.
+* Follow-up: the Standard map is dimmed. `.map-style-standard
+  .leaflet-tile-pane { filter: brightness(0.82) contrast(1.06)
+  saturate(0.92) }` applies to the tiles only; markers, routes and controls
+  keep full colour. Satellite is unchanged.
+
+
+## Daily cash advance replaces per-delivery purchasing cash; Tourism Office "Rider Cash" board (2026-11-08)
+
+**Decision (product owner, 2026-11-08):** the rider already holds the
+Tourism Office's purchasing cash for the day. The office records it once
+per day; there is no per-delivery issue, and pickups never wait for cash.
+
+- **Ledger:**
+  - A daily advance is a `cash_issued` row in the rider's open
+    `rider_cash_funds` with **no delivery**. It is recorded as received at
+    hand-over, idempotent on `idempotency_key`, and municipality-scoped like
+    every cash-fund action. Activity log: `rider_cash.advance_issued`.
+  - The office balance formula is unchanged and shared
+    (`RiderCashFundService::officeCashBalance`): issued − verified office
+    spending − returns. An advance is counted once.
+  - Each COD delivery draws on the advance
+    (`PurchasingCashService::linkDailyAdvance`): it links the fund and sets
+    `purchasing_cash` / `issued_at` / `received_at`, with **no second
+    cash-issued row**. It links on acceptance, when an advance is recorded
+    later for a rider's active deliveries, and at pickup / purchase /
+    receipt submission.
+- **Gate removed:** pickup confirm (`PickupSequenceService`) and
+  `markPurchase` no longer call `assertCashReceived`.
+  - With no advance recorded yet, the pickup still proceeds.
+  - Submitting a purchase receipt still needs the advance ("The Tourism
+    Office has not recorded your cash advance yet.").
+  - The legacy per-delivery issue, additional issue and receipt endpoints
+    still work, for existing records.
+- **COD settlement (80/20), credit-free COD and the remittance formula are
+  untouched.**
+- **Office API:**
+  - `GET /admin/cash-advances?date=` returns per rider: the day's advances,
+    cash still with the rider, returned to date and COD deliveries, plus the
+    policy status;
+  - `POST /admin/riders/{rider}/cash-fund/advances` records an advance.
+- **Office UI:** Admin → Live Operations → **Rider Cash** (`AdminRiderCash`):
+  - date picker, totals, and a card per rider with the advance list;
+  - a "Record advance" form (amount and note, one idempotency key per
+    advance), for today only;
+  - a link to the rider's existing **Daily receipt & remittance** page,
+    which now accepts `?date=`.
+- **Remittance stays behind the daily COD cash policy (§5.1).** Cash
+  returns and COD remittances are refused while it is inactive.
+  - `config/cod_cash.php` was hard-coded off. It now reads
+    `COD_CASH_RECONCILIATION_ENABLED` / `COD_CASH_EFFECTIVE_DATE` (still off
+    by default; documented in `.env.example`).
+  - The board shows "Remittance recording is off" until the policy is
+    active.
+  - **Not activated:** activation needs the authorized effective-date
+    approval.
+- **Rider UI:**
+  - the map's "Purchasing Cash … Waiting for the Tourism Office" panel was
+    removed, with its Buy/Collect controls; pickup confirm already records
+    the purchase as bought and collected;
+  - the trip status page's cash banner and the pickup prompt's cash
+    condition were removed.
+- **Tests:**
+  - `PurchasingCashFlowTest` +5:
+    - one advance with harmless retries and a 409 on key reuse;
+    - delivery linking with no second cash-issued row, and a pickup that
+      isn't held;
+    - linking an advance recorded after acceptance;
+    - the overview, and a return bringing the balance to 0;
+    - RBAC and municipality scope.
+  - 3 assertions reconciled to the decision: `PickupSequenceFlowTest` ×1 and
+    `PurchasingCashFlowTest` ×2. They asserted the per-delivery cash gate;
+    the legacy issue/receipt steps are still exercised.
+  - Frontend: `admin-rider-cash.test.tsx` (3); the trip-steps COD case was
+    rewritten.
+- **Suites:**
+  - Laravel 858 passed, 2 skipped, 0 failures (5,395 assertions);
+  - frontend 478 passed;
+  - build clean.
+  - No migration.
+- **Known, pre-existing:** two TS errors in
+  `AdminRiderCashReconciliation.tsx` (`discrepancies.*` possibly undefined)
+  predate this change.
+
+## Rider trip status page: stage by stage after accepting (2026-11-08)
+
+- New page `/rider/deliveries/:id/status` (`RiderTripStatus`). Accepting on
+  the offer page opens it. The map's "Orders" button opens it while a trip
+  is active.
+- **Header:**
+  - order number, distance, Group Order, restaurant count and one tourist
+    destination;
+  - status (In Progress, Delivered or Cancelled);
+  - "Pickup at" and "Deliver to".
+- **Stages** (`features/rider/trip-steps.ts`, derived from server state only):
+  1. **Order Accepted**, with the accepted time.
+  2. **Pickup at Restaurants**: one row per restaurant with its food photo
+     (falling back to the restaurant logo). The current stop's button goes
+     Confirm Arrival → Confirm Pick Up → Picked Up (with time). Other stops
+     are disabled with the reason: route order, too far, not ready, or
+     waiting for payment. COD shows a "Cash received" step for the
+     purchasing cash.
+  3. **In Transit**: "I've Arrived".
+  4. **Confirm Delivery**: take a photo (camera), preview it, then
+     **Confirm Delivered**. It is locked until arrival (status, or GPS
+     within the drop-off geofence).
+- **Footer:** Rider Earnings / Customer Tip / Delivery Fee; Contact Tourist
+  (`tel:`) and View on Map.
+- **One set of actions:** the page has no actions of its own. It uses the
+  same `RiderActiveTripContext` actions and endpoints as the map, so the
+  server still enforces:
+  - route order;
+  - the pickup radius;
+  - the restaurant being ready;
+  - COD "Payment received";
+  - the 50 m photo proof.
+- **Backend:** `RiderOfferPresenter::assignedExtras` adds `assigned_at`,
+  `rider_earnings`, `customer_name`, `customer_phone` and `order_status`.
+  Only the assigned rider's offer response carries them; other riders never
+  get them.
+- **Tests:**
+  - `RiderDeliveryOfferTest` +1 (assigned extras, and none for other
+    riders);
+  - `rider-trip-status.test.tsx` (9);
+  - the offer-accept test now expects the status page.
+- **Suites:**
+  - Laravel 853 passed, 2 skipped, 0 failures (5,356 assertions);
+  - frontend 475 passed;
+  - build clean.
+
+## Rider UI: offer popup redesign, bottom bar spacing, Available Deliveries back loop (2026-11-08)
+
+- **Offer popup** (`RiderDeliveryRequestAlert`) was rebuilt as a white bottom card:
+  - a "New Delivery Offer" pill and an `hh:mm:ss` countdown pill;
+  - food photo, restaurant name, address and distance, and the tourist
+    location;
+  - chips for items, Group Order and COD (or Paid online);
+  - a "Pickup: N min • Drop-off: N min" bar; tapping it shows the order
+    number, items, food subtotal and payout;
+  - outlined Decline and filled Accept buttons.
+  The countdown auto-decline and the Accept/Decline handlers are unchanged.
+- **Offer data** (`RiderDispatchController::offerCardFacts`, additive) adds
+  `image`, `items_count`, `payment_method`, `is_cod`, `is_group`,
+  `pickup_minutes` and `dropoff_minutes`:
+  - pickup minutes = the rider's distance to the first pickup at
+    `delivery.sequential.offer_eta_speed_kmh` (default 25 km/h), an estimate
+    only;
+  - drop-off minutes = the stored route duration.
+- **Rider bottom bar** sits 24 px + 20 px + the safe area above the screen
+  edge (`.rider-bottom-bar`). An arbitrary Tailwind calc/env class
+  compiled to nothing and pushed the bar off screen; plain CSS replaced it.
+  The map buttons and Start are measured to sit 8 px above the Rider Status
+  panel (`useAboveRiderStatus`, CSS fallback).
+- **Back loop fixed:** the Available Deliveries Back button went one step
+  back in history, and the offer page's "Available deliveries" link opened
+  the list as a new page, so the two bounced between each other. The list's
+  Back now goes to the Live Map, and the offer page's links replace the
+  offer page in history.
+- **Tests:**
+  - `SequentialDispatchTest` +1 (offer card facts);
+  - popup tests rewritten for the new layout (9);
+  - `rider-dispatch-notification` updated;
+  - +2 back-loop tests;
+  - `rider-controls-above-status` (3).
+- **Suites:**
+  - Laravel 852 passed, 2 skipped, 0 failures (5,347 assertions);
+  - frontend 466 passed;
+  - build clean.
+
+## Popular food by ratings + sales; dispatch manual board (Stage 3) (2026-11-08)
+
+### Stage D: ratings + sales rank "Popular" food
+
+- The tourist Food page's default "Popular" sort uses
+  `offerings.popularity_score`: a Bayesian food rating plus log sales.
+  - A single 5-star review can't jump to the top.
+  - The bestseller flag is now a tie-breaker.
+- The score is updated:
+  - when a review is saved, approved or deleted (`ReviewObserver`);
+  - every 10 minutes (`food:recompute-popularity`).
+- Migration `2026_11_08_000003` was applied and verified with
+  `SHOW CREATE TABLE`. Details: `docs/rider-trip-flow-plan.md`, Stage D
+  record.
+
+### Stage E: dispatch Stage 3, the manual board
+
+- During targeted offers a delivery is off Available Deliveries, and other
+  riders' claims are refused server-side.
+- After 4 offers it is on the board for every rider in range, sorted
+  nearest first by distance to the first pickup.
+- Card line: "0.8 km to first pickup · Restaurant C · 3 items · 2 pickup
+  stops".
+- Won offers leave the board at once (D3); the offer page still explains.
+- Details: `docs/dispatch-escalation-plan.md` §8.
+
+### Tests
+
+- New:
+  - `FoodPopularityRankingTest` (7);
+  - `SequentialDispatchTest` +5;
+  - `board-summary-line.test.ts` (3) plus one card assertion.
+- Reconciled: 2 `RiderDeliveryOfferTest` board assertions (decision D3).
+- Suites:
+  - Laravel 851 passed, 2 skipped (known environment skips), 0 failures (5,337 assertions);
+  - frontend 457 passed;
+  - build clean.
+
+## Fix: rider map not centred on the rider (2026-11-08)
+
+* Symptoms: the rider map didn't focus on the rider, and the marker sat low
+  on the screen instead of in the centre.
+* Causes:
+  * The map started on a hard-coded Bansud point and treated it as a real
+    location.
+  * The first GPS fix only panned, staying at zoom 12.
+  * Following ignored movements under 150 m.
+  * GPS errors were silent.
+  * The `fixed inset-0` container spans the area behind mobile browser bars
+    while Leaflet kept a stale size, so its "centre" was below the middle of
+    the visible screen.
+* Fix:
+  * New `RiderMapFollow` (replaces `RecenterMap`):
+    * no focusing until a real location exists (device GPS, else the rider's
+      last saved server location);
+    * the first fix zooms to street level (17) on the rider;
+    * it then follows as the rider moves, with a 5 m threshold;
+    * dragging pauses following;
+    * a "Center map on my location" button, or going online, re-centres and
+      resumes.
+  * Leaflet is re-measured (`invalidateSize`) before every focus and on
+    visual-viewport resize or rotation.
+  * The map container is sized to `100dvh`.
+  * GPS errors show a hint ("Location access is blocked…").
+* Tests: `rider-map-follow.test.tsx` (6). Frontend: 422 passed. Build clean.
+* Follow-up (same day): zooming (scroll wheel, pinch, double-tap) zoomed
+  around the cursor or finger, pushing the marker left or right.
+  * While following, these now zoom around the map centre (Leaflet
+    `scrollWheelZoom`/`touchZoom`/`doubleClickZoom = 'center'`), and the map
+    snaps the rider back to the exact centre on `zoomend`.
+  * While exploring (after a drag), zoom behaves normally.
+  * Tests: +3 (9 total).
+
+
+## Dispatch & Offer Escalation — Stage 2: pickup sequence + sequential 30 s offers (2026-11-07)
+
+* Stage 1 approved; all recommendations D1–D10 accepted. Full record:
+  `docs/dispatch-escalation-plan.md` §7.
+* **Audit defect fixed first:** a cancelled order can no longer be accepted.
+  * Tourist cancel locks the delivery and order, is refused after rider
+    acceptance, and withdraws all offers.
+  * The ping-accept path refuses cancelled or non-dispatchable orders under
+    its lock.
+* Pickup sequence:
+  * farthest from the tourist first (OSRM with fallback), planned before
+    dispatch;
+  * the delivery's pickup point becomes stop 1;
+  * `routeStops` follows the planned order.
+* Food dispatch:
+  * one nearest eligible rider at a time, **30 s** server timer (product
+    decision), at most 4 attempts, never the same rider twice;
+  * then the manual board;
+  * new `dispatch:process-offer-timeouts` worker every 5 s, which also keeps
+    the 60-minute deadline;
+  * transport keeps the wave.
+* Review page: no visible timer (product decision). A heartbeat renews the
+  hold every 30 s while open.
+* Migration `2026_11_07_000003_add_sequential_dispatch_columns` applied to
+  dev MySQL and verified: SHOW CREATE TABLE; FK probe 1452; repeat rider
+  1062; rolled back.
+* Tests:
+  * `SequentialDispatchTest` (14), deadline expiry (+2), heartbeat (+1);
+  * 7 dispatch suites reconciled to the approved rules (annotated in each
+    test).
+* Laravel: 829 passed, 2 skipped (known environment skips), 0 failures (5,188 assertions). Frontend: 416 passed. Build clean.
+
+
+## Dispatch & Offer Escalation — Stage 1 audit (2026-11-07)
+
+* Audit and transition plan only, in `docs/dispatch-escalation-plan.md`. No
+  dispatch, payment or schema code changed.
+* Gaps found:
+  * offers fan out to 5 riders at once for 120 s;
+  * timeouts advance only when riders poll;
+  * timed-out riders are re-offered;
+  * pickup stops are ordered by preparation time and seeded after
+    acceptance;
+  * the 60-minute deadline fails the dispatch but does not cancel or refund
+    the order (a documented decision);
+  * the existing refund processor already supports partial amounts.
+* **Confirmed defect** (temporary probe test, since deleted): after a tourist
+  cancels a single-restaurant order, a pending ping can still be accepted
+  (HTTP 200, rider assigned). `cancelOrder` doesn't withdraw offers, and ping
+  accept doesn't re-check order status. Fix scheduled at the start of
+  Stage 4.
+* 10 decisions (D1–D10) await product-owner review before Stage 2.
+
+
+## Rider offers: "already accepted" status + exclusive review hold (2026-11-07)
+
+* Product rules:
+  * an offer another rider accepted can't be accepted and shows "Already
+    accepted by another rider";
+  * while one rider reviews an offer, other riders can neither view nor
+    accept it. The reviewer accepts or finds another offer.
+* Migration `2026_11_07_000002_add_offer_review_hold_to_deliveries`:
+  * adds `deliveries.review_rider_id` (FK users, ON DELETE SET NULL) and
+    `review_expires_at`;
+  * applied to dev MySQL with `--path`;
+  * verified with SHOW CREATE TABLE and a live FK probe (1452 rejected,
+    valid write ok), all rolled back.
+* `OfferReviewService` handles acquire and release under the delivery row
+  lock: 90 s, one hold per rider, re-opening doesn't extend, holds lapse on
+  their own.
+* Both accept paths (`NearestRiderService` ping accept and direct claim)
+  refuse when another rider holds the review. That check is inside the
+  existing delivery lock, returns 409, and leaves the blocked rider's ping
+  pending. A successful assignment clears the hold.
+  * Targeted guard; the dispatch engine is otherwise unchanged
+    (AGENTS.md §16).
+* API:
+  * `POST` and `DELETE /rider/deliveries/{id}/review`;
+  * `/offer` and `/pending` report `availability`: available, reviewing,
+    taken or mine;
+  * recently taken offers (last 10 minutes, pinged or within 25 km) stay
+    listed with no customer details.
+* UI:
+  * opening an offer claims the hold, with a "Reserved for you · m:ss left
+    to decide" countdown;
+  * Accept; "Find other offers" (or Decline for pings) releases the hold,
+    and leaving the page also releases it;
+  * when time runs out, Accept is replaced by "Review again" / "Find other
+    offers";
+  * other riders see inert "Being reviewed by another rider" or "Accepted
+    by another rider" cards and a "Check again" option;
+  * the list polls every 10 s.
+* Tests:
+  * `RiderDeliveryOfferTest`: 13 total, 6 new — taken race, recent-nearby
+    limit, exclusive hold with list/offer/accept refusal, ping blocked then
+    accepted after release, release and expiry, one hold per rider, and no
+    extension.
+  * Frontend: `rider-deliveries-pending.test.tsx` (11).
+* Docs: business-rules/rider-dispatch.md §6.
+* Laravel: 812 passed, 2 skipped, 1 timing flake (`PreparationPredictionTest` dispatch-time assertion off by 1 s across a second boundary; passes 3/3 when rerun; unrelated code). Frontend: 415 passed. Build clean.
+
+
+## Fix: rider tab 401/403 after a session change in another tab (2026-11-07)
+
+* Symptom: the rider console showed `401` on `/rider/map/location`, then
+  `403` on `/rider/deliveries/6/purchases` and `/pickup-stops`.
+* DB check: delivery 6 belongs to rider #8 and has been at `arrived_pickup`
+  since 2026-10-30. The 403s came from the ownership check in
+  `RiderPurchasingController` and `RiderPickupStopController`, which is
+  correct behaviour.
+* Cause (frontend):
+  * The bearer token sits in localStorage, which every tab shares, and the
+    API client reads it on every request.
+  * When another tab logged out, the rider tab's location polls returned
+    401. When that tab signed in as another account, the rider tab sent the
+    new token.
+  * Meanwhile the rider tab still held rider #8 in memory and delivery 6 in
+    the React Query cache (failed queries keep their last data, and nothing
+    cleared the cache when the account changed). It requested delivery 6 as
+    the wrong account, so the server returned 403.
+  * No data leaked, because the server refused every request.
+* Fix (`app/providers.tsx`):
+  * a `storage` listener on `auth_token` refetches `/user`, so a tab follows
+    logouts and sign-ins made in other tabs;
+  * an auth-store subscription clears the query cache on logout, and resets
+    and refetches it when the account changes.
+* Tests: `auth-cross-tab-session.test.tsx` (3). The two cross-tab tests fail
+  without the fix and pass with it. The existing 401 and revalidation suites
+  still pass.
+* Frontend: 405 passed. Laravel: 800 passed, 2 skipped, 0 failures.
+
+
+## Fix: random 500 "no such table: businesses" under XAMPP Apache (2026-11-07)
+
+* Symptom: `/api/tourist/stays`, `/api/tourist/for-you` and other endpoints
+  sometimes answered 500 through the Vite proxy. The log showed the
+  **sqlite** connection on `database/database.sqlite` (58 occurrences over
+  time), although `.env` says mysql.
+* Cause: the frontend proxies to XAMPP Apache (mod_php, mpm_winnt, threaded;
+  see `frontend/vite.config.ts`). Laravel loaded `.env` with putenv()/getenv(),
+  which share one process environment across Apache threads and are not
+  thread-safe. Concurrent requests could miss `DB_CONNECTION`, and
+  `config/database.php` then fell back to its default `sqlite`.
+* Fix: `bootstrap/app.php` calls `Env::disablePutenv()` only when
+  `PHP_SAPI === 'apache2handler'` on Windows. `.env` values stay in the
+  per-request `$_ENV`/`$_SERVER`. CLI, tests and production are unchanged,
+  and no app code uses getenv() directly.
+* Verified with a burst of 60 concurrent requests to /tourist/stays and
+  /tourist/for-you through Apache:
+
+  | Run | 200 | 500 | New sqlite log errors |
+  | --- | --- | --- | --- |
+  | Without the fix | 56 | 4 | 8 |
+  | With the fix | 60 | 0 | 0 |
+  | With the fix, 100-request burst | 100 | 0 | 0 |
+
+  Laravel suite: 800 passed, 2 skipped (known environment skips), 0 failures.

@@ -34,6 +34,8 @@ class CodPurchase extends Model
         'purchase_amount',
         'status',
         'purchased_at',
+        'payment_confirmed_at',
+        'payment_confirmed_by',
         'collected_at',
     ];
 
@@ -42,6 +44,7 @@ class CodPurchase extends Model
         return [
             'purchase_amount' => 'decimal:2',
             'purchased_at' => 'datetime',
+            'payment_confirmed_at' => 'datetime',
             'collected_at' => 'datetime',
         ];
     }

@@ -59,4 +59,44 @@ describe('buildOsrmUrl — never send OSRM a garbage route', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
     expect(fetchMock.mock.calls[1]?.[0]).toContain('121.49,12.9')
   })
+
+  it('keeps the previous line visible while refreshing the route after rider movement', async () => {
+    const response = (coordinates: [number, number][]) => ({
+      ok: true,
+      json: async () => ({
+        routes: [{
+          geometry: { coordinates },
+          distance: 1000,
+          duration: 600,
+        }],
+      }),
+    })
+    let resolveRefresh: ((value: ReturnType<typeof response>) => void) | undefined
+    const pendingRefresh = new Promise<ReturnType<typeof response>>((resolve) => {
+      resolveRefresh = resolve
+    })
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response([[121.45, 12.86], [121.46, 12.87]]))
+      .mockReturnValueOnce(pendingRefresh)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const destination: [number, number] = [12.87, 121.46]
+    const { result, rerender } = renderHook(
+      ({ waypoints }) => useOsrmRoute(waypoints, true),
+      { initialProps: { waypoints: [[12.86, 121.45], destination] } }
+    )
+
+    await waitFor(() => expect(result.current.points).toEqual([[12.86, 121.45], [12.87, 121.46]]))
+
+    rerender({ waypoints: [[12.864, 121.45], destination] })
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    expect(result.current.points).toEqual([[12.86, 121.45], [12.87, 121.46]])
+
+    await act(async () => {
+      resolveRefresh?.(response([[121.45, 12.864], [121.46, 12.87]]))
+      await pendingRefresh
+    })
+    await waitFor(() => expect(result.current.points).toEqual([[12.864, 121.45], [12.87, 121.46]]))
+  })
 })

@@ -10,10 +10,13 @@ use App\Models\Delivery;
 use App\Models\User;
 use App\Services\DeliveryService;
 use App\Services\NearestRiderService;
+use App\Services\OfferReviewService;
 use App\Services\PickupDeliveryTransitionService;
+use App\Services\RiderOfferPresenter;
 use App\Services\TransportationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\DB;
 
 class RiderDeliveryController extends Controller
@@ -26,12 +29,133 @@ class RiderDeliveryController extends Controller
 
     public function pending(Request $request): JsonResponse
     {
-        $deliveries = $this->deliveryService->getPendingDeliveries($request->user()->id, 15);
+        $riderId = (int) $request->user()->id;
+        $deliveries = $this->deliveryService->getPendingDeliveries($riderId, 15);
+        $presenter = app(RiderOfferPresenter::class);
+        $reviews = app(OfferReviewService::class);
 
-        return $this->successResponse(
-            DeliveryResource::collection($deliveries),
-            'Pending deliveries retrieved.'
-        );
+        // Card line (Stage 3): "0.8 km to first pickup · Restaurant C · 3 items · 2 pickup stops".
+        $distances = $this->deliveryService->pickupDistancesKm($riderId, $deliveries);
+        $board = fn (Delivery $d, array $row) => $row + [
+            'pickup_distance_km' => isset($distances[$d->id]) ? round($distances[$d->id], 1) : null,
+            'pickup_stops' => count($row['pickup_names'] ?? []),
+        ];
+
+        $available = $deliveries->map(fn (Delivery $d) => $board($d, $reviews->isHeldByOther($d, $riderId)
+            // Another rider has it open: listed, but details withheld and not actionable.
+            ? $presenter->reviewingSummary($d)
+            : array_merge(
+                (new DeliveryResource($d))->resolve($request),
+                $presenter->summary($d),
+                ['availability' => 'available', 'reviewing_by_me' => $reviews->isHeldBy($d, $riderId)],
+            )));
+
+        // Decision D3 (docs/dispatch-escalation-plan.md): an offer another
+        // rider won leaves the board immediately. A rider who still has its
+        // offer page open is told "Already accepted by another rider" there.
+        return $this->successResponse($available->values(), 'Pending deliveries retrieved.');
+    }
+
+    /**
+     * GET /rider/deliveries/{delivery}/offer — read-only offer state.
+     *
+     * Visible only to a rider who would see it on Available Deliveries (the
+     * canonical pending query: pinged, or open and within range) or who has
+     * already accepted it. While another rider reviews it, or after another
+     * rider won it, only a restricted summary is returned. Anything else is 404.
+     */
+    public function offer(Request $request, Delivery $delivery): JsonResponse
+    {
+        return $this->offerResponse($request, $delivery, false);
+    }
+
+    /**
+     * POST /rider/deliveries/{delivery}/review — open the offer for review.
+     *
+     * The first rider to open it gets an exclusive hold (OfferReviewService):
+     * full details plus review_expires_at. Others get "Another rider is
+     * reviewing this offer" with no details and cannot accept until the hold
+     * is accepted, released or expires.
+     */
+    public function review(Request $request, Delivery $delivery): JsonResponse
+    {
+        return $this->offerResponse($request, $delivery, true);
+    }
+
+    /**
+     * PATCH /rider/deliveries/{delivery}/review — heartbeat while the review
+     * page is open. Keeps this rider's hold alive (no visible timer).
+     */
+    public function renewReview(Request $request, Delivery $delivery): JsonResponse
+    {
+        $riderId = (int) $request->user()->id;
+        $isVisible = ($delivery->rider_id === null)
+            && $this->deliveryService->getPendingDeliveries($riderId, 100)->contains('id', $delivery->id);
+
+        if (! $isVisible) {
+            return $this->successResponse(['held' => false, 'reason' => $delivery->rider_id !== null ? 'taken' : 'unavailable'], 'Offer no longer available.');
+        }
+
+        return $this->successResponse(app(OfferReviewService::class)->renew($delivery->id, $riderId), 'Review hold renewed.');
+    }
+
+    /** DELETE /rider/deliveries/{delivery}/review — "find other offers": release my hold. */
+    public function releaseReview(Request $request, Delivery $delivery): JsonResponse
+    {
+        app(OfferReviewService::class)->release($delivery->id, (int) $request->user()->id);
+
+        return $this->successResponse(null, 'Offer released.');
+    }
+
+    private function offerResponse(Request $request, Delivery $delivery, bool $acquire): JsonResponse
+    {
+        $riderId = (int) $request->user()->id;
+        $presenter = app(RiderOfferPresenter::class);
+        $reviews = app(OfferReviewService::class);
+        $isMine = $delivery->rider_id !== null && (int) $delivery->rider_id === $riderId;
+
+        if ($isMine) {
+            return $this->successResponse(
+                $presenter->detail($delivery) + $presenter->assignedExtras($delivery) + ['availability' => 'mine'],
+                'Delivery offer retrieved.',
+            );
+        }
+
+        $isOffered = $this->deliveryService->getPendingDeliveries($riderId, 100)->contains('id', $delivery->id);
+
+        if (! $isOffered) {
+            // Won by another rider while this rider could see it: report that
+            // state (no customer/route details), never offer it as acceptable.
+            if ($this->deliveryService->getRecentlyTakenForRider($riderId, 10, 50)->contains('id', $delivery->id)) {
+                return $this->successResponse($presenter->takenSummary($delivery), 'Already accepted by another rider.');
+            }
+
+            return $this->notFoundResponse('This delivery offer is no longer available.');
+        }
+
+        if ($acquire) {
+            $hold = $reviews->acquire($delivery->id, $riderId);
+            $delivery->refresh();
+
+            if (! $hold['held']) {
+                return match ($hold['reason']) {
+                    'reviewing' => $this->successResponse($presenter->reviewingSummary($delivery), 'Another rider is reviewing this offer.'),
+                    'taken' => $this->successResponse($presenter->takenSummary($delivery), 'Already accepted by another rider.'),
+                    default => $this->notFoundResponse('This delivery offer is no longer available.'),
+                };
+            }
+        } elseif ($reviews->isHeldByOther($delivery, $riderId)) {
+            return $this->successResponse($presenter->reviewingSummary($delivery), 'Another rider is reviewing this offer.');
+        }
+
+        $mine = $reviews->isHeldBy($delivery, $riderId);
+
+        return $this->successResponse($presenter->detail($delivery) + [
+            'availability' => 'available',
+            'reviewing_by_me' => $mine,
+            'review_expires_at' => $mine ? $delivery->review_expires_at : null,
+            'review_seconds' => $reviews->seconds(),
+        ], 'Delivery offer retrieved.');
     }
 
     public function active(Request $request): JsonResponse
@@ -194,7 +318,7 @@ class RiderDeliveryController extends Controller
 
         if ($outcome['error'] === 'tourist_confirmation_required') {
             return $this->errorResponse(
-                'The tourist must confirm the delivery before it can be marked as delivered.',
+                'Take a photo of the delivered food at the drop-off to complete this delivery.',
                 422
             );
         }
@@ -280,5 +404,77 @@ class RiderDeliveryController extends Controller
             ]),
             'Cash on delivery settled successfully.'
         );
+    }
+
+    /**
+     * POST /rider/deliveries/{delivery}/complete  (multipart: photo)
+     *
+     * Rider completes a FOOD delivery with proof (decision 2026-11-08): within
+     * tracking.dropoff_radius_meters (50 m) of the delivery address — judged
+     * from the rider's own fresh saved GPS fix, never a client-sent number —
+     * and a photo of the delivered food. Confirming also means the tourist
+     * paid the rider (COD is settled for exactly the cash due).
+     */
+    public function complete(Request $request, Delivery $delivery): JsonResponse
+    {
+        $riderId = (int) $request->user()->id;
+        if ((int) $delivery->rider_id !== $riderId) {
+            return $this->forbiddenResponse('You are not assigned to this delivery.');
+        }
+        if (strtolower((string) ($delivery->primaryOrder()?->order_type ?? '')) === 'transport') {
+            return $this->errorResponse('Rides are completed from the trip screen.', 422);
+        }
+
+        $request->validate([
+            'photo' => ['required', 'image', 'mimes:jpg,jpeg,png,webp', 'max:8192'],
+        ], [
+            'photo.required' => 'Take a photo of the delivered food first.',
+            'photo.image' => 'The proof must be a photo.',
+        ]);
+
+        if ($delivery->delivery_latitude === null || $delivery->delivery_longitude === null) {
+            return $this->errorResponse('This delivery has no drop-off location.', 422);
+        }
+
+        $location = app(\App\Services\PickupSequenceService::class)->latestRiderLocation($riderId);
+        $maxAge = (int) config('tracking.proof_location_max_age_seconds', 120);
+        if (! $location || ! $location['recorded_at'] || $location['recorded_at']->lt(now()->subSeconds($maxAge))) {
+            return $this->errorResponse('We need your current location. Keep the map open with location on, then try again.', 422);
+        }
+
+        $distance = app(\App\Services\PickupSequenceService::class)->distanceMeters(
+            (float) $location['latitude'],
+            (float) $location['longitude'],
+            (float) $delivery->delivery_latitude,
+            (float) $delivery->delivery_longitude,
+        );
+        $radius = (float) config('tracking.dropoff_radius_meters', 50);
+        if ($distance > $radius) {
+            return $this->errorResponse(
+                sprintf('You must be within %d m of the delivery address to complete it (you are %d m away).', (int) $radius, (int) round($distance)),
+                422
+            );
+        }
+
+        $path = $request->file('photo')->store('delivery-proofs', 'public');
+
+        try {
+            $result = $this->dispatchService->completeDeliveryByRider($delivery, $riderId, $path, $distance);
+        } catch (\InvalidArgumentException $e) {
+            Storage::disk('public')->delete($path);
+
+            return $this->errorResponse($e->getMessage(), 422);
+        } catch (\Throwable $e) {
+            Storage::disk('public')->delete($path);
+            throw $e;
+        }
+
+        $fresh = $delivery->fresh()->load('order.business');
+        DeliveryStatusChanged::dispatch($fresh, $result['old_status'], $result['new_status']);
+
+        return $this->successResponse(array_merge($result, [
+            'delivery_proof_url' => Storage::disk('public')->url($path),
+            'delivery' => DeliveryResource::make($fresh),
+        ]), 'Delivery completed. Thank you!');
     }
 }

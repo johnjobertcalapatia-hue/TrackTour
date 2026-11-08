@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, ArrowLeft, CalendarDays, LockKeyhole } from 'lucide-react'
 import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
@@ -135,7 +135,12 @@ function MoneyRow({ label, value }: { label: string; value: number | null }) {
 
 export default function AdminRiderCashReconciliation() {
   const { id } = useParams<{ id: string }>()
-  const [date, setDate] = useState(phDate)
+  // ?date=YYYY-MM-DD opens a given day (linked from the Rider Cash board).
+  const [searchParams] = useSearchParams()
+  const [date, setDate] = useState(() => {
+    const requested = searchParams.get('date')
+    return requested && /^\d{4}-\d{2}-\d{2}$/.test(requested) ? requested : phDate()
+  })
   const [cashReceived, setCashReceived] = useState('')
   const [cashReturned, setCashReturned] = useState('')
   const [reimbursement, setReimbursement] = useState('')

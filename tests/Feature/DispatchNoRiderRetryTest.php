@@ -11,6 +11,7 @@ use App\Models\Order;
 use App\Models\RiderDetail;
 use App\Models\RiderLocation;
 use App\Models\User;
+use App\Services\NearestRiderService;
 use App\Services\ScheduledDispatchProcessor;
 use App\Services\SmartDispatchService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -184,130 +185,102 @@ class DispatchNoRiderRetryTest extends TestCase
     }
 
     // ---------- tests ----------
+    //
+    // Reconciled 2026-11-07 (AGENTS.md §12; docs/dispatch-escalation-plan.md,
+    // approved D1/D2): FOOD deliveries no longer park in the 5-minute retry
+    // loop. When no eligible targeted rider exists the delivery moves to the
+    // manual Available Deliveries board, where any rider who becomes eligible
+    // later can claim it (first accept wins) until the 60-minute deadline.
+    // The original guarantee — no silent dead end — is preserved: the order
+    // stays claimable instead of waiting for a retry wave. Transport rides
+    // keep the retry loop (see the transport test below).
 
-    public function test_checkout_dispatch_failure_parks_delivery_with_retry_timestamp(): void
+    private function makeLegacyParkedRow(Delivery $delivery): void
+    {
+        // A food delivery parked by the pre-sequential engine (no phase).
+        DB::table('deliveries')->where('id', $delivery->id)->update([
+            'dispatch_status' => 'no_rider_available',
+            'dispatch_phase' => null,
+            'targeted_attempts' => 0,
+            'dispatch_retry_at' => now()->subMinute(),
+        ]);
+    }
+
+    public function test_checkout_with_no_eligible_rider_moves_to_the_manual_board_not_a_dead_end(): void
     {
         $business = $this->makeBusiness('Retry A'); // No riders exist.
 
         $delivery = $this->makeParkedDelivery($this->makeImmediateCashOrder($business));
 
         $delivery->refresh();
-        $this->assertSame('no_rider_available', $delivery->dispatch_status);
-        $this->assertNotNull(
-            $delivery->dispatch_retry_at,
-            'An immediate dispatch failure must schedule a retry instead of dying as a terminal state.'
-        );
-        $this->assertTrue($delivery->dispatch_retry_at->between(now()->addMinutes(4), now()->addMinutes(6)));
+        $this->assertSame('manual', $delivery->dispatch_phase);
+        $this->assertSame('waiting_for_rider', $delivery->dispatch_status);
+        $this->assertNull($delivery->dispatch_retry_at, 'No retry wave: the board replaces it.');
         $this->assertEquals(0, $delivery->dispatch_attempts);
         $this->assertSame(0, BookingDispatchLog::where('delivery_id', $delivery->id)->count());
+        $this->assertTrue(app(NearestRiderService::class)->deliveryIsClaimable($delivery), 'Never a dead end: the order is claimable.');
     }
 
-    public function test_parked_delivery_is_not_claimed_before_its_retry_time(): void
+    public function test_manual_board_delivery_is_not_reselected_by_the_retry_scheduler(): void
     {
         $business = $this->makeBusiness('Retry B');
-        $delivery = $this->makeParkedDelivery($this->makeImmediateCashOrder($business)); // retry_at = +5 min.
+        $delivery = $this->makeParkedDelivery($this->makeImmediateCashOrder($business));
+        $this->makeEligibleRider($business); // even with a rider now available
 
-        $this->assertSame(0, $this->processor->process(), 'The backoff window is respected.');
+        $this->assertSame(0, $this->processor->process(), 'Board deliveries get no new targeted waves.');
 
         $delivery->refresh();
-        $this->assertSame('no_rider_available', $delivery->dispatch_status);
+        $this->assertSame('manual', $delivery->dispatch_phase);
         $this->assertEquals(0, $delivery->dispatch_attempts);
-    }
-
-    public function test_parked_delivery_is_retried_when_due_and_remains_parked_on_failure(): void
-    {
-        $business = $this->makeBusiness('Retry C');
-        $delivery = $this->makeParkedDelivery($this->makeImmediateCashOrder($business)); // Still no riders.
-        $this->makeDueForRetry($delivery);
-
-        $this->assertSame(1, $this->processor->process());
-
-        $delivery->refresh();
-        $this->assertSame(
-            'no_rider_available',
-            $delivery->dispatch_status,
-            'The merchant-visible state stays no-rider while the retry loop continues.'
-        );
-        $this->assertEquals(1, $delivery->dispatch_attempts);
-        $this->assertNotNull($delivery->dispatch_retry_at);
-        $this->assertTrue($delivery->dispatch_retry_at->isFuture());
         $this->assertSame(0, BookingDispatchLog::where('delivery_id', $delivery->id)->count());
-
-        // Backoff: an immediate second run claims nothing.
-        $this->assertSame(0, $this->processor->process());
-        $this->assertEquals(1, $delivery->fresh()->dispatch_attempts);
     }
 
-    public function test_parked_delivery_recovers_once_a_rider_becomes_eligible(): void
+    public function test_a_rider_who_becomes_eligible_later_claims_it_from_the_board(): void
     {
         $business = $this->makeBusiness('Retry D');
         $delivery = $this->makeParkedDelivery($this->makeImmediateCashOrder($business));
 
         // The rider comes online with a fresh GPS fix AFTER the order was placed.
         $rider = $this->makeEligibleRider($business);
-        $this->makeDueForRetry($delivery);
 
-        $this->assertSame(1, $this->processor->process());
+        $result = app(NearestRiderService::class)->handleRiderResponse($delivery->id, $rider->id, 'accepted');
 
-        $delivery->refresh();
-        $this->assertSame(
-            'notified',
-            $delivery->dispatch_status,
-            'A later-eligible rider receives the offer the order never got at checkout.'
-        );
-        $this->assertEquals(1, $delivery->dispatch_attempts);
-        $this->assertNull($delivery->dispatch_retry_at, 'The retry timestamp is cleared once an offer exists.');
-        $this->assertNotNull($delivery->dispatch_expires_at);
-
-        $log = BookingDispatchLog::where('delivery_id', $delivery->id)
-            ->where('response', 'pending')
-            ->first();
-        $this->assertNotNull($log, 'The recovery attempt created a real rider offer (the ping the rider was missing).');
-        $this->assertSame($rider->id, $log->rider_id);
+        $this->assertTrue($result['success'] ?? false, 'A later-eligible rider claims the order the checkout never assigned.');
+        $this->assertSame($rider->id, (int) $delivery->fresh()->rider_id);
     }
 
-    public function test_parked_delivery_marks_dispatch_failed_after_retries_are_exhausted(): void
+    public function test_legacy_parked_food_delivery_is_migrated_into_sequential_dispatch(): void
     {
-        $business = $this->makeBusiness('Retry E');
-        $delivery = $this->makeParkedDelivery($this->makeImmediateCashOrder($business)); // Still no riders.
-
-        // max_retries 3 => max 4 attempts: start the final attempt just in time.
-        DB::table('deliveries')->where('id', $delivery->id)->update([
-            'dispatch_attempts' => 3,
-            'dispatch_retry_at' => now()->subMinute(),
-        ]);
-
-        $this->assertSame(1, $this->processor->process());
-
-        $delivery->refresh();
-        $this->assertSame('dispatch_failed', $delivery->dispatch_status, 'The retry loop stays bounded.');
-        $this->assertNotNull($delivery->dispatch_failed_at);
-        $this->assertNull($delivery->dispatch_retry_at, 'A terminal failure carries no pending retry timestamp.');
-        $this->assertEquals(4, $delivery->dispatch_attempts);
-        $this->assertSame(0, BookingDispatchLog::where('delivery_id', $delivery->id)->count());
-
-        // Terminal: further runs must not touch it.
-        $this->assertSame(0, $this->processor->process());
-        $this->assertEquals(4, $delivery->fresh()->dispatch_attempts);
-    }
-
-    public function test_legacy_parked_delivery_without_retry_timestamp_is_still_claimed(): void
-    {
-        // Rows parked before this fix carry dispatch_retry_at = NULL; they must
-        // be picked up too (the attempt cap bounds them to dispatch_failed, so
-        // they cannot loop forever).
+        // Rows parked by the old engine before deploy are still picked up once
+        // and handed to the sequential flow (one targeted offer).
         $business = $this->makeBusiness('Retry F');
         $delivery = $this->makeParkedDelivery($this->makeImmediateCashOrder($business));
-
-        DB::table('deliveries')->where('id', $delivery->id)
-            ->update(['dispatch_retry_at' => null]);
+        $this->makeLegacyParkedRow($delivery);
+        $rider = $this->makeEligibleRider($business);
 
         $this->assertSame(1, $this->processor->process());
 
         $delivery->refresh();
-        $this->assertEquals(1, $delivery->dispatch_attempts);
-        $this->assertSame('no_rider_available', $delivery->dispatch_status);
-        $this->assertTrue($delivery->dispatch_retry_at->isFuture());
+        $this->assertSame('notified', $delivery->dispatch_status);
+        $this->assertSame('targeted', $delivery->dispatch_phase);
+        $this->assertSame(1, $delivery->targeted_attempts);
+        $this->assertNull($delivery->dispatch_retry_at);
+        $this->assertSame($rider->id, (int) BookingDispatchLog::where('delivery_id', $delivery->id)->where('response', 'pending')->value('rider_id'));
+    }
+
+    public function test_legacy_parked_food_delivery_without_a_rider_moves_to_the_board_not_back_to_retry(): void
+    {
+        $business = $this->makeBusiness('Retry E');
+        $delivery = $this->makeParkedDelivery($this->makeImmediateCashOrder($business));
+        $this->makeLegacyParkedRow($delivery);
+
+        $this->assertSame(1, $this->processor->process());
+
+        $delivery->refresh();
+        $this->assertSame('manual', $delivery->dispatch_phase);
+        $this->assertSame('waiting_for_rider', $delivery->dispatch_status);
+        $this->assertNull($delivery->dispatch_retry_at);
+        $this->assertSame(0, $this->processor->process(), 'Never re-parked in the retry loop.');
     }
 
     public function test_parked_transport_delivery_is_retried_with_transport_rider_cohort(): void
@@ -372,15 +345,15 @@ class DispatchNoRiderRetryTest extends TestCase
         $this->assertNotSame('food', $transportRider->riderDetail->current_service);
     }
 
-    public function test_pending_transport_order_does_not_break_food_retry_selection(): void
+    public function test_pending_transport_order_does_not_break_food_selection(): void
     {
         // The transport 'pending' rule must not leak into food selection: a
-        // food order parked at 'pending' stays undispatched (pending may still
-        // be awaiting payment), but a waiting_restaurant food order retries.
+        // legacy-parked waiting_restaurant food order is still processed (and
+        // handed to sequential dispatch).
         $business = $this->makeBusiness('Retry H');
 
         $foodDelivery = $this->makeParkedDelivery($this->makeImmediateCashOrder($business));
-        $this->makeDueForRetry($foodDelivery);
+        $this->makeLegacyParkedRow($foodDelivery);
         $this->makeEligibleRider($business, 'food');
 
         $this->assertSame(1, $this->processor->process());

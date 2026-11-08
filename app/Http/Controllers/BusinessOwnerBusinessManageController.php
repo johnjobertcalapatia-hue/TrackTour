@@ -196,6 +196,26 @@ class BusinessOwnerBusinessManageController extends Controller
         );
     }
 
+    public function updateAcceptSettings(Request $request, Business $business): JsonResponse
+    {
+        if ($business->owner_id !== $request->user()->id) {
+            return $this->forbiddenResponse('You do not own this business.');
+        }
+
+        $validated = $request->validate([
+            'accepts_reservation' => ['required', 'boolean'],
+            'accepts_orders' => ['required', 'boolean'],
+            'accepts_walk_ins' => ['required', 'boolean'],
+        ]);
+
+        $business->update($validated);
+
+        return $this->successResponse(
+            BusinessResource::make($business->fresh()->load('category', 'municipality', 'barangay')),
+            'Acceptance settings updated successfully.'
+        );
+    }
+
     public function update(UpdateBusinessRequest $request, Business $business): JsonResponse
     {
         if ($business->owner_id !== $request->user()->id) {

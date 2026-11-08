@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
+import ExploreViewToggle from '@/features/tourist/components/ExploreViewToggle'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { get } from '@/shared/services/api'
-import { Star, MapPin, Compass } from 'lucide-react'
+import { Star, MapPin, Compass, ChevronDown } from 'lucide-react'
 import { formatCurrency, cn, toAssetUrl } from '@/shared/utils'
 
 type Tab = 'all' | 'places' | 'food' | 'stays'
@@ -21,6 +22,8 @@ interface ExploreData {
   places: ExploreItem[]
   food: ExploreItem[]
   stays: ExploreItem[]
+  /** Every municipality (for the filter), regardless of the current filter. */
+  municipalities?: { id: number; name: string }[]
 }
 
 const TABS: { key: Tab; label: string }[] = [
@@ -40,22 +43,39 @@ export default function TouristExplore() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [tab, setTab] = useState<Tab>(() => initialTabFromParams(searchParams.get('tab')))
+  /** Municipality filter (?municipality=<id>); '' = all municipalities. */
+  const municipalityParam = /^\d+$/.test(searchParams.get('municipality') ?? '') ? searchParams.get('municipality')! : ''
 
   useEffect(() => {
     setTab(initialTabFromParams(searchParams.get('tab')))
   }, [searchParams])
 
+  /** Tab and municipality both live in the URL (refresh / back keep them). */
+  const updateParams = (next: { tab?: Tab; municipality?: string }) => {
+    const t = next.tab ?? tab
+    const m = next.municipality ?? municipalityParam
+    const params: Record<string, string> = {}
+    if (t !== 'all') params.tab = t
+    if (m) params.municipality = m
+    setSearchParams(params, { replace: true })
+  }
+
   const handleTabChange = (key: Tab) => {
     setTab(key)
-    setSearchParams(key === 'all' ? {} : { tab: key }, { replace: true })
+    updateParams({ tab: key })
   }
 
   const { data, isLoading } = useQuery({
-    queryKey: ['tourist-explore-v2'],
-    queryFn: () => get<ExploreData>('/tourist/explore'),
+    queryKey: ['tourist-explore-v2', municipalityParam],
+    queryFn: () => get<ExploreData>('/tourist/explore', municipalityParam ? { params: { municipality_id: municipalityParam } } : undefined),
+    // Keep the current cards (and the dropdown) while another municipality loads.
+    placeholderData: keepPreviousData,
   })
 
-  if (isLoading) {
+  const municipalityOptions = [...(data?.municipalities ?? [])].sort((a, b) => a.name.localeCompare(b.name))
+  const municipalityName = municipalityOptions.find((m) => String(m.id) === municipalityParam)?.name
+
+  if (isLoading && !data) {
     return (
       <div className="flex items-center justify-center py-20">
         <div className="w-6 h-6 border-2 border-[#087F3F] border-t-transparent rounded-full animate-spin" />
@@ -76,34 +96,79 @@ export default function TouristExplore() {
   const handleTap = (item: ExploreItem) => {
     if (item.type === 'place') navigate(`/tourist/destinations/${item.id}`)
     else if (item.type === 'food') navigate(`/tourist/food/${item.id}`)
-    else navigate(`/tourist/stays/${item.id}`)
+    // Stays open the place page (same as Home). /tourist/stays/:id is the
+    // tourist's *booking* detail and must never receive a business id.
+    else navigate(`/tourist/explore/${item.id}`)
   }
 
   return (
     <div className="space-y-4 px-4 pt-4">
-      {/* Tabs */}
-      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => handleTabChange(t.key)}
+      {/* Filters, at most 2 rows and no scrolling:
+          row 1 = the tabs (always together on one line);
+          row 2 (only when it doesn't all fit) = municipality filter + map view.
+          Wide screens: everything on one row. */}
+      <div data-testid="explore-filters" className="flex flex-wrap items-center gap-2">
+        <div data-testid="explore-tabs" className="flex flex-nowrap items-center gap-1.5 sm:gap-2 shrink-0">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => handleTabChange(t.key)}
+              className={cn(
+                'shrink-0 px-3 sm:px-4 py-2 rounded-full text-[13px] sm:text-sm font-medium transition whitespace-nowrap',
+                tab === t.key
+                  ? 'bg-[#087F3F] text-white'
+                  : 'bg-white border border-[#E5E9E7] text-[#68736D] hover:text-[#17201B] hover:border-[#087F3F]/40'
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Municipality filter: grows to fill row 2 on phones, natural width when it fits beside the tabs */}
+        <div data-testid="explore-municipality-wrap" className="relative grow basis-0 min-w-[140px] sm:grow-0 sm:basis-auto">
+          <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#087F3F] pointer-events-none" aria-hidden="true" />
+          <select
+            id="explore-municipality"
+            aria-label="Municipality"
+            value={municipalityParam}
+            onChange={(e) => updateParams({ municipality: e.target.value })}
             className={cn(
-              'px-4 py-2 rounded-full text-sm font-medium transition whitespace-nowrap',
-              tab === t.key
-                ? 'bg-[#087F3F] text-white'
-                : 'bg-white border border-[#E5E9E7] text-[#68736D] hover:text-[#17201B] hover:border-[#087F3F]/40'
+              'appearance-none w-full h-9 pl-9 pr-8 rounded-full border text-sm font-medium truncate focus:outline-none focus:ring-2 focus:ring-[#087F3F]/25',
+              municipalityParam
+                ? 'bg-[#E9F7EF] border-[#087F3F] text-[#087F3F]'
+                : 'bg-white border-[#E5E9E7] text-[#17201B] hover:border-[#087F3F]/40',
             )}
           >
-            {t.label}
-          </button>
-        ))}
+            <option value="">All municipalities</option>
+            {municipalityOptions.map((m) => (
+              <option key={m.id} value={String(m.id)}>{m.name}</option>
+            ))}
+          </select>
+          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#56615B] pointer-events-none" aria-hidden="true" />
+        </div>
+
+        <ExploreViewToggle
+          current="list"
+          to={tab === 'all' ? '/tourist/explore/map' : `/tourist/explore/map?category=${tab}`}
+          className="ml-auto"
+        />
       </div>
 
       {/* Grid */}
       {filtered.length === 0 ? (
                 <div className="py-16 text-center">
           <Compass className="w-12 h-12 text-[#9CA3AF] mx-auto mb-4" />
-          <p className="text-[#68736D]">Nothing found</p>
+          <p className="text-[#68736D]">{municipalityName ? `Nothing listed in ${municipalityName} yet` : 'Nothing found'}</p>
+          {municipalityName && (
+            <button
+              type="button"
+              onClick={() => updateParams({ municipality: '' })}
+              className="mt-4 h-10 px-5 rounded-full bg-[#087F3F] text-white text-sm font-semibold hover:bg-[#056B35] transition"
+            >
+              Show all municipalities
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 pb-4">

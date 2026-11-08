@@ -13,7 +13,12 @@ class EventController extends Controller
         $events = TourismEvent::where(function ($q) {
             $q->where('start_date', '>=', now())
                 ->orWhere('end_date', '>=', now());
-        })->with('municipality')->orderBy('start_date')->get();
+        })
+            ->when(
+                filter_var($request->input('municipality_id'), FILTER_VALIDATE_INT),
+                fn ($q) => $q->where('municipality_id', (int) $request->input('municipality_id')),
+            )
+            ->with('municipality')->orderBy('start_date')->get();
 
         if ($request->expectsJson()) {
             return $this->successResponse(compact('events'));

@@ -120,7 +120,7 @@ interface OrderStatusResponse {
 
 const STATUS_LABELS: Record<string, string> = {
   pending_payment: 'Awaiting Payment',
-  waiting_restaurant: 'Waiting for Restaurant',
+  waiting_restaurant: 'Finding Rider',
   accepted: 'Order Accepted',
   preparing: 'Being Prepared',
   ready: 'Ready for Pickup',
@@ -397,7 +397,9 @@ export default function TouristOrderStatus() {
   // Determine the status label - use COD-specific labels for COD orders
   const statusLabel = isCod
     ? (COD_STATUS_LABELS[order.status] || STATUS_LABELS[order.status] || order.status?.replace(/_/g, ' '))
-    : (STATUS_LABELS[order.status] || order.status?.replace(/_/g, ' '))
+    : (order.status === 'waiting_restaurant' && hasRider
+        ? 'Rider Accepted'
+        : (STATUS_LABELS[order.status] || order.status?.replace(/_/g, ' ')))
 
   return (
     <div>
@@ -457,8 +459,8 @@ export default function TouristOrderStatus() {
           </div>
         )}
 
-        {/* Non-COD: Payment Successful */}
-        {order.status === 'waiting_restaurant' && !isCod && (
+        {/* Non-COD: Payment Successful, waiting for a rider to accept the delivery offer */}
+        {order.status === 'waiting_restaurant' && !isCod && !hasRider && (
           <div className="bg-blue-50 border border-blue-200 rounded-2xl p-5 mb-6 flex items-start gap-4">
             <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center shrink-0">
               <Hourglass className="w-5 h-5 text-blue-600" />
@@ -466,7 +468,22 @@ export default function TouristOrderStatus() {
             <div>
               <h3 className="font-semibold text-blue-800">Payment Successful</h3>
               <p className="text-sm text-blue-700 mt-1">
-                Your payment has been processed. Waiting for <span className="font-semibold">{restaurantName}</span> to accept your order.
+                Your payment has been processed. Waiting for a rider to accept your order delivery offer.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Non-COD: Rider accepted the delivery offer, waiting for the restaurant */}
+        {order.status === 'waiting_restaurant' && !isCod && hasRider && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-5 mb-6 flex items-start gap-4">
+            <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center shrink-0">
+              <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-emerald-800">Rider Accepted</h3>
+              <p className="text-sm text-emerald-700 mt-1">
+                A rider accepted your delivery offer and is heading to <span className="font-semibold">{restaurantName}</span> to pick up your order.
               </p>
             </div>
           </div>

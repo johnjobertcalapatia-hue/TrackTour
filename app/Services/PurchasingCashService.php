@@ -6,6 +6,7 @@ use App\Models\ActivityLog;
 use App\Models\CodPurchase;
 use App\Models\Delivery;
 use App\Models\Order;
+use App\Models\RiderCashFund;
 use App\Models\RiderCashFundTransaction;
 use App\Models\User;
 use Illuminate\Support\Collection;
@@ -38,6 +39,7 @@ class PurchasingCashService
     public function __construct(
         private PickupSequenceService $pickupSequence,
         private RiderCashFundService $cashFunds,
+        private CodSettlementService $settlements,
     ) {}
 
     /** Statuses during which purchasing cash may still be issued / spent. */
@@ -118,6 +120,19 @@ class PurchasingCashService
                 throw new InvalidArgumentException('There are no purchasable items on this delivery.');
             }
 
+            // Financial invariant (AGENTS.md §5.3): the restaurant purchase
+            // allocations must reconcile exactly to the canonical rider-financed
+            // amount before any cash is issued. A mismatch means the ledger has
+            // drifted (e.g. a tampered/stale row) and must never be issued.
+            $canonical = $this->settlements->settlementBaseFor($locked);
+            if (round($total, 2) !== round($canonical, 2)) {
+                throw new InvalidArgumentException(sprintf(
+                    'Purchasing cash invariant violated: restaurant purchase allocations total ₱%s but the canonical rider-financed amount is ₱%s.',
+                    number_format($total, 2),
+                    number_format($canonical, 2)
+                ));
+            }
+
             $fund = $this->cashFunds->recordDeliveryIssuance($locked, $officer, $total);
             $locked->update([
                 'purchasing_cash' => $total,
@@ -178,7 +193,8 @@ class PurchasingCashService
     public function markPurchase(Delivery $delivery, int $purchaseId, int $riderId, string $status): ?array
     {
         $this->assertRiderOwnership($delivery, $riderId);
-        $this->assertCashReceived($delivery);
+        // Daily advance: the rider already holds the office cash.
+        $this->linkDailyAdvance($delivery);
 
         if (! in_array($status, [CodPurchase::STATUS_PURCHASED, CodPurchase::STATUS_COLLECTED], true)) {
             throw new InvalidArgumentException('Invalid purchase status. Use purchased or collected.');
@@ -272,24 +288,15 @@ class PurchasingCashService
     public function allocation(Delivery $delivery): Collection
     {
         $allocations = collect();
-        $orders = $delivery->childOrders();
 
-        foreach ($orders as $order) {
-            $orderSubtotal = max(0.01, (float) $order->subtotal);
-            $systemFee = (float) $order->system_fee;
-
-            $groups = $order->items()->get()->groupBy(fn ($item) => $item->business_id ?: $order->business_id);
-
-            foreach ($groups as $businessId => $items) {
-                $businessSubtotal = round($items->sum(fn ($item) =>
-                    (float) $item->unit_price * max(0, (int) $item->quantity - (int) $item->cancelled_quantity)
-                ), 2);
-                $systemFeeShare = round($systemFee * ($businessSubtotal / $orderSubtotal), 2);
-                $base = round($businessSubtotal + $systemFeeShare, 2);
-
-                $allocations->put((string) $businessId, round((float) $allocations->get((string) $businessId, 0.0) + $base, 2));
+        foreach ($delivery->childOrders() as $order) {
+            // Delegate to the single canonical allocation formula so the
+            // purchasing-cash ledger always mirrors the settlement ledger and
+            // sums exactly to the order's rider-financed amount.
+            foreach ($this->settlements->businessBases($order) as $businessId => $base) {
+                $key = (string) $businessId;
+                $allocations->put($key, round((float) $allocations->get($key, 0.0) + $base, 2));
             }
-
         }
 
         return $allocations;
@@ -398,10 +405,15 @@ class PurchasingCashService
 
     /**
      * Payment-agnostic per-restaurant pickup stops for a delivery, derived
-     * from the order-item snapshots (business_id + preparation_time), ordered
-     * by ascending preparation time (ties fall back to business id). This is
-     * the single canonical derivation for COD (which adds the cod_purchases
-     * ledger row per stop) AND prepaid multi-restaurant trips.
+     * from the order-item snapshots. This is the single canonical derivation
+     * for COD (which adds the cod_purchases ledger row per stop) AND prepaid
+     * multi-restaurant trips.
+     *
+     * Drive order (docs/dispatch-escalation-plan.md §2): the restaurant
+     * FARTHEST from the tourist is stop 1, then farther → nearer. The order
+     * planned before dispatch (deliveries.pickup_sequence, PickupSequencePlanner)
+     * is authoritative; restaurants missing from it (or an unplanned legacy
+     * delivery) are ordered farthest-first by straight-line distance.
      *
      * @return Collection<int, array<string, mixed>>
      */
@@ -425,9 +437,26 @@ class PurchasingCashService
             return collect();
         }
 
-        $orderedIds = collect(array_keys($businesses))
-            ->sortBy(fn (int $id) => [$prepTimes[$id] ?? 0, $id])
+        $planned = array_values(array_filter(
+            array_map('intval', (array) ($delivery->pickup_sequence ?? [])),
+            fn (int $id) => isset($businesses[$id])
+        ));
+        $dropLat = $delivery->delivery_latitude !== null ? (float) $delivery->delivery_latitude : null;
+        $dropLng = $delivery->delivery_longitude !== null ? (float) $delivery->delivery_longitude : null;
+        $distanceFromDropoff = function (int $id) use ($businesses, $dropLat, $dropLng): float {
+            $b = $businesses[$id];
+            if ($dropLat === null || $dropLng === null || $b?->latitude === null || $b?->longitude === null) {
+                return -1.0;
+            }
+
+            return app(DeliveryFeeService::class)->calculateFallbackDistance((float) $b->latitude, (float) $b->longitude, $dropLat, $dropLng);
+        };
+        $unplanned = collect(array_keys($businesses))
+            ->reject(fn (int $id) => in_array($id, $planned, true))
+            ->sort(fn (int $a, int $b) => [$distanceFromDropoff($b), $a] <=> [$distanceFromDropoff($a), $b])
             ->values();
+
+        $orderedIds = collect($planned)->concat($unplanned)->values();
 
         $purchases = $this->isCod($delivery)
             ? $delivery->codPurchases->keyBy(fn (CodPurchase $p) => (int) $p->business_id)
@@ -453,8 +482,8 @@ class PurchasingCashService
     }
 
     /**
-     * Per-restaurant pickup stops ordered by ascending preparation time (the
-     * route the rider drives), each annotated with its sequence, prep time and
+     * Per-restaurant pickup stops in drive order (farthest from the tourist
+     * first — the route the rider drives), each annotated with its sequence, prep time and
      * restaurant pickup coordinates/address. COD-only: every stop carries its
      * cod_purchases ledger row (the controller's cash-flow panel consumes it).
      *
@@ -513,6 +542,44 @@ class PurchasingCashService
         if ($delivery->purchasing_cash_issued_at === null) {
             throw new InvalidArgumentException('Purchasing cash has not been issued yet.');
         }
+    }
+
+    /**
+     * Daily cash advance (decision 2026-11-08): a COD delivery draws on the
+     * rider's open Tourism Office cash fund instead of a per-delivery issue.
+     * Links the fund and records the purchase total as the delivery's
+     * purchasing cash (no new cash-issued ledger row: the advance already
+     * counted that money). No-op for prepaid, unassigned, already-linked
+     * deliveries, or when no advance is recorded yet. Returns true if linked.
+     */
+    public function linkDailyAdvance(Delivery $delivery): bool
+    {
+        if (! $this->isCod($delivery) || ! $delivery->rider_id || $delivery->rider_cash_fund_id !== null) {
+            return false;
+        }
+
+        $fundId = RiderCashFund::query()
+            ->where('active_rider_key', $delivery->rider_id)
+            ->where('status', RiderCashFund::STATUS_OPEN)
+            ->value('id');
+        if (! $fundId) {
+            return false;
+        }
+
+        $this->initializeForDelivery($delivery);
+        $total = round((float) CodPurchase::query()->where('delivery_id', $delivery->id)->sum('purchase_amount'), 2);
+
+        $linked = Delivery::query()
+            ->whereKey($delivery->id)
+            ->whereNull('rider_cash_fund_id')
+            ->update([
+                'rider_cash_fund_id' => $fundId,
+                'purchasing_cash' => $total,
+                'purchasing_cash_issued_at' => $delivery->purchasing_cash_issued_at ?? now(),
+                'purchasing_cash_received_at' => $delivery->purchasing_cash_received_at ?? now(),
+            ]);
+
+        return $linked > 0;
     }
 
     public function assertCashReceived(Delivery $delivery): void

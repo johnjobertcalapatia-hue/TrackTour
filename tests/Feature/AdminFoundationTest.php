@@ -55,11 +55,17 @@ class AdminFoundationTest extends TestCase
         ]);
     }
 
-    private function makeBusiness(): Business
+    private function makeBusiness(
+        string $businessName = 'Foundation Test Eatery',
+        string $municipalityName = 'Bansud',
+        string $status = 'approved',
+        ?float $latitude = 12.51,
+        ?float $longitude = 121.31,
+    ): Business
     {
-        $category = BusinessCategory::create(['name' => 'Restaurant']);
+        $category = BusinessCategory::firstOrCreate(['name' => 'Restaurant']);
         $municipality = Municipality::create([
-            'name' => 'Bansud',
+            'name' => $municipalityName,
             'district' => '1st',
             'province' => 'Oriental Mindoro',
             'latitude' => 12.5,
@@ -78,11 +84,11 @@ class AdminFoundationTest extends TestCase
             ])->id,
             'business_category_id' => $category->id,
             'municipality_id' => $municipality->id,
-            'business_name' => 'Foundation Test Eatery',
-            'status' => 'approved',
+            'business_name' => $businessName,
+            'status' => $status,
             'business_hours' => $allDays,
-            'latitude' => 12.51,
-            'longitude' => 121.31,
+            'latitude' => $latitude,
+            'longitude' => $longitude,
         ]);
     }
 
@@ -100,6 +106,24 @@ class AdminFoundationTest extends TestCase
     // ------------------------------------------------------------------
     // KPI / stats endpoint
     // ------------------------------------------------------------------
+
+    public function test_admin_map_returns_businesses_across_municipalities_without_live_rider_or_delivery_data(): void
+    {
+        $this->makeBusiness('Bansud Eatery', 'Bansud');
+        $this->makeBusiness('Calapan Cafe', 'Calapan City', 'pending', 13.41, 121.18);
+        $this->makeBusiness('Unlocated Business', 'Naujan', 'approved', null, null);
+
+        $response = $this->actingAs($this->admin, 'sanctum')
+            ->getJson('/api/admin/map-data');
+
+        $response->assertOk()
+            ->assertJsonCount(2, 'data.businesses')
+            ->assertJsonPath('data.businesses.0.municipality', 'Bansud')
+            ->assertJsonPath('data.businesses.1.municipality', 'Calapan City')
+            ->assertJsonPath('data.businesses.1.status', 'pending')
+            ->assertJsonMissingPath('data.active_deliveries')
+            ->assertJsonMissingPath('data.rider_locations');
+    }
 
     public function test_dashboard_exposes_operational_kpis_with_expected_values(): void
     {

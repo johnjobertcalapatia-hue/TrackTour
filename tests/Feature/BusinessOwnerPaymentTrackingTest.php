@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Business;
 use App\Models\BusinessCategory;
+use App\Models\CodPurchase;
 use App\Models\Delivery;
 use App\Models\GroupCheckout;
 use App\Models\Municipality;
@@ -115,6 +116,31 @@ class BusinessOwnerPaymentTrackingTest extends TestCase
         ]);
     }
 
+    private function makeCodPurchase(Order $order, Business $business, string $status): CodPurchase
+    {
+        $delivery = Delivery::firstOrCreate(
+            ['order_id' => $order->id],
+            [
+                'status' => 'delivered',
+                'dispatch_status' => 'assigned',
+                'delivery_fee' => 50.00,
+                'delivery_address' => '123 Test St, Bansud',
+                'delivery_latitude' => 12.60,
+                'delivery_longitude' => 121.40,
+            ]
+        );
+
+        return CodPurchase::create([
+            'delivery_id' => $delivery->id,
+            'order_id' => $order->id,
+            'business_id' => $business->id,
+            'purchase_amount' => 100.00,
+            'status' => $status,
+            'purchased_at' => $status === CodPurchase::STATUS_PENDING ? null : now(),
+            'collected_at' => $status === CodPurchase::STATUS_COLLECTED ? now() : null,
+        ]);
+    }
+
     private function paymentsUrl(Business $business, array $params = []): string
     {
         $query = http_build_query($params);
@@ -156,6 +182,34 @@ class BusinessOwnerPaymentTrackingTest extends TestCase
         $onlineRow = $rows->firstWhere('order_number', 'ORD-GCASH001');
         $this->assertSame('Online', $onlineRow['payment_label']);
         $this->assertSame(500, $onlineRow['total']);
+    }
+
+    public function test_cod_restaurant_purchase_is_tracked_separately_from_tourist_payment(): void
+    {
+        $paidOrder = $this->makeOrder('ORD-COD-PAID', 'cash', 500.00, 'ready', 'pending');
+        $paidPurchase = $this->makeCodPurchase($paidOrder, $this->business, CodPurchase::STATUS_PURCHASED);
+        $waitingOrder = $this->makeOrder('ORD-COD-WAIT', 'cash', 300.00, 'preparing', 'pending');
+        $this->makeCodPurchase($waitingOrder, $this->business, CodPurchase::STATUS_PENDING);
+        $onlineOrder = $this->makeOrder('ORD-ONLINE', 'gcash', 250.00, 'preparing', 'paid');
+
+        $response = $this->actingAs($this->owner, 'sanctum')
+            ->getJson($this->paymentsUrl($this->business));
+
+        $response->assertOk();
+        $rows = collect($response->json('data.payments'))->keyBy('order_number');
+
+        $paidRow = $rows->get('ORD-COD-PAID');
+        $this->assertSame('pending', $paidRow['payment_status'], 'Restaurant payment must not mark the tourist COD as paid.');
+        $this->assertSame('paid', $paidRow['restaurant_purchase_status']);
+        $this->assertSame($paidPurchase->purchased_at->toISOString(), $paidRow['restaurant_purchase_paid_at']);
+
+        $waitingRow = $rows->get('ORD-COD-WAIT');
+        $this->assertSame('pending', $waitingRow['payment_status']);
+        $this->assertSame('pending', $waitingRow['restaurant_purchase_status']);
+
+        $onlineRow = $rows->get('ORD-ONLINE');
+        $this->assertSame('not_applicable', $onlineRow['restaurant_purchase_status']);
+        $this->assertSame('paid', $onlineRow['payment_status']);
     }
 
     public function test_payment_filter_isolates_cash_and_online_records(): void
@@ -314,6 +368,65 @@ class BusinessOwnerPaymentTrackingTest extends TestCase
             ->assertJsonPath('data.items.0.product_name', 'Adobo')
             ->assertJsonPath('data.totals.total', 654.65)
             ->assertJsonPath('data.settlement', null);
+    }
+
+    public function test_grouped_cod_purchase_status_is_scoped_to_each_restaurant(): void
+    {
+        $order = $this->makeOrder('ORD-GROUP-COD', 'cash', 1000.00, 'ready', 'pending');
+        $order->items()->create([
+            'business_id' => $this->business->id,
+            'product_name' => 'Restaurant A item',
+            'quantity' => 1,
+            'unit_price' => 600.00,
+            'subtotal' => 600.00,
+            'status' => 'ready',
+        ]);
+        $order->items()->create([
+            'business_id' => $this->otherBusiness->id,
+            'product_name' => 'Restaurant B item',
+            'quantity' => 1,
+            'unit_price' => 400.00,
+            'subtotal' => 400.00,
+            'status' => 'ready',
+        ]);
+        $this->makeCodPurchase($order, $this->business, CodPurchase::STATUS_PURCHASED);
+        $this->makeCodPurchase($order, $this->otherBusiness, CodPurchase::STATUS_PENDING);
+
+        $ownPurchase = $this->actingAs($this->owner, 'sanctum')
+            ->getJson($this->paymentsUrl($this->business) . '/' . $order->id);
+        $ownPurchase->assertOk()
+            ->assertJsonPath('data.payment_status', 'pending')
+            ->assertJsonPath('data.restaurant_purchase_status', 'paid')
+            ->assertJsonCount(1, 'data.items');
+
+        $otherPurchase = $this->actingAs($this->otherOwner, 'sanctum')
+            ->getJson($this->paymentsUrl($this->otherBusiness) . '/' . $order->id);
+        $otherPurchase->assertOk()
+            ->assertJsonPath('data.payment_status', 'pending')
+            ->assertJsonPath('data.restaurant_purchase_status', 'pending')
+            ->assertJsonCount(1, 'data.items');
+
+        $ownOrder = $this->actingAs($this->owner, 'sanctum')
+            ->getJson("/api/business-owner/orders/{$order->id}");
+        $ownOrder->assertOk()
+            ->assertJsonCount(1, 'data.restaurant_purchases')
+            ->assertJsonPath('data.payment_status', 'pending')
+            ->assertJsonPath('data.restaurant_purchases.0.business_id', $this->business->id)
+            ->assertJsonPath('data.restaurant_purchases.0.status', 'paid');
+
+        $otherOrder = $this->actingAs($this->otherOwner, 'sanctum')
+            ->getJson("/api/business-owner/orders/{$order->id}");
+        $otherOrder->assertOk()
+            ->assertJsonCount(1, 'data.restaurant_purchases')
+            ->assertJsonPath('data.payment_status', 'pending')
+            ->assertJsonPath('data.restaurant_purchases.0.business_id', $this->otherBusiness->id)
+            ->assertJsonPath('data.restaurant_purchases.0.status', 'pending');
+
+        $ownOrderList = $this->actingAs($this->owner, 'sanctum')
+            ->getJson('/api/business-owner/orders?perPage=10');
+        $ownOrderList->assertOk()
+            ->assertJsonPath('data.0.restaurant_purchases.0.business_id', $this->business->id)
+            ->assertJsonPath('data.0.restaurant_purchases.0.status', 'paid');
     }
 
     public function test_transaction_detail_includes_settlement_for_the_business(): void

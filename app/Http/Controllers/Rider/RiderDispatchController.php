@@ -6,12 +6,14 @@ use App\Enums\TripStatus;
 use App\Http\Controllers\Controller;
 use App\Models\BookingDispatchLog;
 use App\Models\Delivery;
+use App\Models\Order;
 use App\Models\RiderLocation;
 use App\Models\User;
 use App\Services\NearestRiderService;
 use App\Services\ScheduledDispatchProcessor;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 
 class RiderDispatchController extends Controller
 {
@@ -27,7 +29,7 @@ class RiderDispatchController extends Controller
 
         $pendingLog = $rider->dispatchLogs()
             ->where('response', 'pending')
-            ->with(['delivery.order.business', 'delivery.order.items'])
+            ->with(['delivery.order.business', 'delivery.order.items.offering'])
             ->latest()
             ->first();
 
@@ -59,7 +61,7 @@ class RiderDispatchController extends Controller
 
         $logs = $request->user()->dispatchLogs()
             ->where('response', 'pending')
-            ->with(['delivery.order.business', 'delivery.order.items'])
+            ->with(['delivery.order.business', 'delivery.order.items.offering'])
             ->orderBy('dispatched_at')
             ->get();
 
@@ -101,7 +103,7 @@ class RiderDispatchController extends Controller
         //    as /dispatch/offers). These are the only rows with an accept button.
         $logs = $rider->dispatchLogs()
             ->where('response', 'pending')
-            ->with(['delivery.order.business', 'delivery.order.items'])
+            ->with(['delivery.order.business', 'delivery.order.items.offering'])
             ->orderBy('dispatched_at')
             ->get();
 
@@ -278,6 +280,30 @@ class RiderDispatchController extends Controller
             ])->values()->all(),
             'dispatched_at' => $log->dispatched_at,
             'expires_in' => $expiresIn,
+        ] + $this->offerCardFacts($order, $business, collect($items), $restaurantCount, $log->distance_km, $delivery);
+    }
+
+    /**
+     * Offer popup card facts (additive): a food photo, item count, COD and
+     * group badges, and "Pickup: N min · Drop-off: N min". Pickup minutes are
+     * an estimate from the rider's distance to the first pickup at the
+     * configured average speed; drop-off minutes are the stored route
+     * duration from the restaurant to the tourist.
+     */
+    private function offerCardFacts(?Order $order, $business, Collection $items, int $restaurantCount, $distanceKm, ?Delivery $delivery): array
+    {
+        $photo = $items->map(fn ($it) => $it->offering?->image)->filter()->first();
+        $speed = max(5.0, (float) config('delivery.sequential.offer_eta_speed_kmh', 25));
+        $dropoff = (int) ($delivery?->estimated_duration_minutes ?? $order?->delivery_duration_minutes ?? 0);
+
+        return [
+            'image' => $photo ?: ($business?->logo ?: null),
+            'items_count' => (int) $items->sum(fn ($it) => $it->activeQuantity()),
+            'payment_method' => $order?->payment_method,
+            'is_cod' => strtolower((string) ($order?->payment_method ?? '')) === 'cash',
+            'is_group' => $restaurantCount > 1 || (bool) $delivery?->isGroup(),
+            'pickup_minutes' => $distanceKm !== null ? max(1, (int) ceil(((float) $distanceKm / $speed) * 60)) : null,
+            'dropoff_minutes' => $dropoff > 0 ? $dropoff : null,
         ];
     }
 

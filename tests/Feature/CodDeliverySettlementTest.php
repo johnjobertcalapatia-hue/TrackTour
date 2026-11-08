@@ -20,6 +20,7 @@ use App\Services\NearestRiderService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Hash;
+use Tests\Concerns\ConfirmsCodRestaurantPayments;
 use Tests\TestCase;
 
 /**
@@ -34,6 +35,7 @@ use Tests\TestCase;
  */
 class CodDeliverySettlementTest extends TestCase
 {
+    use ConfirmsCodRestaurantPayments;
     use RefreshDatabase;
 
     private User $owner;
@@ -268,6 +270,8 @@ class CodDeliverySettlementTest extends TestCase
         $this->assertSame('busy', $this->riderA->fresh()->riderDetail->rider_status);
 
         // ---- Step 5: both restaurants mark ready independently ----
+        // Stage B (2026-11-08): COD food becomes ready only after the restaurant confirms the rider's payment.
+        $this->confirmRestaurantPayments($orderA);
         $this->setItemStatus($orderA, 'Burger', 'ready');
         $this->setItemStatus($orderA, 'Fries', 'ready');
         $this->setItemStatus($orderA, 'Coke', 'ready');
@@ -416,6 +420,8 @@ class CodDeliverySettlementTest extends TestCase
         $this->assertEquals((float) $group->grand_total, $cashDue, 'cash_due = group grand total.');
 
         // Both restaurants mark ready.
+        // Stage B (2026-11-08): COD food becomes ready only after the restaurant confirms the rider's payment.
+        $this->confirmRestaurantPayments($orderA);
         $this->setItemStatus($orderA, 'Burger', 'ready');
         $this->setItemStatus($orderA, 'Pizza', 'ready');
         $this->invokeRefreshOrderStatus($orderA);

@@ -125,7 +125,9 @@ export function useOsrmRoute(waypoints: LatLng[] | null, enabled: boolean): Osrm
 
     let cancelled = false
     inFlight.current = true
-    setPoints([])
+    const previousTargets = lastKey.current?.split('|').slice(1).join('|')
+    const currentTargets = key.split('|').slice(1).join('|')
+    if (previousTargets && previousTargets !== currentTargets) setPoints([])
     setDistanceKm(null)
     setDurationMin(null)
 

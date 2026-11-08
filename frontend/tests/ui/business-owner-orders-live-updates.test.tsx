@@ -207,6 +207,56 @@ describe('BusinessOwnerOrders — live updates from the authorized business room
     expect(api.get.mock.calls.length).toBeGreaterThan(callsBefore)
   })
 
+  it('shows a restaurant-confirmed payment without marking the tourist COD as paid', async () => {
+    // Reconciled 2026-11-08 (Stage B): the panel follows the RESTAURANT's own
+    // payment confirmation, not the rider's purchase ledger.
+    useBusinessOwnerStore.setState({ selectedBusinessId: 5 })
+    api.store.detail = detailOrder({
+      status: 'ready',
+      payment_status: 'pending',
+      restaurant_purchases: [{ business_id: 5, status: 'paid', paid_at: '2026-09-24T01:15:00Z', payment_confirmed_at: '2026-09-24T01:15:00Z' }],
+      items: [{ ...BASE_ITEM, status: 'ready' }],
+    })
+    renderAt('/business-owner/orders/42', <BusinessOwnerOrderShow />)
+
+    expect(await screen.findByText('Restaurant Purchase')).toBeInTheDocument()
+    expect(screen.getByText('Payment received')).toBeInTheDocument()
+    expect(screen.getByText(/you can mark the food ready/)).toBeInTheDocument()
+    expect(screen.getByText('Payment Status').parentElement?.parentElement).toHaveTextContent(/pending/i)
+    expect(screen.getByText(/Tourism Office purchasing cash is separate/)).toBeInTheDocument()
+  })
+
+  it('COD: food cannot be marked ready until the restaurant confirms the rider paid', async () => {
+    useBusinessOwnerStore.setState({ selectedBusinessId: 5 })
+    api.post.mockClear()
+    api.store.detail = detailOrder({
+      status: 'preparing',
+      restaurant_purchases: [{ business_id: 5, status: 'pending', paid_at: null, purchase_amount: 300, payment_confirmed_at: null, rider_arrived_at: null, can_confirm_payment: false }],
+      items: [{ ...BASE_ITEM, status: 'preparing' }],
+    })
+    const { unmount } = renderAt('/business-owner/orders/42', <BusinessOwnerOrderShow />)
+
+    // Rider not here yet: no confirm button, Ready locked.
+    expect(await screen.findByText(/Waiting for the rider to arrive and pay/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Payment received' })).not.toBeInTheDocument()
+    const itemReady = screen.getByRole('button', { name: /Mark Ready/ })
+    expect(itemReady).toBeDisabled()
+    expect(itemReady).toHaveAttribute('title', 'Confirm "Payment received" from the rider first')
+    unmount()
+
+    // Rider checked in: confirm the payment.
+    api.store.detail = detailOrder({
+      status: 'preparing',
+      restaurant_purchases: [{ business_id: 5, status: 'pending', paid_at: null, purchase_amount: 300, payment_confirmed_at: null, rider_arrived_at: '2026-09-24T01:10:00Z', can_confirm_payment: true }],
+      items: [{ ...BASE_ITEM, status: 'preparing' }],
+    })
+    renderAt('/business-owner/orders/42', <BusinessOwnerOrderShow />)
+    expect(await screen.findByText(/The rider is at your restaurant/)).toBeInTheDocument()
+    expect(screen.getByText(/Collect ₱300\.00/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Payment received' }))
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/business-owner/orders/42/cod-payment-received', { business_id: 5 }))
+  })
+
   it('shows the auto-ready state on the detail page when the countdown fires', async () => {
     useBusinessOwnerStore.setState({ selectedBusinessId: 5 })
     api.store.detail = detailOrder()

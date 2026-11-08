@@ -29,7 +29,6 @@ class RolePermissionSeeder extends Seeder
                 'business_profile' => ['can_view' => 1, 'can_create' => 0, 'can_update' => 0, 'can_delete' => 0, 'can_export' => 0, 'can_approve' => 0],
                 'table_management' => ['can_view' => 1, 'can_create' => 0, 'can_update' => 1, 'can_delete' => 0, 'can_export' => 0, 'can_approve' => 0],
                 'table_reservations' => ['can_view' => 1, 'can_create' => 1, 'can_update' => 1, 'can_delete' => 0, 'can_export' => 0, 'can_approve' => 0],
-                'customer_management' => ['can_view' => 1, 'can_create' => 1, 'can_update' => 0, 'can_delete' => 0, 'can_export' => 0, 'can_approve' => 0],
                 'menu_management' => ['can_view' => 1, 'can_create' => 0, 'can_update' => 0, 'can_delete' => 0, 'can_export' => 0, 'can_approve' => 0],
                 'attendance' => ['can_view' => 1, 'can_create' => 0, 'can_update' => 0, 'can_delete' => 0, 'can_export' => 0, 'can_approve' => 0],
             ],

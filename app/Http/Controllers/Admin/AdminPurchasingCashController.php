@@ -73,6 +73,62 @@ class AdminPurchasingCashController extends Controller
         ], 'Additional purchasing cash issued.');
     }
 
+    /**
+     * GET /admin/cash-advances?date=Y-m-d — Tourism Office "Rider Cash" board:
+     * each rider's daily advance, cash still with the rider, COD deliveries.
+     */
+    public function advanceOverview(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'date' => ['nullable', 'date_format:Y-m-d', 'before_or_equal:'.now('Asia/Manila')->toDateString()],
+        ]);
+        $date = $validated['date'] ?? now('Asia/Manila')->toDateString();
+
+        try {
+            $riders = app(RiderCashFundService::class)->advanceOverview(auth()->user(), $date);
+        } catch (AuthorizationException $e) {
+            return $this->forbiddenResponse($e->getMessage());
+        }
+
+        return $this->successResponse([
+            'date' => $date,
+            'riders' => $riders,
+            // Returns and COD remittances follow the daily COD cash policy (§5.1).
+            'policy' => app(RiderDailyReconciliationService::class)->policyStatus($date),
+        ]);
+    }
+
+    /** POST /admin/riders/{rider}/cash-fund/advances — record the day's cash advance. */
+    public function recordAdvance(Request $request, User $rider): JsonResponse
+    {
+        $validated = $request->validate([
+            'amount' => ['required', 'numeric', 'decimal:0,2', 'gt:0', 'max:1000000'],
+            'note' => ['nullable', 'string', 'max:255'],
+            'idempotency_key' => ['required', 'uuid'],
+        ]);
+
+        try {
+            $transaction = app(RiderCashFundService::class)->recordDailyAdvance(
+                auth()->user(),
+                $rider,
+                (float) $validated['amount'],
+                $validated['idempotency_key'],
+                $validated['note'] ?? null,
+            );
+        } catch (AuthorizationException $e) {
+            return $this->forbiddenResponse($e->getMessage());
+        } catch (\InvalidArgumentException $e) {
+            return $this->errorResponse($e->getMessage(), 422);
+        }
+
+        return $this->successResponse([
+            'id' => $transaction->id,
+            'reference_number' => $transaction->reference_number,
+            'amount' => (float) $transaction->amount,
+            'occurred_at' => $transaction->occurred_at,
+        ], 'Cash advance recorded.');
+    }
+
     public function riderLedger(Request $request, User $rider): JsonResponse
     {
         $validated = $request->validate([

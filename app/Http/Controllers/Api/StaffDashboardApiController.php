@@ -261,4 +261,34 @@ class StaffDashboardApiController extends Controller
                 ->whereBetween('completed_at', [$startOfDay, $endOfDay])->sum('total_amount'),
         ];
     }
+
+    /**
+     * POST /staff/orders/{order}/cod-payment-received — the restaurant's staff
+     * confirm the rider's COD payment for their restaurant (Stage B).
+     */
+    public function codPaymentReceived(Request $request, Order $order): JsonResponse
+    {
+        $ctx = $this->getStaffAndBusiness($request->user()->id);
+        if (! $ctx || ! $ctx['business']) {
+            return $this->forbiddenResponse('Unauthorized.');
+        }
+        $business = $ctx['business'];
+
+        $inOrder = (int) $order->business_id === (int) $business->id
+            || $order->items()->where('business_id', $business->id)->exists();
+        if (! $inOrder) {
+            return $this->forbiddenResponse('Unauthorized.');
+        }
+
+        try {
+            $result = app(\App\Services\CodPaymentConfirmationService::class)->confirm($order, $business, $request->user());
+        } catch (\InvalidArgumentException $e) {
+            return $this->errorResponse($e->getMessage(), 422);
+        }
+
+        return $this->successResponse(
+            $result,
+            $result['already_confirmed'] ? 'Payment was already confirmed.' : 'Payment received. You can now mark the food ready.'
+        );
+    }
 }

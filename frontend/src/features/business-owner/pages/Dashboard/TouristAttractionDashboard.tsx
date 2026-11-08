@@ -21,7 +21,6 @@ export function TouristAttractionDashboard({ data, businessName }: DashboardProp
   const shortcuts: QuickAction[] = [
     { label: 'Manage Bookings', path: '/business-owner/bookings', icon: CalendarCheck, count: `${active} active` },
     { label: 'Gallery', path: '/business-owner/gallery', icon: Package, count: 'Manage' },
-    { label: 'Customers', path: '/business-owner/customers', icon: Users, count: 'View' },
   ]
 
   return (

@@ -27,6 +27,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Schema;
+use Tests\Concerns\ConfirmsCodRestaurantPayments;
 use Tests\TestCase;
 
 /**
@@ -52,6 +53,7 @@ use Tests\TestCase;
  */
 class CodFinancialSettlementTest extends TestCase
 {
+    use ConfirmsCodRestaurantPayments;
     use RefreshDatabase;
 
     private User $owner;
@@ -258,6 +260,8 @@ class CodFinancialSettlementTest extends TestCase
 
     private function makeAllItemsReady(Order $order): void
     {
+        // Stage B (2026-11-08): COD food becomes ready only after the restaurant confirms the rider's payment.
+        $this->confirmRestaurantPayments($order);
         foreach ($order->fresh()->items as $item) {
             $item->update(['status' => 'ready']);
         }

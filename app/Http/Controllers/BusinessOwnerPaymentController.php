@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Business;
+use App\Models\CodPurchase;
 use App\Models\Order;
 use App\Models\OrderSettlement;
 use Illuminate\Http\JsonResponse;
@@ -29,6 +30,12 @@ class BusinessOwnerPaymentController extends Controller
         }
 
         $order->load('groupOrder', 'delivery.rider.profile');
+        $purchase = $order->delivery
+            ? CodPurchase::query()
+                ->where('delivery_id', $order->delivery->id)
+                ->where('business_id', $business->id)
+                ->first()
+            : null;
         $settlement = OrderSettlement::where('order_id', $order->id)
             ->where('business_id', $business->id)
             ->first();
@@ -62,6 +69,8 @@ class BusinessOwnerPaymentController extends Controller
             'payment_method' => $order->payment_method,
             'payment_label' => $online ? 'Online' : 'Cash',
             'payment_status' => $order->payment_status,
+            'restaurant_purchase_status' => $this->restaurantPurchaseStatus($order, $purchase),
+            'restaurant_purchase_paid_at' => $purchase?->purchased_at?->toISOString(),
             'items' => $transactionItems,
             'totals' => [
                 'subtotal' => round((float) $order->subtotal, 2),
@@ -120,17 +129,28 @@ class BusinessOwnerPaymentController extends Controller
             ->when($method === 'online', fn ($q) => $q->whereIn('payment_method', ['gcash', 'card']))
             ->when($orderStatus !== null && $orderStatus !== '', fn ($q) => $q->where('status', $orderStatus))
             ->when($search !== '', fn ($q) => $q->where('order_number', 'like', "%{$search}%"))
-            ->with('groupOrder')
+            ->with(['groupOrder', 'delivery'])
             ->latest()
             ->paginate($perPage);
+
+        $deliveryIds = collect($orders->items())
+            ->map(fn (Order $order) => $order->delivery?->id)
+            ->filter()
+            ->values();
+        $purchases = CodPurchase::query()
+            ->whereIn('delivery_id', $deliveryIds)
+            ->where('business_id', $business->id)
+            ->get()
+            ->keyBy('delivery_id');
 
         $settlements = OrderSettlement::whereIn('order_id', collect($orders->items())->pluck('id'))
             ->where('business_id', $business->id)
             ->get()
             ->keyBy('order_id');
 
-        $records = collect($orders->items())->map(function (Order $order) use ($settlements) {
+        $records = collect($orders->items())->map(function (Order $order) use ($settlements, $purchases) {
             $settlement = $settlements->get($order->id);
+            $purchase = $order->delivery ? $purchases->get($order->delivery->id) : null;
             $online = in_array($order->payment_method, ['gcash', 'card'], true);
 
             return [
@@ -142,6 +162,8 @@ class BusinessOwnerPaymentController extends Controller
                 'payment_method' => $order->payment_method,
                 'payment_label' => $online ? 'Online' : 'Cash',
                 'payment_status' => $order->payment_status,
+                'restaurant_purchase_status' => $this->restaurantPurchaseStatus($order, $purchase),
+                'restaurant_purchase_paid_at' => $purchase?->purchased_at?->toISOString(),
                 'order_status' => $order->status,
                 'total' => round((float) $order->total, 2),
                 'paid_amount' => round((float) ($order->paid_amount ?? $order->total), 2),
@@ -176,5 +198,17 @@ class BusinessOwnerPaymentController extends Controller
             'total' => $orders->total(),
             'summary' => $summary,
         ]);
+    }
+
+    private function restaurantPurchaseStatus(Order $order, ?CodPurchase $purchase): string
+    {
+        if ($order->payment_method !== 'cash' || $order->order_type !== 'delivery') {
+            return 'not_applicable';
+        }
+
+        return in_array($purchase?->status, [
+            CodPurchase::STATUS_PURCHASED,
+            CodPurchase::STATUS_COLLECTED,
+        ], true) ? 'paid' : 'pending';
     }
 }

@@ -136,6 +136,21 @@ class GpsIntegrityTest extends TestCase
             ->assertUnauthorized();
     }
 
+    public function test_rider_map_returns_pickup_and_dropoff_as_numeric_map_coordinates(): void
+    {
+        $rider = $this->makeRider();
+        $business = $this->makeBusiness();
+        $this->makeAssignedDelivery($rider, $business);
+
+        $this->actingAs($rider)
+            ->getJson('/api/rider/map/location')
+            ->assertOk()
+            ->assertJsonPath('data.deliveries.0.pickup_lat', 12.51)
+            ->assertJsonPath('data.deliveries.0.pickup_lng', 121.31)
+            ->assertJsonPath('data.deliveries.0.delivery_lat', 12.6)
+            ->assertJsonPath('data.deliveries.0.delivery_lng', 121.4);
+    }
+
     public function test_valid_location_is_persisted(): void
     {
         $rider = $this->makeRider();

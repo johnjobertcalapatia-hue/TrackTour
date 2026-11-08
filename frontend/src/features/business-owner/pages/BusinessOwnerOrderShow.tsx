@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { get, patch } from '@/shared/services/api'
+import { apiErrorMessage, get, patch, post } from '@/shared/services/api'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { PreparationCountdown } from '@/shared/components/PreparationCountdown'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
@@ -45,6 +45,17 @@ interface OrderDetail {
   group_order_id?: number | null
   group_reference_number?: string | null
   group_paid?: boolean
+  restaurant_purchases?: {
+    business_id: number
+    status: 'paid' | 'pending'
+    paid_at: string | null
+    purchase_amount?: number | null
+    /** The restaurant confirmed the rider's payment (unlocks READY for COD). */
+    payment_confirmed_at?: string | null
+    /** The rider checked in at this restaurant (≤ 50 m). */
+    rider_arrived_at?: string | null
+    can_confirm_payment?: boolean
+  }[]
   rider_tip?: number | string | null
   delivery_speed?: string | null
   preparation_time?: number | null
@@ -112,6 +123,16 @@ export default function BusinessOwnerOrderShow() {
     },
   })
 
+  // COD "paid before ready": the restaurant confirms it received the rider's payment.
+  const codPaymentMutation = useMutation({
+    mutationFn: (businessId: number | null) =>
+      post(`/business-owner/orders/${id}/cod-payment-received`, businessId ? { business_id: businessId } : {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['bo-order', id] })
+      queryClient.invalidateQueries({ queryKey: ['bo-orders'] })
+    },
+  })
+
   const updateItemStatusMutation = useMutation({
     mutationFn: ({ itemId, status }: { itemId: number; status: string }) =>
       patch(`/business-owner/orders/${id}/items/${itemId}/status`, { status }),
@@ -132,6 +153,18 @@ export default function BusinessOwnerOrderShow() {
   const readyItems = (order.items ?? []).filter(
     (item) => !['cancelled', 'rejected'].includes(item.status ?? '')
   )
+  const restaurantPurchase = order.restaurant_purchases?.find(
+    (purchase) => purchase.business_id === selectedBusinessId
+  )
+  const isCodDelivery = order.order_type === 'delivery' && order.payment_method === 'cash'
+  // Food can't be marked ready until this restaurant confirmed the rider's payment.
+  const awaitingPayment = isCodDelivery && !!restaurantPurchase && !restaurantPurchase.payment_confirmed_at
+  const PAYMENT_LOCK_TITLE = 'Confirm "Payment received" from the rider first'
+  const actionError =
+    (statusMutation.isError && apiErrorMessage(statusMutation.error)) ||
+    (updateItemStatusMutation.isError && apiErrorMessage(updateItemStatusMutation.error)) ||
+    (codPaymentMutation.isError && apiErrorMessage(codPaymentMutation.error)) ||
+    null
 
   return (
     <div>
@@ -288,7 +321,8 @@ export default function BusinessOwnerOrderShow() {
                             {!isReady ? (
                               <button
                                 onClick={() => updateItemStatusMutation.mutate({ itemId: item.id, status: 'ready' })}
-                                disabled={updateItemStatusMutation.isPending}
+                                disabled={updateItemStatusMutation.isPending || awaitingPayment}
+                                title={awaitingPayment ? PAYMENT_LOCK_TITLE : undefined}
                                 className="px-3 py-1 rounded-lg text-xs font-semibold bg-[#16803C] hover:bg-[#126B32] text-white transition disabled:opacity-50 inline-flex items-center gap-1"
                               >
                                 <CheckCircle className="w-3 h-3" /> Mark Ready
@@ -466,11 +500,15 @@ export default function BusinessOwnerOrderShow() {
             ) : (
               transitions.length > 0 ? (
                 <div className="space-y-3">
+                  {actionError && (
+                    <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{actionError}</p>
+                  )}
                   {transitions.map((t) => (
                     <button
                       key={t.next}
                       onClick={() => statusMutation.mutate(t.next)}
-                      disabled={statusMutation.isPending}
+                      disabled={statusMutation.isPending || (t.next === 'ready' && awaitingPayment)}
+                      title={t.next === 'ready' && awaitingPayment ? PAYMENT_LOCK_TITLE : undefined}
                       className={`w-full px-4 py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-50 ${t.color}`}
                     >
                       {statusMutation.isPending ? 'Updating...' : t.label}
@@ -508,6 +546,38 @@ export default function BusinessOwnerOrderShow() {
                 <div className="flex justify-between">
                   <span className="text-[#647067]">Payment Status</span>
                   <StatusBadge status={order.payment_status} />
+                </div>
+              )}
+              {isCodDelivery && (
+                <div>
+                  <div className="flex justify-between">
+                    <span className="text-[#647067]">Restaurant Purchase</span>
+                    <span className={`font-semibold ${restaurantPurchase?.payment_confirmed_at ? 'text-[#16803C]' : 'text-[#B45309]'}`}>
+                      {restaurantPurchase?.payment_confirmed_at ? 'Payment received' : 'Awaiting rider payment'}
+                    </span>
+                  </div>
+                  {restaurantPurchase?.payment_confirmed_at ? (
+                    <p className="mt-1 text-[11px] text-[#16803C]">Confirmed {formatDateTime(restaurantPurchase.payment_confirmed_at)} — you can mark the food ready.</p>
+                  ) : restaurantPurchase?.can_confirm_payment ? (
+                    <div className="mt-2 space-y-1.5">
+                      <p className="text-[11px] text-[#4B5563]">
+                        The rider is at your restaurant.{restaurantPurchase.purchase_amount != null && ` Collect ${formatCurrency(restaurantPurchase.purchase_amount)}`}, then confirm.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => codPaymentMutation.mutate(selectedBusinessId ?? null)}
+                        disabled={codPaymentMutation.isPending}
+                        className="w-full px-4 py-2.5 rounded-xl text-sm font-semibold bg-[#16803C] hover:bg-[#126B32] text-white transition disabled:opacity-50"
+                      >
+                        {codPaymentMutation.isPending ? 'Confirming…' : 'Payment received'}
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-[11px] text-[#8A948E]">Waiting for the rider to arrive and pay. The food can be marked ready after you confirm the payment.</p>
+                  )}
+                  <p className="mt-1 text-[11px] text-[#8A948E]">
+                    Tourism Office purchasing cash is separate from the tourist's COD payment.
+                  </p>
                 </div>
               )}
               {order.group_reference_number && (

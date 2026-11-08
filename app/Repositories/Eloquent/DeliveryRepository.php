@@ -8,6 +8,7 @@ use App\Models\RiderLocation;
 use App\Repositories\Contracts\DeliveryRepositoryInterface;
 use App\Services\NearestRiderService;
 use App\Services\ScheduledDispatchProcessor;
+use App\Services\SequentialDispatchService;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 
@@ -60,9 +61,21 @@ class DeliveryRepository implements DeliveryRepositoryInterface
      * NearestRiderService::handleRiderResponse() (direct-claim branch): any
      * eligible rider may claim an open delivery, first accept wins, and a
      * rider with an active delivery must finish it first.
+     *
+     * Dispatch Stage 3 (docs/dispatch-escalation-plan.md): a food delivery
+     * still in its sequential targeted phase is NOT on the open board; only
+     * the rider holding the live targeted offer sees it (pinged list). It
+     * appears for everyone in range once it reaches the manual phase (after
+     * 4 targeted offers, or no eligible rider). Order: this rider's own
+     * offers first, then the board nearest first by distance to the first
+     * pickup (deliveries.pickup_* = first stop, PickupSequencePlanner);
+     * rows without a distance last, oldest first.
      */
     public function getPendingDeliveries(int $riderId, int $limit = 20): Collection
     {
+        $location = $this->latestLocation($riderId);
+        $distances = [];
+
         $pinged = $this->model->with(['order.business'])
             ->where('status', TripStatus::WAITING)
             ->whereHas('dispatchLogs', function ($query) use ($riderId) {
@@ -76,35 +89,85 @@ class DeliveryRepository implements DeliveryRepositoryInterface
             ->where('status', TripStatus::WAITING)
             ->whereNull('rider_id')
             ->whereIn('dispatch_status', NearestRiderService::OPEN_DISPATCH_STATUSES)
+            ->where(fn ($q) => $q->whereNull('dispatch_phase')
+                ->orWhere('dispatch_phase', '!=', SequentialDispatchService::PHASE_TARGETED))
             ->whereHas('order', function ($query) {
                 $query->whereIn('status', ScheduledDispatchProcessor::DISPATCHABLE_ORDER_STATUSES)
                     ->orWhere(fn ($q) => $q->where('order_type', 'transport')->where('status', 'pending'));
             })
             ->orderBy('created_at')
+            ->orderBy('id')
+            ->get()
+            ->each(function (Delivery $delivery) use ($location, &$distances) {
+                $distances[$delivery->id] = $this->distanceFrom($location, $delivery);
+            })
+            // No GPS fix yet: keep the row visible (acceptance enforces the
+            // location eligibility gate server-side).
+            ->filter(fn (Delivery $d) => $distances[$d->id] === null || $distances[$d->id] <= 25.0)
+            // Nearest first; unknown distance last (stable: oldest first).
+            ->sortBy(fn (Delivery $d) => $distances[$d->id] ?? PHP_FLOAT_MAX)
+            ->reject(fn (Delivery $d) => $pinged->contains('id', $d->id));
+
+        return $pinged->concat($open)->take($limit)->values();
+    }
+
+    /**
+     * Deliveries this rider could see (pinged, or open on their board within
+     * range) that ANOTHER rider accepted in the last $minutes. Shown as
+     * "Already accepted by another rider" instead of silently vanishing.
+     * Read-only: acceptance itself stays first-accept-wins under the lock.
+     */
+    public function getRecentlyTakenForRider(int $riderId, int $minutes = 10, int $limit = 15): Collection
+    {
+        return $this->model->with(['order.business'])
+            ->whereNotNull('rider_id')
+            ->where('rider_id', '!=', $riderId)
+            ->where('assigned_at', '>=', now()->subMinutes($minutes))
+            ->where('status', '!=', TripStatus::CANCELLED)
+            ->latest('assigned_at')
+            ->limit(50)
             ->get()
             ->filter(function (Delivery $delivery) use ($riderId) {
+                if ($delivery->dispatchLogs()->where('rider_id', $riderId)->exists()) {
+                    return true;
+                }
+                // Won during the targeted phase: it was never on this
+                // rider's board, so there is nothing to explain (Stage 3).
+                if ($delivery->dispatch_phase === SequentialDispatchService::PHASE_TARGETED) {
+                    return false;
+                }
                 $distance = $this->distanceFromRider($riderId, $delivery);
 
-                // No GPS fix yet: keep the row visible (acceptance enforces
-                // the location eligibility gate server-side).
                 return $distance === null || $distance <= 25.0;
-            });
-
-        return $open->merge($pinged)->take($limit)->values();
+            })
+            ->take($limit)
+            ->values();
     }
 
     /**
      * Rider → pickup distance (km) from the rider's latest GPS fix; null when
      * the rider has never reported a location or the pickup has no coords.
      */
+    public function pickupDistancesKm(int $riderId, Collection $deliveries): array
+    {
+        $location = $this->latestLocation($riderId);
+
+        return $deliveries->mapWithKeys(fn (Delivery $d) => [$d->id => $this->distanceFrom($location, $d)])->all();
+    }
+
     private function distanceFromRider(int $riderId, Delivery $delivery): ?float
     {
-        if ($delivery->pickup_latitude === null || $delivery->pickup_longitude === null) {
-            return null;
-        }
+        return $this->distanceFrom($this->latestLocation($riderId), $delivery);
+    }
 
-        $location = RiderLocation::where('rider_id', $riderId)->latest('recorded_at')->first();
-        if (! $location) {
+    private function latestLocation(int $riderId): ?RiderLocation
+    {
+        return RiderLocation::where('rider_id', $riderId)->latest('recorded_at')->first();
+    }
+
+    private function distanceFrom(?RiderLocation $location, Delivery $delivery): ?float
+    {
+        if (! $location || $delivery->pickup_latitude === null || $delivery->pickup_longitude === null) {
             return null;
         }
 

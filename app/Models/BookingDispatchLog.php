@@ -11,8 +11,11 @@ class BookingDispatchLog extends Model
         'delivery_id',
         'rider_id',
         'distance_km',
+        'attempt_no',
+        'phase',
         'response',
         'dispatched_at',
+        'expires_at',
         'responded_at',
     ];
 
@@ -21,6 +24,7 @@ class BookingDispatchLog extends Model
         return [
             'distance_km' => 'decimal:3',
             'dispatched_at' => 'datetime',
+            'expires_at' => 'datetime',
             'responded_at' => 'datetime',
         ];
     }

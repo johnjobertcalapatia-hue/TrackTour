@@ -6,7 +6,7 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { get } from '@/shared/services/api'
 import { toAssetUrl } from '@/shared/utils'
-import { pinIcon, userPinIcon } from '@/shared/utils/pin-icon'
+import { businessLogoIcon, pinIcon, userPinIcon } from '@/shared/utils/pin-icon'
 import { ApplicationLogo } from '@/shared/components/ApplicationLogo'
 import {
   ArrowRight,
@@ -31,7 +31,6 @@ import {
   Footprints,
   MapPinned,
   LayoutGrid,
-  Search,
   ExternalLink,
   Film,
   Info,
@@ -47,6 +46,7 @@ interface MapBusiness {
   latitude: number
   longitude: number
   cover_photo?: string | null
+  logo?: string | null
   images?: (string | null)[]
   category?: string | null
   municipality?: string | null
@@ -76,8 +76,24 @@ interface MapMenuItem {
   category?: string | null
 }
 
-const MIN_MARKER_ZOOM = 11
+const MIN_BUSINESS_MARKER_ZOOM = 10
 const MIN_LABEL_ZOOM = 11
+
+function areAtMostTwoMunicipalitiesVisible(
+  bounds: L.LatLngBounds,
+  businesses: MapBusiness[],
+  zoom: number,
+): boolean {
+  if (zoom < MIN_BUSINESS_MARKER_ZOOM) return false
+
+  const municipalities = new Set(
+    businesses
+      .filter((business) => bounds.contains([business.latitude, business.longitude]))
+      .map((business) => business.municipality?.trim())
+      .filter((name): name is string => Boolean(name)),
+  )
+  return municipalities.size < 2
+}
 
 const MAP_TILES: Record<'streets' | 'satellite', { url: string; attribution: string }> = {
   streets: {
@@ -151,15 +167,23 @@ function MapMarkers({
 }) {
   const map = useMap()
   const markersRef = useRef(new Map<number, L.Marker>())
-  const zoomRef = useRef(map.getZoom())
+  const businessesRef = useRef(businesses)
+  businessesRef.current = businesses
+  const [zoom, setZoom] = useState(map.getZoom())
+  const [showMarkers, setShowMarkers] = useState(() =>
+    areAtMostTwoMunicipalitiesVisible(map.getBounds(), businesses, map.getZoom()),
+  )
   const onHoverRef = useRef(onHover)
   onHoverRef.current = onHover
   const onSelectRef = useRef(onSelect)
   onSelectRef.current = onSelect
 
   useEffect(() => {
-    const showPins = zoomRef.current >= MIN_MARKER_ZOOM
-    const showLabels = zoomRef.current >= MIN_LABEL_ZOOM
+    setShowMarkers(areAtMostTwoMunicipalitiesVisible(map.getBounds(), businesses, zoom))
+  }, [map, businesses, zoom])
+
+  useEffect(() => {
+    const showLabels = zoom >= MIN_LABEL_ZOOM
     const wanted = new Set(businesses.map((b) => b.id))
     for (const [id, marker] of markersRef.current) {
       if (!wanted.has(id)) {
@@ -167,38 +191,46 @@ function MapMarkers({
         markersRef.current.delete(id)
       }
     }
-    if (showPins) {
-      for (const b of businesses) {
-        const bid = b.id
-        let marker = markersRef.current.get(bid)
-        if (!marker) {
-          marker = L.marker([b.latitude, b.longitude], {
-            icon: pinIcon(showLabels ? b.name : '', b.id === selectedId),
-            interactive: true,
-          }).addTo(map)
-          marker.setZIndexOffset(b.id === selectedId ? 1000 : 0)
-          marker.getElement()?.addEventListener('mouseenter', () => {
-            const pt = map.latLngToContainerPoint([b.latitude, b.longitude])
-            const container = map.getContainer()
-            onHoverRef.current(b, [pt.x, pt.y], [container.clientWidth, container.clientHeight])
-          })
-          marker.getElement()?.addEventListener('mouseleave', () => onHoverRef.current(null))
-          marker.getElement()?.addEventListener('click', () => onSelectRef.current(b))
-          markersRef.current.set(bid, marker)
-        } else {
-          const b2 = businesses.find((x) => x.id === bid)
-          marker.setIcon(pinIcon(showLabels && b2 ? b2.name : '', b.id === selectedId))
-          marker.setZIndexOffset(b.id === selectedId ? 1000 : 0)
+    for (const b of businesses) {
+      const bid = b.id
+      let marker = markersRef.current.get(bid)
+      const icon = (business: MapBusiness) => {
+        const label = showLabels ? business.name : ''
+        if (getDiscoveryGroup(business.category) === 'dining' && business.logo) {
+          return businessLogoIcon(toAssetUrl(business.logo), label, business.id === selectedId)
         }
+        return pinIcon(label, business.id === selectedId)
       }
+      if (!marker) {
+        marker = L.marker([b.latitude, b.longitude], {
+          icon: icon(b),
+          interactive: true,
+        }).addTo(map)
+        marker.setZIndexOffset(b.id === selectedId ? 1000 : 0)
+        marker.getElement()?.addEventListener('mouseenter', () => {
+          const pt = map.latLngToContainerPoint([b.latitude, b.longitude])
+          const container = map.getContainer()
+          onHoverRef.current(b, [pt.x, pt.y], [container.clientWidth, container.clientHeight])
+        })
+        marker.getElement()?.addEventListener('mouseleave', () => onHoverRef.current(null))
+        marker.getElement()?.addEventListener('click', () => onSelectRef.current(b))
+        markersRef.current.set(bid, marker)
+      } else {
+        const b2 = businesses.find((x) => x.id === bid)
+        if (b2) marker.setLatLng([b2.latitude, b2.longitude])
+        marker.setIcon(icon(b2 ?? b))
+        marker.setZIndexOffset(b.id === selectedId ? 1000 : 0)
+      }
+      const element = marker.getElement()
+      if (element) element.style.display = showMarkers ? '' : 'none'
     }
-  }, [map, businesses, selectedId])
+  }, [map, businesses, selectedId, showMarkers, zoom])
 
   useEffect(() => {
     if (selectedId == null) return
-    const b = businesses.find((x) => x.id === selectedId)
+    const b = businessesRef.current.find((x) => x.id === selectedId)
     if (b) map.panTo([b.latitude, b.longitude], { animate: true, duration: 0.6 })
-  }, [map, selectedId, businesses])
+  }, [map, selectedId])
 
   useMapEvents({
     zoomstart() {
@@ -207,43 +239,17 @@ function MapMarkers({
     movestart() {
       onHoverRef.current(null)
     },
-    move() {
-      const container = map.getContainer()
-      const width = container.clientWidth
-      const height = container.clientHeight
-      if (width === 0 || height === 0) return
-      const halfX = width / 2
-      const halfY = height / 2
-      for (const [, marker] of markersRef.current) {
-        const el = marker.getElement()
-        if (!el) continue
-        const pt = map.latLngToContainerPoint(marker.getLatLng())
-        const dx = Math.max(-1, Math.min(1, (pt.x - halfX) / halfX))
-        const dy = Math.max(-1, Math.min(1, (pt.y - halfY) / halfY))
-        const sx = Math.round(dx * 3)
-        const sy = Math.round(4 + Math.max(0, dy) * 2)
-        el.style.setProperty('--sx', `${sx}px`)
-        el.style.setProperty('--sy', `${sy}px`)
-        el.style.setProperty('--ty', `${14 - sy}px`)
-        el.style.setProperty('--tx', sx > 0 ? 'calc(-100% - 18px)' : '18px')
-      }
-    },
     zoomend() {
-      zoomRef.current = map.getZoom()
-      const showPins = zoomRef.current >= MIN_MARKER_ZOOM
-      const showLabels = zoomRef.current >= MIN_LABEL_ZOOM
-      for (const [id, marker] of markersRef.current) {
-        const el = marker.getElement()
-        if (!el) continue
-        if (!showPins) {
-          el.style.display = 'none'
-          continue
-        }
-        el.style.display = ''
-        const b = businesses.find((x) => x.id === id)
-        marker.setIcon(pinIcon(showLabels && b ? b.name : '', id === selectedId))
-        marker.setZIndexOffset(id === selectedId ? 1000 : 0)
-      }
+      const currentZoom = map.getZoom()
+      setZoom(currentZoom)
+      setShowMarkers(
+        areAtMostTwoMunicipalitiesVisible(map.getBounds(), businessesRef.current, currentZoom),
+      )
+    },
+    moveend() {
+      setShowMarkers(
+        areAtMostTwoMunicipalitiesVisible(map.getBounds(), businessesRef.current, map.getZoom()),
+      )
     },
   })
   return null
@@ -274,7 +280,9 @@ function LandingMap({
       className="w-full h-full z-0"
       zoomControl={false}
       attributionControl={false}
-      wheelPxPerZoomLevel={250}
+      zoomSnap={0.5}
+      zoomDelta={0.5}
+      wheelPxPerZoomLevel={60}
     >
       <TileLayer
         key={mapType}
@@ -401,7 +409,6 @@ export default function LandingPage() {
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [mapType, setMapType] = useState<'streets' | 'satellite'>('streets')
   const [showMap, setShowMap] = useState(false)
-  const [searchQuery, setSearchQuery] = useState('')
   const [hover, setHover] = useState<HoverState | null>(null)
   const [saved, setSaved] = useState(false)
   const overCardRef = useRef(false)
@@ -582,15 +589,7 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
   const categories = landingContent?.categories?.length ? landingContent.categories : DEFAULT_CATEGORIES
   const filteredSpots = cards.filter((card) => {
     const tabType = TAB_TYPE[activeTab] ?? null
-    if (tabType && !card.types.includes(tabType)) return false
-
-    const q = searchQuery.trim().toLowerCase()
-    if (!q) return true
-    return (
-      card.title.toLowerCase().includes(q) ||
-      (card.location ?? '').toLowerCase().includes(q) ||
-      card.category.toLowerCase().includes(q)
-    )
+    return !tabType || card.types.includes(tabType)
   })
 
   useEffect(() => {
@@ -715,7 +714,7 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
               {landingContent?.hero_badge || 'Bansud, Oriental Mindoro'}
             </div>
             <h1 className="text-4xl sm:text-6xl font-bold leading-tight text-white">
-              {landingContent?.hero_title || 'Discover the Beauty of'}{' '}
+              <span className="text-white">{landingContent?.hero_title || 'Discover the Beauty of'}</span>{' '}
               <span className="text-emerald-300">{landingContent?.hero_title_highlight || 'Oriental Mindoro'}</span>
             </h1>
             <p className="mt-6 text-lg text-gray-200 max-w-xl mx-auto">
@@ -724,13 +723,13 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
             <div className="grid grid-cols-2 gap-4 mt-10 max-w-md mx-auto">
               <Link
                 to="/role-selection"
-                className="btn-tourism flex items-center justify-center gap-2 px-8 py-4 font-semibold"
+                className="landing-hero-button landing-hero-primary flex items-center justify-center gap-2 px-8 py-4 font-semibold"
               >
                 Start Exploring <ArrowRight className="w-5 h-5" />
               </Link>
               <Link
                 to="/login"
-                className="flex items-center justify-center gap-2 px-8 py-4 border border-white/20 bg-white/10 backdrop-blur-sm rounded-xl hover:bg-white/20 text-white font-semibold transition-all"
+                className="landing-hero-button landing-hero-secondary flex items-center justify-center gap-2 px-8 py-4 font-semibold"
               >
                 I Have an Account
               </Link>
@@ -860,7 +859,7 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
                       </div>
                       {displayBusiness.category && <p className="mt-1 text-sm text-gray-600">{displayBusiness.category}</p>}
 
-                      <div className="mt-3 flex gap-5 border-b border-[#E2E8E3] overflow-x-auto no-scrollbar">
+                      <div className="tourist-map-detail-tabs mt-3 flex gap-5 border-b border-[#E2E8E3] overflow-x-auto no-scrollbar">
                         {availablePanelTabs.map((t) => (
                           <button
                             key={t}
@@ -1157,7 +1156,13 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
                           {Array.isArray(displayBusiness.menu_items) && displayBusiness.menu_items.length > 0 ? (
                             <div className="grid grid-cols-2 gap-3">
                               {displayBusiness.menu_items.map((item) => (
-                                <div key={item.id} className="rounded-xl border border-[#E2E8E3] overflow-hidden flex flex-col bg-white shadow-sm">
+                                <button
+                                  key={item.id}
+                                  type="button"
+                                  aria-label={`View details for ${item.name}`}
+                                  onClick={() => handleGatedAction(displayBusiness, `/tourist/food/item/${item.id}`)}
+                                  className="rounded-xl border border-[#E2E8E3] overflow-hidden flex flex-col bg-white shadow-sm text-left hover:border-[#087F3F] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#087F3F]"
+                                >
                                   {item.image ? (
                                     <img src={toAssetUrl(item.image)} alt={item.name} className="w-full h-20 object-cover" />
                                   ) : (
@@ -1183,7 +1188,7 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
                                       &#8369;{Number(item.price).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                     </span>
                                   </div>
-                                </div>
+                                </button>
                               ))}
                             </div>
                           ) : (
@@ -1577,18 +1582,6 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
         </div>
         ) : (
           <div id="landing-content" className="ml-[10px] mr-[10px] py-6 space-y-12">
-            {/* Search */}
-            <div className="relative">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[#087F3F]" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search tourist spots, food, businesses, resorts..."
-                className="w-full h-[48px] pl-12 pr-4 rounded-xl border border-[#087F3F]/40 bg-[#EAF6ED] text-sm font-medium text-[#087F3F] placeholder-[#6FAB85] outline-none focus:border-[#087F3F] focus:ring-2 focus:ring-[#087F3F]/20 transition-all"
-              />
-            </div>
-
             {/* Explore by Categories */}
             <div>
               <div className="flex items-center justify-between gap-3 mb-6">
@@ -1684,9 +1677,7 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
                   <p className="text-[#68736D] text-sm py-10">Loading places…</p>
                 ) : filteredSpots.length === 0 ? (
                   <p className="text-[#68736D] text-sm py-10">
-                    {searchQuery.trim()
-                      ? 'No places match your search.'
-                      : `No ${activeTab === 'All' ? 'places' : activeTab.toLowerCase()} published yet.`}
+                    {`No ${activeTab === 'All' ? 'places' : activeTab.toLowerCase()} published yet.`}
                   </p>
                 ) : filteredSpots.map((spot, i) => (
                   <div

@@ -66,6 +66,7 @@ export default function RiderOrderInfoSheet() {
     activeDelivery,
     tripState,
     riderPosition,
+    positionKnown,
     pickupStopsData,
     confirmArrivalStop,
     confirmArrivalBusy,
@@ -101,7 +102,7 @@ export default function RiderOrderInfoSheet() {
 
   const {
     activeStop,
-    distanceMeters: activeStopDistanceMeters,
+    distanceMeters: rawActiveStopDistanceMeters,
   } = resolveStopArrival({
     riderLatitude: riderPosition[0],
     riderLongitude: riderPosition[1],
@@ -116,6 +117,8 @@ export default function RiderOrderInfoSheet() {
     thresholdMeters: pickupStopsData?.pickup_radius_meters ?? STOP_ARRIVAL_THRESHOLD_METERS,
   })
   const activeStopArrivalConfirmed = !!purchaseStops.find((stop) => stop.id === activeStop?.id)?.arrived_at
+  // No distance until the device reports real GPS (never from the placeholder).
+  const activeStopDistanceMeters = positionKnown ? rawActiveStopDistanceMeters : null
 
   const dropPlanWaypoints: [number, number][] | null =
     pickupOrigin?.latitude != null &&

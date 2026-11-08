@@ -13,6 +13,7 @@ use App\Models\RiderEarning;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Hash;
+use Tests\Concerns\CompletesDeliveriesWithProof;
 use Tests\TestCase;
 
 /**
@@ -30,6 +31,7 @@ use Tests\TestCase;
  */
 class CompletionConsistencyTest extends TestCase
 {
+    use CompletesDeliveriesWithProof;
     use RefreshDatabase;
 
     private User $owner;
@@ -140,22 +142,20 @@ class CompletionConsistencyTest extends TestCase
         $order = $this->makeOrder('gcash', 'TT-COMP-PREPAID');
         $delivery = $this->makeDelivery($order);
 
-        // P14 — the rider cannot mark a food delivery delivered; the tourist
-        // confirms receipt at the drop-off, which completes the prepaid order.
+        // Reconciled 2026-11-08 (AGENTS.md §12; product decision): the rider completes a food delivery with a proof photo at the drop-off, which also records the COD cash; the tourist confirm-delivery step is retired.
         $this->withHeader('Authorization', 'Bearer '.$this->riderToken())
             ->patchJson('/api/rider/deliveries/'.$delivery->id.'/status', ['status' => 'delivered'])
             ->assertStatus(422)
-            ->assertJsonPath('message', 'The tourist must confirm the delivery before it can be marked as delivered.');
+            ->assertJsonPath('message', 'Take a photo of the delivered food at the drop-off to complete this delivery.');
 
-        $this->withHeader('Authorization', 'Bearer '.$this->customerToken())
-            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
+        $this->riderCompletesDelivery($delivery, $this->rider)
             ->assertOk()
             ->assertJsonPath('data.new_status', 'completed');
 
         $this->assertSame('completed', $delivery->fresh()->status->value ?? $delivery->fresh()->status,
             'Prepaid delivery reaches completed.');
-        $this->assertNotNull($delivery->fresh()->delivery_confirmed_at, 'Tourist confirmation is stamped.');
-        $this->assertSame((int) $this->customer->id, (int) $delivery->fresh()->delivery_confirmed_by);
+        $this->assertNotNull($delivery->fresh()->delivery_confirmed_at, 'Rider confirmation is stamped.');
+        $this->assertSame((int) $this->rider->id, (int) $delivery->fresh()->delivery_confirmed_by);
         $this->assertSame('completed', $order->fresh()->status,
             'Prepaid ORDER reaches completed (no dangling delivered).');
         $this->assertNotNull($order->fresh()->completed_at, 'Order completed_at is stamped.');
@@ -165,40 +165,27 @@ class CompletionConsistencyTest extends TestCase
             'Rider is free to take the next delivery.');
     }
 
-    public function test_cod_delivery_completes_only_after_cash_settlement(): void
+    public function test_cod_delivery_completes_when_the_rider_confirms_with_proof_cash_received(): void
     {
         $order = $this->makeOrder('cash', 'TT-COMP-COD');
         $delivery = $this->makeDelivery($order);
 
-        // Confirm delivered: cash NOT collected yet, so the order must NOT be
-        // terminal — it hangs on 'delivered' until the rider hands over cash.
-        // P14 — delivery is confirmed by the TOURIST, not the rider.
+        // Reconciled 2026-11-08 (AGENTS.md §12; product decision): the rider completes a food delivery with a proof photo at the drop-off, which also records the COD cash; the tourist confirm-delivery step is retired.
+        // There is no longer a 'delivered but unpaid' state: confirming with the
+        // photo means the tourist paid, so cash settles in the same step.
         $token = $this->riderToken();
         $this->withHeader('Authorization', 'Bearer '.$token)
             ->patchJson('/api/rider/deliveries/'.$delivery->id.'/status', ['status' => 'delivered'])
             ->assertStatus(422)
-            ->assertJsonPath('message', 'The tourist must confirm the delivery before it can be marked as delivered.');
-
-        $this->withHeader('Authorization', 'Bearer '.$this->customerToken())
-            ->postJson('/api/tourist/food/order/'.$order->id.'/confirm-delivery')
-            ->assertOk()
-            ->assertJsonPath('data.new_status', 'delivered');
-
-        $this->assertSame('delivered', $delivery->fresh()->status->value ?? $delivery->fresh()->status);
-        $this->assertNotNull($delivery->fresh()->delivery_confirmed_at);
-        $this->assertSame((int) $this->customer->id, (int) $delivery->fresh()->delivery_confirmed_by);
-        $this->assertSame('delivered', $order->fresh()->status, 'Order stays delivered while cash is pending.');
+            ->assertJsonPath('message', 'Take a photo of the delivered food at the drop-off to complete this delivery.');
         $this->assertNull($order->fresh()->completed_at);
-        $this->assertSame((float) $order->total, (float) $delivery->fresh()->cash_due, 'Cash due snapshot frozen.');
 
-        // Settle the cash: only now does delivery + order complete.
-        $this->withHeader('Authorization', 'Bearer '.$token)
-            ->postJson('/api/rider/deliveries/'.$delivery->id.'/settle-cod', [
-                'cash_received' => (float) $order->total,
-            ])
+        $this->riderCompletesDelivery($delivery, $this->rider)
             ->assertOk()
-            ->assertJson(['success' => true]);
+            ->assertJsonPath('data.cod_settled', true);
 
+        $this->assertSame((float) $order->total, (float) $delivery->fresh()->cash_due, 'Cash due snapshot frozen.');
+        $this->assertSame((float) $order->total, (float) $delivery->fresh()->cash_received, 'Exactly the cash due received.');
         $this->assertSame('completed', $delivery->fresh()->status->value ?? $delivery->fresh()->status);
         $this->assertSame('completed', $order->fresh()->status, 'COD ORDER reaches completed after settlement.');
         $this->assertSame('paid', $order->fresh()->payment_status);

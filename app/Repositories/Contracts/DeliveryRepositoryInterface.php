@@ -14,6 +14,16 @@ interface DeliveryRepositoryInterface
 
     public function getPendingDeliveries(int $riderId, int $limit = 20): Collection;
 
+    public function getRecentlyTakenForRider(int $riderId, int $minutes = 10, int $limit = 15): Collection;
+
+    /**
+     * Rider → first-pickup distance (km) per delivery id; null without a GPS
+     * fix or pickup coordinates.
+     *
+     * @return array<int, float|null>
+     */
+    public function pickupDistancesKm(int $riderId, Collection $deliveries): array;
+
     public function getActiveDeliveries(int $riderId): Collection;
 
     public function getCompletedDeliveries(int $riderId, int $perPage = 15): LengthAwarePaginator;

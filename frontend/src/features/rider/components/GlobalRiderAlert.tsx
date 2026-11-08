@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircle, ShoppingBag, Loader2, AlertTriangle, Zap, Banknote, Store, MapPin } from 'lucide-react'
+import { CheckCircle, ShoppingBag, Loader2, AlertTriangle, Zap, Banknote, Store, MapPin, Camera, RefreshCw } from 'lucide-react'
 import { useRiderActiveTrip } from '@/features/rider/context/RiderActiveTripContext'
 import { formatCurrency } from '@/shared/utils'
 import { formatStopDistance } from '@/features/rider/stop-arrival'
@@ -28,6 +28,7 @@ export default function GlobalRiderAlert() {
     confirmStopBusy,
     confirmStopError,
     pickupComplete,
+    pickupStopsData,
   } = useRiderActiveTrip()
 
   const [exiting, setExiting] = useState(false)
@@ -42,6 +43,12 @@ export default function GlobalRiderAlert() {
   useEffect(() => {
     setCashReceived('')
   }, [pendingSettlement?.deliveryId])
+
+  // Proof-of-delivery photo for the drop-off (required to complete).
+  const [proofPhoto, setProofPhoto] = useState<File | null>(null)
+  useEffect(() => {
+    setProofPhoto(null)
+  }, [activeDelivery?.id])
 
   useEffect(() => {
     if (prevAlert.current && arrivalAlert === null) {
@@ -63,29 +70,29 @@ export default function GlobalRiderAlert() {
     const changePreview = received >= cashDue ? received - cashDue : 0
 
     return (
-      <div className="fixed inset-0 z-[9999] bg-black/60 flex items-end justify-center p-4 backdrop-blur-sm">
-        <div className="bg-zinc-950/70 backdrop-blur-2xl w-full max-w-md rounded-2xl border border-white/10 shadow-2xl flex flex-col overflow-hidden">
-          <div className="p-4 border-b border-white/10 text-center bg-white/5">
-            <div className="inline-flex items-center gap-2 px-3 py-1 bg-amber-500/10 border border-amber-500/30 text-amber-500 rounded-full text-xs font-bold uppercase tracking-wider mb-1">
+      <div className="fixed inset-0 z-[9999] bg-black/40 flex items-end justify-center p-3">
+        <div className="bg-white w-full max-w-md rounded-[24px] shadow-2xl flex flex-col overflow-hidden">
+          <div className="px-4 pt-5 pb-2 text-center">
+            <div className="inline-flex items-center gap-2 px-3 py-1 bg-[#FEF3C7] border border-[#FDE68A] text-[#92400E] rounded-full text-xs font-bold uppercase tracking-wider mb-1">
               <Banknote className="w-3 h-3" />
               Cash on Delivery
             </div>
-            <h2 className="text-lg font-extrabold text-white tracking-tight">Payment settled?</h2>
-            <p className="text-xs text-zinc-400">Enter the cash the tourist paid to finish the delivery</p>
+            <h2 className="text-lg font-extrabold text-[#17201B] tracking-tight">Payment settled?</h2>
+            <p className="text-xs text-[#6B7280]">Enter the cash the tourist paid to finish the delivery</p>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-            <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
+            <div className="bg-[#F4FBF6] border border-[#CFE8D6] rounded-xl p-4 space-y-3">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-zinc-400 font-semibold">Order #{pendingSettlement.orderId}</span>
-                <span className="text-zinc-400 font-semibold">Amount due</span>
+                <span className="text-[#6B7280] font-semibold">Order #{pendingSettlement.orderId}</span>
+                <span className="text-[#6B7280] font-semibold">Amount due</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-xs text-zinc-500">Cash received from customer</span>
-                <span className="text-xl font-extrabold text-white">{formatCurrency(cashDue)}</span>
+                <span className="text-xs text-[#6B7280]">Cash received from customer</span>
+                <span className="text-xl font-extrabold text-[#17201B]">{formatCurrency(cashDue)}</span>
               </div>
               <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-400 font-medium">₱</span>
+                <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[#6B7280] font-medium">₱</span>
                 <input
                   type="number"
                   min="0"
@@ -93,20 +100,20 @@ export default function GlobalRiderAlert() {
                   value={cashReceived}
                   onChange={(e) => setCashReceived(e.target.value)}
                   placeholder="0.00"
-                  className="w-full pl-8 pr-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-zinc-500 focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition"
+                  className="w-full pl-8 pr-4 py-3 bg-[#FFFFFF] border border-[#D1D5DB] rounded-xl text-[#17201B] placeholder-[#9CA3AF] focus:outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-500/20 transition"
                 />
               </div>
               <button
                 type="button"
                 onClick={() => setCashReceived(cashDue.toString())}
-                className="text-xs text-emerald-400 hover:text-emerald-300 transition"
+                className="text-xs text-[#16803C] hover:text-[#126B32] transition"
               >
                 Exact amount: {formatCurrency(cashDue)}
               </button>
               {received > 0 && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-zinc-500 font-semibold">Change to give</span>
-                  <span className={`font-semibold ${received >= cashDue ? 'text-emerald-400' : 'text-red-400'}`}>
+                  <span className="text-[#6B7280] font-semibold">Change to give</span>
+                  <span className={`font-semibold ${received >= cashDue ? 'text-[#16803C]' : 'text-[#B91C1C]'}`}>
                     {received >= cashDue
                       ? formatCurrency(changePreview)
                       : `Short by ${formatCurrency(cashDue - received)}`}
@@ -114,7 +121,7 @@ export default function GlobalRiderAlert() {
                 </div>
               )}
               {settleError && (
-                <div className="flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-950/30 px-3 py-2.5 text-sm font-medium text-red-400">
+                <div className="flex items-start gap-2 rounded-xl border border-[#FCA5A5] bg-[#FEF2F2] px-3 py-2.5 text-sm font-medium text-[#B91C1C]">
                   <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
                   <span>{settleError}</span>
                 </div>
@@ -122,12 +129,12 @@ export default function GlobalRiderAlert() {
             </div>
           </div>
 
-          <div className="p-4 border-t border-white/10 bg-white/5">
+          <div className="p-4 pt-2">
             <button
               type="button"
               onClick={() => settleCod(received)}
               disabled={received < cashDue || settleBusy}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 py-3.5 text-sm font-extrabold uppercase tracking-wider text-neutral-950 shadow-lg shadow-emerald-500/30 transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex w-full items-center justify-center gap-2 rounded-full bg-[#16803C] py-3.5 text-base font-bold text-white shadow-md hover:bg-[#126B32] transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {settleBusy ? (
                 <>
@@ -151,37 +158,42 @@ export default function GlobalRiderAlert() {
     const targetName = pickupArrivalPrompt.businessName ?? `Business #${pickupArrivalPrompt.businessId}`
 
     return (
-      <div className="fixed inset-0 z-[9999] bg-black/60 flex items-end justify-center p-4 backdrop-blur-sm rider-alert-backdrop">
-        <div className="bg-zinc-950/70 backdrop-blur-2xl w-full max-w-md rounded-2xl border border-white/10 shadow-2xl flex flex-col overflow-hidden rider-alert-in">
-          <div className="p-4 border-b border-white/10 text-center bg-white/5">
-            <div className="inline-flex items-center gap-2 px-3 py-1 bg-amber-500/10 border border-amber-500/30 text-amber-400 rounded-full text-xs font-bold uppercase tracking-wider mb-1">
+      <div className="fixed inset-0 z-[9999] bg-black/40 flex items-end justify-center p-3 rider-alert-backdrop">
+        <div className="bg-white w-full max-w-md rounded-[24px] shadow-2xl flex flex-col overflow-hidden rider-alert-in">
+          <div className="px-4 pt-5 pb-2 text-center">
+            <div className="inline-flex items-center gap-2 px-3 py-1 bg-[#FEF3C7] border border-[#FDE68A] text-[#92400E] rounded-full text-xs font-bold uppercase tracking-wider mb-1">
               <MapPin className="w-3 h-3" />
               Pickup {pickupArrivalPrompt.sequence} of {pickupArrivalPrompt.totalStops}
             </div>
-            <h2 className="text-lg font-extrabold text-white tracking-tight">Confirm Restaurant Arrival</h2>
-            <p className="text-xs text-zinc-400">Arrival starts this restaurant's waiting-time clock</p>
+            <h2 className="text-lg font-extrabold text-[#17201B] tracking-tight">Confirm Restaurant Arrival</h2>
+            <p className="text-xs text-[#6B7280]">Arrival starts this restaurant's waiting-time clock</p>
           </div>
           <div className="p-4 space-y-3">
-            <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-              <p className="text-xs text-zinc-500 font-bold uppercase tracking-wide">Pickup Stop</p>
-              <p className="text-sm text-white font-bold mt-1">{targetName}</p>
-              {pickupArrivalPrompt.distanceMeters != null && (
-                <p className="text-xs text-zinc-400 mt-1">{formatStopDistance(pickupArrivalPrompt.distanceMeters)} away</p>
-              )}
+            <div className="flex items-center gap-3 bg-[#F4FBF6] border border-[#CFE8D6] rounded-xl p-4">
+              <div className="w-10 h-10 rounded-full bg-[#DCFCE7] border border-[#16803C] flex items-center justify-center text-[#16803C] shrink-0">
+                <Store className="w-4 h-4" aria-hidden="true" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs text-[#6B7280] font-bold uppercase tracking-wide">Pickup Stop</p>
+                <p className="text-base text-[#17201B] font-bold truncate">{targetName}</p>
+                {pickupArrivalPrompt.distanceMeters != null && (
+                  <p className="text-xs text-[#6B7280] mt-0.5">{formatStopDistance(pickupArrivalPrompt.distanceMeters)} away</p>
+                )}
+              </div>
             </div>
             {confirmArrivalError && (
-              <div className="flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-950/30 px-3 py-2.5 text-sm font-medium text-red-400">
+              <div className="flex items-start gap-2 rounded-xl border border-[#FCA5A5] bg-[#FEF2F2] px-3 py-2.5 text-sm font-medium text-[#B91C1C]">
                 <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
                 <span>{confirmArrivalError}</span>
               </div>
             )}
           </div>
-          <div className="p-4 border-t border-white/10 bg-white/5">
+          <div className="p-4 pt-2">
             <button
               type="button"
               onClick={() => confirmArrivalStop(pickupArrivalPrompt.businessId)}
               disabled={confirmArrivalBusy}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-amber-400 py-3.5 text-sm font-extrabold uppercase tracking-wider text-neutral-950 transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex w-full items-center justify-center gap-2 rounded-full bg-[#16803C] py-3.5 text-base font-bold text-white shadow-md hover:bg-[#126B32] transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {confirmArrivalBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />}
               {confirmArrivalBusy ? 'Confirming...' : 'Confirm Arrival'}
@@ -202,30 +214,30 @@ export default function GlobalRiderAlert() {
     const targetName = pickupStopPrompt.businessName ?? `Business #${pickupStopPrompt.businessId}`
 
     return (
-      <div className="fixed inset-0 z-[9999] bg-black/60 flex items-end justify-center p-4 backdrop-blur-sm rider-alert-backdrop">
-        <div className="bg-zinc-950/70 backdrop-blur-2xl w-full max-w-md rounded-2xl border border-white/10 shadow-2xl flex flex-col overflow-hidden rider-alert-in">
+      <div className="fixed inset-0 z-[9999] bg-black/40 flex items-end justify-center p-3 rider-alert-backdrop">
+        <div className="bg-white w-full max-w-md rounded-[24px] shadow-2xl flex flex-col overflow-hidden rider-alert-in">
           {/* HEADER BANNER */}
-          <div className="p-4 border-b border-white/10 text-center bg-white/5">
-            <div className="inline-flex items-center gap-2 px-3 py-1 bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 rounded-full text-xs font-bold uppercase tracking-wider mb-1">
+          <div className="px-4 pt-5 pb-2 text-center">
+            <div className="inline-flex items-center gap-2 px-3 py-1 bg-[#16803C] border border-[#16803C] text-white rounded-full text-xs font-bold uppercase tracking-wider mb-1">
               <Zap className="w-3 h-3" />
               Pickup {pickupStopPrompt.sequence} of {pickupStopPrompt.totalStops}
             </div>
-            <h2 className="text-lg font-extrabold text-white tracking-tight">Restaurant Ready</h2>
-            <p className="text-xs text-zinc-400">Confirm the item pickup to advance to the next stop</p>
+            <h2 className="text-lg font-extrabold text-[#17201B] tracking-tight">Restaurant Ready</h2>
+            <p className="text-xs text-[#6B7280]">Confirm the item pickup to advance to the next stop</p>
           </div>
 
           {/* RECEIPT BODY */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-            <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-4">
+            <div className="bg-[#F4FBF6] border border-[#CFE8D6] rounded-xl p-4 space-y-4">
               <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-full bg-emerald-500/10 border border-emerald-500 flex items-center justify-center text-emerald-400 shrink-0">
+                <div className="w-10 h-10 rounded-full bg-[#DCFCE7] border border-[#16803C] flex items-center justify-center text-[#16803C] shrink-0">
                   <Store className="w-4 h-4" />
                 </div>
                 <div className="flex flex-col min-w-0">
-                  <span className="text-xs text-zinc-500 font-bold uppercase tracking-wide">Pickup Stop</span>
-                  <span className="text-sm text-white font-bold truncate">{targetName}</span>
+                  <span className="text-xs text-[#6B7280] font-bold uppercase tracking-wide">Pickup Stop</span>
+                  <span className="text-sm text-[#17201B] font-bold truncate">{targetName}</span>
                   {pickupStopPrompt.distanceMeters != null && (
-                    <span className="text-xs text-zinc-400 mt-0.5">
+                    <span className="text-xs text-[#6B7280] mt-0.5">
                       {formatStopDistance(pickupStopPrompt.distanceMeters)} away
                     </span>
                   )}
@@ -233,7 +245,7 @@ export default function GlobalRiderAlert() {
               </div>
 
               {confirmStopError && (
-                <div className="flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-950/30 px-3 py-2.5 text-sm font-medium text-red-400">
+                <div className="flex items-start gap-2 rounded-xl border border-[#FCA5A5] bg-[#FEF2F2] px-3 py-2.5 text-sm font-medium text-[#B91C1C]">
                   <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
                   <span>{confirmStopError}</span>
                 </div>
@@ -242,12 +254,12 @@ export default function GlobalRiderAlert() {
           </div>
 
           {/* ACTION */}
-          <div className="p-4 border-t border-white/10 bg-white/5">
+          <div className="p-4 pt-2">
             <button
               type="button"
               onClick={() => confirmPickupStop(pickupStopPrompt.businessId)}
               disabled={isConfirmingStop}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 py-3.5 text-sm font-extrabold uppercase tracking-wider text-neutral-950 shadow-lg shadow-emerald-500/30 transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+              className="flex w-full items-center justify-center gap-2 rounded-full bg-[#16803C] py-3.5 text-base font-bold text-white shadow-md hover:bg-[#126B32] transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isConfirmingStop ? (
                 <>
@@ -282,7 +294,7 @@ export default function GlobalRiderAlert() {
   const isPickup = arrivalAlert === 'PICKUP' || exitAlertKind === 'PICKUP' || finalPickupFallback
   const isConfirming = busy
 
-  const confirmLabel = isPickup ? 'I Picked Up the Food' : 'I Delivered the Food'
+  const confirmLabel = isPickup ? 'I Picked Up the Food' : 'Confirm Delivered'
   const confirmIcon = isPickup ? ShoppingBag : CheckCircle
 
   // Waypoint shown in the receipt slice — the relevant name/address for this leg.
@@ -292,62 +304,64 @@ export default function GlobalRiderAlert() {
 
   const handleConfirm = () => {
     if (isPickup) onMarkPickedUp()
-    else onConfirmDelivery()
+    else if (proofPhoto) onConfirmDelivery(proofPhoto)
   }
+  const needsPhoto = !isPickup && !proofPhoto
+  const isCod = Boolean(pickupStopsData?.is_cod)
 
   return (
     <div
-      className={`fixed inset-0 z-[9999] bg-black/60 flex items-end justify-center p-4 backdrop-blur-sm ${
+      className={`fixed inset-0 z-[9999] bg-black/40 flex items-end justify-center p-3 ${
         arrivingNow ? 'rider-alert-backdrop' : ''
       }`}
     >
       <div
-        className={`bg-zinc-950/70 backdrop-blur-2xl w-full max-w-md rounded-2xl border border-white/10 shadow-2xl flex flex-col overflow-hidden ${
+        className={`bg-white w-full max-w-md rounded-[24px] shadow-2xl flex flex-col overflow-hidden ${
           arrivingNow ? 'rider-alert-in' : 'rider-alert-out'
         }`}
       >
         {/* HEADER PANEL BANNER */}
-        <div className="p-4 border-b border-white/10 text-center bg-white/5">
-          <div className="inline-flex items-center gap-2 px-3 py-1 bg-amber-500/10 border border-amber-500/30 text-amber-500 rounded-full text-xs font-bold uppercase tracking-wider mb-1">
+        <div className="px-4 pt-5 pb-2 text-center">
+          <div className="inline-flex items-center gap-2 px-3 py-1 bg-[#FEF3C7] border border-[#FDE68A] text-[#92400E] rounded-full text-xs font-bold uppercase tracking-wider mb-1">
             <Zap className="w-3 h-3" />
             Arrival Confirmation
           </div>
-          <h2 className="text-lg font-extrabold text-white tracking-tight">You've Arrived</h2>
-          <p className="text-xs text-zinc-400">Confirm the leg to continue the delivery flow</p>
+          <h2 className="text-lg font-extrabold text-[#17201B] tracking-tight">You've Arrived</h2>
+          <p className="text-xs text-[#6B7280]">Confirm the leg to continue the delivery flow</p>
         </div>
 
         {/* RECEIPT BODY */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
-          <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-4">
+          <div className="bg-[#F4FBF6] border border-[#CFE8D6] rounded-xl p-4 space-y-4">
             <div className="flex items-start gap-3">
               <div
                 className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 border ${
                   isPickup
-                    ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400'
-                    : 'bg-blue-500/10 border-blue-500 text-blue-400'
+                    ? 'bg-[#DCFCE7] border-[#16803C] text-[#16803C]'
+                    : 'bg-[#DBEAFE] border-[#2563EB] text-[#1D4ED8]'
                 }`}
               >
                 {isPickup ? 'P' : 'D'}
               </div>
               <div className="flex flex-col min-w-0">
-                <span className="text-xs text-zinc-500 font-bold uppercase tracking-wide">{waypointLabel}</span>
-                <span className="text-sm text-white font-bold truncate">{targetName ?? 'Location unavailable'}</span>
-                <span className="text-xs text-zinc-400 truncate mt-0.5">{targetAddress ?? 'Address unavailable'}</span>
+                <span className="text-xs text-[#6B7280] font-bold uppercase tracking-wide">{waypointLabel}</span>
+                <span className="text-sm text-[#17201B] font-bold truncate">{targetName ?? 'Location unavailable'}</span>
+                <span className="text-xs text-[#6B7280] truncate mt-0.5">{targetAddress ?? 'Address unavailable'}</span>
               </div>
             </div>
 
-            <div className="w-0.5 h-5 bg-gradient-to-b from-emerald-500 to-blue-500 ml-[11px] -my-3 opacity-60" />
+            <div className="w-0.5 h-5 bg-gradient-to-b from-[#16803C] to-[#2563EB] ml-[11px] -my-3 opacity-60" />
 
             <div className="flex items-start gap-3">
-              <div className="w-6 h-6 rounded-full bg-white/10 border border-white/15 flex items-center justify-center text-zinc-400 text-xs shrink-0 mt-0.5 font-bold">
+              <div className="w-6 h-6 rounded-full bg-[#F3F4F6] border border-[#D1D5DB] flex items-center justify-center text-[#6B7280] text-xs shrink-0 mt-0.5 font-bold">
                 {isPickup ? 'D' : '✓'}
               </div>
               <div className="flex flex-col min-w-0">
-                <span className="text-xs text-zinc-500 font-bold uppercase tracking-wide">
+                <span className="text-xs text-[#6B7280] font-bold uppercase tracking-wide">
                   {isPickup ? 'Dropoff Destination' : 'Trip Completion'}
                 </span>
-                <span className="text-sm text-white font-bold truncate">
-                  {isPickup ? (activeDelivery?.delivery_address ?? 'Destination Location') : 'Mark this order as delivered'}
+                <span className="text-sm text-[#17201B] font-bold truncate">
+                  {isPickup ? (activeDelivery?.delivery_address ?? 'Destination Location') : 'Take a photo of the delivered food, then confirm'}
                 </span>
               </div>
             </div>
@@ -355,16 +369,16 @@ export default function GlobalRiderAlert() {
         </div>
 
         {/* ERROR / ACTION CONSOLE */}
-        <div className="p-4 border-t border-white/10 bg-white/5 space-y-3">
+        <div className="p-4 pt-2 space-y-3">
           {isPickup && pickupGateBlocked ? (
             <>
               {pickupGateMessage ? (
-                <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-sm font-medium text-amber-400">
+                <div className="flex items-start gap-2 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] px-3 py-2.5 text-sm font-medium text-[#92400E]">
                   <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
                   <span>{pickupGateMessage}</span>
                 </div>
               ) : (
-                <div className="flex items-start gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-sm font-medium text-zinc-400">
+                <div className="flex items-start gap-2 rounded-xl border border-[#CFE8D6] bg-[#F4FBF6] px-3 py-2.5 text-sm font-medium text-[#6B7280]">
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin mt-0.5" />
                   <span>Checking restaurant pickup stops…</span>
                 </div>
@@ -373,10 +387,10 @@ export default function GlobalRiderAlert() {
                 type="button"
                 onClick={pickupGateMessage ? dismissArrivalAlert : undefined}
                 disabled={!pickupGateMessage}
-                className={`flex w-full items-center justify-center gap-2 rounded-xl py-3.5 text-sm font-extrabold uppercase tracking-wider transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 ${
+                className={`flex w-full items-center justify-center gap-2 rounded-full py-3.5 text-base font-bold transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60 ${
                   pickupGateMessage
-                    ? 'bg-amber-500 text-neutral-950 shadow-lg shadow-amber-500/30 hover:bg-amber-600'
-                    : 'bg-white/10 text-zinc-400'
+                    ? 'bg-[#16803C] text-white shadow-md hover:bg-[#126B32]'
+                    : 'bg-[#E5E7EB] text-[#6B7280]'
                 }`}
               >
                 {pickupGateMessage ? (
@@ -395,17 +409,21 @@ export default function GlobalRiderAlert() {
           ) : (
             <>
               {actionError && arrivalAlert && (
-                <div className="flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-950/30 px-3 py-2.5 text-sm font-medium text-red-400">
+                <div className="flex items-start gap-2 rounded-xl border border-[#FCA5A5] bg-[#FEF2F2] px-3 py-2.5 text-sm font-medium text-[#B91C1C]">
                   <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
                   <span>{actionError}</span>
                 </div>
               )}
 
+              {!isPickup && (
+                <DeliveryProofPicker photo={proofPhoto} onChange={setProofPhoto} isCod={isCod} />
+              )}
+
               <button
                 type="button"
                 onClick={handleConfirm}
-                disabled={isConfirming}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 py-3.5 text-sm font-extrabold uppercase tracking-wider text-neutral-950 shadow-lg shadow-emerald-500/30 transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={isConfirming || needsPhoto}
+                className="flex w-full items-center justify-center gap-2 rounded-full bg-[#16803C] py-3.5 text-base font-bold text-white shadow-md hover:bg-[#126B32] transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isConfirming ? (
                   <>
@@ -429,4 +447,61 @@ export default function GlobalRiderAlert() {
 
 function ConfirmGlyph({ icon: Icon }: { icon: typeof CheckCircle }) {
   return <Icon className="h-4 w-4" />
+}
+
+/**
+ * Drop-off proof photo: opens the rear camera on phones (file picker on
+ * desktop), shows a preview with Retake. Required before "Confirm Delivered".
+ */
+function DeliveryProofPicker({ photo, onChange, isCod }: { photo: File | null; onChange: (f: File | null) => void; isCod: boolean }) {
+  const [preview, setPreview] = useState<string | null>(null)
+  useEffect(() => {
+    if (!photo) { setPreview(null); return }
+    const url = URL.createObjectURL(photo)
+    setPreview(url)
+    return () => URL.revokeObjectURL(url)
+  }, [photo])
+
+  const input = (
+    <input
+      type="file"
+      accept="image/*"
+      capture="environment"
+      aria-label="Take a photo of the delivered food"
+      className="sr-only"
+      onChange={(e) => {
+        const file = e.target.files?.[0] ?? null
+        onChange(file)
+        e.target.value = ''
+      }}
+    />
+  )
+
+  return (
+    <div className="space-y-2">
+      {photo && preview ? (
+        <div className="flex items-center gap-3 rounded-xl border border-[#CFE8D6] bg-[#F4FBF6] p-2">
+          <img src={preview} alt="Delivered food" className="h-16 w-16 rounded-lg object-cover" />
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-bold text-[#17201B]">Photo ready</p>
+            <p className="text-xs text-[#6B7280] truncate">{photo.name}</p>
+          </div>
+          <label className="inline-flex cursor-pointer items-center gap-1 rounded-lg bg-[#F3F4F6] px-3 py-2 text-xs font-bold text-[#17201B] hover:bg-[#E5E7EB]">
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" /> Retake
+            {input}
+          </label>
+        </div>
+      ) : (
+        <label className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[#16803C] bg-[#FFFFFF] py-3.5 text-sm font-bold text-[#16803C] hover:bg-[#F0FDF4]">
+          <Camera className="h-4 w-4" aria-hidden="true" /> Take photo of delivered food
+          {input}
+        </label>
+      )}
+      <p className="text-xs text-[#6B7280]">
+        {isCod
+          ? 'You must be within 50 m of the address. Confirming means the tourist has received the food and paid you in cash.'
+          : 'You must be within 50 m of the address. Confirming means the tourist has received the food.'}
+      </p>
+    </div>
+  )
 }

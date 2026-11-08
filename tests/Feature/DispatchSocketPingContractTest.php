@@ -237,8 +237,11 @@ class DispatchSocketPingContractTest extends TestCase
         $this->assertSame(1, $this->dispatchBridgePosts()->count(), 'Exactly one rider was pinged.');
     }
 
-    public function test_radar_fallback_pings_every_online_candidate_once(): void
+    public function test_radar_fallback_pings_only_the_targeted_candidate_then_the_next_on_reject(): void
     {
+        // Reconciled 2026-11-07 (AGENTS.md §12; docs/dispatch-escalation-plan.md, approved): food deliveries
+        // are offered to ONE rider at a time. With two radar candidates only the
+        // first gets an offer + bridge ping; a reject advances to the second.
         $business = $this->makeBusiness('Ping Radar Multi');
         $riderA = $this->makeRider('ping-radar-a@example.com');
         $riderB = $this->makeRider('ping-radar-b@example.com');
@@ -247,40 +250,38 @@ class DispatchSocketPingContractTest extends TestCase
         $delivery = $this->dispatchCheckout($business);
 
         $this->assertSame('notified', $delivery->fresh()->dispatch_status);
-        $this->assertSame(
-            2,
-            BookingDispatchLog::where('delivery_id', $delivery->id)->where('response', 'pending')->count(),
-            'Each eligible radar rider gets its own pending offer.'
-        );
+        $pending = BookingDispatchLog::where('delivery_id', $delivery->id)->where('response', 'pending')->get();
+        $this->assertCount(1, $pending, 'Exactly one targeted offer at a time.');
+        $this->assertSame(1, $this->dispatchBridgePosts()->count(), 'Exactly one bridge ping.');
 
-        $posts = $this->dispatchBridgePosts();
-        $this->assertSame(2, $posts->count(), 'Each eligible radar rider gets its own bridge ping.');
+        $first = (int) $pending->first()->rider_id;
+        $second = $first === $riderA->id ? $riderB->id : $riderA->id;
+        app(\App\Services\NearestRiderService::class)->handleRiderResponse($delivery->id, $first, 'declined');
 
+        $this->assertSame($second, (int) BookingDispatchLog::where('delivery_id', $delivery->id)->where('response', 'pending')->value('rider_id'));
         Http::assertSent(fn (HttpRequest $req) =>
             $req->url() === self::BRIDGE_DISPATCH_URL
             && $req['deliveryId'] === $delivery->id
-            && $req['riderId'] === $riderB->id
+            && $req['riderId'] === $second
         );
     }
 
-    public function test_no_candidate_produces_a_ping_with_null_rider_and_parks_for_retry(): void
+    public function test_no_candidate_moves_the_delivery_to_the_manual_board_without_a_rider_ping(): void
     {
+        // Reconciled 2026-11-07 (AGENTS.md §12; docs/dispatch-escalation-plan.md, approved): with no MySQL or
+        // radar candidate a food delivery is published on the manual board
+        // (every eligible rider can see and accept it) instead of a blind
+        // ping + retry. Never a dead end.
         $business = $this->makeBusiness('Ping Nobody');
         $this->bypassLiveBridge([]); // no MySQL riders, no radar riders
 
         $delivery = $this->dispatchCheckout($business);
 
         $delivery->refresh();
-        $this->assertSame('no_rider_available', $delivery->dispatch_status);
-        $this->assertNotNull($delivery->dispatch_retry_at, 'No candidate must never be a dead end.');
+        $this->assertSame('waiting_for_rider', $delivery->dispatch_status);
+        $this->assertSame('manual', $delivery->dispatch_phase);
+        $this->assertNull($delivery->dispatch_retry_at);
         $this->assertSame(0, BookingDispatchLog::where('delivery_id', $delivery->id)->count());
-
-        // Even a no-candidate dispatch still POSTs the blind radar ping so a
-        // rider connecting in the next instant can still discover the order.
-        Http::assertSent(fn (HttpRequest $req) =>
-            $req->url() === self::BRIDGE_DISPATCH_URL
-            && $req['deliveryId'] === $delivery->id
-            && $req['riderId'] === null
-        );
+        $this->assertSame(0, $this->dispatchBridgePosts()->count(), 'No targeted rider exists, so no rider ping is sent.');
     }
 }

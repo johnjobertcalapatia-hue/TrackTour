@@ -216,6 +216,14 @@ class ScheduledDispatchProcessor
                 return true;
             }
 
+            // Sequential dispatch (food) owns its own fallback: a delivery it
+            // moved to the manual board must not be parked back into the
+            // legacy retry loop.
+            $delivery->refresh();
+            if ($delivery->dispatch_phase !== null) {
+                return true;
+            }
+
             $maxAttempts = 1 + (int) config('delivery.scheduler.max_retries', 11);
 
             // Terminal when the attempt cap is reached OR the cycle deadline

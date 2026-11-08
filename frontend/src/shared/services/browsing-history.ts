@@ -11,10 +11,14 @@ export interface BrowsedPlace {
   rating: number | null
   url: string
   viewed_at: number
+  /** 'food' for a dish (food item page); places (restaurants, attractions, stays) omit it. */
+  kind?: 'place' | 'food'
 }
 
 const BROWSING_HISTORY_KEY = 'tracktour_browsing_history'
-const MAX_HISTORY_ITEMS = 8
+/** Kept for My Activities → Explored (Home "Recently Viewed" shows the latest RECENT_PLACES_LIMIT). */
+const MAX_HISTORY_ITEMS = 60
+export const RECENT_PLACES_LIMIT = 8
 
 export function getBrowsedPlaces(): BrowsedPlace[] {
   try {
@@ -44,7 +48,9 @@ export function recordBrowsedPlace(place: Omit<BrowsedPlace, 'viewed_at' | 'disc
       viewed_at: Date.now(),
     }
 
-    const filtered = existing.filter((item) => !(item.id === place.id && item.discoveryGroup === group))
+    // A dish and a restaurant can share an id: compare the kind too.
+    const kind = place.kind ?? 'place'
+    const filtered = existing.filter((item) => !(item.id === place.id && item.discoveryGroup === group && (item.kind ?? 'place') === kind))
     const nextList = [updatedItem, ...filtered].slice(0, MAX_HISTORY_ITEMS)
 
     localStorage.setItem(BROWSING_HISTORY_KEY, JSON.stringify(nextList))

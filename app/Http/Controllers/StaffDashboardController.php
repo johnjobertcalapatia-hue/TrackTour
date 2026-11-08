@@ -24,6 +24,17 @@ class StaffDashboardController extends Controller
             'cancellation_reason' => ['nullable', 'string', 'max:1000'],
         ]);
 
+        // AGENTS.md §4.2: staff may not start or finish preparation of a
+        // delivery order before a rider accepted it (this web path lacked the
+        // gate the API path has). The COD paid-before-ready rule is enforced
+        // by the Order model guard.
+        if ($order->order_type === 'delivery'
+            && ! $order->hasAcceptedRider()
+            && in_array($validated['status'], ['preparing', 'ready'], true)
+        ) {
+            return back()->withErrors(['status' => 'This delivery order cannot be prepared until a rider has accepted the delivery.']);
+        }
+
         $order->update([
             'status' => $validated['status'],
             'cancellation_reason' => $validated['cancellation_reason'] ?? null,

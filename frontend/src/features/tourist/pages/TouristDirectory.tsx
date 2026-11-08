@@ -208,20 +208,20 @@ export default function TouristDirectory() {
 
   if (isError) {
     return (
-      <div className="min-h-screen bg-gray-950 flex items-center justify-center">
+      <div className="min-h-screen bg-transparent flex items-center justify-center">
         <div className="text-center">
           <Store className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-          <h2 className="text-xl font-semibold text-gray-100 mb-2">Failed to load directory</h2>
-          <p className="text-gray-400">Please try again later.</p>
+          <h2 className="text-xl font-semibold text-[#17201B] mb-2">Failed to load directory</h2>
+          <p className="text-[#68736D]">Please try again later.</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-950">
+    <div className="min-h-screen bg-transparent">
       {/* Hero Search Section */}
-      <div className="relative bg-gradient-to-br from-emerald-900/80 via-emerald-800/60 to-gray-900 overflow-hidden">
+      <div className="relative bg-gradient-to-br from-emerald-900/80 via-emerald-800/70 to-[#056B35] overflow-hidden">
         <div className="absolute inset-0 opacity-10">
           <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_30%_50%,rgba(16,185,129,0.3),transparent_50%)]" />
           <div className="absolute bottom-0 right-0 w-full h-full bg-[radial-gradient(circle_at_70%_50%,rgba(5,150,105,0.2),transparent_50%)]" />
@@ -239,7 +239,7 @@ export default function TouristDirectory() {
                 setSearchInput(e.target.value)
                 setCurrentPage(1)
               }}
-              className="w-full pl-12 pr-12 py-4 bg-gray-900/80 backdrop-blur-xl border border-gray-700/50 rounded-2xl text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 text-lg"
+              className="w-full pl-12 pr-12 py-4 bg-white border border-[#E5E9E7] rounded-2xl text-[#17201B] placeholder-[#68736D] focus:outline-none focus:ring-2 focus:ring-emerald-500/50 focus:border-emerald-500/50 text-lg"
             />
             {searchInput && (
               <button
@@ -247,7 +247,7 @@ export default function TouristDirectory() {
                   setSearchInput('')
                   setDebouncedSearch('')
                 }}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200"
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-[#17201B]"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -268,7 +268,7 @@ export default function TouristDirectory() {
                 className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
                   activeFilter === f.key
                     ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/25'
-                    : 'bg-gray-900/80 backdrop-blur-xl border border-gray-700/30 text-gray-300 hover:border-emerald-500/50 hover:text-emerald-400'
+                    : 'bg-white backdrop-blur-xl border border-[#E5E9E7] text-[#56615B] hover:border-emerald-500/50 hover:text-[#087F3F]'
                 }`}
               >
                 <Icon className="w-4 h-4" />
@@ -288,7 +288,7 @@ export default function TouristDirectory() {
                 className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
                   activeCategory === cat.name
                     ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/25'
-                    : 'bg-gray-800/50 border border-gray-700/30 text-gray-300 hover:border-emerald-500/50 hover:text-emerald-400'
+                    : 'bg-[#F3F8F4] border border-[#E5E9E7] text-[#56615B] hover:border-emerald-500/50 hover:text-[#087F3F]'
                 }`}
               >
                 <span>{cat.name}</span>
@@ -307,7 +307,7 @@ export default function TouristDirectory() {
                 setSelectedMunicipality(e.target.value)
                 setCurrentPage(1)
               }}
-              className="w-full px-4 py-3 bg-gray-900/80 backdrop-blur-xl border border-gray-700/30 rounded-xl text-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 appearance-none cursor-pointer"
+              className="w-full px-4 py-3 bg-white backdrop-blur-xl border border-[#E5E9E7] rounded-xl text-[#17201B] focus:outline-none focus:ring-2 focus:ring-emerald-500/50 appearance-none cursor-pointer"
             >
               {MUNICIPALITIES.map((m) => (
                 <option key={m} value={m === 'All Municipalities' ? '' : m}>
@@ -320,7 +320,7 @@ export default function TouristDirectory() {
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value)}
-              className="w-full px-4 py-3 bg-gray-900/80 backdrop-blur-xl border border-gray-700/30 rounded-xl text-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/50 appearance-none cursor-pointer"
+              className="w-full px-4 py-3 bg-white backdrop-blur-xl border border-[#E5E9E7] rounded-xl text-[#17201B] focus:outline-none focus:ring-2 focus:ring-emerald-500/50 appearance-none cursor-pointer"
             >
               {SORT_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -331,7 +331,7 @@ export default function TouristDirectory() {
           </div>
           <button
             onClick={() => setShowFilters(!showFilters)}
-            className="flex items-center gap-2 px-4 py-3 bg-gray-900/80 backdrop-blur-xl border border-gray-700/30 rounded-xl text-gray-300 hover:text-emerald-400 hover:border-emerald-500/50 transition-all sm:hidden"
+            className="flex items-center gap-2 px-4 py-3 bg-white backdrop-blur-xl border border-[#E5E9E7] rounded-xl text-[#56615B] hover:text-[#087F3F] hover:border-emerald-500/50 transition-all sm:hidden"
           >
             <SlidersHorizontal className="w-4 h-4" />
             Filters
@@ -340,13 +340,13 @@ export default function TouristDirectory() {
 
         {/* Results Count */}
         <div className="flex items-center justify-between mb-6">
-          <p className="text-gray-400 text-sm">
+          <p className="text-[#68736D] text-sm">
             {isLoading ? (
               'Searching...'
             ) : (
               <>
-                Showing <span className="text-gray-200 font-medium">{businesses.length}</span> of{' '}
-                <span className="text-gray-200 font-medium">{totalCount}</span> businesses
+                Showing <span className="text-[#17201B] font-medium">{businesses.length}</span> of{' '}
+                <span className="text-[#17201B] font-medium">{totalCount}</span> businesses
               </>
             )}
           </p>
@@ -356,12 +356,12 @@ export default function TouristDirectory() {
         {isLoading && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="bg-gray-900/80 backdrop-blur-xl rounded-2xl border border-gray-700/30 overflow-hidden animate-pulse">
-                <div className="h-48 bg-gray-800/50" />
+              <div key={i} className="bg-white backdrop-blur-xl rounded-2xl border border-[#E5E9E7] overflow-hidden animate-pulse">
+                <div className="h-48 bg-[#F3F8F4]" />
                 <div className="p-5 space-y-3">
-                  <div className="h-5 bg-gray-800/50 rounded w-3/4" />
-                  <div className="h-4 bg-gray-800/50 rounded w-1/2" />
-                  <div className="h-4 bg-gray-800/50 rounded w-2/3" />
+                  <div className="h-5 bg-[#F3F8F4] rounded w-3/4" />
+                  <div className="h-4 bg-[#F3F8F4] rounded w-1/2" />
+                  <div className="h-4 bg-[#F3F8F4] rounded w-2/3" />
                 </div>
               </div>
             ))}
@@ -375,7 +375,7 @@ export default function TouristDirectory() {
               <Link
                 key={businessId(biz)}
                 to={`/tourist/explore/${businessId(biz)}`}
-                className="group bg-gray-900/80 backdrop-blur-xl rounded-2xl border border-gray-700/30 shadow-lg shadow-black/5 overflow-hidden hover:border-emerald-500/30 transition-all duration-300"
+                className="group bg-white backdrop-blur-xl rounded-2xl border border-[#E5E9E7] shadow-lg shadow-black/5 overflow-hidden hover:border-emerald-500/30 transition-all duration-300"
               >
                 {/* Cover Image */}
                 <div className="relative h-48 overflow-hidden">
@@ -417,11 +417,11 @@ export default function TouristDirectory() {
 
                 {/* Content */}
                 <div className="p-5">
-                  <h3 className="text-lg font-semibold text-gray-100 mb-1 group-hover:text-emerald-400 transition-colors">
+                  <h3 className="text-lg font-semibold text-[#17201B] mb-1 group-hover:text-[#087F3F] transition-colors">
                     {businessDisplayName(biz)}
                   </h3>
-                  <p className="text-sm text-emerald-400/80 mb-1">{categoryName(biz.category)}</p>
-                  <div className="flex items-center gap-1 text-gray-400 text-sm mb-3">
+                  <p className="text-sm text-[#087F3F] mb-1">{categoryName(biz.category)}</p>
+                  <div className="flex items-center gap-1 text-[#68736D] text-sm mb-3">
                     <MapPin className="w-3.5 h-3.5" />
                     <span>{safeText(biz.municipality)}</span>
                   </div>
@@ -429,12 +429,12 @@ export default function TouristDirectory() {
                     <p className="text-gray-500 text-xs mb-4 line-clamp-1">{biz.address}</p>
                   )}
                   <div className="flex items-center gap-2">
-                    <span className="flex-1 text-center py-2 bg-emerald-600/10 text-emerald-400 rounded-xl text-sm font-medium border border-emerald-500/20 group-hover:bg-emerald-600 group-hover:text-white transition-all">
+                    <span className="flex-1 text-center py-2 bg-emerald-600/10 text-[#087F3F] rounded-xl text-sm font-medium border border-emerald-500/20 group-hover:bg-emerald-600 group-hover:text-white transition-all">
                       Visit Business
                     </span>
                     <button
                       onClick={(e) => { e.stopPropagation(); window.open(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(biz.address || safeText(biz.municipality))}`, '_blank') }}
-                      className="p-2 bg-gray-800/50 rounded-xl text-gray-400 hover:text-emerald-400 hover:bg-emerald-500/10 transition-all"
+                      className="p-2 bg-[#F3F8F4] rounded-xl text-[#68736D] hover:text-[#087F3F] hover:bg-emerald-500/10 transition-all"
                     >
                       <Navigation className="w-4 h-4" />
                     </button>
@@ -449,7 +449,7 @@ export default function TouristDirectory() {
         {!isLoading && businesses.length === 0 && (
           <div className="text-center py-16">
             <Store className="w-20 h-20 text-gray-700 mx-auto mb-6" />
-            <h3 className="text-xl font-semibold text-gray-200 mb-2">No businesses found</h3>
+            <h3 className="text-xl font-semibold text-[#17201B] mb-2">No businesses found</h3>
             <p className="text-gray-500 mb-6">Try adjusting your search or filters</p>
             <button
               onClick={() => {
@@ -473,16 +473,16 @@ export default function TouristDirectory() {
           <div className="mt-12 mb-8">
             <div className="flex items-center gap-3 mb-6">
               <div className="p-2 bg-emerald-500/10 rounded-xl">
-                <Flame className="w-5 h-5 text-emerald-400" />
+                <Flame className="w-5 h-5 text-[#087F3F]" />
               </div>
-              <h2 className="text-xl font-bold text-gray-100">Featured Businesses</h2>
+              <h2 className="text-xl font-bold text-[#17201B]">Featured Businesses</h2>
             </div>
             <div className="flex gap-6 overflow-x-auto pb-4 scrollbar-hide snap-x snap-mandatory">
               {featuredBusinesses.map((biz) => (
                 <Link
                   key={businessId(biz)}
                   to={`/tourist/explore/${businessId(biz)}`}
-                  className="flex-shrink-0 w-72 snap-start bg-gray-900/80 backdrop-blur-xl rounded-2xl border border-gray-700/30 shadow-lg shadow-black/5 overflow-hidden hover:border-emerald-500/30 transition-all"
+                  className="flex-shrink-0 w-72 snap-start bg-white backdrop-blur-xl rounded-2xl border border-[#E5E9E7] shadow-lg shadow-black/5 overflow-hidden hover:border-emerald-500/30 transition-all"
                 >
                   <div className="relative h-36 overflow-hidden">
                     <img
@@ -497,8 +497,8 @@ export default function TouristDirectory() {
                     </div>
                   </div>
                   <div className="p-4">
-                    <h3 className="font-semibold text-gray-100 mb-1">{businessDisplayName(biz)}</h3>
-                    <p className="text-sm text-emerald-400/80">{categoryName(biz.category)}</p>
+                    <h3 className="font-semibold text-[#17201B] mb-1">{businessDisplayName(biz)}</h3>
+                    <p className="text-sm text-[#087F3F]">{categoryName(biz.category)}</p>
                     <div className="flex items-center gap-1 text-gray-500 text-xs mt-1">
                       <MapPin className="w-3 h-3" />
                       <span>{safeText(biz.municipality)}</span>
@@ -516,7 +516,7 @@ export default function TouristDirectory() {
             <button
               onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
               disabled={currentPage === 1}
-              className="p-2 bg-gray-900/80 border border-gray-700/30 rounded-xl text-gray-400 hover:text-emerald-400 hover:border-emerald-500/50 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+              className="p-2 bg-white border border-[#E5E9E7] rounded-xl text-[#68736D] hover:text-[#087F3F] hover:border-emerald-500/50 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
             >
               <ChevronLeft className="w-5 h-5" />
             </button>
@@ -538,7 +538,7 @@ export default function TouristDirectory() {
                   className={`w-10 h-10 rounded-xl text-sm font-medium transition-all ${
                     currentPage === page
                       ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/25'
-                      : 'bg-gray-900/80 border border-gray-700/30 text-gray-400 hover:text-emerald-400 hover:border-emerald-500/50'
+                      : 'bg-white border border-[#E5E9E7] text-[#68736D] hover:text-[#087F3F] hover:border-emerald-500/50'
                   }`}
                 >
                   {page}
@@ -548,7 +548,7 @@ export default function TouristDirectory() {
             <button
               onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
               disabled={currentPage === totalPages}
-              className="p-2 bg-gray-900/80 border border-gray-700/30 rounded-xl text-gray-400 hover:text-emerald-400 hover:border-emerald-500/50 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+              className="p-2 bg-white border border-[#E5E9E7] rounded-xl text-[#68736D] hover:text-[#087F3F] hover:border-emerald-500/50 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
             >
               <ChevronRight className="w-5 h-5" />
             </button>

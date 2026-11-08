@@ -66,21 +66,6 @@ class OrderPolicy
         return false;
     }
 
-    public function assignRider(User $user, Order $order): bool
-    {
-        $business = $order->business;
-
-        if ($business && $business->owner_id === $user->id) {
-            return true;
-        }
-
-        if ($business && $business->staff()->where('user_id', $user->id)->where('status', 'active')->exists()) {
-            return true;
-        }
-
-        return false;
-    }
-
     public function cancel(User $user, Order $order): bool
     {
         if ($order->customer_email && $order->customer_email === $user->email) {

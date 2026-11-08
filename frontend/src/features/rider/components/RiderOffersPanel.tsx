@@ -44,7 +44,7 @@ export default function RiderOffersPanel({ offers, onAccept, acceptDeliveryId = 
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
           {offers.map((offer) => {
-            const expiresIn = Math.max(0, Math.round((offer.expires_in ?? 45) - nowTick))
+            const expiresIn = Math.max(0, Math.round((offer.expires_in ?? 30) - nowTick))
             const payout = Number(offer.rider_payout ?? offer.rider_commission ?? 0)
             const isAccepting = acceptDeliveryId != null && acceptDeliveryId === offer.delivery_id
 

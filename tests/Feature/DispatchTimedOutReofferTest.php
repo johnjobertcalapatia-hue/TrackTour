@@ -179,29 +179,27 @@ class DispatchTimedOutReofferTest extends TestCase
         );
     }
 
-    public function test_a_timed_out_offer_is_reopened_for_the_same_rider(): void
+    public function test_a_timed_out_targeted_rider_is_not_reoffered_but_can_claim_from_the_board(): void
     {
+        // Reconciled 2026-11-07 (AGENTS.md §12; docs/dispatch-escalation-plan.md, approved): the spec forbids
+        // selecting the same rider again for the same order. The missed-ping
+        // dead end this suite guarded against is now prevented by the manual
+        // board: with no other eligible rider the delivery is published there
+        // and the rider who missed the ping can still claim it.
         $delivery = $this->dispatchWithInitialOffer();
-        $firstOffer = $this->offerFor($delivery);
 
         $this->expireOffer($delivery, 'timeout');
 
-        $rider = $this->redispatch($delivery);
-
-        $this->assertNotNull($rider, 'A rider whose offer only timed out is offered again.');
-        $this->assertSame($this->rider->id, $rider->id);
-
-        $reopen = $this->offerFor($delivery);
-        $this->assertSame('pending', $reopen->response, 'Timed-out offer reopened as live.');
-        $this->assertNull($reopen->responded_at, 'Reopening clears the timeout answer.');
-        $this->assertTrue(
-            $reopen->dispatched_at->greaterThanOrEqualTo($firstOffer->dispatched_at),
-            'dispatched_at refreshed so the offer window restarts.'
-        );
+        $this->assertNull($this->redispatch($delivery), 'The same rider is never targeted twice.');
+        $this->assertSame('timeout', $this->offerFor($delivery)->response);
 
         $delivery->refresh();
-        $this->assertSame('notified', $delivery->dispatch_status);
-        $this->assertNotNull($delivery->dispatch_expires_at, 'Offer window re-armed.');
+        $this->assertSame('manual', $delivery->dispatch_phase);
+        $this->assertSame('waiting_for_rider', $delivery->dispatch_status);
+
+        $claim = $this->service->handleRiderResponse($delivery->id, $this->rider->id, 'accepted');
+        $this->assertTrue($claim['success'] ?? false, 'Never a dead end: the rider claims it from the board.');
+        $this->assertSame($this->rider->id, (int) $delivery->fresh()->rider_id);
     }
 
     public function test_reopening_reuses_the_single_row_so_the_unique_backstop_holds(): void

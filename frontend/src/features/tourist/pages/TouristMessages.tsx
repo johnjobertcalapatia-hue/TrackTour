@@ -38,34 +38,34 @@ export default function TouristMessages() {
   return (
     <div>
       <div className="mb-8">
-        <h1 className="text-2xl lg:text-3xl font-bold text-gray-100">Messages</h1>
-        <p className="mt-1 text-sm text-gray-400">Your conversations with businesses</p>
+        <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">Messages</h1>
+        <p className="mt-1 text-sm text-[#68736D]">Your conversations with businesses</p>
       </div>
 
       {messages.length === 0 ? (
-        <div className="bg-gray-900/80 backdrop-blur-xl rounded-2xl border border-gray-700/30 p-12 text-center">
+        <div className="bg-white backdrop-blur-xl rounded-2xl border border-[#E5E9E7] p-12 text-center">
           <MessageSquare className="w-12 h-12 text-gray-600 mx-auto mb-4" />
-          <p className="text-gray-400">No messages yet. Start a conversation with a business.</p>
+          <p className="text-[#68736D]">No messages yet. Start a conversation with a business.</p>
         </div>
       ) : (
-        <div className="bg-gray-900/80 backdrop-blur-xl rounded-2xl border border-gray-700/30 overflow-hidden">
+        <div className="bg-white backdrop-blur-xl rounded-2xl border border-[#E5E9E7] overflow-hidden">
           <div className="max-h-[500px] overflow-y-auto p-4 space-y-3">
             {messages.map((m) => (
               <div key={m.id} className={`flex ${m.sender_role === 'tourist' ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-[75%] rounded-2xl px-4 py-3 ${
                   m.sender_role === 'tourist'
                     ? 'bg-emerald-600 text-white'
-                    : 'bg-gray-800 text-gray-100'
+                    : 'bg-[#F3F8F4] text-[#17201B]'
                 }`}>
                   <p className="text-sm">{m.message}</p>
-                  <p className={`text-xs mt-1 ${m.sender_role === 'tourist' ? 'text-emerald-200' : 'text-gray-500'}`}>
+                  <p className={`text-xs mt-1 ${m.sender_role === 'tourist' ? 'text-emerald-50' : 'text-gray-500'}`}>
                     {m.sender_name} &bull; {formatDateTime(m.created_at)}
                   </p>
                 </div>
               </div>
             ))}
           </div>
-          <div className="border-t border-gray-800/50 p-4 flex items-center gap-3">
+          <div className="border-t border-[#E5E9E7] p-4 flex items-center gap-3">
             <input
               type="text"
               value={newMessage}
@@ -76,7 +76,7 @@ export default function TouristMessages() {
                 }
               }}
               placeholder="Type a message..."
-              className="flex-1 bg-gray-800 border border-gray-700 rounded-xl px-4 py-2.5 text-sm text-gray-100 placeholder-gray-400 focus:ring-2 focus:ring-emerald-500/40 focus:outline-none transition"
+              className="flex-1 bg-[#F3F8F4] border border-[#E5E9E7] rounded-xl px-4 py-2.5 text-sm text-[#17201B] placeholder-gray-400 focus:ring-2 focus:ring-emerald-500/40 focus:outline-none transition"
             />
             <button
               onClick={() => {

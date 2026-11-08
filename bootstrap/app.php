@@ -8,6 +8,22 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Env;
+
+/*
+ * XAMPP Apache on Windows runs PHP as a threaded module (apache2handler,
+ * mpm_winnt). putenv()/getenv() share ONE process environment across those
+ * threads and are not thread-safe, so concurrent requests could read the
+ * environment while another request was rewriting it and miss DB_CONNECTION.
+ * Laravel then fell back to its default (sqlite → empty database.sqlite) and
+ * answered 500 "no such table: businesses" at random (/tourist/stays,
+ * /tourist/for-you, …). Keeping .env values in the per-request $_ENV/$_SERVER
+ * only removes the race. CLI, tests and production (non-threaded) are
+ * unaffected.
+ */
+if (PHP_SAPI === 'apache2handler' && PHP_OS_FAMILY === 'Windows') {
+    Env::disablePutenv();
+}
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(

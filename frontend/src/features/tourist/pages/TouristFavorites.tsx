@@ -29,7 +29,7 @@ interface Favorite {
   is_open: boolean
 }
 
-export default function TouristFavorites() {
+export default function TouristFavorites({ embedded = false }: { embedded?: boolean } = {}) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
@@ -57,10 +57,12 @@ export default function TouristFavorites() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">Favorites</h1>
-        <p className="mt-1 text-sm text-[#6B7280]">Food businesses you've saved</p>
-      </div>
+      {!embedded && (
+        <div className="mb-6">
+          <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">Favorites</h1>
+          <p className="mt-1 text-sm text-[#6B7280]">Food businesses you've saved</p>
+        </div>
+      )}
 
       {favorites.length === 0 ? (
         <div className="bg-white border border-[#E5E9E7] rounded-2xl p-12 text-center">

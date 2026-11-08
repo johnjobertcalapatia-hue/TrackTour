@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, Navigate, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { get, put, post, del } from '@/shared/services/api'
 import { useBusinessOwnerStore } from '@/features/business-owner/services/business-owner-store'
-import { formatCurrency, formatDate, formatDateTime, toAssetUrl } from '@/shared/utils'
+import { formatCurrency, formatDate, formatDateTime } from '@/shared/utils'
 import { Alert } from '@/shared/components/Alert'
 import { Modal } from '@/shared/components/Modal'
 
@@ -21,12 +21,12 @@ interface SwitcherData {
   selected_business_id: number | null
 }
 import {
-  ArrowLeft, Save, Building2, MapPin, Clock, Eye, FileText, Image as ImageIcon,
-  Star, BarChart3, Settings, CreditCard, Users, Trash2, Upload, X, Plus,
-  AlertTriangle, Globe, Link2, Phone, Mail, Landmark, Archive, RotateCcw, Search, Filter, Receipt, Wallet,
+  ArrowLeft, Save, MapPin, Clock, Eye, FileText,
+  Star, BarChart3, Settings, CreditCard, Users, Trash2, X, Plus,
+  AlertTriangle, Landmark, Archive, RotateCcw, Search, Filter, Receipt, Wallet,
 } from 'lucide-react'
 
-type Tab = 'general' | 'location' | 'hours' | 'visibility' | 'documents' | 'archive' | 'promotions'
+type Tab = 'location' | 'hours' | 'visibility' | 'documents' | 'archive' | 'promotions'
   | 'reviews' | 'analytics' | 'config' | 'staff' | 'payments' | 'payment-methods' | 'danger'
 
 interface BusinessData {
@@ -65,6 +65,9 @@ interface BusinessData {
   facilities: string[] | null
   services: string[] | null
   payment_methods: string[] | null
+  accepts_reservation: boolean
+  accepts_orders: boolean
+  accepts_walk_ins: boolean
 }
 
 interface ArchivedItem {
@@ -76,9 +79,7 @@ interface ArchivedItem {
 }
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
-  { key: 'general', label: 'General', icon: <Settings className="w-4 h-4" /> },
   { key: 'location', label: 'Location', icon: <MapPin className="w-4 h-4" /> },
-  { key: 'hours', label: 'Hours', icon: <Clock className="w-4 h-4" /> },
   { key: 'visibility', label: 'Visibility', icon: <Eye className="w-4 h-4" /> },
   { key: 'documents', label: 'Documents', icon: <FileText className="w-4 h-4" /> },
   { key: 'archive', label: 'Archive Vault', icon: <Archive className="w-4 h-4" /> },
@@ -95,9 +96,7 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
 
 const TAB_TITLES: Record<Tab, string> = {
-  general: 'Business Settings',
   location: 'Location',
-  hours: 'Operating Hours',
   visibility: 'Visibility',
   documents: 'Documents',
   archive: 'Archive Vault',
@@ -112,10 +111,9 @@ const TAB_TITLES: Record<Tab, string> = {
 }
 
 const FACILITY_OPTIONS = ['WiFi', 'Parking', 'Air Conditioning', 'Outdoor Seating', 'Delivery', 'Takeout', 'Reservations', 'Live Music', 'TV/Screen', 'Private Room']
-const PRICE_RANGES = ['budget', 'affordable', 'mid_range', 'premium', 'luxury']
 
 export default function BusinessOwnerSettings() {
-  const [searchParams, setSearchParams] = useSearchParams()
+  const [searchParams] = useSearchParams()
   const queryClient = useQueryClient()
   const { selectedBusinessId, businesses, setBusinesses, setSelectedBusinessId } = useBusinessOwnerStore()
 
@@ -135,12 +133,9 @@ export default function BusinessOwnerSettings() {
     }
   }, [switcherData, setBusinesses, setSelectedBusinessId, selectedBusinessId])
 
-  const tabParam = searchParams.get('tab') as Tab | null
-  const activeTab: Tab = TABS.some(t => t.key === tabParam) ? tabParam! : 'general'
-
-  const setActiveTab = (tab: Tab) => {
-    setSearchParams({ tab })
-  }
+  const requestedTab = searchParams.get('tab')
+  const tabParam = requestedTab === 'hours' ? 'visibility' : requestedTab as Tab | null
+  const activeTab: Tab = TABS.some(t => t.key === tabParam) ? tabParam! : 'location'
 
   const activeId = selectedBusinessId
 
@@ -158,25 +153,11 @@ export default function BusinessOwnerSettings() {
     },
   })
 
-  const logoMutation = useMutation({
-    mutationFn: (file: File) => {
-      const fd = new FormData()
-      fd.append('logo', file)
-      return post(`/business-owner/businesses/${activeId}/logo`, fd)
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['bo-business', activeId] }),
-  })
-
-  const coverMutation = useMutation({
-    mutationFn: (file: File) => {
-      const fd = new FormData()
-      fd.append('cover_photo', file)
-      return post(`/business-owner/businesses/${activeId}/cover-photo`, fd)
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['bo-business', activeId] }),
-  })
-
   const disabled = !activeId
+
+  if (tabParam === 'general') {
+    return <Navigate to="/business-owner/gallery" replace />
+  }
 
   return (
     <div>
@@ -214,16 +195,19 @@ export default function BusinessOwnerSettings() {
                 </span>
               </div>
             )}
-            {activeTab === 'general' && <GeneralSection business={business} mutation={updateMutation} logoMutation={logoMutation} coverMutation={coverMutation} />}
             {activeTab === 'location' && <LocationSection business={business} mutation={updateMutation} />}
-            {activeTab === 'hours' && <HoursSection business={business} mutation={updateMutation} />}
-            {activeTab === 'visibility' && <VisibilitySection business={business} />}
+            {activeTab === 'visibility' && (
+              <>
+                <HoursSection business={business} mutation={updateMutation} />
+                <VisibilitySection business={business} />
+              </>
+            )}
             {activeTab === 'documents' && <DocumentsSection businessId={activeId} />}
             {activeTab === 'archive' && <ArchiveVaultSection />}
             {activeTab === 'payment-methods' && <PaymentMethodsSection business={business} />}
             {activeTab === 'payments' && <PaymentSettingsSection business={business} />}
             {activeTab === 'danger' && <DangerSection business={business} />}
-            {!['general', 'location', 'hours', 'visibility', 'documents', 'archive', 'payment-methods', 'payments', 'danger'].includes(activeTab) && (
+            {!['location', 'visibility', 'documents', 'archive', 'payment-methods', 'payments', 'danger'].includes(activeTab) && (
               <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-12 text-center">
                 <Settings className="w-10 h-10 text-[#647067] mx-auto mb-3" />
                 <p className="text-sm text-[#647067]">This section is coming soon.</p>
@@ -231,125 +215,6 @@ export default function BusinessOwnerSettings() {
             )}
           </div>
         )}
-      </div>
-    </div>
-  )
-}
-
-/* ─── General Section ────────────────────────────────────── */
-function GeneralSection({ business, mutation, logoMutation, coverMutation }: {
-  business: BusinessData | undefined
-  mutation: ReturnType<typeof useMutation>
-  logoMutation: ReturnType<typeof useMutation>
-  coverMutation: ReturnType<typeof useMutation>
-}) {
-  const [form, setForm] = useState({
-    business_name: '', business_description: '', tagline: '',
-    contact_number: '', email: '', website: '',
-    facebook: '', instagram: '', price_range: '',
-  })
-  const logoRef = useRef<HTMLInputElement>(null)
-  const coverRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (business) {
-      setForm({
-        business_name: business.business_name || '',
-        business_description: business.business_description || '',
-        tagline: business.tagline || '',
-        contact_number: business.contact_number || '',
-        email: business.email || '',
-        website: business.website || '',
-        facebook: business.facebook || '',
-        instagram: business.instagram || '',
-        price_range: business.price_range || '',
-      })
-    }
-  }, [business])
-
-  const handle = (k: string, v: string) => setForm(prev => ({ ...prev, [k]: v }))
-
-  return (
-    <div className="space-y-6">
-      {/* Cover + Logo */}
-      <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] overflow-hidden">
-        <div className="px-6 py-4 border-b border-[#E2E8E3]">
-          <h2 className="text-sm font-semibold text-[#17201A]">Branding</h2>
-        </div>
-        <div className="p-6">
-          <div className="relative h-32 rounded-xl overflow-hidden bg-gradient-to-br from-[#EAF6ED] to-[#F3F8F4] mb-4">
-            {business?.cover_photo ? (
-              <img src={toAssetUrl(business.cover_photo)} alt="" className="w-full h-full object-cover" />
-            ) : (
-              <div className="flex items-center justify-center h-full text-sm text-[#647067]">No cover photo</div>
-            )}
-            <button onClick={() => coverRef.current?.click()} className="absolute top-2 right-2 bg-black/50 text-white rounded-lg px-3 py-1.5 text-xs hover:bg-black/70 transition">
-              <Upload className="w-3 h-3 inline mr-1" />Change Cover
-            </button>
-            <input ref={coverRef} type="file" accept="image/*" className="hidden" onChange={e => { if (e.target.files?.[0]) coverMutation.mutate(e.target.files[0]) }} />
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="relative">
-              <div className="w-20 h-20 rounded-xl bg-[#E2E8E3] overflow-hidden border-4 border-white shadow">
-                {business?.logo ? (
-                  <img src={toAssetUrl(business.logo)} alt="" className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center"><Building2 className="w-8 h-8 text-[#647067]" /></div>
-                )}
-              </div>
-              <button onClick={() => logoRef.current?.click()} className="absolute -bottom-1 -right-1 w-7 h-7 bg-[#16803C] text-white rounded-full flex items-center justify-center hover:bg-[#126B32] transition">
-                <Upload className="w-3 h-3" />
-              </button>
-              <input ref={logoRef} type="file" accept="image/*" className="hidden" onChange={e => { if (e.target.files?.[0]) logoMutation.mutate(e.target.files[0]) }} />
-            </div>
-            <div>
-              <p className="text-sm font-medium text-[#17201A]">{business?.business_name}</p>
-              <p className="text-xs text-[#647067]">{business?.category}</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Business Info */}
-      <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-6">
-        <h2 className="text-sm font-semibold text-[#17201A] mb-4">Business Information</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Field label="Business Name" value={form.business_name} onChange={v => handle('business_name', v)} />
-          <Field label="Tagline" value={form.tagline} onChange={v => handle('tagline', v)} placeholder="e.g. Taste the best" />
-          <div className="md:col-span-2">
-            <label className="block text-sm font-medium text-[#4B5563] mb-1.5">Description</label>
-            <textarea rows={3} value={form.business_description} onChange={e => handle('business_description', e.target.value)} className="w-full bg-white border border-[#E2E8E3] rounded-xl px-4 py-2.5 text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C]" placeholder="Describe your business..." />
-          </div>
-          <Field label="Contact Number" value={form.contact_number} onChange={v => handle('contact_number', v)} icon={<Phone className="w-4 h-4 text-[#647067]" />} />
-          <Field label="Email" value={form.email} onChange={v => handle('email', v)} type="email" icon={<Mail className="w-4 h-4 text-[#647067]" />} />
-          <Field label="Website" value={form.website} onChange={v => handle('website', v)} icon={<Globe className="w-4 h-4 text-[#647067]" />} />
-          <div>
-            <label className="block text-sm font-medium text-[#4B5563] mb-1.5">Price Range</label>
-            <select value={form.price_range} onChange={e => handle('price_range', e.target.value)} className="w-full bg-white border border-[#E2E8E3] rounded-xl px-4 py-2.5 text-sm text-[#17201A] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C]">
-              <option value="">Select...</option>
-              {PRICE_RANGES.map(p => <option key={p} value={p}>{p.replace('_', ' ')}</option>)}
-            </select>
-          </div>
-        </div>
-        <div className="mt-4 flex justify-end">
-          <button onClick={() => mutation.mutate(form)} disabled={mutation.isPending} className="inline-flex items-center gap-2 bg-[#16803C] hover:bg-[#126B32] text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-50">
-            <Save className="w-4 h-4" />{mutation.isPending ? 'Saving...' : 'Save Changes'}
-          </button>
-        </div>
-      </div>
-
-      {/* Social Media */}
-      <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-6">
-        <h2 className="text-sm font-semibold text-[#17201A] mb-4 flex items-center gap-2"><Link2 className="w-4 h-4 text-[#16803C]" /> Social Media</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Field label="Facebook" value={form.facebook} onChange={v => handle('facebook', v)} placeholder="Facebook URL" />
-          <Field label="Instagram" value={form.instagram} onChange={v => handle('instagram', v)} placeholder="Instagram URL" />
-        </div>
-        <div className="mt-4 flex justify-end">
-          <button onClick={() => mutation.mutate({ facebook: form.facebook, instagram: form.instagram })} disabled={mutation.isPending} className="inline-flex items-center gap-2 bg-[#16803C] hover:bg-[#126B32] text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-50">
-            <Save className="w-4 h-4" />Save Social Links
-          </button>
-        </div>
       </div>
     </div>
   )
@@ -404,13 +269,21 @@ function LocationSection({ business, mutation }: { business: BusinessData | unde
 /* ─── Hours Section ────────────────────────────────────── */
 type DayPeriod = { open: string; close: string }
 type HoursForm = Record<string, { enabled: boolean; periods: DayPeriod[] }>
+type AcceptanceField = 'accepts_reservation' | 'accepts_orders' | 'accepts_walk_ins'
+type AcceptanceSettings = Record<AcceptanceField, boolean>
 
 function HoursSection({ business }: { business: BusinessData | undefined; mutation: ReturnType<typeof useMutation> }) {
   const queryClient = useQueryClient()
   const [form, setForm] = useState<HoursForm>({})
   const [forceClosed, setForceClosed] = useState(false)
+  const [acceptSettings, setAcceptSettings] = useState<AcceptanceSettings>({
+    accepts_reservation: false,
+    accepts_orders: true,
+    accepts_walk_ins: true,
+  })
   const [feedback, setFeedback] = useState<{ key: number; type: 'success' | 'error'; msg: string } | null>(null)
   const feedbackKey = useRef(0)
+  const hoursDirty = useRef(false)
 
   const pushFeedback = (type: 'success' | 'error', msg: string) => {
     feedbackKey.current += 1
@@ -419,24 +292,34 @@ function HoursSection({ business }: { business: BusinessData | undefined; mutati
 
   useEffect(() => {
     const hours = business?.business_hours || {}
-    const next: HoursForm = {}
-    DAYS.forEach(d => {
-      const periods = Array.isArray(hours[d]) ? hours[d] : []
-      next[d] = {
-        enabled: periods.length > 0,
-        periods: periods.length > 0 ? periods : [{ open: '08:00', close: '17:00' }],
-      }
-    })
-    setForm(next)
+    if (!hoursDirty.current) {
+      const next: HoursForm = {}
+      DAYS.forEach(d => {
+        const periods = Array.isArray(hours[d]) ? hours[d] : []
+        next[d] = {
+          enabled: periods.length > 0,
+          periods: periods.length > 0 ? periods : [{ open: '08:00', close: '17:00' }],
+        }
+      })
+      setForm(next)
+    }
     setForceClosed(!!business?.force_closed)
+    if (business) {
+      setAcceptSettings({
+        accepts_reservation: !!business.accepts_reservation,
+        accepts_orders: business.accepts_orders ?? true,
+        accepts_walk_ins: business.accepts_walk_ins ?? true,
+      })
+    }
   }, [business])
 
   const saveMutation = useMutation({
     mutationFn: (data: { business_hours: Record<string, DayPeriod[]>; force_closed: boolean }) =>
       put(`/business-owner/businesses/${business?.id}/hours`, data),
     onSuccess: () => {
+      hoursDirty.current = false
       queryClient.invalidateQueries({ queryKey: ['bo-business', business?.id] })
-      pushFeedback('success', 'Restaurant hours and status saved successfully.')
+      pushFeedback('success', 'Operating hours saved successfully.')
     },
     onError: (err: unknown) => {
       const msg =
@@ -444,6 +327,40 @@ function HoursSection({ business }: { business: BusinessData | undefined; mutati
         'Failed to save. Please check your entries and try again.'
       pushFeedback('error', msg)
     },
+  })
+
+  const statusMutation = useMutation({
+    mutationFn: (nextForceClosed: boolean) =>
+      put(`/business-owner/businesses/${business?.id}/hours`, { force_closed: nextForceClosed }),
+    onMutate: () => forceClosed,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['bo-business', business?.id] })
+      pushFeedback('success', 'Restaurant status updated successfully.')
+    },
+    onError: (err: unknown, _nextForceClosed, previousForceClosed) => {
+      setForceClosed(previousForceClosed ?? !forceClosed)
+      const msg =
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        'Failed to update restaurant status. Please try again.'
+      pushFeedback('error', msg)
+    },
+  })
+
+  const acceptanceMutation = useMutation({
+    mutationFn: (settings: AcceptanceSettings) =>
+      put(`/business-owner/businesses/${business?.id}/accept-settings`, settings),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['bo-business', business?.id] })
+      pushFeedback('success', 'Acceptance settings updated successfully.')
+    },
+    onError: (err: unknown, _settings, previousSettings) => {
+      if (previousSettings) setAcceptSettings(previousSettings)
+      const msg =
+        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
+        'Failed to update acceptance settings. Please try again.'
+      pushFeedback('error', msg)
+    },
+    onMutate: () => acceptSettings,
   })
 
   const buildPayload = () => {
@@ -460,11 +377,13 @@ function HoursSection({ business }: { business: BusinessData | undefined; mutati
 
   const setDayEnabled = (d: string, enabled: boolean) => {
     clearFeedback()
+    hoursDirty.current = true
     setForm(prev => ({ ...prev, [d]: { ...prev[d], enabled } }))
   }
 
   const updatePeriod = (d: string, idx: number, field: keyof DayPeriod, value: string) => {
     clearFeedback()
+    hoursDirty.current = true
     setForm(prev => {
       const periods = prev[d].periods.map((p, i) => (i === idx ? { ...p, [field]: value } : p))
       return { ...prev, [d]: { ...prev[d], periods } }
@@ -473,6 +392,7 @@ function HoursSection({ business }: { business: BusinessData | undefined; mutati
 
   const addPeriod = (d: string) => {
     clearFeedback()
+    hoursDirty.current = true
     setForm(prev => ({
       ...prev,
       [d]: { ...prev[d], periods: [...prev[d].periods, { open: '08:00', close: '17:00' }] },
@@ -481,15 +401,28 @@ function HoursSection({ business }: { business: BusinessData | undefined; mutati
 
   const removePeriod = (d: string, idx: number) => {
     clearFeedback()
+    hoursDirty.current = true
     setForm(prev => ({
       ...prev,
       [d]: { ...prev[d], periods: prev[d].periods.filter((_, i) => i !== idx) },
     }))
   }
 
-  const toggleForceClosed = () => {
+  const setRestaurantStatus = (nextForceClosed: boolean) => {
+    if (statusMutation.isPending || nextForceClosed === forceClosed) return
     clearFeedback()
-    setForceClosed(f => !f)
+    setForceClosed(nextForceClosed)
+    statusMutation.mutate(nextForceClosed)
+  }
+
+  const toggleAcceptance = (field: AcceptanceField) => {
+    if (acceptanceMutation.isPending || !business) return
+
+    const previousSettings = acceptSettings
+    const nextSettings = { ...previousSettings, [field]: !previousSettings[field] }
+    setAcceptSettings(nextSettings)
+    clearFeedback()
+    acceptanceMutation.mutate(nextSettings)
   }
 
   const saving = saveMutation.isPending
@@ -505,28 +438,47 @@ function HoursSection({ business }: { business: BusinessData | undefined; mutati
         )}
         <div className="space-y-3">
           <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${!forceClosed ? 'border-[#16803C]/40 bg-[#EAF6ED]' : 'border-[#E2E8E3]'}`}>
-            <input type="radio" className="mt-0.5 text-[#16803C] focus:ring-[#16803C]/25" checked={!forceClosed} onChange={() => toggleForceClosed()} />
+            <input type="radio" className="mt-0.5 text-[#16803C] focus:ring-[#16803C]/25" checked={!forceClosed} disabled={statusMutation.isPending} onChange={() => setRestaurantStatus(false)} />
             <div>
               <p className="text-sm font-medium text-[#17201A]">Automatic — Follow business hours</p>
               <p className="text-xs text-[#647067]">Open/closed is determined automatically by your schedule below.</p>
             </div>
           </label>
           <label className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition ${forceClosed ? 'border-red-300 bg-red-50' : 'border-[#E2E8E3]'}`}>
-            <input type="radio" className="mt-0.5 text-red-600 focus:ring-red-200" checked={forceClosed} onChange={() => toggleForceClosed()} />
+            <input type="radio" className="mt-0.5 text-red-600 focus:ring-red-200" checked={forceClosed} disabled={statusMutation.isPending} onChange={() => setRestaurantStatus(true)} />
             <div>
                 <p className="text-sm font-medium text-[#17201A]">Temporarily Closed</p>
                 <p className="text-xs text-[#647067]">Close immediately, even during your normal opening hours.</p>
               </div>
             </label>
           </div>
-        <div className="mt-4 flex justify-end">
-          <button
-            onClick={() => saveMutation.mutate(buildPayload())}
-            disabled={saving}
-            className="inline-flex items-center gap-2 bg-[#16803C] hover:bg-[#126B32] text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-50"
-          >
-            <Save className="w-4 h-4" />{saving ? 'Saving...' : 'Save Status'}
-          </button>
+        <div className="mt-5 border-t border-[#E2E8E3] pt-5">
+          <h3 className="text-sm font-semibold text-[#17201A] mb-2">Accept Settings</h3>
+          <div className="space-y-3">
+            {[
+              { label: 'Accept Bookings', desc: 'Allow customers to make reservations', field: 'accepts_reservation' as const },
+              { label: 'Accept Orders', desc: 'Allow online food/service orders', field: 'accepts_orders' as const },
+              { label: 'Accept Walk-ins', desc: 'Welcome walk-in customers', field: 'accepts_walk_ins' as const },
+            ].map(item => (
+              <div key={item.label} className="flex items-center justify-between py-3 border-b border-[#E2E8E3] last:border-0">
+                <div>
+                  <p className="text-sm font-medium text-[#17201A]">{item.label}</p>
+                  <p className="text-xs text-[#647067]">{item.desc}</p>
+                </div>
+                <label className="relative inline-flex cursor-pointer">
+                  <input
+                    type="checkbox"
+                    aria-label={item.label}
+                    checked={acceptSettings[item.field]}
+                    disabled={acceptanceMutation.isPending || !business}
+                    onChange={() => toggleAcceptance(item.field)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:ring-2 peer-focus:ring-[#16803C]/25 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#16803C]" />
+                </label>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -618,27 +570,6 @@ function VisibilitySection({ business }: { business: BusinessData | undefined })
         </p>
       </div>
 
-      <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-6">
-        <h2 className="text-sm font-semibold text-[#17201A] mb-4">Accept Settings</h2>
-        <div className="space-y-3">
-          {[
-            { label: 'Accept Bookings', desc: 'Allow customers to make reservations', defaultOn: true },
-            { label: 'Accept Orders', desc: 'Allow online food/service orders', defaultOn: false },
-            { label: 'Accept Walk-ins', desc: 'Welcome walk-in customers', defaultOn: true },
-          ].map(item => (
-            <div key={item.label} className="flex items-center justify-between py-3 border-b border-[#E2E8E3] last:border-0">
-              <div>
-                <p className="text-sm font-medium text-[#17201A]">{item.label}</p>
-                <p className="text-xs text-[#647067]">{item.desc}</p>
-              </div>
-              <label className="relative inline-flex cursor-pointer">
-                <input type="checkbox" defaultChecked={item.defaultOn} className="sr-only peer" />
-                <div className="w-11 h-6 bg-gray-200 peer-focus:ring-2 peer-focus:ring-[#16803C]/25 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#16803C]" />
-              </label>
-            </div>
-          ))}
-        </div>
-      </div>
     </div>
   )
 }
@@ -872,7 +803,6 @@ type PaymentOption = { key: string; label: string; desc: string; online: boolean
 const PAYMENT_OPTION_DEFS: PaymentOption[] = [
   { key: 'cash', label: 'Cash on Delivery', desc: 'Customer pays cash to the rider on delivery (or at pickup).', online: false },
   { key: 'gcash', label: 'GCash (Online)', desc: 'Customer prepays online via GCash through PayMongo.', online: true },
-  { key: 'card', label: 'Card (Online)', desc: 'Customer prepays online via credit/debit card through PayMongo.', online: true },
 ]
 
 interface PaymentRecord {
@@ -884,6 +814,8 @@ interface PaymentRecord {
   payment_method: string
   payment_label: string
   payment_status: string
+  restaurant_purchase_status: 'paid' | 'pending' | 'not_applicable'
+  restaurant_purchase_paid_at: string | null
   order_status: string
   total: number
   paid_amount: number
@@ -934,6 +866,8 @@ interface PaymentDetail {
   payment_method: string
   payment_label: string
   payment_status: string
+  restaurant_purchase_status: 'paid' | 'pending' | 'not_applicable'
+  restaurant_purchase_paid_at: string | null
   items: PaymentDetailItem[]
   totals: {
     subtotal: number
@@ -969,6 +903,10 @@ function paymentStatusStyles(status: string): string {
   if (status === 'paid') return 'text-[#16803C] font-semibold'
   if (status === 'refunded') return 'text-[#647067]'
   return 'text-[#B45309]'
+}
+
+function restaurantPurchaseLabel(status: PaymentRecord['restaurant_purchase_status']): string {
+  return status === 'paid' ? 'Restaurant purchase: Paid' : 'Restaurant purchase: Awaiting rider payment'
 }
 
 function PaymentTransactionModal({ businessId, record, onClose }: {
@@ -1020,8 +958,19 @@ function PaymentTransactionModal({ businessId, record, onClose }: {
               <span className={`text-xs font-medium ${paymentStatusStyles(d.payment_status)}`}>
                 {d.payment_status === 'paid' ? 'Paid' : d.payment_status === 'refunded' ? 'Refunded' : 'Pending'}
               </span>
+              {d.restaurant_purchase_status !== 'not_applicable' && (
+                <span className={`text-xs font-medium ${paymentStatusStyles(d.restaurant_purchase_status)}`}>
+                  {restaurantPurchaseLabel(d.restaurant_purchase_status)}
+                </span>
+              )}
               <span className="text-xs text-[#647067] bg-[#F1F4F1] px-2.5 py-1 rounded-full">{d.order_status.replace(/_/g, ' ')}</span>
             </div>
+            {d.restaurant_purchase_status !== 'not_applicable' && (
+              <p className="text-xs text-[#647067]">
+                The restaurant purchase is funded from the Tourism Office advance and is tracked separately from the tourist's COD payment.
+                {d.restaurant_purchase_paid_at && ` Paid ${formatDateTime(d.restaurant_purchase_paid_at)}.`}
+              </p>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="border border-[#E8ECE9] rounded-xl p-4">
@@ -1141,13 +1090,15 @@ function PaymentMethodsSection({ business }: { business: BusinessData | undefine
   }, [business])
 
   const saveMutation = useMutation({
-    mutationFn: (payment_methods: string[]) =>
-      put(`/business-owner/businesses/${business?.id}/payment-methods`, { payment_methods }),
+    mutationFn: ({ paymentMethods }: { paymentMethods: string[]; previousSelected: Record<string, boolean> }) =>
+      put(`/business-owner/businesses/${business?.id}/payment-methods`, { payment_methods: paymentMethods }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['bo-business', business?.id] })
-      pushFeedback('success', 'Payment methods saved. Orders will only be accepted with the methods you enabled.')
+      return queryClient.invalidateQueries({ queryKey: ['bo-business', business?.id] }).then(() => {
+        pushFeedback('success', 'Payment methods updated. Customers can use the methods you enabled.')
+      })
     },
-    onError: (err: unknown) => {
+    onError: (err: unknown, variables) => {
+      setSelected(variables.previousSelected)
       const msg =
         (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
         'Failed to save payment methods. Please try again.'
@@ -1155,10 +1106,20 @@ function PaymentMethodsSection({ business }: { business: BusinessData | undefine
     },
   })
 
-  const toggle = (key: string) => setSelected(prev => ({ ...prev, [key]: !prev[key] }))
+  const toggle = (key: string) => {
+    if (saveMutation.isPending) return
 
-  const enabledKeys = PAYMENT_OPTION_DEFS.map(o => o.key).filter(k => selected[k])
-  const saving = saveMutation.isPending
+    const next = { ...selected, [key]: !selected[key] }
+    const enabledKeys = PAYMENT_OPTION_DEFS.map(option => option.key).filter(optionKey => next[optionKey])
+    if (enabledKeys.length === 0) {
+      pushFeedback('error', 'At least one payment method must remain enabled.')
+      return
+    }
+
+    setSelected(next)
+    setFeedback(null)
+    saveMutation.mutate({ paymentMethods: enabledKeys, previousSelected: selected })
+  }
 
   return (
     <div className="space-y-6">
@@ -1178,24 +1139,12 @@ function PaymentMethodsSection({ business }: { business: BusinessData | undefine
                 </div>
                 <p className="text-xs text-[#647067] mt-0.5">{opt.desc}</p>
               </div>
-              <label className="relative inline-flex cursor-pointer shrink-0">
-                <input type="checkbox" checked={!!selected[opt.key]} onChange={() => toggle(opt.key)} className="sr-only peer" />
+              <label className={`relative inline-flex shrink-0 ${saveMutation.isPending ? 'cursor-wait opacity-60' : 'cursor-pointer'}`}>
+                <input type="checkbox" checked={!!selected[opt.key]} onChange={() => toggle(opt.key)} disabled={saveMutation.isPending} className="sr-only peer" />
                 <div className="w-11 h-6 bg-gray-200 peer-focus:ring-2 peer-focus:ring-[#16803C]/25 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-[#16803C]" />
               </label>
             </div>
           ))}
-        </div>
-        {enabledKeys.length === 0 && (
-          <p className="mt-3 text-xs text-[#B91C1C]">Enable at least one payment method so customers can place orders.</p>
-        )}
-        <div className="mt-5 flex justify-end">
-          <button
-            onClick={() => saveMutation.mutate(enabledKeys)}
-            disabled={saving || enabledKeys.length === 0}
-            className="inline-flex items-center gap-2 bg-[#16803C] hover:bg-[#126B32] text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-50"
-          >
-            <Save className="w-4 h-4" />{saving ? 'Saving...' : 'Save Payment Methods'}
-          </button>
         </div>
       </div>
     </div>
@@ -1225,7 +1174,7 @@ function PaymentSettingsSection({ business }: { business: BusinessData | undefin
     <div className="space-y-6">
       <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-6">
         <h2 className="text-sm font-semibold text-[#17201A] mb-1 flex items-center gap-2"><BarChart3 className="w-4 h-4 text-[#16803C]" /> Payment Tracking</h2>
-        <p className="text-xs text-[#647067] mb-5">Every order placed with this business is recorded here with the payment method used, its payment status, and the amount received.</p>
+        <p className="text-xs text-[#647067] mb-5">Every order placed with this business is recorded here. For COD deliveries, the Tourism Office-funded restaurant purchase is tracked separately from the tourist's COD payment.</p>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
           <div className="border border-[#E8ECE9] rounded-xl p-4 bg-[#F7FAF7]">
             <p className="text-xs text-[#647067] font-medium">Total Received</p>
@@ -1320,6 +1269,11 @@ function PaymentSettingsSection({ business }: { business: BusinessData | undefin
                         {r.payment_status === 'paid' ? 'Paid' : r.payment_status === 'refunded' ? 'Refunded' : 'Pending'}
                       </span>
                       <span className="text-[11px] text-[#8A948E] block">{r.order_status.replace(/_/g, ' ')}</span>
+                      {r.restaurant_purchase_status !== 'not_applicable' && (
+                        <span className={`text-[11px] block mt-0.5 ${paymentStatusStyles(r.restaurant_purchase_status)}`}>
+                          {restaurantPurchaseLabel(r.restaurant_purchase_status)}
+                        </span>
+                      )}
                     </td>
                     <td className="py-3 pr-4 text-right font-semibold text-[#17201A]">{formatCurrency(r.total)}</td>
                     <td className="py-3 text-right">
