@@ -1,4 +1,5 @@
 import { useSearchParams, useNavigate } from 'react-router-dom'
+import { useBackOr } from '@/shared/hooks/use-back-or'
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { checkAndConfirmPayment } from '@/shared/services/payment'
@@ -19,6 +20,9 @@ interface PaymentStatusData {
 export default function PaymentCallbackPage() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
+  // This page is opened by PayMongo's redirect: plain history-back would
+  // return to PayMongo's checkout, so go to My Orders instead.
+  const goBack = useBackOr('/tourist/activities?view=orders')
 
   const paymentNumber = searchParams.get('payment_number')
   const statusParam = searchParams.get('status') || 'unknown'
@@ -165,7 +169,7 @@ export default function PaymentCallbackPage() {
             </button>
           )}
           <button
-            onClick={() => navigate(-1)}
+            onClick={goBack}
             className="w-full bg-[#F8FAF9] hover:bg-[#E9F7EF] text-[#17201B] py-3 rounded-xl font-semibold transition flex items-center justify-center gap-2"
           >
             <ArrowLeft className="w-4 h-4" /> Go Back

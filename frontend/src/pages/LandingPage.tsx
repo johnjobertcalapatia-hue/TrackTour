@@ -196,8 +196,11 @@ function MapMarkers({
       let marker = markersRef.current.get(bid)
       const icon = (business: MapBusiness) => {
         const label = showLabels ? business.name : ''
-        if (getDiscoveryGroup(business.category) === 'dining' && business.logo) {
-          return businessLogoIcon(toAssetUrl(business.logo), label, business.id === selectedId)
+        // Restaurants, attractions and stays show their photo (logo, else cover).
+        const photo = business.logo || business.cover_photo
+        const group = getDiscoveryGroup(business.category)
+        if (photo && (group === 'dining' || group === 'spot' || group === 'accommodation')) {
+          return businessLogoIcon(toAssetUrl(photo), label, business.id === selectedId)
         }
         return pinIcon(label, business.id === selectedId)
       }

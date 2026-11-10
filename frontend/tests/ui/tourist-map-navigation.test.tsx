@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TouristExploreMap from '@/features/tourist/pages/TouristExploreMap'
 import { bearingAlongRoute, compassHeadingFrom, routeBearing } from '@/features/tourist/hooks/use-navigation-bearing'
 import { bearingBetween } from '@/shared/utils/rider-heading'
+import { planeOffsetForScreenY } from '@/features/rider/navigation-view'
 
 const api = vi.hoisted(() => ({ get: vi.fn() }))
 const map = vi.hoisted(() => ({
@@ -83,7 +84,7 @@ async function startDirections() {
 
 /** Back to the north-up whole-route view, where the route card shows. */
 async function toOverview() {
-  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Show whole route, north up' })) })
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Overview' })) })
 }
 
 beforeEach(() => {
@@ -196,9 +197,14 @@ describe('Explore map: navigation view after "Directions"', () => {
       const screen = { x: mx * Math.cos(b) + my * Math.sin(b), y: -mx * Math.sin(b) + my * Math.cos(b) }
 
       // Area centre is (200, 450); target is (200, 736 - 30 = 706) -> 256 px below centre, straight down.
+      // The map is tilted back (3D, like the rider's), so the camera places the
+      // tourist at the point of the tilted plane that shows 256 px down...
       expect(screen.x).toBeCloseTo(0, 0)
-      expect(screen.y).toBeCloseTo(256, 0)
+      expect(screen.y).toBeCloseTo(Math.round(planeOffsetForScreenY(256)), 0)
       expect(zoom).toBe(18)
+      // ...where the fixed puck is drawn on screen.
+      expect(document.querySelector<HTMLElement>('[data-testid="rider-nav-puck"]')!.style.transform)
+        .toBe('translate(calc(-50% + 0px), calc(-50% + 256px))')
     } finally {
       bar.remove()
     }
@@ -217,13 +223,13 @@ describe('Explore map: navigation view after "Directions"', () => {
   it('the compass button switches to the north-up whole-route view and back', async () => {
     await startDirections()
 
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Show whole route, north up' })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Overview' })) })
     expect(rotator()).not.toHaveClass('map-rotator--nav')
     expect(bearing()).toBe(0)
     expect(map.dragging.enable).toHaveBeenCalled()
     expect(map.fitBounds).toHaveBeenCalled()
 
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Follow me, facing my direction' })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Navigation view' })) })
     expect(rotator()).toHaveClass('map-rotator--nav')
   })
 

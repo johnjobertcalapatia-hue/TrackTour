@@ -11,6 +11,7 @@ import { useRiderActiveTrip } from '@/features/rider/context/RiderActiveTripCont
 import { km, orderLabel, peso, type DeliveryOffer } from '@/features/rider/services/delivery-offers'
 import type { PickupStop } from '@/features/rider/pickup-stops'
 import { stepState, stepTime, stopAction, tripStage, type TripStepState } from '@/features/rider/trip-steps'
+import { DeliveryPhotoCapture } from '@/features/rider/components/DeliveryPhotoCapture'
 
 /**
  * Rider trip status page (2026-11-08): after accepting, the rider follows the
@@ -315,39 +316,17 @@ function StopRow({ stop, image, action, busy, onArrive, onPickup }: {
 }
 
 function DeliveryProof({ busy, onConfirm, isCod }: { busy: boolean; onConfirm: (photo: File) => void; isCod: boolean }) {
+  // The rider takes and submits a photo of the tourist receiving the food;
+  // only a submitted photo unlocks "Confirm Delivered".
   const [photo, setPhoto] = useState<File | null>(null)
-  const [preview, setPreview] = useState<string | null>(null)
-  const input = useRef<HTMLInputElement | null>(null)
-
-  useEffect(() => {
-    if (!photo) { setPreview(null); return }
-    const url = URL.createObjectURL(photo)
-    setPreview(url)
-    return () => URL.revokeObjectURL(url)
-  }, [photo])
 
   return (
     <div className="space-y-3">
-      <input
-        ref={input}
-        type="file"
-        accept="image/*"
-        capture="environment"
-        className="sr-only"
-        aria-label="Delivery photo"
-        onChange={(e) => setPhoto(e.target.files?.[0] ?? null)}
+      <DeliveryPhotoCapture
+        photo={photo}
+        onSubmit={setPhoto}
+        note={isCod ? 'Confirming means the tourist paid you in cash.' : undefined}
       />
-      {preview ? (
-        <img src={preview} alt="Delivery photo preview" className="h-40 w-full rounded-xl object-cover" />
-      ) : null}
-      <button
-        type="button"
-        onClick={() => input.current?.click()}
-        className="flex h-11 w-full items-center justify-center gap-2 rounded-full border-2 border-[#16803C] font-semibold text-[#16803C]"
-      >
-        <Camera className="h-5 w-5" aria-hidden="true" /> {photo ? 'Retake Photo' : 'Take Photo'}
-      </button>
-      {isCod && <p className="text-xs text-[#6B7280]">Confirming means the tourist paid you in cash.</p>}
       <ActionButton onClick={() => photo && onConfirm(photo)} disabled={!photo || busy} icon={<Check className="h-5 w-5" />}>
         Confirm Delivered
       </ActionButton>

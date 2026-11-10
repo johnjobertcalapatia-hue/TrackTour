@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { get } from '@/shared/services/api'
 import { categoryName, toAssetUrl, safeText, formatCurrency, cn } from '@/shared/utils'
-import { getBrowsedPlaces, RECENT_PLACES_LIMIT, type BrowsedPlace } from '@/shared/services/browsing-history'
+import { browsedPlaceLink, getBrowsedPlaces, isBrowsedDish, RECENT_PLACES_LIMIT, type BrowsedPlace } from '@/shared/services/browsing-history'
 import { addToFoodCart } from '@/shared/services/food-cart'
 import PhotoPlaceholder from '@/shared/components/PhotoPlaceholder'
 import { useCurrentMunicipality, useMunicipalityPhotos, DEFAULT_MUNICIPALITY_NAME } from '@/shared/hooks/use-current-municipality'
@@ -660,14 +660,15 @@ function StayCard({ stay, saved, onToggleSave }: { stay: ExploreBusiness; saved:
 
 function RecentPlaceCard({ place }: { place: BrowsedPlace }) {
   const groupLabel =
-    place.discoveryGroup === 'dining' ? 'Dining'
+    isBrowsedDish(place) ? 'Food'
+    : place.discoveryGroup === 'dining' ? 'Dining'
       : place.discoveryGroup === 'accommodation' ? 'Stay'
         : place.discoveryGroup === 'spot' ? 'Spot'
           : 'Place'
   return (
     <Link
-      // Entries saved before the restaurant page existed still point at /tourist/explore/:id.
-      to={place.discoveryGroup === 'dining' ? `/tourist/food/${place.id}` : place.url}
+      // Dish → dish page; restaurant → restaurant page (see browsedPlaceLink).
+      to={browsedPlaceLink(place)}
       className="home-card group flex-shrink-0 w-[min(15rem,75vw)] bg-white rounded-2xl border border-[#E5E9E7] overflow-hidden hover:shadow-lg hover:shadow-[#087F3F]/10 transition"
     >
       <CardImage src={place.cover_photo || place.logo} fallback={Compass} className="h-32">

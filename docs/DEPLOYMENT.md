@@ -129,6 +129,39 @@ MAIL_FROM_NAME="Track-Tour App"
    `CleanupRiderLocations`.
 6. Point PayMongo webhooks at `https://<your-api-service>.up.railway.app/api/payments/webhook`
    and the payment return URL at the API's `/api/payments/return`.
+7. **Payment return page.** Set `FRONTEND_URL` on the API service to the
+   public address of the web app (the service that serves the React build).
+   PayMongo sends customers back to `FRONTEND_URL/payment/callback`; without
+   it Laravel falls back to `APP_URL` (the API), where that page is a 404.
+   Live (2026-11-10): `FRONTEND_URL=https://nurturing-creation-production-ecea.up.railway.app`
+   on the `TrackTour` service.
+8. **Real GCash payments (PayMongo live mode).** Test keys (`sk_test_` /
+   `pk_test_`) only open PayMongo's test GCash page; no money moves. To take
+   real payments:
+   - activate the PayMongo account (business verification) and make sure
+     GCash is enabled for it;
+   - in PayMongo **live** mode copy the live keys into the API service:
+     `PAYMONGO_SECRET_KEY=sk_live_…`, `PAYMONGO_PUBLIC_KEY=pk_live_…`;
+   - create a **live** webhook for `…/api/payments/webhook` (events
+     `checkout_session.payment.paid`, `payment.paid`, `payment.failed`,
+     `refund.*`) and set its signing secret as `PAYMONGO_WEBHOOK_SECRET`
+     (test and live webhooks have different secrets);
+   - redeploy, then make one small real payment and check the order turns
+     paid.
+   Outside `local`/`testing`, webhooks are **rejected** when
+   `PAYMONGO_WEBHOOK_SECRET` is empty (fail closed, 2026-11-10): an unsigned
+   "paid" event can never mark an order paid. Live signatures (`li=`) are
+   verified.
+
+9. **Business owner modules.** The business owner sidebar only shows the
+   modules a business has (`business_module_assignments`). Migration
+   `2026_11_10_000001_seed_business_modules_and_assignments` creates any
+   missing modules on deploy, gives categories without modules their defaults
+   (admin-customised lists are kept) and links businesses that have none.
+   Production had all three module tables empty until 2026-11-10 (restaurant
+   sidebar missing Menu / Orders / Kitchen / POS); it was backfilled that day
+   with the same additive logic through `railway ssh` (49 modules, 42
+   category links, 31 business links), so the migration is a no-op there.
 
 ## 4. Railway — Socket.IO service
 

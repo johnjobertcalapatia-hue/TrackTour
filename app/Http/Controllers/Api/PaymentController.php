@@ -821,6 +821,23 @@ class PaymentController extends Controller
         })();
     }
 
+    /**
+     * Order statuses of a food order already under way (rider accepted / food
+     * being made / on the road). Paying such an order online records the
+     * payment without restarting its flow.
+     */
+    private const IN_PROGRESS_ORDER_STATUSES = ['accepted', 'preparing', 'ready', 'picked_up', 'in_transit', 'arrived_destination'];
+
+    /** The order is now paid online; its status / progress is left as it is. */
+    private function recordOnlinePaymentOnly(Order $order, float $amount, string $method): void
+    {
+        $order->update([
+            'paid_amount' => $amount,
+            'payment_method' => $method,
+            'payment_status' => 'paid',
+        ]);
+    }
+
     protected function markPayablePaid(Payment $payment): void
     {
         $payable = $payment->payable;
@@ -852,7 +869,20 @@ class PaymentController extends Controller
             return;
         }
 
-        if ($payable instanceof Order && ! in_array($payable->status, ['accepted', 'preparing', 'ready', 'completed'])) {
+        // A cash-on-delivery order paid online while it is already under way
+        // ("Complete payment" in the tourist's To Pay tab): record the online
+        // payment only. The order keeps its progress (no new acceptance
+        // window, no re-dispatch). No longer 'cash', every COD step drops
+        // away: the restaurant does not confirm a rider payment before Ready
+        // (CodPickupPaymentGuard), the rider buys nothing and collects no cash
+        // (NearestRiderService::isCodDelivery). Decision 2026-11-10.
+        if ($payable instanceof Order && in_array($payable->status, self::IN_PROGRESS_ORDER_STATUSES, true)) {
+            $this->recordOnlinePaymentOnly($payable, (float) $payment->amount, (string) $payment->method);
+
+            return;
+        }
+
+        if ($payable instanceof Order && ! in_array($payable->status, ['accepted', 'preparing', 'ready', 'delivered', 'completed'])) {
             $payable->update([
                 'paid_amount' => $payment->amount,
                 'payment_method' => $payment->method,
@@ -895,7 +925,10 @@ class PaymentController extends Controller
             // Fan out: mark each child order paid/ready for restaurant acceptance.
             $orders = $payable->orders()->get();
             foreach ($orders as $childOrder) {
-                if (! in_array($childOrder->status, ['accepted', 'preparing', 'ready', 'completed'])) {
+                if (in_array($childOrder->status, self::IN_PROGRESS_ORDER_STATUSES, true)) {
+                    // Already under way (COD paid online mid-way): record the payment only.
+                    $this->recordOnlinePaymentOnly($childOrder, (float) $childOrder->total, (string) $payment->method);
+                } elseif (! in_array($childOrder->status, ['accepted', 'preparing', 'ready', 'delivered', 'completed'])) {
                     $childOrder->update([
                         'paid_amount' => $childOrder->total,
                         'payment_method' => $payment->method,

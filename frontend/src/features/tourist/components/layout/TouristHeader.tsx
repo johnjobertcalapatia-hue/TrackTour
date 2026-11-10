@@ -24,8 +24,10 @@ export default function TouristHeader() {
     return () => window.removeEventListener('cart-updated', update)
   }, [])
 
+  // Phones / tablets: solid header (no backdrop blur), which can make mobile
+  // Chrome drop the fixed bottom navigation bar from the screen.
   return (
-    <header className="tourist-topbar sticky top-0 z-[2000] bg-[#F4F8F3]/85 backdrop-blur-xl">
+    <header className="tourist-topbar sticky top-0 z-[2000] bg-[#F4F8F3] lg:bg-[#F4F8F3]/85 lg:backdrop-blur-xl">
       <div className="flex items-center gap-2 sm:gap-4 px-4 sm:px-6 h-16 sm:h-[84px]">
         {/* Logo (mobile only; desktop shows it in the sidebar) */}
         <Link to="/tourist/dashboard" className="lg:hidden flex items-center shrink-0" aria-label="TrackTour home">

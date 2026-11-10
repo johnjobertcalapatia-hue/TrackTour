@@ -9,8 +9,8 @@ vi.mock('react-leaflet', async () => {
   return {
     MapContainer: ({ children }: { children: React.ReactNode }) => React.createElement('div', { 'data-testid': 'map' }, children),
     TileLayer: () => null,
-    Marker: ({ position }: { position: [number, number] }) =>
-      React.createElement('span', { 'data-testid': 'marker', 'data-pos': position.join(',') }),
+    Marker: ({ position, icon }: { position: [number, number]; icon?: { options?: { html?: string } } }) =>
+      React.createElement('span', { 'data-testid': 'marker', 'data-pos': position.join(','), 'data-html': icon?.options?.html ?? '' }),
     Polyline: ({ positions, pathOptions }: { positions: [number, number][]; pathOptions: { dashArray?: string } }) =>
       React.createElement('span', {
         'data-testid': 'route-line',
@@ -21,7 +21,7 @@ vi.mock('react-leaflet', async () => {
   }
 })
 
-vi.mock('leaflet', () => ({ default: { divIcon: vi.fn(() => ({})) } }))
+vi.mock('leaflet', () => ({ default: { divIcon: vi.fn((options: unknown) => ({ options })) } }))
 
 const RESTAURANT: [number, number] = [12.8617, 121.4594]
 const TOURIST = { latitude: 12.8401, longitude: 121.4702 }
@@ -136,5 +136,31 @@ describe('RestaurantRouteMap', () => {
     expect(screen.queryByTestId('route-line')).not.toBeInTheDocument()
     expect(screen.getAllByTestId('marker')).toHaveLength(1)
     expect(screen.getByRole('button', { name: 'Get directions from my location' })).toBeInTheDocument()
+  })
+
+  describe('restaurant marker', () => {
+    const restaurantMarker = () =>
+      screen.getAllByTestId('marker').find((m) => m.getAttribute('data-pos') === RESTAURANT.join(','))!
+
+    it("is the Explore map's photo pin: the restaurant's image and name", () => {
+      mockGeolocation('ok')
+      vi.stubGlobal('fetch', vi.fn())
+      render(<RestaurantRouteMap restaurantName="Eksklusibo Grill" destination={RESTAURANT} locationLabel="Poblacion, Bansud" photo="logos/eksklusibo.png" />)
+
+      const html = restaurantMarker().getAttribute('data-html')!
+      expect(html).toContain('/storage/logos/eksklusibo.png"')
+      expect(html).toContain('<img src=')
+      expect(html).toContain('Eksklusibo Grill')
+    })
+
+    it('falls back to the plain pin when the restaurant has no image', () => {
+      mockGeolocation('ok')
+      vi.stubGlobal('fetch', vi.fn())
+      renderMap()
+
+      const html = restaurantMarker().getAttribute('data-html')!
+      expect(html).not.toContain('<img')
+      expect(html).toContain('Eksklusibo Grill')
+    })
   })
 })

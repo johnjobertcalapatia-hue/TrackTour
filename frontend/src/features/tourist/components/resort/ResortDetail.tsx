@@ -335,7 +335,7 @@ export default function ResortDetail({ business, resort, photos, reviews, avgRat
             <p className="flex items-start gap-2 text-sm text-[#3B4540] mb-3"><MapPin className="w-4 h-4 mt-0.5 text-[#087F3F] shrink-0" aria-hidden="true" /> {[business.address, place].filter(Boolean).join(', ')}</p>
           )}
           {hasCoords && (
-            <RestaurantRouteMap restaurantName={name} destination={[lat!, lng!]} locationLabel={place || business.address || name} />
+            <RestaurantRouteMap restaurantName={name} destination={[lat!, lng!]} locationLabel={place || business.address || name} photo={business.logo || business.cover_photo} />
           )}
         </section>
       )}

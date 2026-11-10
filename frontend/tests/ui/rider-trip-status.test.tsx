@@ -169,8 +169,11 @@ describe('RiderTripStatus page', () => {
     const confirm = await screen.findByRole('button', { name: 'Confirm Delivered' })
     expect(confirm).toBeDisabled()
     const photo = new File(['x'], 'proof.jpg', { type: 'image/jpeg' })
-    await act(async () => { fireEvent.change(screen.getByLabelText('Delivery photo'), { target: { files: [photo] } }) })
-    expect(screen.getByAltText('Delivery photo preview')).toBeInTheDocument()
+    await act(async () => { fireEvent.change(screen.getByLabelText('Take a photo of the tourist receiving the food'), { target: { files: [photo] } }) })
+    expect(screen.getByAltText('Photo preview')).toBeInTheDocument()
+    expect(confirm).toBeDisabled() // taken, not submitted yet
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Submit photo' })) })
+    expect(screen.getByAltText('Submitted delivery photo')).toBeInTheDocument()
 
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Confirm Delivered' })) })
     expect(trip.value.onConfirmDelivery).toHaveBeenCalledWith(photo)

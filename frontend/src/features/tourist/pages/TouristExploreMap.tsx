@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import api from '@/shared/services/api'
 import { useNavigate, useSearchParams } from 'react-router-dom'
@@ -10,9 +10,13 @@ import { beachPinIcon, businessLogoIcon, pinIcon, profilePinIcon, userPinIcon } 
 import { useAuthStore } from '@/features/auth/services/auth-store'
 import MapLayerTile from '@/shared/components/MapLayerTile'
 import ExploreViewToggle from '@/features/tourist/components/ExploreViewToggle'
+import MapPlacesList, { matchesPlaceSearch, type MapPlace, type PlaceSort } from '@/features/tourist/components/MapPlacesList'
 import { requestCompassPermission, useNavigationBearing } from '@/features/tourist/hooks/use-navigation-bearing'
 import { OFF_ROUTE_METERS, routeProgress } from '@/features/tourist/utils/route-progress'
 import { NavigationCamera } from '@/shared/components/map/NavigationCamera'
+import { NAV_PERSPECTIVE_PX, NAV_TILT_DEG, NAV_TILT_SIZE_FACTOR, planePointForScreen } from '@/features/rider/navigation-view'
+import { RiderMapCompass } from '@/features/rider/components/RiderMapCompass'
+import { RiderNavPuck } from '@/features/rider/components/RiderNavPuck'
 
 /** Minimum gap between automatic re-routes when the tourist leaves the route. */
 const REROUTE_COOLDOWN_MS = 10_000
@@ -54,6 +58,8 @@ import {
   ShoppingCart,
   Check,
   LocateFixed,
+  Navigation2,
+  Route,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -71,6 +77,8 @@ const MAP_LAYERS: Record<MapType, { url: string; attribution: string }> = {
 }
 
 const MAP_CATEGORY_OPTIONS = ['all', 'Tourist Spots', 'Food', 'Resorts', 'Other'] as const
+/** The same categories for the places panel dropdown ('' there = 'all'). */
+const PANEL_CATEGORY_OPTIONS = MAP_CATEGORY_OPTIONS.filter((c) => c !== 'all').map((c) => ({ id: c, name: c }))
 
 /** Explore tab (?category=places|food|stays) → map category chip, and back. */
 const CATEGORY_PARAM_TO_FILTER: Record<string, (typeof MAP_CATEGORY_OPTIONS)[number]> = {
@@ -224,16 +232,20 @@ interface HoverState {
 }
 
 /**
- * Marker per business, matching the landing-page map: restaurants show their
- * photo (logo, else cover) in the round image pin; attractions the beach pin;
- * everything else the standard labelled pin.
+ * Marker per business, matching the landing-page map: restaurants,
+ * attractions and resorts / stays show their photo (logo, else cover) in the
+ * round image pin (2026-11-09: attractions and resorts too). Without a
+ * photo, attractions keep the beach pin and everything else the standard
+ * labelled pin.
  */
 function markerIconFor(biz: Business, selected: boolean): L.DivIcon {
-  if (isTouristAttractionCategory(biz.category?.name)) return beachPinIcon
   const photo = biz.logo || biz.cover_photo
-  if (photo && getDiscoveryGroup(biz.category?.name, biz.category?.id) === 'dining') {
+  const group = getDiscoveryGroup(biz.category?.name, biz.category?.id)
+  const attraction = isTouristAttractionCategory(biz.category?.name)
+  if (photo && (attraction || group === 'dining' || group === 'spot' || group === 'accommodation')) {
     return businessLogoIcon(toAssetUrl(photo), biz.name ?? '', selected)
   }
+  if (attraction) return beachPinIcon
   return pinIcon(biz.name, selected)
 }
 
@@ -267,6 +279,18 @@ function RecenterOnUser({ location, signal }: { location: { lat: number; lng: nu
     // Only on an explicit request, not on every GPS update.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signal, map])
+  return null
+}
+
+/** A place picked from the places list: bring it to the middle of the map, close enough to see. */
+function FocusPlace({ target }: { target: { lat: number; lng: number; n: number } | null }) {
+  const map = useMap()
+  useEffect(() => {
+    if (!target) return
+    map.setView?.([target.lat, target.lng], Math.max(map.getZoom?.() ?? USER_FOCUS_ZOOM, USER_FOCUS_ZOOM))
+    // Only when a card is picked (`n` bumps), not on re-renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target?.n, map])
   return null
 }
 
@@ -366,6 +390,20 @@ export default function TouristExploreMap() {
   const [panelOpen, setPanelOpen] = useState(false)
   /** Phone-only: business sheet minimised to its title bar (e.g. while a route is shown). */
   const [sheetCollapsed, setSheetCollapsed] = useState(false)
+  /** Phone-only: places list sheet minimised to its title bar (it starts that way so the map shows). */
+  const [listCollapsed, setListCollapsed] = useState(true)
+  /** Places panel search: filters the list and the markers. */
+  const [placeQuery, setPlaceQuery] = useState('')
+  /** Places panel municipality filter (id as a string, '' = all): filters the list and the markers. */
+  const [placeMunicipality, setPlaceMunicipality] = useState('')
+  /** Places panel order. */
+  const [placeSort, setPlaceSort] = useState<PlaceSort>('top-rated')
+  /** Card hovered in the places list: its marker is highlighted. */
+  const [listHoverId, setListHoverId] = useState<number | null>(null)
+  /** Places list scroll position, kept while a place's details are open. */
+  const listScrollRef = useRef(0)
+  /** A place picked from the list: the map moves to it (bumped `n` = move again). */
+  const [focusTarget, setFocusTarget] = useState<{ lat: number; lng: number; n: number } | null>(null)
   const [selectedImage, setSelectedImage] = useState(0)
   const [panelTab, setPanelTab] = useState<PanelTab>('Overview')
   const [saved, setSaved] = useState(false)
@@ -466,7 +504,7 @@ export default function TouristExploreMap() {
       .finally(() => { reroutingRef.current = false })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [progress])
-  const bearing = useNavigationBearing({ active: navigating && !!route, location: userLocation, course: userCourse, route: progress?.remaining ?? route })
+  const liveBearing = useNavigationBearing({ active: navigating && !!route, location: userLocation, course: userCourse, route: progress?.remaining ?? route })
   const mapAreaRef = useRef<HTMLDivElement>(null)
   /** Side of the square the rotated map needs so no corner shows blank (the container diagonal). */
   const [rotatorSize, setRotatorSize] = useState(0)
@@ -483,6 +521,49 @@ export default function TouristExploreMap() {
     return () => ro.disconnect()
   }, [])
   const navActive = navigating && !!route
+
+  // Same navigation view as the rider's (2026-11-10): tilted 3D, heading-up,
+  // and the map can be explored while navigating (drag pans, pinch / wheel
+  // zoom, twist / right-drag rotates). The first pan or twist enters free
+  // look: the camera stops following and the map keeps the bearing the
+  // tourist gave it; "Show my location" brings it back to them.
+  const [navFree, setNavFree] = useState(false)
+  const [freeBearing, setFreeBearing] = useState(0)
+  // Following: heading-up, or north-up after a tap on the compass (again: heading-up).
+  const [northUp, setNorthUp] = useState(false)
+  // A gesture is running: the map turns with the fingers, without easing.
+  const [navGesturing, setNavGesturing] = useState(false)
+  /** "Show my location" while navigating: the camera re-centres on the tourist. */
+  const [navRecenterSignal, setNavRecenterSignal] = useState(0)
+  useEffect(() => {
+    if (!navActive) {
+      setNavFree(false)
+      setNavGesturing(false)
+      setNorthUp(false)
+    }
+  }, [navActive])
+  const bearing = navActive && navFree ? freeBearing : navActive && northUp ? 0 : liveBearing
+  const shownBearingRef = useRef(bearing)
+  shownBearingRef.current = bearing
+  const handleFreeLookChange = useCallback((free: boolean) => {
+    // Exploring starts from the view the tourist is looking at.
+    if (free) setFreeBearing(shownBearingRef.current)
+    setNavFree(free)
+  }, [])
+  const handleCompass = () => {
+    if (navFree) setFreeBearing(0) // exploring: face north
+    else setNorthUp((n) => !n) // following: north-up <-> heading-up
+  }
+  /** A point on the tilted map (client px) -> its offset on the map plane. */
+  const navScreenToPlanePoint = useCallback((pt: { x: number; y: number }) => {
+    const rect = mapAreaRef.current?.getBoundingClientRect()
+    const cx = rect ? rect.left + rect.width / 2 : 0
+    const cy = rect ? rect.top + rect.height / 2 : 0
+    return planePointForScreen(pt.x - cx, pt.y - cy)
+  }, [])
+  /** The tilted plane is larger than the screen so no blank corner shows while it turns and tips back. */
+  const planeSize = Math.ceil(rotatorSize * NAV_TILT_SIZE_FACTOR)
+
   const [navScreenOffset, setNavScreenOffset] = useState({ x: 0, y: 0 })
   useEffect(() => {
     if (!navActive) return
@@ -494,6 +575,11 @@ export default function TouristExploreMap() {
     window.addEventListener('resize', measure)
     return () => window.removeEventListener('resize', measure)
   }, [navActive, rotatorSize])
+  /** The marker's screen spot as a point on the tilted plane (what the camera places). */
+  const navPlaneOffset = useMemo(() => {
+    const pt = planePointForScreen(navScreenOffset.x, navScreenOffset.y)
+    return { x: Math.round(pt.x), y: Math.round(pt.y) }
+  }, [navScreenOffset])
   /**
    * Navigating near the route: show the tourist snapped onto the line (as Google
    * Maps does), so the centred marker sits on the route and the line runs
@@ -525,6 +611,27 @@ export default function TouristExploreMap() {
     if (categoryFilter === 'Other') return group === 'other'
     return true
   })
+  const municipalityOptions = [...(mapData?.municipalities ?? [])].sort((a, b) => a.name.localeCompare(b.name))
+  const chosenMunicipality = municipalityOptions.find((m) => String(m.id) === placeMunicipality) ?? null
+  /** In the chosen municipality (some rows carry it as a plain name). */
+  const inChosenMunicipality = (b: Business) => {
+    if (!chosenMunicipality) return true
+    const m = b.municipality as { id?: number; name?: string } | string | null
+    if (typeof m === 'string') return m.toLowerCase() === chosenMunicipality.name.toLowerCase()
+    return m?.id === chosenMunicipality.id
+  }
+  /** Shown in the places panel and on the map: category chip + municipality + search. */
+  const isPlaceVisible = (b: Business) => inChosenMunicipality(b) && matchesPlaceSearch(b, placeQuery)
+  const visibleBusinesses = filteredBusinesses.filter(isPlaceVisible)
+  /** Municipalities that have at least one business on the map. */
+  const businessMunicipalityCount = new Set(
+    businesses
+      .map((b) => {
+        const m = b.municipality as { id?: number; name?: string } | string | null
+        return typeof m === 'string' ? m.toLowerCase() : m?.id ?? m?.name?.toLowerCase() ?? null
+      })
+      .filter((k) => k != null),
+  ).size
 
   /** Hide the marker hover card now and cancel any pending show/hide timer. */
   const dismissHover = () => {
@@ -561,9 +668,32 @@ export default function TouristExploreMap() {
     navigate('/tourist/food/cart')
   }
 
+  /** A card in the places list: open its details in the panel and bring it into view. */
+  const handlePlaceCardSelect = (place: MapPlace) => {
+    const biz = businesses.find((b) => b.id === place.id)
+    if (!biz) return
+    setListHoverId(null)
+    handleBusinessSelect(biz)
+    if (biz.latitude != null && biz.longitude != null) {
+      const lat = biz.latitude
+      const lng = biz.longitude
+      setFocusTarget((prev) => ({ lat, lng, n: (prev?.n ?? 0) + 1 }))
+    }
+  }
+
+  /** Details -> back to the places list (a route being shown stays). */
+  const handleBackToList = () => {
+    setPanelOpen(false)
+    setPinned(null)
+    setSheetCollapsed(false)
+    // Phones: the list comes back open, unless a route is on screen.
+    setListCollapsed(!!route)
+  }
+
   const handleClosePanel = () => {
     setPanelOpen(false)
     setSheetCollapsed(false)
+    setListCollapsed(true)
     setPinned(null)
     setRoute(null)
     setRouteDistanceKm(null)
@@ -697,6 +827,7 @@ export default function TouristExploreMap() {
   const currentImage = cardImages[Math.min(activeImage, cardImages.length - 1)] ?? null
 
   const displayBusiness = pinned
+  const showDetail = panelOpen && !!displayBusiness
   const panelImages = getBusinessImages(displayBusiness)
   const panelImage = panelImages[Math.min(selectedImage, panelImages.length - 1)] ?? null
   const currentGroup: DiscoveryGroup = getDiscoveryGroup(displayBusiness?.category?.name, displayBusiness?.category?.id)
@@ -735,44 +866,70 @@ export default function TouristExploreMap() {
   }
 
   return (
-    <div className="flex flex-col min-h-0 overflow-hidden bg-[#f8faf7] h-[calc(100dvh-var(--tourist-header-h))] -mx-4 -mt-4 sm:-mx-6 sm:-mt-6 -mb-24 lg:-mb-8">
-      {/* Header row */}
-      <div className="flex items-center justify-between gap-2 px-3 py-2 bg-white border-b border-[#E5E9E7] z-[1000] shrink-0">
-        {/* Category chips: scroll sideways (swipe on touch; thin scrollbar or mouse wheel with a mouse). */}
-        <div
-          role="group"
-          aria-label="Map categories"
-          data-testid="map-category-chips"
-          onWheel={(e) => {
-            const el = e.currentTarget
-            if (el.scrollWidth > el.clientWidth && Math.abs(e.deltaY) > Math.abs(e.deltaX)) el.scrollLeft += e.deltaY
-          }}
-          className="chip-scroll flex flex-nowrap items-center gap-2 overflow-x-auto overscroll-x-contain min-w-0 -my-1 py-1"
-        >
-          {MAP_CATEGORY_OPTIONS.map((cat) => (
-            <button
-              key={cat}
-              onClick={() => setCategoryFilter(cat)}
-              aria-pressed={categoryFilter === cat}
-              className={`shrink-0 whitespace-nowrap h-[34px] px-4 rounded-full text-xs font-medium transition-colors ${
-                categoryFilter === cat
-                  ? 'bg-[#087F3F] text-white'
-                  : 'bg-white text-[#17201A] border border-[#E2E8E3] hover:bg-[#EAF6ED]'
-              }`}
-            >
-              {cat === 'all' ? 'All' : cat}
-            </button>
-          ))}
-        </div>
-        {/* Same switch, same place as on the list: here it reads "List view". */}
-        <ExploreViewToggle current="map" to={listViewTab ? `/tourist/explore?tab=${listViewTab}` : '/tourist/explore'} className="ml-auto" />
-      </div>
-
+    <div
+      // Height + bottom margin: index.css .tourist-map-page (phones / tablets: ends at the top of the bottom bar, whatever its size).
+      className="tourist-map-page flex flex-col min-h-0 overflow-hidden bg-[#f8faf7] -mx-4 -mt-4 sm:-mx-6 sm:-mt-6"
+    >
       <div className="relative flex flex-1 min-h-0">
         {/* Left Panel */}
-        {panelOpen ? (
-          <aside className={`map-business-sheet absolute inset-x-0 bottom-0 z-[600] transition-[max-height] duration-300 ${sheetCollapsed ? 'max-h-[72px]' : 'max-h-[62dvh]'} sm:max-h-full sm:static sm:inset-auto sm:w-[405px] sm:max-w-[90vw] sm:shrink-0 bg-white rounded-t-2xl sm:rounded-none border-t sm:border-t-0 sm:border-r border-[#E5E9E7] shadow-2xl sm:shadow-none flex flex-col overflow-hidden`}>
+        {/* Left panel: the places list (search + cards); a card or marker opens
+            that place's details in the same panel. Phones: a bottom sheet. */}
+        {(
+          <aside
+            aria-label={showDetail ? 'Place details' : 'Places'}
+            className={`map-business-sheet absolute inset-x-0 bottom-0 z-[600] transition-[max-height] duration-300 ${(showDetail ? sheetCollapsed : listCollapsed) ? 'max-h-[72px]' : 'max-h-[62dvh]'} sm:max-h-full sm:static sm:inset-auto sm:w-[405px] sm:max-w-[90vw] sm:shrink-0 bg-white rounded-t-2xl sm:rounded-none border-t sm:border-t-0 sm:border-r border-[#E5E9E7] shadow-2xl sm:shadow-none flex flex-col overflow-hidden`}
+          >
+            {!showDetail && (
+              <>
+                {/* Phone: grab bar that opens / minimises the places list */}
+                <button
+                  type="button"
+                  onClick={() => setListCollapsed((c) => !c)}
+                  aria-expanded={!listCollapsed}
+                  aria-label={listCollapsed ? 'Show places list' : 'Minimize places list'}
+                  className="sm:hidden shrink-0 mx-2 mt-2 mb-1 flex items-center gap-3 px-2 py-1.5 rounded-xl text-left hover:bg-[#F3F8F4]"
+                >
+                  <span className="w-9 h-1.5 rounded-full bg-[#C9D1CD] shrink-0" aria-hidden="true" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-bold text-[#17201B] truncate">Explore {visibleBusinesses.length} {visibleBusinesses.length === 1 ? 'place' : 'places'}</span>
+                    {listCollapsed && <span className="block text-xs text-[#56615B]">Tap to search and browse</span>}
+                  </span>
+                  <ChevronRight className={`ml-auto w-5 h-5 text-[#56615B] shrink-0 transition-transform ${listCollapsed ? '-rotate-90' : 'rotate-90'}`} aria-hidden="true" />
+                </button>
+                <h2 className="hidden sm:block shrink-0 px-4 pt-4 pb-2 text-base font-bold text-[#17201B]">Explore places</h2>
+                <MapPlacesList
+                  places={visibleBusinesses}
+                  query={placeQuery}
+                  onQueryChange={setPlaceQuery}
+                  onSelect={handlePlaceCardSelect}
+                  onHover={setListHoverId}
+                  userLocation={userLocation}
+                  scrollRef={listScrollRef}
+                  municipality={placeMunicipality}
+                  municipalities={municipalityOptions}
+                  onMunicipalityChange={setPlaceMunicipality}
+                  category={categoryFilter === 'all' ? '' : categoryFilter}
+                  categories={PANEL_CATEGORY_OPTIONS}
+                  onCategoryChange={(c) => setCategoryFilter(c || 'all')}
+                  totalCount={businesses.length}
+                  municipalityCount={businessMunicipalityCount}
+                  sort={placeSort}
+                  onSortChange={setPlaceSort}
+                />
+              </>
+            )}
+            {showDetail && (<>
             <div className="flex items-center gap-2 p-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleBackToList}
+                aria-label="Back to places list"
+                title="Back to places list"
+                className="h-9 shrink-0 flex items-center gap-1 rounded-full px-2 sm:pr-3 text-sm font-semibold text-[#087F3F] hover:bg-[#E9F7EF] transition-colors"
+              >
+                <ChevronLeft className="w-5 h-5" aria-hidden="true" />
+                <span className="hidden sm:inline">All places</span>
+              </button>
               {/* Phone: grab bar that minimises / expands the sheet */}
               <button
                 type="button"
@@ -1260,8 +1417,9 @@ export default function TouristExploreMap() {
                 </div>
               )}
             </div>
+            </>)}
           </aside>
-        ) : null}
+        )}
 
         {/* Route Info Panel */}
         {/* Full route card (modes, fare, booking): the whole-route view only. */}
@@ -1387,6 +1545,8 @@ export default function TouristExploreMap() {
                         destination: routeDestination,
                         distanceKm: routeKm,
                         vehicle: selectedVehicle,
+                        // Lets Ride Hailing go straight to the pickup step.
+                        ...(routeTo ? { lat: routeTo.lat, lng: routeTo.lng } : {}),
                       }))
                     }
                     navigate('/tourist/transport')
@@ -1411,7 +1571,22 @@ export default function TouristExploreMap() {
         })()}
 
         {/* Map */}
-        <div ref={mapAreaRef} className="relative flex-1 min-w-0 min-h-0 overflow-hidden bg-[#f8faf7]">
+        <div
+          ref={mapAreaRef}
+          data-view-mode={navActive ? 'navigation' : 'overview'}
+          className="tourist-map-area relative flex-1 min-w-0 min-h-0 overflow-hidden bg-[#f8faf7]"
+          style={navActive ? { perspective: `${NAV_PERSPECTIVE_PX}px` } : undefined}
+        >
+          {/* View switch, top left of the map, beside the places panel and its
+              filters (the category chips are now the panel's Category dropdown). */}
+          {!navActive && (
+            <div className="absolute top-3 left-3 z-[640] rounded-full shadow-md">
+              <ExploreViewToggle
+                current="map"
+                to={listViewTab ? `/tourist/explore?tab=${listViewTab}` : '/tourist/explore'}
+              />
+            </div>
+          )}
           {/* Navigation card: small, travel-only (no fares or booking): time, distance left, speed. */}
           {navActive && routeDistanceKm != null && (() => {
             const activeMode = transportModes.find((m) => m.key === selectedVehicle) ?? transportModes[0]
@@ -1462,25 +1637,48 @@ export default function TouristExploreMap() {
             className={`absolute right-3 z-[640] flex flex-col items-end gap-2 ${routeDistanceKm != null && !navActive ? 'top-3 max-sm:top-auto max-sm:bottom-24' : 'top-3'}`}
           >
             <MapLayerTile value={activeMapType} onChange={setMapType} />
+            {/* Navigation: where north is; tap to face north (again: travel direction). */}
+            {navActive && (
+              <RiderMapCompass
+                bearing={bearing}
+                northUp={navFree ? Math.round(bearing) % 360 === 0 : northUp}
+                onClick={handleCompass}
+                className="map-compass-btn w-12 h-12 rounded-lg border-2 border-white bg-white shadow-[0_2px_8px_rgba(0,0,0,0.25)] hover:bg-[#F3F8F4]"
+              />
+            )}
+            {/* One view switch, like the rider's: it offers the other view. */}
             {route && (
               <button
                 type="button"
-                onClick={() => setNavigating((v) => !v)}
-                aria-pressed={navActive}
-                aria-label={navActive ? 'Show whole route, north up' : 'Follow me, facing my direction'}
-                title={navActive ? 'Show whole route (north up)' : 'Follow me (heading up)'}
-                className={`map-compass-btn w-12 h-12 rounded-lg border-2 border-white flex items-center justify-center shadow-[0_2px_8px_rgba(0,0,0,0.25)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#087F3F] ${navActive ? 'bg-[#087F3F] text-white' : 'bg-white text-[#087F3F] hover:bg-[#F3F8F4]'}`}
+                onClick={() => {
+                  if (!navActive) requestCompassPermission()
+                  setNavigating((v) => !v)
+                }}
+                aria-label={navActive ? 'Overview' : 'Navigation view'}
+                title={navActive ? 'Overview (whole route, north up)' : 'Navigation view (follow me, heading up)'}
+                data-current-view={navActive ? 'navigation' : 'overview'}
+                className="map-view-toggle w-12 h-12 rounded-lg bg-white border-2 border-white text-[#087F3F] flex items-center justify-center shadow-[0_2px_8px_rgba(0,0,0,0.25)] hover:bg-[#F3F8F4] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#087F3F]"
               >
-                {/* Needle points to north on the rotated map. */}
-                <Compass className="w-6 h-6 transition-transform duration-500" style={{ transform: `rotate(${-(navActive ? bearing : 0) - 45}deg)` }} aria-hidden="true" />
+                {navActive ? <Route className="w-5 h-5" aria-hidden="true" /> : <Navigation2 className="w-5 h-5" aria-hidden="true" />}
               </button>
             )}
             <button
               type="button"
-              onClick={showMyLocation}
+              onClick={() => {
+                if (navActive) {
+                  // Back from exploring: follow the tourist again.
+                  setNavFree(false)
+                  setNavRecenterSignal((n) => n + 1)
+                  return
+                }
+                showMyLocation()
+              }}
               aria-label="Show my location"
               title="Show my location"
-              className="map-locate-btn w-12 h-12 rounded-lg bg-white border-2 border-white text-[#087F3F] flex items-center justify-center shadow-[0_2px_8px_rgba(0,0,0,0.25)] hover:bg-[#F3F8F4] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#087F3F]"
+              aria-pressed={navActive ? !navFree : undefined}
+              className={`map-locate-btn w-12 h-12 rounded-lg border-2 flex items-center justify-center shadow-[0_2px_8px_rgba(0,0,0,0.25)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#087F3F] ${
+                navActive && !navFree ? 'bg-[#087F3F] border-[#087F3F] text-white' : 'bg-white border-white text-[#087F3F] hover:bg-[#F3F8F4]'
+              }`}
             >
               <LocateFixed className="w-5 h-5" aria-hidden="true" />
             </button>
@@ -1490,12 +1688,12 @@ export default function TouristExploreMap() {
           <div
             data-testid="map-rotator"
             data-bearing={Math.round(navActive ? bearing : 0)}
-            className={navActive ? 'map-rotator map-rotator--nav' : 'map-rotator'}
+            className={navActive ? `map-rotator map-rotator--nav${navGesturing ? ' map-rotator--gesture' : ''}` : 'map-rotator'}
             style={navActive && rotatorSize > 0
               ? ({
-                  width: rotatorSize,
-                  height: rotatorSize,
-                  transform: `translate(-50%, -50%) rotate(${-bearing}deg)`,
+                  width: planeSize,
+                  height: planeSize,
+                  transform: `translate(-50%, -50%) rotateX(${NAV_TILT_DEG}deg) rotate(${-bearing}deg)`,
                   '--map-bearing': `${bearing}deg`,
                 } as React.CSSProperties)
               : undefined}
@@ -1513,15 +1711,23 @@ export default function TouristExploreMap() {
               url={MAP_LAYERS[activeMapType].url}
               attribution={MAP_LAYERS[activeMapType].attribution}
             />
-            <MapEventsHandler onMapClick={() => (route ? setSheetCollapsed(true) : handleClosePanel())} />
+            <MapEventsHandler
+              onMapClick={() => {
+                if (!panelOpen) return setListCollapsed(true)
+                if (route) setSheetCollapsed(true)
+                else handleClosePanel()
+              }}
+            />
 
             {filteredBusinesses.map((biz) => {
               if (biz.latitude == null || biz.longitude == null) return null
+              // The search / municipality hide the other markers (never the place whose details are open).
+              if (biz.id !== pinned?.id && !isPlaceVisible(biz)) return null
               return (
                 <Marker
                   key={biz.id}
                   position={[biz.latitude, biz.longitude]}
-                  icon={markerIconFor(biz, biz.id === pinned?.id)}
+                  icon={markerIconFor(biz, biz.id === pinned?.id || biz.id === listHoverId)}
                   eventHandlers={{
                     click: () => handleBusinessSelect(biz),
                     mouseover: (e) => {
@@ -1550,7 +1756,7 @@ export default function TouristExploreMap() {
                 />
               )
             })}
-            {markerLocation && (
+            {markerLocation && (!navActive || navFree) && (
               <Marker
                 position={[markerLocation.lat, markerLocation.lng]}
                 icon={userMarkerIcon}
@@ -1562,6 +1768,7 @@ export default function TouristExploreMap() {
             )}
             <CenterOnUserOnce location={userLocation} skip={!!pinned || !!route} />
             <RecenterOnUser location={userLocation} signal={recenterSignal} />
+            {!navActive && <FocusPlace target={focusTarget} />}
             {route && routeTo && (
               <RouteOverlay
                 route={{ coords: progress?.remaining ?? route, fitCoords: route }}
@@ -1569,9 +1776,28 @@ export default function TouristExploreMap() {
                 fit={!navActive}
               />
             )}
-            <NavigationCamera active={navActive} location={markerLocation} bearing={bearing} screenOffset={navScreenOffset} />
+            <NavigationCamera
+              active={navActive}
+              location={markerLocation}
+              bearing={bearing}
+              screenOffset={navPlaneOffset}
+              recenterSignal={navRecenterSignal}
+              freeLook={navFree}
+              onFreeLookChange={handleFreeLookChange}
+              onBearingChange={setFreeBearing}
+              onGestureChange={setNavGesturing}
+              screenToPlanePoint={navScreenToPlanePoint}
+            />
           </MapContainer>
           </div>
+          {navActive && (
+            <>
+              {/* Soft horizon where the tilted map fades into the distance. */}
+              <div aria-hidden="true" className="nav-horizon pointer-events-none absolute inset-x-0 top-0 z-[400] h-[22%]" />
+              {/* Following: the tourist is a fixed puck lying on the tilted map, arrow up = travel direction. */}
+              {!navFree && <RiderNavPuck offsetX={navScreenOffset.x} offsetY={navScreenOffset.y} />}
+            </>
+          )}
 
           {/* Hover Card */}
           <div
@@ -1718,14 +1944,6 @@ export default function TouristExploreMap() {
             </div>
           </div>
 
-          {/* Business Count Badge */}
-          <div className="absolute bottom-6 left-4 z-[400] pointer-events-none">
-            <div className="px-4 py-2 bg-white/90 backdrop-blur-xl border border-[#E5E9E7] rounded-xl shadow-lg">
-              <p className="text-sm text-[#6B7280]">
-                <span className="font-semibold text-[#087F3F]">{filteredBusinesses.length}</span> businesses on map
-              </p>
-            </div>
-          </div>
         </div>
       </div>
 

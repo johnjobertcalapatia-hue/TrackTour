@@ -14,13 +14,19 @@ class RestaurantBusinessSeeder extends Seeder
 {
     public function run(): void
     {
-        $email = 'johnjobertcalapatia@gmail.com';
+        // This seeder is a manual local fixture (it is not part of
+        // DatabaseSeeder), so its identity must never be a hardcoded real
+        // person's address. Override per environment when you need a specific
+        // demo owner; the defaults stay on the project's *.test convention.
+        $email = (string) (env('TRACKTOUR_DEMO_OWNER_EMAIL') ?: 'restaurant.demo@bansud.test');
+        $ownerName = (string) (env('TRACKTOUR_DEMO_OWNER_NAME') ?: 'Demo Restaurant Owner');
+        $businessName = (string) (env('TRACKTOUR_DEMO_BUSINESS_NAME') ?: 'Demo Restaurant');
 
         // Find or create the business owner user
         $user = User::firstOrCreate(
             ['email' => $email],
             [
-                'name' => 'John Jobert Calapatia',
+                'name' => $ownerName,
                 'password' => Hash::make('password123'),
                 'role' => 'business_owner',
                 'account_status' => 'approved',
@@ -59,7 +65,7 @@ class RestaurantBusinessSeeder extends Seeder
 
         // Check if business already exists
         $existing = Business::where('owner_id', $user->id)
-            ->where('business_name', "John Jobert's Restaurant")
+            ->where('business_name', $businessName)
             ->first();
 
         if ($existing) {
@@ -73,7 +79,7 @@ class RestaurantBusinessSeeder extends Seeder
             'business_category_id' => $category->id,
             'municipality_id' => $municipality->id,
             'barangay_id' => $barangay->id,
-            'business_name' => "John Jobert's Restaurant",
+            'business_name' => $businessName,
             'business_description' => 'A cozy restaurant serving delicious Filipino and local Oriental Mindoro cuisine. Fresh seafood, traditional dishes, and warm hospitality await you.',
             'tagline' => 'Taste the flavors of Oriental Mindoro',
             'contact_number' => '+63 912 345 6789',

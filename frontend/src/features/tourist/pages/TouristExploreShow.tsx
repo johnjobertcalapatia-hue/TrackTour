@@ -7,7 +7,8 @@ import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { formatCurrency, formatDateTime, isNewItem, categoryName, toAssetUrl } from '@/shared/utils'
 import { getDiscoveryGroup, type DiscoveryGroup } from '@/shared/utils/category'
-import { recordBrowsedPlace } from '@/shared/services/browsing-history'
+import { forgetBrowsedPlace, recordBrowsedPlace } from '@/shared/services/browsing-history'
+import { PlaceUnavailable, isNotFoundError } from '@/shared/components/PlaceUnavailable'
 import {
   ArrowLeft, Star, MapPin, Phone, Clock, Heart, UtensilsCrossed, Plus, Minus,
   ShoppingCart, X, Share2, Navigation, Ticket, Camera, Video, Compass,
@@ -125,10 +126,15 @@ export default function TouristExploreShow() {
     return () => window.removeEventListener('cart-updated', sync)
   }, [])
 
-  const { data, isLoading } = useQuery<BusinessDetailResponse>({
+  const { data, isLoading, error } = useQuery<BusinessDetailResponse>({
     queryKey: ['tourist-explore', id],
     queryFn: () => get(`/tourist/explore/${id}`),
   })
+  // The place no longer exists (404): stop listing it in Recently Viewed.
+  const gone = isNotFoundError(error)
+  useEffect(() => {
+    if (gone && id) forgetBrowsedPlace(Number(id))
+  }, [gone, id])
 
   const favoriteMutation = useMutation({
     mutationFn: () => post('/tourist/favorites/toggle', { business_id: Number(id) }),
@@ -239,7 +245,18 @@ export default function TouristExploreShow() {
   if (business && getDiscoveryGroup(categoryName(business.category), business.business_category_id) === 'dining') {
     return <Navigate to={`/tourist/food/${business.id}`} replace />
   }
-  if (!business) return <div className="text-center py-20 text-[#6B7280]">Business not found.</div>
+  if (!business) {
+    return gone ? (
+      <PlaceUnavailable
+        title="This place isn't on TrackTour anymore"
+        message="It was removed from TrackTour, so there is no page to show. We've taken it off your recently viewed places."
+        backTo="/tourist/explore"
+        backLabel="Explore places"
+      />
+    ) : (
+      <div className="text-center py-20 text-[#6B7280]">Couldn't load this place. Please try again.</div>
+    )
+  }
 
   // Resorts: the reusable, data-driven resort page (sections hidden when empty).
   if (data?.resort) {
@@ -605,7 +622,19 @@ export default function TouristExploreShow() {
 
             {/* View on interactive tourist map */}
             <button
-              onClick={() => navigate('/tourist/explore/map')}
+              onClick={() => {
+                // Open the tourist map on THIS place (selected, with directions),
+                // like an attraction's "View on Map".
+                if (business.latitude != null && business.longitude != null) {
+                  sessionStorage.setItem('tracktour_pending_map_destination', JSON.stringify({
+                    id: business.id,
+                    name: business.name,
+                    latitude: Number(business.latitude),
+                    longitude: Number(business.longitude),
+                  }))
+                }
+                navigate('/tourist/explore/map')
+              }}
               className="w-full flex items-center justify-center gap-2 py-2.5 bg-white border border-[#D7E8DB] hover:bg-[#F3F8F4] text-[#087F3F] rounded-xl text-xs font-semibold transition"
             >
               <Compass className="w-4 h-4" /> View on Map

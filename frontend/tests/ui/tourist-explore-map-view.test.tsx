@@ -94,20 +94,22 @@ describe('Explore → Map view', () => {
   it('the map starts on the requested category and List view returns to that tab', async () => {
     renderAt('/tourist/explore/map?category=food')
 
-    expect(await screen.findByRole('button', { name: 'Food' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'false')
+    const category = await screen.findByRole('combobox', { name: 'Category' })
+    expect(category).toHaveTextContent('Food')
     expect(screen.getByRole('link', { name: 'List view' })).toHaveAttribute('href', '/tourist/explore?tab=food')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resorts' }))
+    fireEvent.click(category)
+    fireEvent.click(screen.getByRole('option', { name: 'Resorts' }))
     expect(screen.getByRole('link', { name: 'List view' })).toHaveAttribute('href', '/tourist/explore?tab=stays')
 
-    fireEvent.click(screen.getByRole('button', { name: 'All' }))
+    fireEvent.click(category)
+    fireEvent.click(screen.getByRole('option', { name: 'All Categories' }))
     expect(screen.getByRole('link', { name: 'List view' })).toHaveAttribute('href', '/tourist/explore')
   })
 
   it('an unknown category falls back to All', async () => {
     renderAt('/tourist/explore/map?category=bogus')
-    expect(await screen.findByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true')
+    expect(await screen.findByRole('combobox', { name: 'Category' })).toHaveTextContent('All Categories')
   })
 
   it('stays open the place page, never the booking detail route', async () => {
@@ -131,39 +133,12 @@ describe('Explore → Map view', () => {
     const onMap = await screen.findByTestId('explore-view-toggle')
     expect(onMap).toHaveTextContent('List view')
     expect(onMap.className).toBe(onList.className) // same button styling on both views
-    // Sits at the end of the top row, like on the list (after the category chips).
-    expect(onMap.previousElementSibling?.querySelector('[aria-pressed]')).not.toBeNull()
+    // On the map it floats at the top left, beside the places panel and its filters.
+    expect(onMap.parentElement!.className).toContain('top-3 left-3')
 
     fireEvent.click(onMap)
     expect(screen.getByTestId('location')).toHaveTextContent('/tourist/explore?tab=food')
     expect(await screen.findByTestId('explore-view-toggle')).toHaveTextContent('Map view')
-  })
-
-  it('the map category chips scroll horizontally (swipe, scrollbar, or mouse wheel)', async () => {
-    renderAt('/tourist/explore/map')
-    const row = await screen.findByTestId('map-category-chips')
-
-    expect(row).toHaveAttribute('aria-label', 'Map categories')
-    expect(row.className).toContain('overflow-x-auto')
-    expect(row.className).toContain('flex-nowrap')
-    expect(row.className).toContain('chip-scroll')
-    expect(row.className).not.toContain('scrollbar-hide')
-    for (const name of ['All', 'Tourist Spots', 'Food', 'Resorts', 'Other']) {
-      expect(screen.getByRole('button', { name }).className).toContain('shrink-0')
-    }
-
-    // A vertical mouse wheel scrolls the row sideways when the chips overflow…
-    Object.defineProperty(row, 'scrollWidth', { configurable: true, value: 600 })
-    Object.defineProperty(row, 'clientWidth', { configurable: true, value: 300 })
-    row.scrollLeft = 0
-    fireEvent.wheel(row, { deltaY: 120, deltaX: 0 })
-    expect(row.scrollLeft).toBe(120)
-
-    // …and does nothing when everything already fits.
-    Object.defineProperty(row, 'scrollWidth', { configurable: true, value: 300 })
-    row.scrollLeft = 0
-    fireEvent.wheel(row, { deltaY: 120, deltaX: 0 })
-    expect(row.scrollLeft).toBe(0)
   })
 
   describe('municipality filter', () => {
@@ -185,8 +160,13 @@ describe('Explore → Map view', () => {
       renderAt('/tourist/explore')
       await screen.findByText('Bansud Cafe')
 
-      const select = screen.getByRole('combobox', { name: 'Municipality' }) as HTMLSelectElement
-      expect([...select.options].map((o) => o.text)).toEqual(['All municipalities', 'Bansud', 'Gloria'])
+      const select = screen.getByRole('combobox', { name: 'Municipality' })
+      expect(select).toHaveTextContent('All municipalities')
+      fireEvent.click(select)
+      expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['All municipalities', 'Bansud', 'Gloria'])
+      expect(screen.getByRole('option', { name: 'All municipalities' })).toHaveAttribute('aria-selected', 'true')
+      fireEvent.click(select)
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
       // Sits in the same row as the All / Places / Food / Stays tabs, right after them.
       const row = screen.getByTestId('explore-filters')
       expect(row).toContainElement(select)
@@ -202,7 +182,9 @@ describe('Explore → Map view', () => {
       // The filter can shrink to share row 2 with the map button (never a 3rd row).
       expect(screen.getByTestId('explore-municipality-wrap').className).toMatch(/grow basis-0 min-w-\[140px\]/)
 
-      fireEvent.change(select, { target: { value: '2' } })
+      fireEvent.click(select)
+      fireEvent.click(screen.getByRole('option', { name: 'Gloria' }))
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
 
       expect(screen.getByTestId('location')).toHaveTextContent('/tourist/explore?municipality=2')
       expect(await screen.findByText('Nothing listed in Gloria yet')).toBeInTheDocument()
@@ -217,9 +199,49 @@ describe('Explore → Map view', () => {
       renderAt('/tourist/explore?tab=food&municipality=2')
 
       expect(await screen.findByText('Nothing listed in Gloria yet')).toBeInTheDocument()
-      expect((screen.getByRole('combobox', { name: 'Municipality' }) as HTMLSelectElement).value).toBe('2')
+      expect(screen.getByRole('combobox', { name: 'Municipality' })).toHaveTextContent('Gloria')
       fireEvent.click(screen.getByRole('button', { name: 'Stays' }))
       expect(screen.getByTestId('location')).toHaveTextContent('/tourist/explore?tab=stays&municipality=2')
+    })
+
+    it('is green: green when showing all, solid green when filtered, and the chosen option is solid green', async () => {
+      renderAt('/tourist/explore')
+      await screen.findByText('Bansud Cafe')
+      const select = screen.getByRole('combobox', { name: 'Municipality' })
+      expect(select.className).toContain('bg-[#E9F7EF]')
+      expect(select.className).toContain('border-[#087F3F]')
+      expect(select.className).toContain('text-[#087F3F]')
+
+      fireEvent.click(select)
+      expect(screen.getByRole('option', { name: 'All municipalities' }).className).toContain('bg-[#087F3F]')
+      expect(screen.getByRole('option', { name: 'Gloria' }).className).not.toContain('bg-[#087F3F]')
+      fireEvent.click(screen.getByRole('option', { name: 'Gloria' }))
+
+      await screen.findByText('Nothing listed in Gloria yet')
+      expect(select.className).toContain('bg-[#087F3F]')
+      expect(select.className).toContain('text-white')
+    })
+
+    it('works from the keyboard and closes on Escape or an outside click', async () => {
+      renderAt('/tourist/explore')
+      await screen.findByText('Bansud Cafe')
+      const select = screen.getByRole('combobox', { name: 'Municipality' })
+
+      fireEvent.keyDown(select, { key: 'ArrowDown' })
+      expect(screen.getByRole('listbox')).toBeInTheDocument()
+      fireEvent.keyDown(select, { key: 'Escape' })
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+
+      fireEvent.click(select)
+      fireEvent.mouseDown(document.body)
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+
+      fireEvent.keyDown(select, { key: 'Enter' })
+      fireEvent.keyDown(select, { key: 'ArrowDown' })
+      fireEvent.keyDown(select, { key: 'ArrowDown' })
+      fireEvent.keyDown(select, { key: 'Enter' })
+      expect(screen.getByTestId('location')).toHaveTextContent('/tourist/explore?municipality=2')
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
     })
   })
 })

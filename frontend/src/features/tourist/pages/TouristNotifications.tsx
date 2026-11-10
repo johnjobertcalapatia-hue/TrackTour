@@ -8,13 +8,19 @@ import { Bell, CheckCheck, ChevronLeft, ChevronRight } from 'lucide-react'
 
 const ITEMS_PER_PAGE = 8
 
+function toNotificationList(value: unknown): Notification[] {
+  if (Array.isArray(value)) return value as Notification[]
+  const page = value as { data?: unknown } | null | undefined
+  return Array.isArray(page?.data) ? (page!.data as Notification[]) : []
+}
+
 export default function TouristNotifications() {
   const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
 
   const { data, isLoading } = useQuery({
     queryKey: ['tourist-notifications'],
-    queryFn: () => get<{ notifications: Notification[] }>('/tourist/notifications'),
+    queryFn: () => get<{ notifications: Notification[] | { data?: Notification[] } }>('/tourist/notifications'),
   })
 
   const markReadMutation = useMutation({
@@ -29,7 +35,10 @@ export default function TouristNotifications() {
 
   if (isLoading) return <DashboardSkeleton />
 
-  const notifications = data?.notifications ?? []
+  // The API sends a paginated page ({ data: [...] , current_page, … }); older
+  // responses were a plain list. Accept both — `.filter` on the page object
+  // crashed this screen (reported 2026-11-09).
+  const notifications = toNotificationList(data?.notifications)
   const unreadCount = notifications.filter((n) => !n.read_at).length
   const totalPages = Math.ceil(notifications.length / ITEMS_PER_PAGE)
   const paginated = notifications.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE)

@@ -234,6 +234,58 @@ tap "Payment received" before their food can be marked ready or collected.
 - **Tunable:** `NAV_TILT_DEG`, `NAV_PERSPECTIVE_PX`, `NAV_TILT_SIZE_FACTOR`
   and `NAV_PUCK_GAP_PX` in `features/rider/navigation-view.ts`. Not visually
   verified on a device in this session.
+- **Free look (2026-11-08):** the rider can drag the map to explore while in
+  the Navigation view (it was locked to the rider before).
+  - The first drag (over 6 px; taps and two-finger pinches don't count) puts
+    the camera in free look: it stops following, the map's bearing is frozen,
+    the fixed puck gives way to the rider marker on the map, and the wheel
+    zooms around the screen centre.
+  - "My location" (no longer shown pressed) ends free look and goes back to
+    the rider at street zoom.
+  - A drag becomes a map pan by undoing the tilt (`planePointForScreen`) and
+    the rotation, so the map stays under the finger. In Chromium the error
+    was 0–4 px at bearings 0/35/120/270.
+  - Opt-in through `NavigationCamera`'s `onFreeLookChange`. The tourist map
+    is unchanged.
+  - **Defect fixed:** Leaflet focuses its container on every press. Inside
+    the `overflow:hidden` map area, that focus scrolled the oversized
+    navigation map by about 80 px. `.rider-map-area` now uses
+    `overflow: clip`.
+  - Tests: `navigation-camera.test.tsx` +8, `rider-map-view-modes.test.tsx`
+    +1, `rider-navigation-view.test.ts` +1. Frontend 496 passed; build clean.
+- **Google-Maps-style explore (2026-11-09)** replaces the free look above.
+  - **Gestures:**
+    - One-finger or mouse drag pans. The spot grabbed stays under the finger
+      (forward, back, sideways).
+    - Two fingers: pinch zooms around the fingers, twist rotates, slide pans.
+    - Right-drag or Ctrl+drag rotates on desktop.
+  - **Mouse wheel and trackpad:** smooth fractional zoom, always around the
+    rider. Their marker never moves while scrolling, whether following or
+    exploring (product decision).
+  - **Following vs exploring:**
+    - While following, a pinch only zooms and the rider stays under the puck.
+    - A twist over 12° or a slide over 40 px turns it into exploring.
+    - Any pan or twist enters free look. The bearing then belongs to the
+      rider's gesture (`onBearingChange`).
+  - **Compass button:** shown in the Navigation view; its red needle points
+    north. Tapping it:
+    - while following, toggles north-up and heading-up;
+    - while exploring, turns the map to face north.
+  - **One view button:** it always offers the other view (Navigation view ⇄
+    Overview).
+  - **Accuracy:** gestures place the spot grabbed at the start rather than
+    moving step by step. Leaflet rounds the view to whole pixels on every
+    change. With step-by-step zooming, a 60-event pinch ended 30 px off; it is
+    now 0–1 px (Chromium, real `NavigationCamera`, touch through CDP).
+  - **Zoom snapping:** `zoomSnap` is 0 while navigating (smooth zoom). Zoom
+    rounds back to a whole level for the Overview.
+  - **Rotation easing:** the rotator's 0.45 s turn easing is off during a
+    gesture (`map-rotator--gesture`).
+  - **Tests:**
+    - `navigation-camera.test.tsx`: 16 tests, rewritten;
+    - `rider-map-view-modes.test.tsx`: 11 tests (view button flip, compass,
+      twist);
+    - frontend 518 passed; build clean.
 
 ## Stage D record (2026-11-08): ratings + sales rank "Popular" food
 
@@ -275,6 +327,43 @@ tap "Payment received" before their food can be marked ready or collected.
   - other sorts unchanged.
 - The existing food stats, dish review and food detail tests are unchanged
   and pass.
+
+## Record (2026-11-10): COD order paid online mid-way
+
+**Rule (user decision).** An order paid online has already paid the
+restaurant: the restaurant does **not** confirm a rider payment. It only marks
+its food Ready; the rider then confirms the pickup. Only a still-unpaid COD
+order keeps the "Payment received" step.
+
+**Defect fixed.** Orders checked out online were already exempt (every COD
+step keys off `payment_method === 'cash'` through
+`NearestRiderService::isCodDelivery`). The gap: a COD order the tourist pays
+online from the To Pay tab ("Complete payment") after it is already under
+way. `PaymentController::markPayablePaid` skipped orders in
+`accepted/preparing/ready`, so the PayMongo payment never reached the order:
+it stayed `cash / pending`, the restaurant still had to confirm a rider
+payment and the rider would have collected the cash a second time. Orders in
+`picked_up/in_transit/arrived_destination/delivered` were worse: they were
+reset to `waiting_restaurant` and dispatched again.
+
+**Fix.** For an order (or a group checkout's order) already under way
+(`accepted, preparing, ready, picked_up, in_transit, arrived_destination`), a
+paid online payment now records `paid_amount`, `payment_method` (gcash) and
+`payment_status = paid` only. Status, acceptance window and delivery are left
+alone (no second dispatch). `delivered` orders are no longer reset. The
+payable's authoritative-paid-once guard (P11.4) is unchanged. Being no longer
+cash, the restaurant purchase rows, purchasing cash, "Payment received" gate
+and the rider's cash collection all drop away automatically.
+
+**Tests.** `CodOrderPaidOnlineTest` (4): a multi-restaurant COD order paid
+online while preparing lets both restaurants mark Ready directly (no
+`restaurant_purchases`, `paymentConfirmation` null, no new delivery, status
+kept); an unpaid COD order still gets the 422; an order paid online while
+in transit keeps `in_transit`; a group checkout paid online mid-way records
+the payment on the canonical order.
+
+Full Laravel suite after the fix: 863 passed, 2 skipped (known environment
+skips), 0 failures (5,434 assertions). No schema change.
 
 ## Stage E record (2026-11-08)
 

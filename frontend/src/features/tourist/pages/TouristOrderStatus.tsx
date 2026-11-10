@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { get, post } from '@/shared/services/api'
-import { useParams, Link, useNavigate } from 'react-router-dom'
+import { useParams, Link } from 'react-router-dom'
+import { useBackOr } from '@/shared/hooks/use-back-or'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { formatCurrency, formatDateTime, toAssetUrl } from '@/shared/utils'
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet'
@@ -243,7 +244,9 @@ function LiveTrackingMap({ delivery, pickupStops, riderLocation }: {
 
 export default function TouristOrderStatus() {
   const { id } = useParams<{ id: string }>()
-  const navigate = useNavigate()
+  // After paying on PayMongo the previous history entry is PayMongo's page:
+  // Back then opens My Orders instead.
+  const goBack = useBackOr('/tourist/activities?view=orders')
   const queryClient = useQueryClient()
   const [showCancelModal, setShowCancelModal] = useState(false)
   const [cancelReason, setCancelReason] = useState('')
@@ -408,7 +411,7 @@ export default function TouristOrderStatus() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <button
-              onClick={() => navigate(-1)}
+              onClick={goBack}
               className="flex items-center gap-2 text-[#6B7280] hover:text-[#087F3F] text-sm mb-2 transition-colors"
             >
               <ArrowLeft className="w-4 h-4" />

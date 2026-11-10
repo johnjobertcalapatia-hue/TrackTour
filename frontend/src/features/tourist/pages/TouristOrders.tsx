@@ -1,13 +1,15 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import type { FoodItem } from '@/features/tourist/components/FoodMenuCard'
 import OrderItemRow from '@/features/tourist/components/OrderItemRow'
 import { fetchMyOrders, myOrdersKey, type OrderSection, type TabKey, type SectionTab } from '@/features/tourist/services/my-orders'
-import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query'
-import { get } from '@/shared/services/api'
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery } from '@tanstack/react-query'
+import { apiErrorMessage, get } from '@/shared/services/api'
+import { createCheckoutSession } from '@/shared/services/payment'
+import { openExternalPage } from '@/shared/utils/external-redirect'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { cn, formatCurrency, formatDateTime, toAssetUrl } from '@/shared/utils'
-import { Banknote, Bike, CheckCircle2, ClipboardList, CreditCard, MapPin, PackageCheck, Star, UtensilsCrossed } from 'lucide-react'
+import { Banknote, Bike, CheckCircle2, ClipboardList, CreditCard, Loader2, MapPin, PackageCheck, Star, UtensilsCrossed } from 'lucide-react'
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -193,11 +195,7 @@ function SectionActions({ section }: { section: OrderSection }) {
         </p>
       )}
 
-      {section.tab === 'to_pay' && (
-        <Link to={progressUrl} className={cn(button, 'bg-[#F4B400] text-[#17201B] hover:bg-[#E0A500]')}>
-          <CreditCard className="w-4 h-4" aria-hidden="true" /> Complete payment
-        </Link>
-      )}
+      {section.tab === 'to_pay' && <CompletePaymentButton section={section} className={button} />}
       {section.tab === 'to_review' && (
         <Link to={`/tourist/orders/${section.primary_order_id}/details`} className={cn(button, 'border border-[#087F3F] text-[#087F3F] hover:bg-[#E9F7EF]')}>
           View order details
@@ -229,6 +227,52 @@ function SectionActions({ section }: { section: OrderSection }) {
         </span>
       )}
       {section.tab === 'cancelled' && <span className="text-sm text-[#56615B]">This order was {section.status_label.toLowerCase()}.</span>}
+    </div>
+  )
+}
+
+/**
+ * "Complete payment" for an unpaid online (GCash) order: opens a new PayMongo
+ * checkout for the whole checkout (the group checkout for a multi-restaurant
+ * order) and sends the tourist to PayMongo's page, where they enter their
+ * name and GCash number. PayMongo then returns them to /payment/callback.
+ * A fresh checkout is opened each time: an earlier one may have expired or
+ * been cancelled, and the server refuses one that is already paid.
+ */
+function CompletePaymentButton({ section, className }: { section: OrderSection; className: string }) {
+  const [error, setError] = useState<string | null>(null)
+  const pay = useMutation({
+    mutationFn: () => (section.group_order_id
+      ? createCheckoutSession('group_order', section.group_order_id, 'gcash')
+      : createCheckoutSession('order', section.primary_order_id, 'gcash')),
+    onSuccess: (data) => {
+      if (data?.checkout_url) {
+        openExternalPage(data.checkout_url)
+      } else {
+        setError("Couldn't open the payment page. Please try again.")
+      }
+    },
+    onError: (e) => setError(apiErrorMessage(e, "Couldn't open the payment page. Please try again.")),
+  })
+  // Stays "Opening…" after success too: the browser is leaving for PayMongo.
+  const busy = pay.isPending || (pay.isSuccess && !error)
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <button
+        type="button"
+        onClick={() => {
+          setError(null)
+          pay.mutate()
+        }}
+        disabled={busy}
+        className={cn(className, 'bg-[#F4B400] text-[#17201B] hover:bg-[#E0A500] disabled:opacity-70')}
+      >
+        {busy
+          ? <><Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> Opening payment…</>
+          : <><CreditCard className="w-4 h-4" aria-hidden="true" /> Complete payment</>}
+      </button>
+      {error && <p role="alert" className="text-xs font-medium text-[#B91C1C]">{error}</p>}
     </div>
   )
 }

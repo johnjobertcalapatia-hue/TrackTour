@@ -2,11 +2,24 @@ import { useEffect, type ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useAuthStore } from '@/features/auth/services/auth-store'
 
+/**
+ * Retry a failed query once — but not a client error (4xx): "not found",
+ * "forbidden" or a validation error gives the same answer again, and the
+ * retry only doubled the error in the console (e.g. a restaurant that no
+ * longer exists, reported 2026-11-09). Timeouts (408) and rate limits (429)
+ * can succeed later, so they are retried.
+ */
+export function shouldRetryQuery(failureCount: number, error: unknown): boolean {
+  const status = (error as { response?: { status?: number } } | null)?.response?.status
+  if (typeof status === 'number' && status >= 400 && status < 500 && status !== 408 && status !== 429) return false
+  return failureCount < 1
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       staleTime: 5 * 60 * 1000,
-      retry: 1,
+      retry: shouldRetryQuery,
       refetchOnWindowFocus: false,
     },
   },

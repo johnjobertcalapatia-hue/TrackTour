@@ -200,7 +200,7 @@ export default function TouristFood() {
 
       {/* Floating cart bar (above the mobile bottom navigation) */}
       {cartCount > 0 && (
-        <div className="fixed inset-x-0 z-[1900] px-4 bottom-[calc(4.75rem+env(safe-area-inset-bottom))] lg:bottom-6 lg:left-[248px] pointer-events-none">
+        <div className="fixed inset-x-0 z-[1900] px-4 bottom-[calc(var(--tourist-bottom-nav-space)+0.75rem)] lg:bottom-6 lg:left-[248px] pointer-events-none">
           <button
             type="button"
             onClick={() => navigate('/tourist/food/cart')}

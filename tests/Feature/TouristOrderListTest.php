@@ -153,6 +153,8 @@ class TouristOrderListTest extends TestCase
         $this->assertEqualsCanonicalizing(['Ekslusibo Grill', 'Bansud Cafe'], array_column($section['items'], 'restaurant'));
         $this->assertEquals(95, $section['delivery_fee'], 'one delivery fee for the whole checkout');
         $this->assertEquals(643, $section['total']);
+        // "Complete payment" pays the group checkout as a whole.
+        $this->assertSame($group->id, $section['group_order_id']);
     }
 
     public function test_reviewing_moves_the_order_out_of_to_review(): void

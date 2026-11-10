@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { clearBrowsedPlaces, getBrowsedPlaces, type BrowsedPlace } from '@/shared/services/browsing-history'
+import { browsedPlaceLink, clearBrowsedPlaces, getBrowsedPlaces, type BrowsedPlace } from '@/shared/services/browsing-history'
 import { getSeenMunicipalities } from '@/shared/hooks/use-current-municipality'
 import { useQuery } from '@tanstack/react-query'
 import { get } from '@/shared/services/api'
@@ -215,7 +215,7 @@ function ExploredCard({ place: p }: { place: BrowsedPlace }) {
   return (
     <li>
       <Link
-        to={p.url}
+        to={browsedPlaceLink(p)}
         className="group flex flex-col h-full bg-white rounded-2xl border border-[#E5E9E7] overflow-hidden hover:border-[#087F3F]/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#087F3F] transition"
       >
         <div className="relative aspect-[4/3] bg-[#E9F7EF] overflow-hidden">

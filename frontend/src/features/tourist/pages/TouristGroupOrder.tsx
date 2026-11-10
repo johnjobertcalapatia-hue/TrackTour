@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useParams, Link, useNavigate } from 'react-router-dom'
+import { useParams, Link } from 'react-router-dom'
+import { useBackOr } from '@/shared/hooks/use-back-or'
 import { get, post } from '@/shared/services/api'
 import { formatCurrency, formatDateTime, toAssetUrl } from '@/shared/utils'
 import {
@@ -135,7 +136,8 @@ function isOrderCancellable(status: string): boolean {
 
 export default function TouristGroupOrder() {
   const { id } = useParams<{ id: string }>()
-  const navigate = useNavigate()
+  // After paying on PayMongo the previous history entry is PayMongo's page.
+  const goBack = useBackOr('/tourist/activities?view=orders')
 
   const { data, isLoading, isError } = useQuery<{ group_order: GroupCheckoutData }>({
     queryKey: ['group-order', id],
@@ -183,7 +185,7 @@ export default function TouristGroupOrder() {
 
   return (
     <div className="max-w-4xl mx-auto py-6">
-      <button onClick={() => navigate(-1)} className="inline-flex items-center gap-2 text-sm text-[#6B7280] hover:text-[#17201B] mb-6 transition">
+      <button onClick={goBack} className="inline-flex items-center gap-2 text-sm text-[#6B7280] hover:text-[#17201B] mb-6 transition">
         <ArrowLeft className="w-4 h-4" /> Back
       </button>
 

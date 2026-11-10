@@ -161,12 +161,17 @@ describe('GlobalRiderAlert — COD pickup-gate behaviour', () => {
     fireEvent.click(confirm)
     expect(onConfirmDelivery).not.toHaveBeenCalled()
 
-    // Take the photo (rear camera), then confirm.
-    const input = screen.getByLabelText('Take a photo of the delivered food')
+    // Take the photo of the tourist receiving the food (jsdom has no live
+    // camera, so this is the phone camera-app path), check it, submit it.
+    const input = screen.getByLabelText('Take a photo of the tourist receiving the food')
     expect(input).toHaveAttribute('capture', 'environment')
     const photo = new File(['x'], 'delivered.jpg', { type: 'image/jpeg' })
     fireEvent.change(input, { target: { files: [photo] } })
-    expect(screen.getByAltText('Delivered food')).toHaveAttribute('src', 'blob:proof')
+    expect(screen.getByAltText('Photo preview')).toHaveAttribute('src', 'blob:proof')
+    // Taken but not submitted yet: still can't confirm.
+    expect(screen.getByRole('button', { name: /confirm delivered/i })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Submit photo' }))
+    expect(screen.getByAltText('Submitted delivery photo')).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: /confirm delivered/i }))
     expect(onConfirmDelivery).toHaveBeenCalledWith(photo)

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { MapContainer, TileLayer, Marker, Polyline, useMap } from 'react-leaflet'
 import { Navigation, MapPin, LocateFixed, X, Loader2, Route as RouteIcon, Clock } from 'lucide-react'
-import { pinIcon, userPinIcon } from '@/shared/utils/pin-icon'
+import { businessLogoIcon, pinIcon, userPinIcon } from '@/shared/utils/pin-icon'
 import { useOsrmRoute } from '@/features/rider/hooks/useOsrmRoute'
-import { cn } from '@/shared/utils'
+import { cn, toAssetUrl } from '@/shared/utils'
 
 type LatLng = [number, number]
 
@@ -17,6 +17,8 @@ interface Props {
   restaurantName: string
   destination: LatLng
   locationLabel: string
+  /** The place's logo (else cover photo): drawn in its map pin, like the Explore map. */
+  photo?: string | null
 }
 
 function geolocationMessage(error: GeolocationPositionError | null): string {
@@ -35,6 +37,12 @@ function formatDuration(min: number): string {
   const h = Math.floor(min / 60)
   const m = Math.round(min % 60)
   return m ? `${h} hr ${m} min` : `${h} hr`
+}
+
+/** The place's photo pin (Explore map marker); the plain pin when it has no photo. */
+function placeMarkerIcon(name: string, photo?: string | null) {
+  const src = photo ? toAssetUrl(photo) : null
+  return src ? businessLogoIcon(src, name, true) : pinIcon(name, true)
 }
 
 /** Keeps the tourist, the restaurant and the route in view. */
@@ -57,7 +65,7 @@ function FitToRoute({ points }: { points: LatLng[] }) {
  * route loads, or if the router is unreachable, a dashed straight line is
  * drawn so the tourist still sees the direction.
  */
-export default function RestaurantRouteMap({ restaurantName, destination, locationLabel }: Props) {
+export default function RestaurantRouteMap({ restaurantName, destination, locationLabel, photo }: Props) {
   const [locate, setLocate] = useState<LocateState>({ status: 'idle' })
   const origin = locate.status === 'ready' ? locate.position : null
 
@@ -102,7 +110,8 @@ export default function RestaurantRouteMap({ restaurantName, destination, locati
             />
           )}
           {origin && <Marker position={origin} icon={userPinIcon} />}
-          <Marker position={destination} icon={pinIcon(restaurantName, true)} />
+          {/* Same marker as the Explore map: the place's photo in a round pin, with its name. */}
+          <Marker position={destination} icon={placeMarkerIcon(restaurantName, photo)} />
           {origin && <FitToRoute points={linePoints} />}
         </MapContainer>
       </div>

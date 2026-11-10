@@ -24,8 +24,18 @@ vi.mock('@/features/rider/components/RiderMapFollow', () => ({
   RiderMapFollow: ({ overview }: { overview?: { key: string } | null }) => <div data-testid="follow-mode" data-overview-key={overview?.key ?? ''} />,
 }))
 vi.mock('@/shared/components/map/NavigationCamera', () => ({
-  NavigationCamera: ({ bearing, screenOffset }: { bearing: number; screenOffset: { y: number } }) => (
-    <div data-testid="nav-camera" data-bearing={bearing} data-offset-y={screenOffset.y} />
+  NavigationCamera: ({ bearing, screenOffset, freeLook, onFreeLookChange, onBearingChange }: {
+    bearing: number
+    screenOffset: { y: number }
+    freeLook?: boolean
+    onFreeLookChange?: (free: boolean) => void
+    onBearingChange?: (bearing: number) => void
+  }) => (
+    <div data-testid="nav-camera" data-bearing={bearing} data-offset-y={screenOffset.y} data-free-look={String(!!freeLook)}>
+      {/* Stand in for the rider dragging / twisting the map. */}
+      <button type="button" onClick={() => onFreeLookChange?.(true)}>simulate map drag</button>
+      <button type="button" onClick={() => { onFreeLookChange?.(true); onBearingChange?.(270) }}>simulate map twist</button>
+    </div>
   ),
 }))
 vi.mock('@/features/rider/components/MapZoomOutLimit', () => ({ MapZoomOutLimit: () => null }))
@@ -90,13 +100,26 @@ beforeEach(() => {
 })
 
 describe('Rider map: Overview and Navigation views', () => {
-  it('stacks the Overview and Navigation buttons directly above the map-type button', async () => {
+  it('one view button (it offers the other view) sits directly above the map-type button', async () => {
     renderMap()
-    const group = await screen.findByRole('group', { name: 'Map view' })
-    const stack = group.parentElement as HTMLElement
+    const toggle = await screen.findByRole('button', { name: 'Navigation view' })
+    expect(toggle).toHaveAttribute('data-current-view', 'overview')
+    const stack = toggle.parentElement as HTMLElement
     const labels = within(stack).getAllByRole('button').map((b) => b.getAttribute('aria-label'))
-    expect(labels).toEqual(['Overview', 'Navigation view', 'Map type', 'Center map on my location'])
-    expect(screen.getByRole('button', { name: 'Overview' })).toHaveAttribute('aria-pressed', 'true')
+    expect(labels).toEqual(['Navigation view', 'Map type', 'Center map on my location'])
+    expect(screen.queryByRole('button', { name: 'Overview' })).not.toBeInTheDocument()
+  })
+
+  it('the view button flips: Navigation view ⇄ Overview', async () => {
+    renderMap()
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Navigation view' })) })
+    const toggle = screen.getByRole('button', { name: 'Overview' })
+    expect(toggle).toHaveAttribute('data-current-view', 'navigation')
+    expect(screen.queryByRole('button', { name: 'Navigation view' })).not.toBeInTheDocument()
+
+    await act(async () => { fireEvent.click(toggle) })
+    expect(screen.getByRole('button', { name: 'Navigation view' })).toHaveAttribute('data-current-view', 'overview')
+    expect(screen.getByTestId('leaflet-map').closest('[data-view-mode]')).toHaveAttribute('data-view-mode', 'overview')
   })
 
   it('opens in the overview with the route framed and no Start button', async () => {
@@ -117,8 +140,38 @@ describe('Rider map: Overview and Navigation views', () => {
     expect(screen.getByTestId('rider-nav-puck')).toBeInTheDocument()
     // Same marker as the overview, lying back at the map's tilt like the map's own markers.
     expect(screen.getByTestId('rider-nav-puck-marker').style.transform).toBe('perspective(1000px) rotateX(50deg)')
-    expect(screen.getByRole('button', { name: 'Navigation view' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Overview' })).toHaveAttribute('data-current-view', 'navigation')
     expect(screen.getByTestId('leaflet-map').closest('[data-view-mode]')).toHaveAttribute('data-view-mode', 'navigation')
+    // Navigation has a compass; the overview doesn't.
+    expect(screen.getByRole('button', { name: /^Compass/ })).toBeInTheDocument()
+  })
+
+  it('compass: tap for north-up while following, tap again for the travel direction', async () => {
+    renderMap()
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Navigation view' })) })
+    const rotator = screen.getByTestId('rider-map-rotator')
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Compass: tap to face north' })) })
+    expect(rotator).toHaveAttribute('data-bearing', '0')
+    expect(screen.getByRole('button', { name: /^Compass: north up/ })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('nav-camera')).toHaveAttribute('data-free-look', 'false') // still following
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /^Compass: north up/ })) })
+    expect(screen.getByRole('button', { name: 'Compass: tap to face north' })).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('twisting the map turns it (the compass needle follows); the compass turns it back to north', async () => {
+    renderMap()
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Navigation view' })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'simulate map twist' })) })
+
+    expect(screen.getByTestId('rider-map-rotator')).toHaveAttribute('data-bearing', '270')
+    expect(screen.getByTestId('nav-camera')).toHaveAttribute('data-bearing', '270')
+    expect(screen.getByTestId('rider-map-compass-needle').style.transform).toBe('rotate(-270deg)')
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Compass: tap to face north' })) })
+    expect(screen.getByTestId('rider-map-rotator')).toHaveAttribute('data-bearing', '0')
+    expect(screen.getByTestId('nav-camera')).toHaveAttribute('data-free-look', 'true') // still exploring
   })
 
   it('Overview returns to the flat bird\'s-eye view and re-frames the route', async () => {
@@ -130,6 +183,29 @@ describe('Rider map: Overview and Navigation views', () => {
     expect(screen.queryByTestId('nav-camera')).not.toBeInTheDocument()
     expect(screen.queryByTestId('rider-nav-puck')).not.toBeInTheDocument()
     expect(screen.getByTestId('follow-mode')).toHaveAttribute('data-overview-key', '6:pickup:1')
+  })
+
+  it('the rider can drag the map to explore while navigating; "My location" goes back', async () => {
+    renderMap()
+    await act(async () => { fireEvent.click(await screen.findByRole('button', { name: 'Navigation view' })) })
+    const locate = screen.getByRole('button', { name: 'Center map on my location' })
+    expect(locate).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('nav-camera')).toHaveAttribute('data-free-look', 'false')
+
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'simulate map drag' })) })
+    // Exploring: the camera stops following, the fixed puck gives way to the
+    // rider marker on the map, and "My location" is no longer pressed.
+    expect(screen.getByTestId('nav-camera')).toHaveAttribute('data-free-look', 'true')
+    expect(screen.queryByTestId('rider-nav-puck')).not.toBeInTheDocument()
+    expect(screen.getAllByTestId('marker').some((m) => m.getAttribute('data-icon') === 'custom-rider-navigation-marker')).toBe(true)
+    expect(locate).toHaveAttribute('aria-pressed', 'false')
+    // Still the navigation view (tilted, heading-up).
+    expect(screen.getByTestId('leaflet-map').closest('[data-view-mode]')).toHaveAttribute('data-view-mode', 'navigation')
+
+    await act(async () => { fireEvent.click(locate) })
+    expect(screen.getByTestId('nav-camera')).toHaveAttribute('data-free-look', 'false')
+    expect(screen.getByTestId('rider-nav-puck')).toBeInTheDocument()
+    expect(locate).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('hides restaurants that were already collected; the next one stays', async () => {
@@ -145,7 +221,7 @@ describe('Rider map: Overview and Navigation views', () => {
     expect(await screen.findByTestId('follow-mode')).toHaveAttribute('data-overview-key', '6:pickup:0')
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Going to Pickup.*Show the whole route/ })) })
     expect(screen.getByTestId('follow-mode')).toHaveAttribute('data-overview-key', '6:pickup:1')
-    expect(screen.getByRole('button', { name: 'Overview' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Navigation view' })).toHaveAttribute('data-current-view', 'overview')
   })
 
   it('restaurants use the tourist map business marker (photo pin with the name)', async () => {
