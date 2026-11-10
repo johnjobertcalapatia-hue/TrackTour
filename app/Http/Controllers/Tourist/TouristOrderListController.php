@@ -161,6 +161,9 @@ class TouristOrderListController extends Controller
             'key' => $group ? 'group-'.$group->id : 'order-'.$primary->id,
             'reference' => $group?->reference_number ?? $primary->order_number,
             'primary_order_id' => $primary->id,
+            // "Complete payment" pays the whole checkout: the group checkout when
+            // there is one, otherwise the order (PaymentController::createIntent).
+            'group_order_id' => $group?->id,
             'placed_at' => $primary->created_at?->toIso8601String(),
             'tab' => $tab,
             /** Every tab this order shows in (a COD order: its progress tab + to_pay). */

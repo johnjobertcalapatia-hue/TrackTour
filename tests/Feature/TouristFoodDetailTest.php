@@ -59,6 +59,33 @@ class TouristFoodDetailTest extends TestCase
         ], $overrides));
     }
 
+    /**
+     * Product rule (2026-11-09): a CLOSED restaurant is still browsable — its
+     * page, information and menu load; only ordering is off. Only a
+     * restaurant that does not exist (or is not approved) is "not found".
+     */
+    public function test_a_closed_restaurant_is_still_browsable_with_its_menu_but_not_orderable(): void
+    {
+        $owner = $this->makeUser('business_owner', 'closed-owner@example.com');
+        // No opening hours set: closed right now.
+        $business = $this->makeBusiness($owner, ['business_name' => 'Closed Grill']);
+        $dish = $this->makeOffering($business, ['name' => 'Sisig']);
+
+        $page = $this->getJson('/api/tourist/explore/'.$business->id);
+        $page->assertOk()
+            ->assertJsonPath('data.business.business_name', 'Closed Grill')
+            ->assertJsonPath('data.business.is_accepting_orders', false)
+            ->assertJsonPath('data.menu_items.0.name', 'Sisig');
+
+        // The dish page opens too, also not orderable.
+        $this->getJson('/api/tourist/food/'.$dish->id)
+            ->assertOk()
+            ->assertJsonPath('data.is_accepting_orders', false);
+
+        // A restaurant that does not exist is the only "not found".
+        $this->getJson('/api/tourist/explore/999999')->assertNotFound();
+    }
+
     public function test_food_detail_returns_gallery_variations_and_restaurant_context(): void
     {
         $owner = $this->makeUser('tourist', 'owner@example.com');

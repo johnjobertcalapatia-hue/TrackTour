@@ -129,6 +129,29 @@ MAIL_FROM_NAME="Track-Tour App"
    `CleanupRiderLocations`.
 6. Point PayMongo webhooks at `https://<your-api-service>.up.railway.app/api/payments/webhook`
    and the payment return URL at the API's `/api/payments/return`.
+7. **Payment return page.** Set `FRONTEND_URL` on the API service to the
+   public address of the web app (the service that serves the React build).
+   PayMongo sends customers back to `FRONTEND_URL/payment/callback`; without
+   it Laravel falls back to `APP_URL` (the API), where that page is a 404.
+   Live (2026-11-10): `FRONTEND_URL=https://nurturing-creation-production-ecea.up.railway.app`
+   on the `TrackTour` service.
+8. **Real GCash payments (PayMongo live mode).** Test keys (`sk_test_` /
+   `pk_test_`) only open PayMongo's test GCash page; no money moves. To take
+   real payments:
+   - activate the PayMongo account (business verification) and make sure
+     GCash is enabled for it;
+   - in PayMongo **live** mode copy the live keys into the API service:
+     `PAYMONGO_SECRET_KEY=sk_live_…`, `PAYMONGO_PUBLIC_KEY=pk_live_…`;
+   - create a **live** webhook for `…/api/payments/webhook` (events
+     `checkout_session.payment.paid`, `payment.paid`, `payment.failed`,
+     `refund.*`) and set its signing secret as `PAYMONGO_WEBHOOK_SECRET`
+     (test and live webhooks have different secrets);
+   - redeploy, then make one small real payment and check the order turns
+     paid.
+   Outside `local`/`testing`, webhooks are **rejected** when
+   `PAYMONGO_WEBHOOK_SECRET` is empty (fail closed, 2026-11-10): an unsigned
+   "paid" event can never mark an order paid. Live signatures (`li=`) are
+   verified.
 
 ## 4. Railway — Socket.IO service
 

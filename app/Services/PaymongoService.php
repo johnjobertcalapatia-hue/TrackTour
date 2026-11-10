@@ -315,9 +315,19 @@ class PaymongoService
     public function verifyWebhookSignature(string $payload, string $signatureHeader): bool
     {
         if (empty($this->webhookSecret)) {
-            Log::warning('PayMongo webhook secret not configured — skipping signature verification.');
+            // Only local development / the test suite may run without a
+            // secret. Anywhere else (production, staging) fail CLOSED: an
+            // unsigned "paid" event could otherwise mark an order paid with
+            // no money received (checkout ids are visible to the payer).
+            if (app()->environment(['local', 'testing'])) {
+                Log::warning('PayMongo webhook secret not configured — skipping signature verification (local/testing only).');
 
-            return true;
+                return true;
+            }
+
+            Log::error('PayMongo webhook rejected: PAYMONGO_WEBHOOK_SECRET is not configured.');
+
+            return false;
         }
 
         if (empty($signatureHeader)) {
@@ -355,9 +365,10 @@ class PaymongoService
         $valid = hash_equals($expected, $signature);
 
         if (! $valid) {
+            // Never log the expected HMAC: it would let anyone reading the
+            // logs replay a valid signature for this payload.
             Log::warning('PayMongo webhook signature mismatch', [
-                'expected' => $expected,
-                'received' => $signature,
+                'timestamp' => $timestamp,
             ]);
         }
 
