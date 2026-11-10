@@ -436,6 +436,12 @@ describe('tourist food item details — mobile order bar', () => {
     expect(bar.className).toContain('fixed')
     expect(bar.className).toContain('bottom-[var(--tourist-bottom-nav-space)]')
     expect(bar.className).toContain('lg:static')
+    // Buy Now is green below lg. Its classes must not contain the substring
+    // "bg-white": the shared card rule (index.css) matches substrings and
+    // repainted it near-white on every screen, hiding its white text (2026-11-10).
+    const buyNow = within(bar).getByRole('button', { name: /Buy Now/ })
+    expect(buyNow.className).toContain('bg-[#087F3F]')
+    expect(buyNow.className).not.toContain('bg-white')
 
     // Two equal halves: icon group (left) and Buy Now (right).
     const halves = bar.firstElementChild!

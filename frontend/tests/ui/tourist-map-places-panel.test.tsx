@@ -258,7 +258,7 @@ describe('Tourist map — places panel', () => {
     expect(input.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     // White fields with a grey border until something is chosen.
     expect(municipality!.className).toContain('rounded-xl')
-    expect(municipality!.className).toContain('bg-white')
+    expect(municipality!.className).toContain('bg-[#fff]')
     expect(municipality!.className).toContain('border-[#E5E9E7]')
   })
 

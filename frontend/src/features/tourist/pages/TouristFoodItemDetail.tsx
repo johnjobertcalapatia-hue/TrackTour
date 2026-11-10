@@ -543,12 +543,15 @@ export default function TouristFoodItemDetail() {
                   </button>
                 </div>
 
-                {/* Right half: Buy Now */}
+                {/* Right half: Buy Now. NB: "lg:bg-[#fff]", not "lg:bg-white": the
+                    shared card rule in index.css matches class SUBSTRINGS
+                    (bg-white + rounded-xl + border) and painted this button
+                    near-white on every screen, hiding its white text. */}
                 <button
                   type="button"
                   onClick={handleBuyNow}
                   disabled={!orderable}
-                  className="min-w-0 h-12 px-2 flex items-center justify-center gap-1.5 rounded-xl bg-[#087F3F] lg:bg-white lg:border-2 lg:border-[#087F3F] text-white lg:text-[#087F3F] text-base lg:text-sm font-bold whitespace-nowrap hover:bg-[#056B35] lg:hover:bg-[#E9F7EF] transition disabled:bg-[#E5E9E7] disabled:text-[#68736D] lg:disabled:border-[#E5E9E7] disabled:cursor-not-allowed"
+                  className="min-w-0 h-12 px-2 flex items-center justify-center gap-1.5 rounded-xl bg-[#087F3F] lg:bg-[#fff] lg:border-2 lg:border-[#087F3F] text-white lg:text-[#087F3F] text-base lg:text-sm font-bold whitespace-nowrap hover:bg-[#056B35] lg:hover:bg-[#E9F7EF] transition disabled:bg-[#E5E9E7] disabled:text-[#68736D] lg:disabled:border-[#E5E9E7] disabled:cursor-not-allowed"
                 >
                   <Zap className="w-5 h-5 shrink-0" aria-hidden="true" /> Buy Now
                 </button>

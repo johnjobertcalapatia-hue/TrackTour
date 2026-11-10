@@ -1030,7 +1030,11 @@ header {
   border-radius: 9999px !important;
 }
 
-/* Shared card/modal patterns used across tourist, rider, business, and admin pages. */
+/* Shared card/modal patterns used across tourist, rider, business, and admin pages.
+   NB: these match class SUBSTRINGS, so "lg:bg-white", "hover:bg-white" or
+   "bg-white/90" plus rounded + border also turn an element into this card
+   (background #f8faf6, grey border) on EVERY screen. A coloured button that is
+   only white at some sizes must write it as bg-[#fff] (e.g. food Buy Now). */
 [class*="bg-white"][class*="rounded-2xl"][class*="border"],
 [class*="bg-white"][class*="rounded-xl"][class*="border"] {
   background-color: #f8faf6;
