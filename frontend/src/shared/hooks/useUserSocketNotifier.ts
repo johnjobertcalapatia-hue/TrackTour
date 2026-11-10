@@ -54,6 +54,11 @@ export function useUserSocketNotifier({
     get<UserTokenData>('/socket/user-token')
       .then((data) => {
         if (cancelled) return
+        // No token (e.g. a failed or empty response): nothing to join.
+        if (!data?.userId || !data?.token) {
+          setConnection('closed')
+          return
+        }
 
         socket = io(SOCKET_BASE_URL, {
           transports: ['polling', 'websocket'],
