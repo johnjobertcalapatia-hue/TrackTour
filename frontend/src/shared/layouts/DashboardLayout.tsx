@@ -22,6 +22,8 @@ const bottomPanelActions = [
 // gate whose violation is logged as `gps_stale` and silently excludes a rider
 // from every COD dispatch wave.
 const RIDER_LOCATION_HEARTBEAT_MS = 60_000
+/** On a trip the saved fix gates arrival / delivery: refresh it more often. */
+const RIDER_TRIP_LOCATION_HEARTBEAT_MS = 30_000
 
 // Rider-selectable service types. The value is persisted to
 // rider_details.current_service, which is the column NearestRiderService
@@ -150,9 +152,9 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
       )
 
     beat()
-    const id = window.setInterval(beat, RIDER_LOCATION_HEARTBEAT_MS)
+    const id = window.setInterval(beat, inTrip ? RIDER_TRIP_LOCATION_HEARTBEAT_MS : RIDER_LOCATION_HEARTBEAT_MS)
     return () => window.clearInterval(id)
-  }, [roleLabel, riderOnline])
+  }, [roleLabel, riderOnline, inTrip])
 
   // Auto-dismiss the availability conflict message so it never gets stuck.
   useEffect(() => {

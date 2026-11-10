@@ -156,6 +156,8 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
   // rider confirms pickup instead of waiting up to a refetch round-trip.
   const [optimisticStatus, setOptimisticStatus] = useState<string | null>(null)
   const lastAlertStatus = useRef<string | null>(null)
+  // Latest usable GPS fix, for the actions below (no stale closure).
+  const freshFix = useRef<[number, number] | null>(null)
 
   const setRiderPosition = useCallback((lat: number, lng: number) => {
     // A reading missing an axis is never a position (see isUsableGpsFix).
@@ -163,6 +165,23 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
     if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) return
     setRiderPositionState([lat, lng])
     setPositionKnown(true)
+    freshFix.current = [lat, lng]
+  }, [])
+
+  /**
+   * Save the device's current GPS fix on the server right before a
+   * location-gated action (I've Arrived, Confirm Delivered). The server judges
+   * those from the rider's SAVED fix; a rider standing still at the door may
+   * not have sent one recently (2026-11-10). Never blocks the action.
+   */
+  const sendFreshFix = useCallback(async () => {
+    const fix = freshFix.current
+    if (!fix || !isUsableGpsFix(fix[0], fix[1])) return
+    try {
+      await post('/rider/map/location', { latitude: fix[0], longitude: fix[1] })
+    } catch {
+      // The action itself reports any location problem.
+    }
   }, [])
 
   const { data } = useQuery({
@@ -198,14 +217,18 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
     onError: () => setOptimisticStatus(null),
   })
   const arrivedDropMutation = useMutation({
-    mutationFn: (id: number) => patch(`/rider/deliveries/${id}/status`, { status: 'arrived_destination' }),
+    mutationFn: async (id: number) => {
+      await sendFreshFix()
+      return patch(`/rider/deliveries/${id}/status`, { status: 'arrived_destination' })
+    },
     onSuccess: arrivalsRefetch,
   })
   // Food deliveries complete with a proof photo at the drop-off (decision
   // 2026-11-08): POST /rider/deliveries/{id}/complete. The server checks the
   // 50 m radius from the rider's saved GPS and, for COD, settles the cash due.
   const completeMutation = useMutation({
-    mutationFn: ({ id, photo }: { id: number; photo: File }) => {
+    mutationFn: async ({ id, photo }: { id: number; photo: File }) => {
+      await sendFreshFix()
       const body = new FormData()
       body.append('photo', photo)
       return post(`/rider/deliveries/${id}/complete`, body)
