@@ -8,6 +8,13 @@ use Illuminate\Database\Seeder;
 
 class BusinessModuleSeeder extends Seeder
 {
+    /**
+     * Only give modules to categories that have none yet (leave lists an admin
+     * customised alone). Used by the 2026_11_10 backfill migration; a manual
+     * `db:seed` keeps syncing every category to this file.
+     */
+    public bool $onlyEmptyCategories = false;
+
     public function run(): void
     {
         $modules = [
@@ -201,9 +208,16 @@ class BusinessModuleSeeder extends Seeder
             ],
         ];
 
+        // Category names used by other environments for the same business type
+        // (production names its attraction category "Attractions").
+        $mappings['Attractions'] = $mappings['Tourist Attraction'];
+
         foreach ($mappings as $categoryName => $moduleCodes) {
             $category = BusinessCategory::where('name', $categoryName)->first();
             if (! $category) {
+                continue;
+            }
+            if ($this->onlyEmptyCategories && $category->modules()->exists()) {
                 continue;
             }
 

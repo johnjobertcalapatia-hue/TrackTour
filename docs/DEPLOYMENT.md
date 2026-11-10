@@ -153,6 +153,16 @@ MAIL_FROM_NAME="Track-Tour App"
    "paid" event can never mark an order paid. Live signatures (`li=`) are
    verified.
 
+9. **Business owner modules.** The business owner sidebar only shows the
+   modules a business has (`business_module_assignments`). Migration
+   `2026_11_10_000001_seed_business_modules_and_assignments` creates any
+   missing modules on deploy, gives categories without modules their defaults
+   (admin-customised lists are kept) and links businesses that have none.
+   Production had all three module tables empty until 2026-11-10 (restaurant
+   sidebar missing Menu / Orders / Kitchen / POS); it was backfilled that day
+   with the same additive logic through `railway ssh` (49 modules, 42
+   category links, 31 business links), so the migration is a no-op there.
+
 ## 4. Railway — Socket.IO service
 
 1. **New Service → Port with a Dockerfile**, same repo. Settings:
