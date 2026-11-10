@@ -147,7 +147,10 @@ export default function FilterDropdown({
               )
             : cn(
                 size === 'sm' ? 'h-8 pl-3 pr-8 rounded-lg text-xs' : 'h-10 pl-3 pr-9 rounded-xl',
-                'bg-white',
+                // "bg-[#fff]", not "bg-white": the shared card rule in index.css
+                // (substring bg-white + rounded-xl + border) would override the
+                // green "filter active" border and background.
+                'bg-[#fff]',
                 filtered
                   ? 'border-[#087F3F] text-[#087F3F] bg-[#F3FAF6]'
                   : 'border-[#E5E9E7] text-[#17201B] hover:border-[#087F3F]/50',

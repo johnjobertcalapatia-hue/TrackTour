@@ -81,3 +81,95 @@ export function stepTime(iso: string | null | undefined): string | null {
   const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Manila' })
   return `${date} • ${time}`
 }
+
+/** One requirement an action waits for, shown as a tick / cross under its button. */
+export interface Condition {
+  label: string
+  met: boolean
+}
+
+/** Server defaults (config/tracking.php): restaurant 50 m, drop-off arrival 50 m, delivery proof 50 m. */
+export const PICKUP_RADIUS_M = 50
+export const DROPOFF_ARRIVAL_RADIUS_M = 50
+export const DROPOFF_PROOF_RADIUS_M = 50
+
+export function formatDistance(meters: number): string {
+  if (meters < 1000) return `${Math.round(meters)} m`
+  const km = meters / 1000
+  return km < 100 ? `${km.toFixed(1)} km` : `${Math.round(km).toLocaleString('en-US')} km`
+}
+
+function withinLabel(radius: number, place: string, distance: number | null, locationKnown: boolean): string {
+  if (!locationKnown || distance == null) return `Within ${radius} m of ${place} (turn on your location)`
+  return `Within ${radius} m of ${place} (you are ${formatDistance(distance)} away)`
+}
+
+/**
+ * What a restaurant row's button waits for (2026-11-10): Confirm Arrival needs
+ * the rider's turn in route order and the restaurant within the pickup radius;
+ * Confirm Pick Up needs the check-in, the restaurant's "Payment received" (COD
+ * only), the food ready and the rider still in the pickup area. Mirrors the
+ * server gates, which stay authoritative.
+ */
+export function stopConditions(stop: PickupStop, data: Pick<PickupStopsData, 'stops' | 'pickup_radius_meters'>): Condition[] {
+  if (stop.status === 'collected') return []
+  const radius = data.pickup_radius_meters ?? PICKUP_RADIUS_M
+  const ordered = [...data.stops].sort((a, b) => a.sequence - b.sequence)
+  const current = ordered.find((s) => s.status !== 'collected')
+  const isCurrent = current?.id === stop.id
+  const locationKnown = stop.arrival_reason !== 'gps_unavailable' && stop.reason !== 'gps_unavailable'
+  const conditions: Condition[] = []
+  if (ordered.length > 1) conditions.push({ label: 'Your turn in the pickup order', met: isCurrent })
+
+  if (!stop.arrived_at) {
+    conditions.push({
+      label: withinLabel(radius, 'the restaurant', stop.distance_meters, locationKnown),
+      met: stop.arrival_can_confirm || (locationKnown && stop.distance_meters != null && stop.distance_meters <= radius),
+    })
+    return conditions
+  }
+
+  conditions.push({ label: 'Arrived at the restaurant', met: true })
+  if (stop.payment_confirmed != null) {
+    conditions.push({ label: 'Restaurant confirmed your payment', met: stop.payment_confirmed === true })
+  }
+  conditions.push({ label: 'Food is ready', met: stop.is_ready || stop.ready_label === 'ready' || stop.ready_label === 'none' })
+  conditions.push({
+    label: withinLabel(radius, 'the restaurant', stop.distance_meters, locationKnown),
+    met: stop.reason !== 'too_far' && stop.reason !== 'gps_unavailable',
+  })
+  return conditions
+}
+
+/** "I've Arrived" at the tourist: all food picked up and within 50 m of the delivery address. */
+export function dropoffArrivalConditions(distance: number | null, locationKnown: boolean): Condition[] {
+  return [
+    { label: 'All food picked up', met: true },
+    {
+      label: withinLabel(DROPOFF_ARRIVAL_RADIUS_M, 'the delivery address', distance, locationKnown),
+      met: locationKnown && distance != null && distance <= DROPOFF_ARRIVAL_RADIUS_M,
+    },
+  ]
+}
+
+/** "Confirm Delivered": within 50 m of the delivery address and a submitted photo. */
+export function deliveryConditions(distance: number | null, locationKnown: boolean, photoSubmitted: boolean): Condition[] {
+  return [
+    {
+      label: withinLabel(DROPOFF_PROOF_RADIUS_M, 'the delivery address', distance, locationKnown),
+      met: locationKnown && distance != null && distance <= DROPOFF_PROOF_RADIUS_M,
+    },
+    { label: 'Photo of the tourist receiving the food submitted', met: photoSubmitted },
+  ]
+}
+
+export const allMet = (conditions: Condition[]): boolean => conditions.every((c) => c.met)
+
+/** Straight-line distance in metres. */
+export function distanceMeters(a: [number, number], b: [number, number]): number {
+  const rad = Math.PI / 180
+  const dLat = (b[0] - a[0]) * rad
+  const dLng = (b[1] - a[1]) * rad
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * rad) * Math.cos(b[0] * rad) * Math.sin(dLng / 2) ** 2
+  return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h))
+}

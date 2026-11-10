@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
-import { CheckCircle, ShoppingBag, Loader2, AlertTriangle, Zap, Banknote, Store, MapPin } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { CheckCircle, ShoppingBag, Loader2, AlertTriangle, Zap, Banknote, Store, MapPin, ChevronDown, ChevronUp } from 'lucide-react'
 import { useRiderActiveTrip } from '@/features/rider/context/RiderActiveTripContext'
 import { formatCurrency } from '@/shared/utils'
 import { formatStopDistance } from '@/features/rider/stop-arrival'
 import { DeliveryPhotoCapture } from '@/features/rider/components/DeliveryPhotoCapture'
+import { TripConditions } from '@/features/rider/components/TripConditions'
+import { allMet, deliveryConditions, distanceMeters } from '@/features/rider/trip-steps'
 
 export default function GlobalRiderAlert() {
   const {
@@ -30,6 +32,8 @@ export default function GlobalRiderAlert() {
     confirmStopError,
     pickupComplete,
     pickupStopsData,
+    riderPosition,
+    positionKnown,
   } = useRiderActiveTrip()
 
   const [exiting, setExiting] = useState(false)
@@ -44,6 +48,20 @@ export default function GlobalRiderAlert() {
   useEffect(() => {
     setCashReceived('')
   }, [pendingSettlement?.deliveryId])
+
+  // The rider may collapse any arrival / pickup / delivery message to a small
+  // bar (not ready to confirm yet) and reopen it from there. Collapsing is
+  // remembered per message, so the NEXT message (next restaurant, drop-off)
+  // opens expanded; a collapsed message keeps its state (e.g. the photo).
+  const [collapsedKey, setCollapsedKey] = useState<string | null>(null)
+  const promptKey = pickupArrivalPrompt
+    ? `arrive:${activeDelivery?.id}:${pickupArrivalPrompt.businessId}`
+    : pickupStopPrompt
+      ? `pickup:${activeDelivery?.id}:${pickupStopPrompt.businessId}`
+      : `leg:${activeDelivery?.id}:${arrivalAlert ?? 'final'}`
+  const collapsed = collapsedKey === promptKey
+  const collapse = () => setCollapsedKey(promptKey)
+  const expand = () => setCollapsedKey(null)
 
   // Proof-of-delivery photo for the drop-off (required to complete).
   const [proofPhoto, setProofPhoto] = useState<File | null>(null)
@@ -158,10 +176,23 @@ export default function GlobalRiderAlert() {
   if (pickupArrivalPrompt) {
     const targetName = pickupArrivalPrompt.businessName ?? `Business #${pickupArrivalPrompt.businessId}`
 
+    if (collapsed) {
+      return (
+        <CollapsedBar
+          label="Show restaurant arrival confirmation"
+          title={`Pickup ${pickupArrivalPrompt.sequence} of ${pickupArrivalPrompt.totalStops}: ${targetName}`}
+          subtitle="Tap to confirm your arrival"
+          icon={<MapPin className="h-4 w-4" aria-hidden="true" />}
+          onExpand={expand}
+        />
+      )
+    }
+
     return (
       <div className="fixed inset-0 z-[9999] bg-black/40 flex items-end justify-center p-3 rider-alert-backdrop">
         <div className="bg-white w-full max-w-md rounded-[24px] shadow-2xl flex flex-col overflow-hidden rider-alert-in">
-          <div className="px-4 pt-5 pb-2 text-center">
+          <div className="relative px-4 pt-5 pb-2 text-center">
+            <CollapseButton onClick={collapse} />
             <div className="inline-flex items-center gap-2 px-3 py-1 bg-[#FEF3C7] border border-[#FDE68A] text-[#92400E] rounded-full text-xs font-bold uppercase tracking-wider mb-1">
               <MapPin className="w-3 h-3" />
               Pickup {pickupArrivalPrompt.sequence} of {pickupArrivalPrompt.totalStops}
@@ -214,11 +245,24 @@ export default function GlobalRiderAlert() {
     const isConfirmingStop = confirmStopBusy
     const targetName = pickupStopPrompt.businessName ?? `Business #${pickupStopPrompt.businessId}`
 
+    if (collapsed) {
+      return (
+        <CollapsedBar
+          label="Show pickup confirmation"
+          title={`Pickup ${pickupStopPrompt.sequence} of ${pickupStopPrompt.totalStops}: ${targetName}`}
+          subtitle="Food is ready. Tap to confirm the pickup"
+          icon={<Zap className="h-4 w-4" aria-hidden="true" />}
+          onExpand={expand}
+        />
+      )
+    }
+
     return (
       <div className="fixed inset-0 z-[9999] bg-black/40 flex items-end justify-center p-3 rider-alert-backdrop">
         <div className="bg-white w-full max-w-md rounded-[24px] shadow-2xl flex flex-col overflow-hidden rider-alert-in">
           {/* HEADER BANNER */}
-          <div className="px-4 pt-5 pb-2 text-center">
+          <div className="relative px-4 pt-5 pb-2 text-center">
+            <CollapseButton onClick={collapse} />
             <div className="inline-flex items-center gap-2 px-3 py-1 bg-[#16803C] border border-[#16803C] text-white rounded-full text-xs font-bold uppercase tracking-wider mb-1">
               <Zap className="w-3 h-3" />
               Pickup {pickupStopPrompt.sequence} of {pickupStopPrompt.totalStops}
@@ -309,6 +353,29 @@ export default function GlobalRiderAlert() {
   }
   const needsPhoto = !isPickup && !proofPhoto
   const isCod = Boolean(pickupStopsData?.is_cod)
+  // Confirm Delivered: within 50 m of the address (live GPS) + submitted photo,
+  // the same conditions as the trip page; the server re-checks both.
+  const dropLat = activeDelivery?.delivery_lat
+  const dropLng = activeDelivery?.delivery_lng
+  const dropoffDistance = positionKnown && Array.isArray(riderPosition) && dropLat != null && dropLng != null
+    ? distanceMeters(riderPosition, [Number(dropLat), Number(dropLng)])
+    : null
+  const deliveryChecks = deliveryConditions(dropoffDistance, !!positionKnown, !!proofPhoto)
+  const deliveryBlocked = !isPickup && !allMet(deliveryChecks)
+
+  // Collapsed: a small bar instead of the full-screen popup; the rider keeps
+  // using the map and reopens it to confirm.
+  if (collapsed && arrivingNow) {
+    return (
+      <CollapsedBar
+        label={isPickup ? 'Show pickup confirmation' : 'Show delivery confirmation'}
+        title="You've Arrived"
+        subtitle={isPickup ? 'Tap to confirm the pickup' : 'Tap to confirm the delivery'}
+        icon={<Zap className="h-4 w-4" aria-hidden="true" />}
+        onExpand={expand}
+      />
+    )
+  }
 
   return (
     <div
@@ -322,7 +389,8 @@ export default function GlobalRiderAlert() {
         }`}
       >
         {/* HEADER PANEL BANNER */}
-        <div className="px-4 pt-5 pb-2 text-center">
+        <div className="relative px-4 pt-5 pb-2 text-center">
+          {arrivingNow && <CollapseButton onClick={collapse} />}
           <div className="inline-flex items-center gap-2 px-3 py-1 bg-[#FEF3C7] border border-[#FDE68A] text-[#92400E] rounded-full text-xs font-bold uppercase tracking-wider mb-1">
             <Zap className="w-3 h-3" />
             Arrival Confirmation
@@ -425,11 +493,12 @@ export default function GlobalRiderAlert() {
                     : 'You must be within 50 m of the address. Confirming means the tourist has received the food.'}
                 />
               )}
+              {!isPickup && <TripConditions items={deliveryChecks} />}
 
               <button
                 type="button"
                 onClick={handleConfirm}
-                disabled={isConfirming || needsPhoto}
+                disabled={isConfirming || needsPhoto || deliveryBlocked}
                 className="flex w-full items-center justify-center gap-2 rounded-full bg-[#16803C] py-3.5 text-base font-bold text-white shadow-md hover:bg-[#126B32] transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isConfirming ? (
@@ -448,6 +517,48 @@ export default function GlobalRiderAlert() {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+/** Top-right "not yet" button: collapses the message to a small bar. */
+function CollapseButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Collapse"
+      title="Not yet: collapse this message"
+      className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-[#F3F4F6] text-[#4B5563] hover:bg-[#E5E7EB] hover:text-[#17201B]"
+    >
+      <ChevronDown className="h-5 w-5" aria-hidden="true" />
+    </button>
+  )
+}
+
+/** A collapsed message: a small bar at the bottom; tap to open it again. */
+function CollapsedBar({ label, title, subtitle, icon, onExpand }: {
+  label: string
+  title: string
+  subtitle: string
+  icon: ReactNode
+  onExpand: () => void
+}) {
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-[9999] flex justify-center p-3 pointer-events-none">
+      <button
+        type="button"
+        onClick={onExpand}
+        aria-label={label}
+        className="pointer-events-auto flex w-full max-w-md items-center gap-3 rounded-2xl border border-[#CFE8D6] bg-[#fff] px-4 py-3 text-left shadow-2xl"
+      >
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#FEF3C7] text-[#92400E]">{icon}</span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sm font-extrabold text-[#17201B]">{title}</span>
+          <span className="block truncate text-xs text-[#6B7280]">{subtitle}</span>
+        </span>
+        <ChevronUp className="h-5 w-5 shrink-0 text-[#16803C]" aria-hidden="true" />
+      </button>
     </div>
   )
 }

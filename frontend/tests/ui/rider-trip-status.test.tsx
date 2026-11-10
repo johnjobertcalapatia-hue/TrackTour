@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PickupStop, PickupStopsData } from '@/features/rider/pickup-stops'
-import { stepState, stopAction, tripStage } from '@/features/rider/trip-steps'
+import { deliveryConditions, dropoffArrivalConditions, stepState, stopAction, stopConditions, tripStage } from '@/features/rider/trip-steps'
 
 const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), patch: vi.fn(), del: vi.fn() }))
 vi.mock('@/shared/services/api', () => ({ ...api, apiErrorMessage: (_e: unknown, f: string) => f }))
@@ -99,9 +99,45 @@ function setTrip(status: string, stops: PickupStop[], over: Record<string, unkno
     pickupStopsData: stopsData(stops),
     busy: false, actionError: null, confirmStopBusy: false, confirmArrivalBusy: false, confirmStopError: null, confirmArrivalError: null,
     confirmArrivalStop: vi.fn(), confirmPickupStop: vi.fn(), onMarkPickedUp: vi.fn(), onArrivedDrop: vi.fn(), onConfirmDelivery: vi.fn(),
+    // Live GPS: at the drop-off (OFFER.dropoff) unless a test moves the rider.
+    positionKnown: true, riderPosition: [12.86, 121.45],
     ...over,
   }
 }
+
+describe('trip action conditions', () => {
+  it("Confirm Arrival: the rider's turn and within the restaurant radius", () => {
+    const a = stop({ id: 1, sequence: 1, distance_meters: 120, arrival_can_confirm: false, arrival_reason: 'too_far' })
+    const b = stop({ id: 2, business_id: 20, sequence: 2, business_name: 'BBQ House' })
+    expect(stopConditions(a, stopsData([a, b]))).toEqual([
+      { label: 'Your turn in the pickup order', met: true },
+      { label: 'Within 50 m of the restaurant (you are 120 m away)', met: false },
+    ])
+    expect(stopConditions(b, stopsData([a, b]))[0]).toEqual({ label: 'Your turn in the pickup order', met: false })
+    const near = { ...a, distance_meters: 20, arrival_can_confirm: true, arrival_reason: null }
+    expect(stopConditions(near, stopsData([near]))).toEqual([{ label: 'Within 50 m of the restaurant (you are 20 m away)', met: true }])
+  })
+
+  it('Confirm Pick Up: arrived, paid (COD only), ready and still in the pickup area', () => {
+    const arrived = stop({ arrived_at: '2026-11-08T04:00:00Z', can_confirm: true, reason: null, payment_confirmed: true })
+    expect(stopConditions(arrived, stopsData([arrived])).every((c) => c.met)).toBe(true)
+    const prepaid = { ...arrived, payment_confirmed: null }
+    expect(stopConditions(prepaid, stopsData([prepaid])).map((c) => c.label)).not.toContain('Restaurant confirmed your payment')
+    const left = { ...arrived, reason: 'too_far' as const, distance_meters: 300 }
+    expect(stopConditions(left, stopsData([left])).find((c) => c.label.startsWith('Within'))).toEqual({ label: 'Within 50 m of the restaurant (you are 300 m away)', met: false })
+    expect(stopConditions({ ...arrived, status: 'collected' }, stopsData([arrived]))).toEqual([])
+  })
+
+  it('drop-off: arrival within 50 m, delivery within 50 m plus the photo', () => {
+    expect(dropoffArrivalConditions(30, true)[1].met).toBe(true)
+    expect(dropoffArrivalConditions(80, true)[1].met).toBe(false) // 50 m, not 100 m
+    expect(dropoffArrivalConditions(1500, true)[1]).toEqual({ label: 'Within 50 m of the delivery address (you are 1.5 km away)', met: false })
+    expect(dropoffArrivalConditions(null, false)[1].met).toBe(false)
+    expect(deliveryConditions(30, true, true).every((c) => c.met)).toBe(true)
+    expect(deliveryConditions(80, true, true)[0].met).toBe(false)
+    expect(deliveryConditions(30, true, false)[1].met).toBe(false)
+  })
+})
 
 describe('RiderTripStatus page', () => {
   beforeEach(() => {
@@ -177,6 +213,44 @@ describe('RiderTripStatus page', () => {
 
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Confirm Delivered' })) })
     expect(trip.value.onConfirmDelivery).toHaveBeenCalledWith(photo)
+  })
+
+  it("\"I've Arrived\" stays disabled until the rider is within 50 m of the delivery address", async () => {
+    setTrip('in_transit', [], { riderPosition: [12.8, 121.4] }) // ~8 km away
+    const { unmount } = renderPage()
+    const button = await screen.findByRole('button', { name: "I've Arrived" })
+    expect(button).toBeDisabled()
+    expect(screen.getByText(/Within 50 m of the delivery address \(you are 8\.\d km away\)/).closest('li')).toHaveAttribute('data-met', 'false')
+    expect(screen.getByText('All food picked up').closest('li')).toHaveAttribute('data-met', 'true')
+    unmount()
+
+    setTrip('in_transit', [], { positionKnown: false })
+    renderPage()
+    expect(await screen.findByRole('button', { name: "I've Arrived" })).toBeDisabled()
+    expect(screen.getByText('Within 50 m of the delivery address (turn on your location)')).toBeInTheDocument()
+  })
+
+  it('Confirm Delivered needs the photo AND the rider within 50 m of the delivery address', async () => {
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: () => 'blob:photo', revokeObjectURL: () => {} }))
+    setTrip('arrived_destination', [], { riderPosition: [12.8607, 121.45] }) // ~78 m away
+    renderPage()
+    const photo = new File(['x'], 'proof.jpg', { type: 'image/jpeg' })
+    await act(async () => { fireEvent.change(await screen.findByLabelText('Take a photo of the tourist receiving the food'), { target: { files: [photo] } }) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Submit photo' })) })
+
+    expect(screen.getByText('Photo of the tourist receiving the food submitted').closest('li')).toHaveAttribute('data-met', 'true')
+    expect(screen.getByText(/Within 50 m of the delivery address \(you are \d+ m away\)/).closest('li')).toHaveAttribute('data-met', 'false')
+    expect(screen.getByRole('button', { name: 'Confirm Delivered' })).toBeDisabled()
+  })
+
+  it('COD: Confirm Pick Up waits for the restaurant "Payment received" and the food', async () => {
+    setTrip('arrived_pickup', [stop({ id: 1, arrived_at: '2026-11-08T04:00:00Z', payment_confirmed: false, is_ready: false, ready_label: 'preparing', can_confirm: false, reason: 'waiting_payment' })])
+    renderPage()
+    const row = within(await screen.findByRole('listitem', { name: 'Ekslusibo Grill' }))
+    expect(row.getByRole('button', { name: 'Confirm pick up at Ekslusibo Grill' })).toBeDisabled()
+    expect(row.getByText('Arrived at the restaurant').closest('li')).toHaveAttribute('data-met', 'true')
+    expect(row.getByText('Restaurant confirmed your payment').closest('li')).toHaveAttribute('data-met', 'false')
+    expect(row.getByText('Food is ready').closest('li')).toHaveAttribute('data-met', 'false')
   })
 
   it('a finished delivery shows every step done', async () => {

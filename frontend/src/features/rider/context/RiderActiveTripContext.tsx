@@ -7,6 +7,7 @@ import { resolveStopArrival, STOP_ARRIVAL_THRESHOLD_METERS } from '@/features/ri
 import type { PickupStopsData } from '@/features/rider/pickup-stops'
 import type { Delivery } from '@/shared/types'
 import { useUserSocketNotifier } from '@/shared/hooks/useUserSocketNotifier'
+import { isUsableGpsFix } from '@/features/rider/gps'
 
 export type TripState =
   | 'EN_ROUTE_TO_PICKUP'
@@ -157,6 +158,8 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
   const lastAlertStatus = useRef<string | null>(null)
 
   const setRiderPosition = useCallback((lat: number, lng: number) => {
+    // A reading missing an axis is never a position (see isUsableGpsFix).
+    if (!isUsableGpsFix(lat, lng)) return
     if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) return
     setRiderPositionState([lat, lng])
     setPositionKnown(true)

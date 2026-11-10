@@ -38,6 +38,7 @@ import { riderNavigationMarkerIcon, destinationMarkerIcon } from '@/shared/utils
 import { businessLogoIcon, pinIcon } from '@/shared/utils/pin-icon'
 import { toAssetUrl } from '@/shared/utils'
 import { RiderHeadingController } from '@/shared/utils/rider-heading'
+import { INVALID_GPS_MESSAGE, isUsableGpsFix } from '@/features/rider/gps'
 
 const deliveryDestIcon = destinationMarkerIcon
 
@@ -356,6 +357,10 @@ export default function RiderMap() {
     // hammered faster than it can respond (avoids ERR_INSUFFICIENT_RESOURCES)
     // and no two location requests are ever in flight at the same time.
     const { latitude, longitude, heading, speed, accuracy } = position.coords
+    if (!isUsableGpsFix(latitude, longitude)) {
+      setGpsError(INVALID_GPS_MESSAGE)
+      return
+    }
     headingController.update({
       latitude,
       longitude,
