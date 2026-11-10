@@ -16,7 +16,11 @@ interface RideSheetProps {
   onClose: () => void
   destination?: string
   destinationCoords?: { lat: number; lng: number }
+  /** Shown under the destination name (e.g. "Bansud, Oriental Mindoro"). */
+  destinationAddress?: string
   initialQuery?: string
+  /** Vehicle already chosen (e.g. on the map's route card). */
+  initialVehicle?: string
 }
 
 interface LocationResult {
@@ -199,7 +203,7 @@ function RoutePreview({
   )
 }
 
-export default function BookRideSheet({ isOpen, onClose, destination, destinationCoords, initialQuery }: RideSheetProps) {
+export default function BookRideSheet({ isOpen, onClose, destination, destinationCoords, destinationAddress, initialQuery, initialVehicle }: RideSheetProps) {
   const navigate = useNavigate()
   const [step, setStep] = useState<Step>('destination')
   const [dest, setDest] = useState<{ name: string; address: string; lat: number | null; lng: number | null }>()
@@ -222,10 +226,11 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
   useEffect(() => {
     if (isOpen && !seededRef.current) {
       seededRef.current = true
+      if (initialVehicle && VEHICLES.some((v) => v.type === initialVehicle)) setVehicleType(initialVehicle)
       if (destination) {
         setDest({
           name: destination,
-          address: '',
+          address: destinationAddress ?? '',
           lat: destinationCoords?.lat ?? null,
           lng: destinationCoords?.lng ?? null,
         })
@@ -238,7 +243,7 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
     if (!isOpen) {
       seededRef.current = false
     }
-  }, [isOpen, destination, destinationCoords, initialQuery])
+  }, [isOpen, destination, destinationCoords, destinationAddress, initialQuery, initialVehicle])
 
   const saveRecent = (entry: RecentLocation) => {
     setRecent((prev) => {
@@ -446,9 +451,10 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
                   setMapMode(false)
                   setMapPin(null)
                 }}
+                aria-label="Back"
                 className="p-2 -ml-1 rounded-full hover:bg-[#E9F7EF] transition"
               >
-                <ChevronLeft className="w-5 h-5 text-[#68736D]" />
+                <ChevronLeft className="w-5 h-5 text-[#68736D]" aria-hidden="true" />
               </button>
             )}
             <div className="w-8 h-8 rounded-full bg-[#E9F7EF] flex items-center justify-center">
@@ -456,8 +462,8 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
             </div>
             <h3 className="font-semibold text-[#17201B]">{stepTitles[step]}</h3>
           </div>
-          <button onClick={onClose} className="p-2 rounded-full hover:bg-[#E9F7EF] transition">
-            <X className="w-5 h-5 text-[#68736D]" />
+          <button type="button" onClick={onClose} aria-label="Close" className="p-2 rounded-full hover:bg-[#E9F7EF] transition">
+            <X className="w-5 h-5 text-[#68736D]" aria-hidden="true" />
           </button>
         </div>
 
@@ -514,7 +520,7 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
               {/* Recent destinations */}
               {step === 'destination' && recent.length > 0 && !searchQuery.trim() && (
                 <div>
-                  <p className="text-[10px] text-[#68736D] mb-1.5">Recent destinations</p>
+                  <p className="text-xs text-[#68736D] mb-1.5">Recent destinations</p>
                   <div className="space-y-1.5">
                     {recent.map((r) => (
                       <button
@@ -568,7 +574,7 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
               {/* Manual entry */}
               {!searchQuery.trim() || !locations.data?.length ? (
                 <div className="pt-2 border-t border-[#E5E9E7]">
-                  <p className="text-[10px] text-[#68736D] mb-1.5">Or enter an address</p>
+                  <p className="text-xs text-[#68736D] mb-1.5">Or enter an address</p>
                   <div className="relative">
                     <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#9CA3AF]" />
                     <input
@@ -614,7 +620,7 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
             <>
               <PinMap center={mapPin ?? FALLBACK_CENTER} marker={mapPin} onPick={onMapPick} />
               <div className="bg-[#E9F7EF] border border-[#087F3F]/20 rounded-xl p-3">
-                <p className="text-[10px] text-[#68736D] mb-0.5">Selected location</p>
+                <p className="text-xs text-[#68736D] mb-0.5">Selected location</p>
                 <p className="text-sm font-medium text-[#17201B]">
                   {reverseMut.isPending ? 'Resolving…' : pinLabel?.name ?? 'Tap the map to pin a location'}
                 </p>
@@ -652,11 +658,11 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
                 </div>
                 <div className="flex-1 space-y-3">
                   <div>
-                    <p className="text-[10px] text-[#68736D] uppercase tracking-wider">Pickup</p>
+                    <p className="text-xs text-[#68736D] uppercase tracking-wider">Pickup</p>
                     <p className="text-sm text-[#17201B]">{pickup?.name || '—'}</p>
                   </div>
                   <div>
-                    <p className="text-[10px] text-[#68736D] uppercase tracking-wider">Destination</p>
+                    <p className="text-xs text-[#68736D] uppercase tracking-wider">Destination</p>
                     <p className="text-sm text-[#17201B]">{dest?.name}{dest?.address ? ` · ${dest.address}` : ''}</p>
                   </div>
                 </div>
@@ -692,7 +698,7 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
 
               {/* Vehicle selection */}
               <div>
-                <label className="text-[10px] text-[#68736D] mb-1.5 block">Vehicle</label>
+                <label className="text-xs text-[#68736D] mb-1.5 block">Vehicle</label>
                 <div className="grid grid-cols-2 gap-2">
                   {VEHICLES.map((v) => {
                     const Icon = v.icon
@@ -720,7 +726,7 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
 
               {/* Payment method */}
               <div>
-                <label className="text-[10px] text-[#68736D] mb-1.5 block">Payment method</label>
+                <label className="text-xs text-[#68736D] mb-1.5 block">Payment method</label>
                 <div className="flex flex-wrap gap-2">
                   {PAYMENT_METHODS.map((m) => (
                     <button
@@ -761,7 +767,7 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
                     <span className="text-xs font-medium text-[#68736D]">Total fare</span>
                     <span className="text-lg font-bold text-[#17201B]">{formatCurrency(currentFare.total_fare)}</span>
                   </div>
-                  <div className="flex items-center justify-between text-[10px] text-[#9CA3AF]">
+                  <div className="flex items-center justify-between text-xs text-[#9CA3AF]">
                     <span>{estimate.distance_text} • {estimate.duration_text}</span>
                     {estimate.service_fee > 0 && <span>Service fee not included in billed total</span>}
                   </div>
@@ -788,7 +794,7 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
                   <><CheckCircle2 className="w-4 h-4" /> Request Ride</>
                 )}
               </button>
-              <p className="text-[10px] text-[#9CA3AF] text-center">Ride managed by Tourism Office transportation</p>
+              <p className="text-xs text-[#9CA3AF] text-center">Ride managed by Tourism Office transportation</p>
             </>
           )}
         </div>

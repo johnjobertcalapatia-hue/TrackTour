@@ -408,7 +408,7 @@ function FloatingCart({ items, onView }: { items: number; onView: () => void }) 
   const cart = JSON.parse(localStorage.getItem('food_cart') || '[]')
   const total = cart.reduce((s: number, c: any) => s + Number(c.price || 0) * c.quantity, 0)
   return (
-    <div className="fixed bottom-16 md:bottom-6 inset-x-0 z-50 px-4">
+    <div className="fixed bottom-[var(--tourist-bottom-nav-space)] lg:bottom-6 inset-x-0 z-50 px-4">
       <button
         onClick={onView}
         className="w-full max-w-md mx-auto flex items-center justify-between bg-brand hover:bg-brand-dark text-white rounded-2xl px-5 py-4 shadow-2xl shadow-brand/40 animate-[slide-up_0.3s_ease-out]"

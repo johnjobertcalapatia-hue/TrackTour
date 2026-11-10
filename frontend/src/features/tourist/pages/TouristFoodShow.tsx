@@ -4,7 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { get, post } from '@/shared/services/api'
 import { formatCurrency, cn, toAssetUrl, categoryName } from '@/shared/utils'
 import RestaurantRouteMap from '@/features/tourist/components/RestaurantRouteMap'
-import { recordBrowsedPlace } from '@/shared/services/browsing-history'
+import { forgetBrowsedPlace, recordBrowsedPlace } from '@/shared/services/browsing-history'
+import { PlaceUnavailable, isNotFoundError } from '@/shared/components/PlaceUnavailable'
 import {
   ArrowLeft, Star, StarHalf, MapPin, Heart, Clock, ShoppingCart, Plus, Minus, UtensilsCrossed,
   Info, Image as ImageIcon, Phone, Bike, Search, Flame,
@@ -148,10 +149,15 @@ export default function TouristFoodShow() {
     setCartVersion((v) => v + 1)
   }
 
-  const { data, isLoading } = useQuery<BusinessDetailResponse>({
+  const { data, isLoading, error } = useQuery<BusinessDetailResponse>({
     queryKey: ['tourist-food-business-v2', id],
     queryFn: () => get(`/tourist/explore/${id}`),
   })
+  // The restaurant no longer exists (404): stop listing it in Recently Viewed.
+  const gone = isNotFoundError(error)
+  useEffect(() => {
+    if (gone && id) forgetBrowsedPlace(Number(id))
+  }, [gone, id])
   const business = data?.business
   const bizReviews = data?.reviews ?? business?.reviews ?? []
   const breakdown = data?.ratingBreakdown
@@ -203,7 +209,18 @@ export default function TouristFoodShow() {
       </div>
     )
   }
-  if (!business) return <div className="text-center py-20 text-[#56615B]">Restaurant not found.</div>
+  if (!business) {
+    return gone ? (
+      <PlaceUnavailable
+        title="This restaurant isn't on TrackTour anymore"
+        message="It was removed from TrackTour, so there is no page to show. (A restaurant that is only closed still opens: you can view its menu, just not order.) We've taken it off your recently viewed places."
+        backTo="/tourist/food"
+        backLabel="Browse food"
+      />
+    ) : (
+      <div className="text-center py-20 text-[#56615B]">Couldn't load this restaurant. Please try again.</div>
+    )
+  }
 
   const accepting = business.is_accepting_orders
   const openStatusLabel = business.open_status?.label ?? (business.is_open ? 'Open now' : 'Closed')
@@ -548,7 +565,7 @@ export default function TouristFoodShow() {
 
           {detailTab === 'location' && (
             lat != null && lng != null ? (
-              <RestaurantRouteMap restaurantName={business.name} destination={[lat, lng]} locationLabel={locationLabel} />
+              <RestaurantRouteMap restaurantName={business.name} destination={[lat, lng]} locationLabel={locationLabel} photo={business.logo || business.cover_photo} />
             ) : (
               <section className="bg-white border border-[#E5E9E7] rounded-2xl p-6">
                 <p className="text-center text-sm text-[#56615B]">Map location not provided for this restaurant.</p>
@@ -629,7 +646,7 @@ export default function TouristFoodShow() {
 
       {/* Cart bar */}
       {cartCount > 0 && (
-        <div className="fixed inset-x-0 z-[2100] px-4 bottom-[calc(5rem+env(safe-area-inset-bottom))] lg:bottom-6 lg:left-[248px]">
+        <div className="fixed inset-x-0 z-[2100] px-4 bottom-[calc(var(--tourist-bottom-nav-space)+1rem)] lg:bottom-6 lg:left-[248px]">
           <button
             type="button"
             onClick={() => navigate('/tourist/food/cart')}

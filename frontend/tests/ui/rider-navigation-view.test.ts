@@ -1,13 +1,29 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  NAV_PERSPECTIVE_PX,
   NAV_PUCK_GAP_PX,
   NAV_PUCK_HALF_PX,
+  NAV_TILT_DEG,
   navPuckScreenOffset,
   planeOffsetForScreenY,
+  planePointForScreen,
   screenYForPlaneOffset,
 } from '@/features/rider/navigation-view'
 
 describe('navigation view geometry (3D tilt)', () => {
+  it('planePointForScreen inverts the tilt for whole points (drag to explore)', () => {
+    const t = (NAV_TILT_DEG * Math.PI) / 180
+    const p = NAV_PERSPECTIVE_PX
+    for (const [sx, sy] of [[0, 0], [120, 200], [-80, -150], [40, 300]]) {
+      const plane = planePointForScreen(sx, sy)
+      const scale = p / (p - plane.y * Math.sin(t))
+      expect(plane.x * scale).toBeCloseTo(sx, 6)
+      expect(screenYForPlaneOffset(plane.y)).toBeCloseTo(sy, 6)
+    }
+    // Above the horizon it stays finite (clamped just below it).
+    expect(Number.isFinite(planePointForScreen(0, -5000).y)).toBe(true)
+  })
+
   it('finds the plane offset that lands exactly at a screen offset despite the perspective', () => {
     for (const screenY of [-200, -50, 0, 120, 260, 340]) {
       const plane = planeOffsetForScreenY(screenY)

@@ -13,6 +13,7 @@ import { RiderMapFollow } from '@/features/rider/components/RiderMapFollow'
 import { MapZoomOutLimit } from '@/features/rider/components/MapZoomOutLimit'
 import { RiderMapStyleSwitcher } from '@/features/rider/components/RiderMapStyleSwitcher'
 import { RiderMapViewToggle } from '@/features/rider/components/RiderMapViewToggle'
+import { RiderMapCompass } from '@/features/rider/components/RiderMapCompass'
 import { RiderNavPuck } from '@/features/rider/components/RiderNavPuck'
 import { NavigationCamera } from '@/shared/components/map/NavigationCamera'
 import { requestCompassPermission, useNavigationBearing } from '@/features/tourist/hooks/use-navigation-bearing'
@@ -23,6 +24,7 @@ import {
   NAV_TILT_SIZE_FACTOR,
   navPuckScreenOffset,
   planeOffsetForScreenY,
+  planePointForScreen,
   type RiderMapViewMode,
 } from '@/features/rider/navigation-view'
 import { MAP_STYLES, loadMapStyle, saveMapStyle, type MapStyleId } from '@/shared/utils/map-tiles'
@@ -521,12 +523,50 @@ export default function RiderMap() {
   const drawnRoute: [number, number][] = progress && progress.remaining.length >= 2 ? progress.remaining : polylinePoints
 
   const navActive = viewMode === 'navigation' && hasRealPosition
-  const bearing = useNavigationBearing({
+  const liveBearing = useNavigationBearing({
     active: navActive,
     location: hasRealPosition ? { lat: riderPosition[0], lng: riderPosition[1] } : null,
     course,
     route: drawnRoute.length >= 2 ? drawnRoute : null,
   })
+
+  // Exploring the map while navigating (Google-Maps-like, 2026-11-09): drag
+  // pans, pinch / wheel zoom, twist / right-drag rotates. The first pan or
+  // twist enters free look: the camera stops following and the map keeps the
+  // bearing the rider gave it (the compass shows where north is) until
+  // "My location" brings it back to the rider.
+  const [navFree, setNavFree] = useState(false)
+  const [freeBearing, setFreeBearing] = useState(0)
+  // Following, the map turns with the travel direction, or stays north-up
+  // after a tap on the compass (tap again: back to heading-up).
+  const [northUp, setNorthUp] = useState(false)
+  // A gesture is running: the map turns with the fingers, without easing.
+  const [navGesturing, setNavGesturing] = useState(false)
+  useEffect(() => {
+    if (!navActive) {
+      setNavFree(false)
+      setNavGesturing(false)
+    }
+  }, [navActive])
+  const bearing = navActive && navFree ? freeBearing : navActive && northUp ? 0 : liveBearing
+  const shownBearingRef = useRef(bearing)
+  shownBearingRef.current = bearing
+  const handleFreeLookChange = useCallback((free: boolean) => {
+    // Exploring starts from the view the rider is looking at.
+    if (free) setFreeBearing(shownBearingRef.current)
+    setNavFree(free)
+  }, [])
+  const handleCompass = () => {
+    if (navFree) setFreeBearing(0) // exploring: face north
+    else setNorthUp((n) => !n) // following: north-up ↔ heading-up
+  }
+  /** A point on the tilted map (client px) → its offset on the map plane. */
+  const navScreenToPlanePoint = useCallback((p: { x: number; y: number }) => {
+    const rect = mapAreaRef.current?.getBoundingClientRect()
+    const cx = rect ? rect.left + rect.width / 2 : 0
+    const cy = rect ? rect.top + rect.height / 2 : 0
+    return planePointForScreen(p.x - cx, p.y - cy)
+  }, [])
 
   // Tilted, rotated map plane: a square much larger than the screen so no
   // blank corner shows while it turns and tips back toward the horizon.
@@ -645,7 +685,7 @@ export default function RiderMap() {
     <div
       ref={mapAreaRef}
       data-view-mode={navActive ? 'navigation' : 'overview'}
-      className={`fixed top-0 left-0 w-full h-[100dvh] z-0 overflow-hidden ${tiles.containerClass ?? ''}`}
+      className={`rider-map-area fixed top-0 left-0 w-full h-[100dvh] z-0 ${tiles.containerClass ?? ''}`}
       style={navActive ? { perspective: `${NAV_PERSPECTIVE_PX}px` } : undefined}
     >
       {/* Rotator/tilter: in the navigation view the map becomes a large square,
@@ -653,7 +693,9 @@ export default function RiderMap() {
       <div
         data-testid="rider-map-rotator"
         data-bearing={Math.round(navActive ? bearing : 0)}
-        className={navActive && planeSize > 0 ? 'map-rotator map-rotator--nav' : 'map-rotator'}
+        className={navActive && planeSize > 0
+          ? `map-rotator map-rotator--nav${navGesturing ? ' map-rotator--gesture' : ''}`
+          : 'map-rotator'}
         style={navActive && planeSize > 0
           ? ({
               width: planeSize,
@@ -689,6 +731,11 @@ export default function RiderMap() {
               bearing={bearing}
               screenOffset={navPlaneOffset}
               recenterSignal={focusSignal}
+              freeLook={navFree}
+              onFreeLookChange={handleFreeLookChange}
+              onBearingChange={setFreeBearing}
+              onGestureChange={setNavGesturing}
+              screenToPlanePoint={navScreenToPlanePoint}
             />
           ) : (
             <RiderMapFollow
@@ -701,7 +748,9 @@ export default function RiderMap() {
             />
           )}
 
-          {!navActive && <AnimatedRiderMarker
+          {/* Navigation draws the rider as a fixed screen puck; while exploring
+              (free look) the rider is a marker on the map again. */}
+          {(!navActive || navFree) && <AnimatedRiderMarker
             position={riderPosition}
             icon={riderNavigationMarkerIcon}
             eventHandlers={riderMarkerEvents}
@@ -772,13 +821,17 @@ export default function RiderMap() {
           <>
             {/* Soft horizon where the tilted map fades into the distance. */}
             <div aria-hidden="true" className="nav-horizon pointer-events-none absolute inset-x-0 top-0 z-[400] h-[22%]" />
-            <RiderNavPuck offsetY={puckScreenY} />
+            {!navFree && <RiderNavPuck offsetY={puckScreenY} />}
           </>
         )}
 
         {/* Map controls, stacked: view buttons, then map type, then "My location". */}
         <div ref={mapControlsRef} style={controlsStyle} className="rider-map-controls-bottom absolute right-3 sm:right-4 z-[1000] flex flex-col items-center gap-2">
           {/* Overview / Navigation view. */}
+          {/* Navigation: where north is; tap to face north (again: travel direction). */}
+          {navActive && (
+            <RiderMapCompass bearing={bearing} northUp={navFree ? Math.round(bearing) % 360 === 0 : northUp} onClick={handleCompass} />
+          )}
           <RiderMapViewToggle value={viewMode} onChange={changeView} />
           {/* Map type: Standard / Dark / Satellite. */}
           <RiderMapStyleSwitcher value={mapStyle} onChange={setMapStyle} />
@@ -786,12 +839,15 @@ export default function RiderMap() {
           {/* My location: re-centre on the rider and resume following. */}
           <button
             type="button"
-            onClick={() => setFocusSignal((n) => n + 1)}
+            onClick={() => {
+              setNavFree(false) // back from exploring the map
+              setFocusSignal((n) => n + 1)
+            }}
             aria-label="Center map on my location"
-            // The navigation view always follows the rider.
-            aria-pressed={navActive || following}
+            // Pressed while the map follows the rider (navigation: unless exploring).
+            aria-pressed={navActive ? !navFree : following}
             className={`w-11 h-11 rounded-full border shadow-md flex items-center justify-center backdrop-blur transition ${
-              navActive || following ? 'bg-[#16803C] border-[#16803C] text-white' : 'bg-white/95 border-[#E4E9E6] text-[#16803C] hover:bg-white'
+              (navActive ? !navFree : following) ? 'bg-[#16803C] border-[#16803C] text-white' : 'bg-white/95 border-[#E4E9E6] text-[#16803C] hover:bg-white'
             }`}
           >
             <LocateFixed className="w-5 h-5" aria-hidden="true" />

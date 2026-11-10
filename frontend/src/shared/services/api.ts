@@ -14,7 +14,8 @@ export interface ApiResponse<T> {
   errors?: Record<string, string[]>
 }
 
-const API_BASE_URL: string = import.meta.env.VITE_API_URL || '/api'
+/** The API's base URL (production: the Railway backend; dev: the /api proxy). */
+export const API_BASE_URL: string = import.meta.env.VITE_API_URL || '/api'
 
 const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,

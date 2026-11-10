@@ -431,9 +431,10 @@ describe('tourist food item details — mobile order bar', () => {
     const detailPage = await openDetails()
 
     const bar = within(detailPage).getByRole('group', { name: 'Order actions' })
-    // Floats above the bottom navigation below lg; back in the card from lg.
+    // Floats right above the bottom navigation below lg (whatever height the
+    // bar has on this screen: --tourist-bottom-nav-space); back in the card from lg.
     expect(bar.className).toContain('fixed')
-    expect(bar.className).toContain('bottom-[calc(4rem+env(safe-area-inset-bottom))]')
+    expect(bar.className).toContain('bottom-[var(--tourist-bottom-nav-space)]')
     expect(bar.className).toContain('lg:static')
 
     // Two equal halves: icon group (left) and Buy Now (right).

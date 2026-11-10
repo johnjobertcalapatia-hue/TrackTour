@@ -63,3 +63,19 @@ export function navPuckScreenOffset(mapArea: HTMLElement | null): { x: number; y
   const y = Math.max(-area.height / 2 + 80, Math.min(area.height / 2 - NAV_PUCK_HALF_PX, anchorY - centreY))
   return { x: 0, y: Math.round(y) }
 }
+
+/**
+ * Inverse of the tilt for a whole point: a screen offset (px from the centre
+ * of the map area, y down) → the offset on the tilted plane (still turned by
+ * the map's bearing). Used to turn a finger drag on the tilted map into the
+ * matching map pan. Points above the horizon are clamped just below it.
+ */
+export function planePointForScreen(screenX: number, screenY: number, tiltDeg = NAV_TILT_DEG, perspective = NAV_PERSPECTIVE_PX): { x: number; y: number } {
+  const t = (tiltDeg * Math.PI) / 180
+  // The horizon sits at screenY = -p·cosθ/sinθ; stay well below it.
+  const minY = -0.8 * perspective * (Math.cos(t) / Math.sin(t))
+  const sy = Math.max(minY, screenY)
+  const py = planeOffsetForScreenY(sy, tiltDeg, perspective)
+  const px = (screenX * (perspective - py * Math.sin(t))) / perspective
+  return { x: px, y: py }
+}

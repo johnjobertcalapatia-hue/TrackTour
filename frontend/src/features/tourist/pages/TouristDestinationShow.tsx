@@ -22,6 +22,7 @@ import {
 import { MapContainer, TileLayer, Marker } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
+import { businessLogoIcon } from '@/shared/utils/pin-icon'
 import { cn, formatCurrency, toAssetUrl } from '@/shared/utils'
 import BookRideSheet from '../components/BookRideSheet'
 
@@ -402,7 +403,11 @@ export default function TouristDestinationShow() {
                   url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                   attribution="&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a>"
                 />
-                <Marker position={[Number(destination.latitude), Number(destination.longitude)]} icon={spotIcon} />
+                {/* Same photo pin as the Explore map; the plain spot pin without a photo. */}
+                <Marker
+                  position={[Number(destination.latitude), Number(destination.longitude)]}
+                  icon={destination.images?.[0] ? businessLogoIcon(toAssetUrl(destination.images[0]), destination.name, true) : spotIcon}
+                />
               </MapContainer>
             </div>
             <div className="p-5">

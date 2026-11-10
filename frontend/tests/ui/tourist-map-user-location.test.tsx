@@ -154,13 +154,30 @@ describe('Explore map — tourist location', () => {
 })
 
 describe('Explore map — restaurant markers match the landing page', () => {
-  it('restaurants use the image pin (logo, else cover photo); others keep their pins', async () => {
+  it('restaurants and stays use the image pin (logo, else cover photo); no photo keeps the pin', async () => {
     renderMap()
     await screen.findAllByTestId('business-marker')
 
     const markers = screen.getAllByTestId('business-marker')
-    expect(markers.map((m) => m.dataset.icon)).toEqual(['logo', 'logo', 'pin', 'pin'])
+    // Restaurant (logo), cafe (cover only), diner without a photo, inn (logo).
+    expect(markers.map((m) => m.dataset.icon)).toEqual(['logo', 'logo', 'pin', 'logo'])
     expect(markers[0].dataset.src).toContain('/storage/logo.png')
     expect(markers[1].dataset.src).toContain('/storage/cover.jpg')
+    expect(markers[3].dataset.src).toContain('/storage/inn.png')
+  })
+
+  it('attractions and resorts use the image pin too; an attraction without a photo keeps the beach pin', async () => {
+    api.get.mockResolvedValue({ data: { businesses: [
+      biz({ id: 20, name: 'Bansud Falls', category: { id: 3, name: 'Tourist Attraction' }, cover_photo: '/storage/falls.jpg' }),
+      biz({ id: 21, name: 'Bay Resort', category: { id: 4, name: 'Beach Resort' }, logo: '/storage/resort.png' }),
+      biz({ id: 22, name: 'Hidden Cove', category: { id: 3, name: 'Tourist Attraction' } }),
+    ], categories: [], municipalities: [] } })
+    renderMap()
+    await screen.findAllByTestId('business-marker')
+
+    const markers = screen.getAllByTestId('business-marker')
+    expect(markers.map((m) => m.dataset.icon)).toEqual(['logo', 'logo', 'beach'])
+    expect(markers[0].dataset.src).toContain('/storage/falls.jpg')
+    expect(markers[1].dataset.src).toContain('/storage/resort.png')
   })
 })

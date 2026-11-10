@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
 import ExploreViewToggle from '@/features/tourist/components/ExploreViewToggle'
+import MunicipalityFilter from '@/features/tourist/components/MunicipalityFilter'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { get } from '@/shared/services/api'
-import { Star, MapPin, Compass, ChevronDown } from 'lucide-react'
+import { Star, MapPin, Compass } from 'lucide-react'
 import { formatCurrency, cn, toAssetUrl } from '@/shared/utils'
 
 type Tab = 'all' | 'places' | 'food' | 'stays'
@@ -126,32 +127,16 @@ export default function TouristExplore() {
         </div>
 
         {/* Municipality filter: grows to fill row 2 on phones, natural width when it fits beside the tabs */}
-        <div data-testid="explore-municipality-wrap" className="relative grow basis-0 min-w-[140px] sm:grow-0 sm:basis-auto">
-          <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#087F3F] pointer-events-none" aria-hidden="true" />
-          <select
-            id="explore-municipality"
-            aria-label="Municipality"
-            value={municipalityParam}
-            onChange={(e) => updateParams({ municipality: e.target.value })}
-            className={cn(
-              'appearance-none w-full h-9 pl-9 pr-8 rounded-full border text-sm font-medium truncate focus:outline-none focus:ring-2 focus:ring-[#087F3F]/25',
-              municipalityParam
-                ? 'bg-[#E9F7EF] border-[#087F3F] text-[#087F3F]'
-                : 'bg-white border-[#E5E9E7] text-[#17201B] hover:border-[#087F3F]/40',
-            )}
-          >
-            <option value="">All municipalities</option>
-            {municipalityOptions.map((m) => (
-              <option key={m.id} value={String(m.id)}>{m.name}</option>
-            ))}
-          </select>
-          <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#56615B] pointer-events-none" aria-hidden="true" />
-        </div>
+        <MunicipalityFilter
+          value={municipalityParam}
+          options={municipalityOptions}
+          onChange={(m) => updateParams({ municipality: m })}
+          className="grow basis-0 min-w-[140px] sm:grow-0 sm:basis-auto"
+        />
 
         <ExploreViewToggle
           current="list"
           to={tab === 'all' ? '/tourist/explore/map' : `/tourist/explore/map?category=${tab}`}
-          className="ml-auto"
         />
       </div>
 
@@ -187,7 +172,7 @@ export default function TouristExplore() {
                   </div>
                 )}
                 {item.rating != null && (
-                  <div className="absolute bottom-2 left-2 flex items-center gap-1 bg-black/60 backdrop-blur-md text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-md">
+                  <div className="absolute bottom-2 left-2 flex items-center gap-1 bg-black/65 text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-md">
                     <Star className="w-3 h-3 text-[#F4B400] fill-[#F4B400]" /> {item.rating.toFixed(1)}
                   </div>
                 )}

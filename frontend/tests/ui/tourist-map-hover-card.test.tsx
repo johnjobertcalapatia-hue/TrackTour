@@ -227,7 +227,7 @@ describe('Tourist map hover card', () => {
 
       expect((await screen.findAllByTestId('route-line')).length).toBeGreaterThan(0)
       expect(screen.getByTestId('map-rotator')).toHaveClass('map-rotator--nav')
-      expect(screen.getByRole('button', { name: 'Show whole route, north up' })).toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByRole('button', { name: 'Overview' })).toHaveAttribute('data-current-view', 'navigation')
     })
 
     it('"Get directions" only draws the route line (no navigation)', async () => {
@@ -237,7 +237,7 @@ describe('Tourist map hover card', () => {
 
       expect((await screen.findAllByTestId('route-line')).length).toBeGreaterThan(0)
       expect(screen.getByTestId('map-rotator')).not.toHaveClass('map-rotator--nav')
-      expect(screen.getByRole('button', { name: 'Follow me, facing my direction' })).toHaveAttribute('aria-pressed', 'false')
+      expect(screen.getByRole('button', { name: 'Navigation view' })).toHaveAttribute('data-current-view', 'overview')
     })
   })
 })

@@ -143,7 +143,7 @@ describe('Tourist map — business sheet and routing UX', () => {
     // "Directions" only draws the route: the whole route is framed, north up.
     // (Navigation is the separate "Navigate" button / the compass toggle.)
     expect(fitBounds).toHaveBeenCalled()
-    expect(screen.getByRole('button', { name: 'Follow me, facing my direction' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('button', { name: 'Navigation view' })).toHaveAttribute('data-current-view', 'overview')
   })
 
   it('minimises the business sheet once the route is shown, and the handle re-expands it', async () => {

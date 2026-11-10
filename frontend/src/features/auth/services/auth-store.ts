@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { create } from 'zustand'
-import { get, post } from '@/shared/services/api'
+import { API_BASE_URL, get, post } from '@/shared/services/api'
 import type { User, AuthResponse } from '@/shared/types'
 
 interface AuthState {
@@ -98,7 +98,10 @@ register: async (formData: Record<string, unknown>) => {
     // the status untouched when the rider still has an active trip. This may
     // fail if the token is already gone (e.g. 401 interceptor cleared it) —
     // that's fine.
-    await axios.post('/api/logout', null, {
+    // Same API base as every other request: a hard-coded '/api/logout' went to
+    // the FRONTEND's host in production (API on another domain) → 405, and
+    // the token was never revoked (reported 2026-11-09).
+    await axios.post(`${API_BASE_URL.replace(/\/+$/, '')}/logout`, null, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     }).catch(() => {})
   },

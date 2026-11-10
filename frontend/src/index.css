@@ -1488,6 +1488,137 @@ table tbody td {
   transition: transform 0.45s ease-out;
   will-change: transform;
 }
+/* ── Tourist bottom navigation (phones / tablets, < 1024 px) ───────────────
+   Sized to the screen (2026-11-10). One set of variables drives the bar AND
+   what has to clear it (page bottom padding, the Explore map height):
+     < 360 px   small phones      58 px, 18 px icons, short 9.5 px labels
+     360-639    phones            64 px, 20 px icons, short labels (11 px from 400)
+     640-767    large phones / small tablets  68 px, 22 px icons, full labels
+     768-1023   tablets           72 px, 24 px icons, full labels
+     landscape phones (height <= 480 px): 50 px, icons only (names stay as
+     accessible labels).
+   From 1024 px the sidebar replaces it. */
+:root {
+  --tourist-bottom-nav-h: 58px;
+  --tourist-bottom-nav-icon: 18px;
+  --tourist-bottom-nav-label: 9.5px;
+  --tourist-bottom-nav-label-spacing: -0.02em;
+  --tourist-bottom-nav-pill-w: 40px;
+  --tourist-bottom-nav-pill-h: 26px;
+  --tourist-bottom-nav-space: calc(var(--tourist-bottom-nav-h) + env(safe-area-inset-bottom, 0px));
+}
+@media (min-width: 360px) {
+  :root {
+    --tourist-bottom-nav-h: 64px;
+    --tourist-bottom-nav-icon: 20px;
+    --tourist-bottom-nav-label: 10px;
+    --tourist-bottom-nav-label-spacing: 0em;
+    --tourist-bottom-nav-pill-w: 44px;
+    --tourist-bottom-nav-pill-h: 28px;
+  }
+}
+@media (min-width: 400px) {
+  :root {
+    --tourist-bottom-nav-label: 11px;
+  }
+}
+@media (min-width: 640px) {
+  :root {
+    --tourist-bottom-nav-h: 68px;
+    --tourist-bottom-nav-icon: 22px;
+    --tourist-bottom-nav-label: 12px;
+    --tourist-bottom-nav-pill-w: 56px;
+    --tourist-bottom-nav-pill-h: 30px;
+  }
+}
+@media (min-width: 768px) {
+  :root {
+    --tourist-bottom-nav-h: 72px;
+    --tourist-bottom-nav-icon: 24px;
+    --tourist-bottom-nav-label: 13px;
+    --tourist-bottom-nav-pill-w: 60px;
+    --tourist-bottom-nav-pill-h: 32px;
+  }
+}
+@media (max-height: 480px) and (orientation: landscape) and (max-width: 1023px) {
+  :root {
+    --tourist-bottom-nav-h: 50px;
+    --tourist-bottom-nav-icon: 20px;
+    --tourist-bottom-nav-pill-h: 30px;
+  }
+  .tourist-bottom-nav-label {
+    display: none;
+  }
+}
+@media (min-width: 1024px) {
+  :root {
+    /* No bottom bar: nothing to clear. */
+    --tourist-bottom-nav-space: 0px;
+  }
+}
+
+/* ALWAYS on screen, never hidden on scroll (product decision, 2026-11-10).
+   Its own compositing layer: Chrome on Android can drop a fixed bar from the
+   screen while scrolling when the page also has a blurred sticky element. */
+.tourist-bottom-nav {
+  transform: translate3d(0, 0, 0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+.tourist-bottom-nav-grid {
+  height: var(--tourist-bottom-nav-h);
+}
+.tourist-bottom-nav-pill {
+  width: var(--tourist-bottom-nav-pill-w);
+  height: var(--tourist-bottom-nav-pill-h);
+}
+.tourist-bottom-nav-icon {
+  width: var(--tourist-bottom-nav-icon);
+  height: var(--tourist-bottom-nav-icon);
+}
+.tourist-bottom-nav-label {
+  font-size: var(--tourist-bottom-nav-label);
+  letter-spacing: var(--tourist-bottom-nav-label-spacing, 0em);
+  line-height: 1.2;
+}
+/* Bottom bars clear the phone's home-indicator / gesture area. */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Page content always scrolls clear of the bar (whatever its height). */
+.tourist-main {
+  padding-bottom: calc(var(--tourist-bottom-nav-space) + 1.5rem);
+}
+@media (min-width: 1024px) {
+  .tourist-main {
+    padding-bottom: 2rem;
+  }
+}
+
+/* Explore map page: fills the screen under the header and ends at the TOP of
+   the bottom bar, so the bar never covers the map or the places sheet's
+   handle. Its negative bottom margin cancels .tourist-main's padding. */
+.tourist-map-page {
+  height: calc(100dvh - var(--tourist-header-h) - var(--tourist-bottom-nav-space));
+  margin-bottom: calc(-1 * (var(--tourist-bottom-nav-space) + 1.5rem));
+}
+@media (min-width: 1024px) {
+  .tourist-map-page {
+    margin-bottom: -2rem;
+  }
+}
+
+/* Rider map area: clip, never scroll. The navigation map is far larger than
+   the screen, and Leaflet focuses its container on every press; inside an
+   overflow:hidden box that focus SCROLLS the box, shifting the whole map
+   (~80 px jump at the start of a drag, measured in Chromium 2026-11-08).
+   overflow:clip cannot be scrolled; hidden is the fallback. */
+.rider-map-area,
+.tourist-map-area {
+  overflow: hidden;
+  overflow: clip;
+}
 /* Rider navigation view (Stage C): the far edge of the tilted map fades into
    a soft "sky" like a driving-navigation app, tinted per map type. */
 .nav-horizon {
@@ -1505,6 +1636,12 @@ table tbody td {
 .map-rotator--nav .leaflet-marker-icon > .marker-rot {
   transform: rotate(var(--map-bearing, 0deg));
   transition: transform 0.45s ease-out;
+}
+/* While the rider pans / pinches / twists the map, it follows the fingers
+   exactly: no easing on the turn (Google-Maps-like explore, 2026-11-09). */
+.map-rotator--nav.map-rotator--gesture,
+.map-rotator--nav.map-rotator--gesture .leaflet-marker-icon > .marker-rot {
+  transition: none;
 }
 @media (prefers-reduced-motion: reduce) {
   .map-rotator--nav,

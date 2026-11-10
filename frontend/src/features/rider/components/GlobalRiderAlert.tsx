@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
-import { CheckCircle, ShoppingBag, Loader2, AlertTriangle, Zap, Banknote, Store, MapPin, Camera, RefreshCw } from 'lucide-react'
+import { CheckCircle, ShoppingBag, Loader2, AlertTriangle, Zap, Banknote, Store, MapPin } from 'lucide-react'
 import { useRiderActiveTrip } from '@/features/rider/context/RiderActiveTripContext'
 import { formatCurrency } from '@/shared/utils'
 import { formatStopDistance } from '@/features/rider/stop-arrival'
+import { DeliveryPhotoCapture } from '@/features/rider/components/DeliveryPhotoCapture'
 
 export default function GlobalRiderAlert() {
   const {
@@ -361,7 +362,7 @@ export default function GlobalRiderAlert() {
                   {isPickup ? 'Dropoff Destination' : 'Trip Completion'}
                 </span>
                 <span className="text-sm text-[#17201B] font-bold truncate">
-                  {isPickup ? (activeDelivery?.delivery_address ?? 'Destination Location') : 'Take a photo of the delivered food, then confirm'}
+                  {isPickup ? (activeDelivery?.delivery_address ?? 'Destination Location') : 'Take a photo of the tourist receiving the food, submit it, then confirm'}
                 </span>
               </div>
             </div>
@@ -416,7 +417,13 @@ export default function GlobalRiderAlert() {
               )}
 
               {!isPickup && (
-                <DeliveryProofPicker photo={proofPhoto} onChange={setProofPhoto} isCod={isCod} />
+                <DeliveryPhotoCapture
+                  photo={proofPhoto}
+                  onSubmit={setProofPhoto}
+                  note={isCod
+                    ? 'You must be within 50 m of the address. Confirming means the tourist has received the food and paid you in cash.'
+                    : 'You must be within 50 m of the address. Confirming means the tourist has received the food.'}
+                />
               )}
 
               <button
@@ -449,59 +456,3 @@ function ConfirmGlyph({ icon: Icon }: { icon: typeof CheckCircle }) {
   return <Icon className="h-4 w-4" />
 }
 
-/**
- * Drop-off proof photo: opens the rear camera on phones (file picker on
- * desktop), shows a preview with Retake. Required before "Confirm Delivered".
- */
-function DeliveryProofPicker({ photo, onChange, isCod }: { photo: File | null; onChange: (f: File | null) => void; isCod: boolean }) {
-  const [preview, setPreview] = useState<string | null>(null)
-  useEffect(() => {
-    if (!photo) { setPreview(null); return }
-    const url = URL.createObjectURL(photo)
-    setPreview(url)
-    return () => URL.revokeObjectURL(url)
-  }, [photo])
-
-  const input = (
-    <input
-      type="file"
-      accept="image/*"
-      capture="environment"
-      aria-label="Take a photo of the delivered food"
-      className="sr-only"
-      onChange={(e) => {
-        const file = e.target.files?.[0] ?? null
-        onChange(file)
-        e.target.value = ''
-      }}
-    />
-  )
-
-  return (
-    <div className="space-y-2">
-      {photo && preview ? (
-        <div className="flex items-center gap-3 rounded-xl border border-[#CFE8D6] bg-[#F4FBF6] p-2">
-          <img src={preview} alt="Delivered food" className="h-16 w-16 rounded-lg object-cover" />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-bold text-[#17201B]">Photo ready</p>
-            <p className="text-xs text-[#6B7280] truncate">{photo.name}</p>
-          </div>
-          <label className="inline-flex cursor-pointer items-center gap-1 rounded-lg bg-[#F3F4F6] px-3 py-2 text-xs font-bold text-[#17201B] hover:bg-[#E5E7EB]">
-            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" /> Retake
-            {input}
-          </label>
-        </div>
-      ) : (
-        <label className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-[#16803C] bg-[#FFFFFF] py-3.5 text-sm font-bold text-[#16803C] hover:bg-[#F0FDF4]">
-          <Camera className="h-4 w-4" aria-hidden="true" /> Take photo of delivered food
-          {input}
-        </label>
-      )}
-      <p className="text-xs text-[#6B7280]">
-        {isCod
-          ? 'You must be within 50 m of the address. Confirming means the tourist has received the food and paid you in cash.'
-          : 'You must be within 50 m of the address. Confirming means the tourist has received the food.'}
-      </p>
-    </div>
-  )
-}

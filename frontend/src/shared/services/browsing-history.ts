@@ -58,6 +58,43 @@ export function recordBrowsedPlace(place: Omit<BrowsedPlace, 'viewed_at' | 'disc
   } catch {}
 }
 
+/** A dish entry (food item page), including ones saved before `kind` existed. */
+export function isBrowsedDish(place: Pick<BrowsedPlace, 'kind' | 'url'>): boolean {
+  return place.kind === 'food' || (typeof place.url === 'string' && place.url.startsWith('/tourist/food/item/'))
+}
+
+/**
+ * Where a history entry opens. A dish opens its dish page; a restaurant opens
+ * the restaurant page (old restaurant entries still point at
+ * /tourist/explore/:id); anything else opens its saved url.
+ *
+ * Dishes are in the "dining" group too: routing every dining entry to
+ * /tourist/food/:id sent a DISH id to the restaurant page — Home → Recently
+ * Viewed "Pork/Chicken Sisig" (dish 7) opened "restaurant 7", which does not
+ * exist (reported 2026-11-09).
+ */
+export function browsedPlaceLink(place: Pick<BrowsedPlace, 'id' | 'kind' | 'discoveryGroup' | 'url'>): string {
+  if (isBrowsedDish(place)) return `/tourist/food/item/${place.id}`
+  if (place.discoveryGroup === 'dining') return `/tourist/food/${place.id}`
+  return place.url
+}
+
+/**
+ * Drop a place that no longer exists (its page answered 404) from the
+ * history, so Home → Recently Viewed and My Activities → Explored stop
+ * linking to it. History lives in the browser, so it can outlive a record
+ * the server removed (e.g. after a database reset).
+ */
+export function forgetBrowsedPlace(id: number, kind: 'place' | 'food' = 'place'): void {
+  try {
+    const existing = getBrowsedPlaces()
+    const next = existing.filter((item) => !(item.id === id && (item.kind ?? 'place') === kind))
+    if (next.length === existing.length) return
+    localStorage.setItem(BROWSING_HISTORY_KEY, JSON.stringify(next))
+    window.dispatchEvent(new Event('browsing-history-updated'))
+  } catch {}
+}
+
 export function clearBrowsedPlaces(): void {
   try {
     localStorage.removeItem(BROWSING_HISTORY_KEY)

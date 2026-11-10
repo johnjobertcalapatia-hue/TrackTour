@@ -31,6 +31,8 @@ export interface OrderSection {
   key: string
   reference: string
   primary_order_id: number
+  /** The group checkout this order belongs to (multi-restaurant); pay that as a whole. */
+  group_order_id?: number | null
   placed_at: string | null
   /** Progress stage, which decides the actions. */
   tab: SectionTab

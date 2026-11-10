@@ -15,14 +15,14 @@ import { NAV_PERSPECTIVE_PX, NAV_TILT_DEG } from '@/features/rider/navigation-vi
  * markers drawn on the tilted map), around its centre, so it looks flat on the
  * ground without leaving the rider's position.
  */
-export function RiderNavPuck({ offsetY }: { offsetY: number }) {
+export function RiderNavPuck({ offsetY, offsetX = 0 }: { offsetY: number; offsetX?: number }) {
   return (
     <div
       data-testid="rider-nav-puck"
       aria-label="Your location"
       role="img"
       className="pointer-events-none absolute left-1/2 top-1/2 z-[500]"
-      style={{ transform: `translate(-50%, calc(-50% + ${offsetY}px))` }}
+      style={{ transform: `translate(calc(-50% + ${offsetX}px), calc(-50% + ${offsetY}px))` }}
     >
       {/* Same geometry and colours as riderNavigationMarkerIcon (shared/utils/map-markers.ts). */}
       <svg

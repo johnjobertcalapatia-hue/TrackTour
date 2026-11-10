@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { recordBrowsedPlace } from '@/shared/services/browsing-history'
+import { forgetBrowsedPlace, recordBrowsedPlace } from '@/shared/services/browsing-history'
+import { isNotFoundError } from '@/shared/components/PlaceUnavailable'
 import { useQuery } from '@tanstack/react-query'
 import { get } from '@/shared/services/api'
 import FoodImageCarousel from '@/features/tourist/components/FoodImageCarousel'
@@ -205,13 +206,18 @@ export default function TouristFoodItemDetail() {
   const [added, setAdded] = useState(false)
   const itemId = Number(id)
 
-  const { data: item, isLoading, isError } = useQuery<FoodItemDetail>({
+  const { data: item, isLoading, isError, error } = useQuery<FoodItemDetail>({
     queryKey: ['tourist-food-detail', itemId],
     queryFn: () => get<FoodItemDetail>(`/tourist/food/${itemId}`),
     staleTime: 60_000,
     retry: false,
     enabled: Number.isInteger(itemId) && itemId > 0,
   })
+  // The dish no longer exists (404): stop listing it in Recently Viewed.
+  const dishGone = isNotFoundError(error)
+  useEffect(() => {
+    if (dishGone) forgetBrowsedPlace(itemId, 'food')
+  }, [dishGone, itemId])
 
   // My Activities → Explored: remember dishes the tourist looked at.
   useEffect(() => {
@@ -483,7 +489,7 @@ export default function TouristFoodItemDetail() {
               [Add to Cart][Buy Now]; Restaurant/Chat live elsewhere there.
             */}
             <div
-              className="food-order-actions fixed inset-x-0 bottom-[calc(4rem+env(safe-area-inset-bottom))] z-[1900] bg-white border-t border-[#E5E9E7] px-2 py-2 shadow-[0_-6px_18px_rgba(23,32,27,0.08)] lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:border-0 lg:p-0 lg:shadow-none"
+              className="food-order-actions fixed inset-x-0 bottom-[var(--tourist-bottom-nav-space)] z-[1900] bg-white border-t border-[#E5E9E7] px-2 py-2 shadow-[0_-6px_18px_rgba(23,32,27,0.08)] lg:static lg:inset-auto lg:z-auto lg:bg-transparent lg:border-0 lg:p-0 lg:shadow-none"
               role="group"
               aria-label="Order actions"
             >

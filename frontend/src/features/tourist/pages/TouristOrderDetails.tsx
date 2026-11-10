@@ -1,4 +1,5 @@
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
+import { useBackOr } from '@/shared/hooks/use-back-or'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, CalendarCheck, CreditCard, MapPin, Phone, User } from 'lucide-react'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
@@ -16,13 +17,12 @@ const PAYMENT_LABEL: Record<string, string> = { cash: 'Cash on delivery', cod: '
 export default function TouristOrderDetails() {
   const { id } = useParams<{ id: string }>()
   const orderId = Number(id)
-  const navigate = useNavigate()
-  const location = useLocation()
 
   const { data, isLoading } = useQuery({ queryKey: myOrdersKey('all'), queryFn: () => fetchMyOrders('all') })
   const section = findSection(data?.sections, orderId)
 
-  const goBack = () => (location.key !== 'default' ? navigate(-1) : navigate('/tourist/activities?view=orders'))
+  // Never back out of the app (e.g. onto PayMongo's page after paying).
+  const goBack = useBackOr('/tourist/activities?view=orders')
 
   if (isLoading && !data) return <DashboardSkeleton />
 

@@ -4,6 +4,9 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TouristOrders from '@/features/tourist/pages/TouristOrders'
 
+const redirect = vi.hoisted(() => ({ open: vi.fn() }))
+vi.mock('@/shared/utils/external-redirect', () => ({ openExternalPage: redirect.open }))
+
 const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }))
 vi.mock('@/shared/services/api', () => ({
   get: api.get,
@@ -93,7 +96,44 @@ describe('My Orders tabs', () => {
     expect(within(order).getAllByText('Delivery fee')).toHaveLength(1)
     expect(within(order).getByText('₱95.00')).toBeInTheDocument()
     expect(within(order).getByText('₱643.00')).toBeInTheDocument()
-    expect(within(order).getByRole('link', { name: /Complete payment/ })).toHaveAttribute('href', '/tourist/orders/40/progress')
+    expect(within(order).getByRole('button', { name: /Complete payment/ })).toBeInTheDocument()
+  })
+
+  it('Complete payment opens the PayMongo GCash checkout for the order', async () => {
+    redirect.open.mockReset()
+    api.post.mockResolvedValue({ payment_number: 'PAY-1', checkout_url: 'https://checkout.paymongo.com/cs_test_1' })
+    renderAt('/tourist/orders?tab=to_pay')
+    const order = await screen.findByRole('article', { name: 'Order TT-to_pay' })
+    await act(async () => { fireEvent.click(within(order).getByRole('button', { name: /Complete payment/ })) })
+
+    expect(api.post).toHaveBeenCalledWith('/payments/create-intent', { payable_type: 'order', payable_id: 40, method: 'gcash' })
+    await waitFor(() => expect(redirect.open).toHaveBeenCalledWith('https://checkout.paymongo.com/cs_test_1'))
+    // While the browser leaves for PayMongo the button can't be pressed twice.
+    expect(within(order).getByRole('button', { name: /Opening payment/ })).toBeDisabled()
+  })
+
+  it('a multi-restaurant checkout pays its group checkout as a whole', async () => {
+    redirect.open.mockReset()
+    api.get.mockResolvedValue({ tab: 'to_pay', counts: COUNTS, sections: [section('to_pay', { group_order_id: 7 })] })
+    api.post.mockResolvedValue({ payment_number: 'PAY-2', checkout_url: 'https://checkout.paymongo.com/cs_test_2' })
+    renderAt('/tourist/orders?tab=to_pay')
+    const order = await screen.findByRole('article', { name: 'Order TT-to_pay' })
+    await act(async () => { fireEvent.click(within(order).getByRole('button', { name: /Complete payment/ })) })
+
+    expect(api.post).toHaveBeenCalledWith('/payments/create-intent', { payable_type: 'group_order', payable_id: 7, method: 'gcash' })
+    await waitFor(() => expect(redirect.open).toHaveBeenCalledWith('https://checkout.paymongo.com/cs_test_2'))
+  })
+
+  it('shows the error and lets the tourist try again when the payment page cannot open', async () => {
+    redirect.open.mockReset()
+    api.post.mockRejectedValue(new Error('This order has already been paid.'))
+    renderAt('/tourist/orders?tab=to_pay')
+    const order = await screen.findByRole('article', { name: 'Order TT-to_pay' })
+    await act(async () => { fireEvent.click(within(order).getByRole('button', { name: /Complete payment/ })) })
+
+    expect(await within(order).findByRole('alert')).toHaveTextContent("Couldn't open the payment page")
+    expect(redirect.open).not.toHaveBeenCalled()
+    expect(within(order).getByRole('button', { name: /Complete payment/ })).toBeEnabled()
   })
 
   it('switching tabs loads that tab and keeps it in the URL', async () => {
@@ -230,7 +270,7 @@ describe('My Orders tabs', () => {
     const order = await screen.findByRole('article', { name: 'Order TT-COD' })
     expect(within(order).getByText('Cash on delivery')).toBeInTheDocument()
     expect(within(order).getByText(/in cash to your rider when your order arrives/)).toHaveTextContent('Pay ₱643.00 in cash')
-    expect(within(order).queryByRole('link', { name: /Complete payment/ })).not.toBeInTheDocument()
+    expect(within(order).queryByRole('button', { name: /Complete payment/ })).not.toBeInTheDocument()
     expect(within(order).getByRole('link', { name: 'View progress' })).toHaveAttribute('href', '/tourist/orders/40/progress')
   })
 })
