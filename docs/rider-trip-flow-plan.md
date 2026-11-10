@@ -328,6 +328,59 @@ tap "Payment received" before their food can be marked ready or collected.
 - The existing food stats, dish review and food detail tests are unchanged
   and pass.
 
+## Record (2026-11-10): trip buttons only work once their conditions are met
+
+**Rule (user decision).** Every rider action on the trip page waits for its
+conditions, shows them as a ✓ / ✗ list under the button, and stays disabled
+until all are met:
+
+| Action | Conditions |
+|---|---|
+| Confirm Arrival (restaurant) | the rider's turn in route order; within 50 m of the restaurant |
+| Confirm Pick Up | arrived; restaurant confirmed "Payment received" (COD only); food ready; still within 50 m |
+| I've Arrived (tourist) | all food picked up; within 50 m of the delivery address |
+| Confirm Delivered | within 50 m of the delivery address; delivery photo submitted |
+
+**Defect fixed (server).** `PATCH /rider/deliveries/{id}/status` →
+`arrived_destination` had no distance check, so "I've Arrived" worked from
+anywhere. Food deliveries now need the rider's own fresh saved GPS fix
+(≤ `tracking.proof_location_max_age_seconds`) within
+`tracking.dropoff_radius_meters` (50 m) of the delivery address — the same
+source as the pickup arrival and the delivery proof. Rides are unaffected;
+re-confirming an already arrived delivery stays allowed.
+
+**UI.** `trip-steps.ts` (`stopConditions`, `dropoffArrivalConditions`,
+`deliveryConditions`) + `RiderTripStatus` checklists; distances from the
+device's live GPS ("turn on your location" when unknown). The server stays
+authoritative for every gate.
+
+**Tests.** `DropoffArrivalGateTest` (4); three flow tests now place the rider
+at the drop-off before arriving (`riderIsAtDropoff`); rider trip page tests
+(+6). Full suites: Laravel 873 passed, 2 skipped; frontend 579 passed; build
+clean.
+
+### Follow-up (2026-11-10): invalid GPS fix, popup gate
+
+Production delivery #14 (TT-54788) could not be completed: "you are
+12948945 m away". The rider's latest saved fix was (12.9604387, **0.0**) — a
+reading missing its longitude (emulated / overridden location), accepted
+because the previous fix was 133 s old, just outside the 120 s teleport-guard
+window (kept on purpose so one bad fix can't block real ones forever).
+
+- Server: `POST /rider/map/location` and trip tracking refuse a fix with an
+  exact 0 latitude or longitude (422, never saved).
+- App: `isUsableGpsFix` (`features/rider/gps.ts`) — the rider map, the online
+  heartbeat and the trip context never use or send such a fix; the map shows
+  "Your device reported an invalid location…".
+- The arrival popup's **Confirm Delivered** now waits for the same conditions
+  as the trip page (within 50 m by live GPS + submitted photo), shared
+  `TripConditions` list.
+- Distances in server messages and checklists read "1.5 km" / "12,949 km".
+
+Tests: `InvalidGpsFixTest` (3), km wording in `DropoffArrivalGateTest`,
+popup gate (+1), `rider-gps-fix` (2). Full suites: Laravel 876 passed,
+2 skipped; frontend 582 passed; build clean.
+
 ## Record (2026-11-10): COD order paid online mid-way
 
 **Rule (user decision).** An order paid online has already paid the

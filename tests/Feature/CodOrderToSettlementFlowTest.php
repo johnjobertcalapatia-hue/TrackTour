@@ -516,6 +516,8 @@ class CodOrderToSettlementFlowTest extends TestCase
         $this->be($this->riderA)
             ->patchJson($this->riderStatusUrl($delivery), ['status' => 'in_transit'])
             ->assertOk();
+        // "I've arrived" needs the rider's fresh GPS fix at the drop-off (2026-11-10).
+        $this->riderIsAtDropoff($delivery, $this->riderA);
         $this->be($this->riderA)
             ->patchJson($this->riderStatusUrl($delivery), ['status' => 'arrived_destination'])
             ->assertOk();

@@ -175,6 +175,51 @@ class RiderDeliveryController extends Controller
         return $this->paginatedResponse($deliveries, 'Completed deliveries retrieved.');
     }
 
+    /** "80 m" below a kilometre, "12.3 km" / "12,949 km" above. */
+    private function formatDistance(float $meters): string
+    {
+        if ($meters < 1000) {
+            return ((int) round($meters)).' m';
+        }
+        $km = $meters / 1000;
+
+        return ($km < 100 ? number_format($km, 1) : number_format($km, 0)).' km';
+    }
+
+    /** Food delivery with a drop-off location, not already marked arrived. */
+    private function dropOffArrivalGateApplies(Delivery $delivery): bool
+    {
+        $current = $delivery->status->value ?? $delivery->status;
+
+        return $current !== 'arrived_destination'
+            && strtolower((string) ($delivery->primaryOrder()?->order_type ?? '')) !== 'transport'
+            && $delivery->delivery_latitude !== null
+            && $delivery->delivery_longitude !== null;
+    }
+
+    /** Why the rider may not confirm arrival at the drop-off yet (null = allowed). */
+    private function dropOffArrivalBlockedMessage(Delivery $delivery, int $riderId): ?string
+    {
+        $sequence = app(\App\Services\PickupSequenceService::class);
+        $location = $sequence->latestRiderLocation($riderId);
+        $maxAge = (int) config('tracking.proof_location_max_age_seconds', 120);
+        if (! $location || ! $location['recorded_at'] || $location['recorded_at']->lt(now()->subSeconds($maxAge))) {
+            return 'We need your current location. Keep the map open with location on, then try again.';
+        }
+
+        $distance = $sequence->distanceMeters(
+            (float) $location['latitude'],
+            (float) $location['longitude'],
+            (float) $delivery->delivery_latitude,
+            (float) $delivery->delivery_longitude,
+        );
+        $radius = (float) config('tracking.dropoff_radius_meters', 50);
+
+        return $distance > $radius
+            ? sprintf('Move closer to the delivery address to confirm arrival (within %d m; you are %s away).', (int) $radius, $this->formatDistance($distance))
+            : null;
+    }
+
     public function updateStatus(Request $request, Delivery $delivery): JsonResponse
     {
         if ((int) $delivery->rider_id !== (int) $request->user()?->id) {
@@ -193,6 +238,17 @@ class RiderDeliveryController extends Controller
 
         if (! isset($validTransitions[$newStatus])) {
             return $this->errorResponse('Invalid status transition.', 422);
+        }
+
+        // "I've arrived" at the tourist (food delivery, 2026-11-10): only from
+        // within tracking.dropoff_radius_meters (50 m) of the delivery address, judged
+        // from the rider's own fresh saved GPS fix (never a client-sent number),
+        // like the pickup arrival and the delivery proof. Rides keep their flow.
+        if ($newStatus === 'arrived_destination' && $this->dropOffArrivalGateApplies($delivery)) {
+            $blocked = $this->dropOffArrivalBlockedMessage($delivery, (int) $request->user()->id);
+            if ($blocked !== null) {
+                return $this->errorResponse($blocked, 422);
+            }
         }
 
         // Perform the transition under a row lock on the delivery so the terminal
@@ -451,7 +507,7 @@ class RiderDeliveryController extends Controller
         $radius = (float) config('tracking.dropoff_radius_meters', 50);
         if ($distance > $radius) {
             return $this->errorResponse(
-                sprintf('You must be within %d m of the delivery address to complete it (you are %d m away).', (int) $radius, (int) round($distance)),
+                sprintf('You must be within %d m of the delivery address to complete it (you are %s away).', (int) $radius, $this->formatDistance($distance)),
                 422
             );
         }

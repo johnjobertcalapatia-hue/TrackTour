@@ -149,6 +149,9 @@ describe('GlobalRiderAlert — COD pickup-gate behaviour', () => {
       actionError: null,
       onConfirmDelivery,
       pickupStopsData: { is_cod: true, stops: [], fully_collected: true },
+      // Live GPS at the drop-off (activeDelivery.delivery_lat / delivery_lng).
+      positionKnown: true,
+      riderPosition: [12.86, 121.48],
     })
     vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:proof'), revokeObjectURL: vi.fn() }))
 
@@ -175,6 +178,98 @@ describe('GlobalRiderAlert — COD pickup-gate behaviour', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /confirm delivered/i }))
     expect(onConfirmDelivery).toHaveBeenCalledWith(photo)
+  })
+
+  it('Confirm Delivered stays disabled away from the address, even with the photo submitted', () => {
+    const onConfirmDelivery = vi.fn()
+    h.setOverrides({
+      arrivalAlert: 'DROPOFF',
+      tripState: 'ARRIVED_AT_DROP',
+      actionError: null,
+      onConfirmDelivery,
+      pickupStopsData: { is_cod: false, stops: [], fully_collected: true },
+      positionKnown: true,
+      riderPosition: [12.8, 121.4], // ~11 km from the drop-off
+    })
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:proof'), revokeObjectURL: vi.fn() }))
+    render(<GlobalRiderAlert />)
+
+    const photo = new File(['x'], 'delivered.jpg', { type: 'image/jpeg' })
+    fireEvent.change(screen.getByLabelText('Take a photo of the tourist receiving the food'), { target: { files: [photo] } })
+    fireEvent.click(screen.getByRole('button', { name: 'Submit photo' }))
+
+    expect(screen.getByText('Photo of the tourist receiving the food submitted').closest('li')).toHaveAttribute('data-met', 'true')
+    expect(screen.getByText(/Within 50 m of the delivery address \(you are \d+\.\d km away\)/).closest('li')).toHaveAttribute('data-met', 'false')
+    const confirm = screen.getByRole('button', { name: /confirm delivered/i })
+    expect(confirm).toBeDisabled()
+    fireEvent.click(confirm)
+    expect(onConfirmDelivery).not.toHaveBeenCalled()
+  })
+
+  it('the rider can collapse the arrival message and reopen it later, keeping the submitted photo', () => {
+    h.setOverrides({
+      arrivalAlert: 'DROPOFF',
+      tripState: 'ARRIVED_AT_DROP',
+      actionError: null,
+      onConfirmDelivery: vi.fn(),
+      pickupStopsData: { is_cod: false, stops: [], fully_collected: true },
+      positionKnown: true,
+      riderPosition: [12.86, 121.48],
+    })
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: vi.fn(() => 'blob:proof'), revokeObjectURL: vi.fn() }))
+    render(<GlobalRiderAlert />)
+
+    const photo = new File(['x'], 'delivered.jpg', { type: 'image/jpeg' })
+    fireEvent.change(screen.getByLabelText('Take a photo of the tourist receiving the food'), { target: { files: [photo] } })
+    fireEvent.click(screen.getByRole('button', { name: 'Submit photo' }))
+
+    // Not ready yet: collapse it to a small bar; the confirm button is gone.
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse' }))
+    expect(screen.queryByRole('button', { name: /confirm delivered/i })).not.toBeInTheDocument()
+    const bar = screen.getByRole('button', { name: 'Show delivery confirmation' })
+    expect(bar).toHaveTextContent("You've Arrived")
+    expect(bar).toHaveTextContent('Tap to confirm the delivery')
+
+    // Reopen: same message, photo still submitted, ready to confirm.
+    fireEvent.click(bar)
+    expect(screen.getByAltText('Submitted delivery photo')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /confirm delivered/i })).toBeEnabled()
+  })
+
+  it('the restaurant arrival prompt (Pickup 1 of 1) collapses to a bar and reopens', () => {
+    const confirmArrivalStop = vi.fn()
+    h.setOverrides({
+      pickupArrivalPrompt: { businessId: 10, businessName: 'Ekslusibo Grill and Restaurant', sequence: 1, totalStops: 1, distanceMeters: 22 },
+      confirmArrivalStop,
+    })
+    render(<GlobalRiderAlert />)
+    expect(screen.getByText('Confirm Restaurant Arrival')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse' }))
+    expect(screen.queryByText('Confirm Restaurant Arrival')).not.toBeInTheDocument()
+    const bar = screen.getByRole('button', { name: 'Show restaurant arrival confirmation' })
+    expect(bar).toHaveTextContent('Pickup 1 of 1: Ekslusibo Grill and Restaurant')
+    expect(bar).toHaveTextContent('Tap to confirm your arrival')
+
+    fireEvent.click(bar)
+    fireEvent.click(screen.getByRole('button', { name: /Confirm Arrival/ }))
+    expect(confirmArrivalStop).toHaveBeenCalledWith(10)
+  })
+
+  it('the food pickup prompt collapses too', () => {
+    h.setOverrides({
+      pickupStopPrompt: { businessId: 10, businessName: 'Ekslusibo Grill and Restaurant', sequence: 1, totalStops: 1, distanceMeters: 10 },
+    })
+    render(<GlobalRiderAlert />)
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse' }))
+    expect(screen.getByRole('button', { name: 'Show pickup confirmation' })).toHaveTextContent('Food is ready. Tap to confirm the pickup')
+  })
+
+  it('pickup arrival can be collapsed too', () => {
+    h.setOverrides({ arrivalAlert: 'PICKUP', tripState: 'ARRIVED_AT_PICKUP', actionError: null })
+    render(<GlobalRiderAlert />)
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse' }))
+    expect(screen.getByRole('button', { name: 'Show pickup confirmation' })).toHaveTextContent('Tap to confirm the pickup')
   })
 
   it('surfaces the real server message instead of the old generic text', () => {

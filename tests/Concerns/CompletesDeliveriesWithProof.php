@@ -18,6 +18,18 @@ use Illuminate\Testing\TestResponse;
 trait CompletesDeliveriesWithProof
 {
     /** Put the rider at the drop-off (fresh GPS) and complete with a photo. */
+    /** The rider's fresh saved GPS fix at the drop-off (arrival / proof gates). */
+    protected function riderIsAtDropoff(Delivery $delivery, User $rider): void
+    {
+        $delivery->refresh();
+        RiderLocation::create([
+            'rider_id' => $rider->id,
+            'latitude' => (float) $delivery->delivery_latitude,
+            'longitude' => (float) $delivery->delivery_longitude,
+            'recorded_at' => now(),
+        ]);
+    }
+
     protected function riderCompletesDelivery(Delivery $delivery, User $rider): TestResponse
     {
         Storage::fake('public');

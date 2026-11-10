@@ -10,8 +10,12 @@ import { cn, toAssetUrl } from '@/shared/utils'
 import { useRiderActiveTrip } from '@/features/rider/context/RiderActiveTripContext'
 import { km, orderLabel, peso, type DeliveryOffer } from '@/features/rider/services/delivery-offers'
 import type { PickupStop } from '@/features/rider/pickup-stops'
-import { stepState, stepTime, stopAction, tripStage, type TripStepState } from '@/features/rider/trip-steps'
+import {
+  allMet, deliveryConditions, distanceMeters, dropoffArrivalConditions, stepState, stepTime, stopAction, stopConditions, tripStage,
+  type Condition, type TripStepState,
+} from '@/features/rider/trip-steps'
 import { DeliveryPhotoCapture } from '@/features/rider/components/DeliveryPhotoCapture'
+import { TripConditions } from '@/features/rider/components/TripConditions'
 
 /**
  * Rider trip status page (2026-11-08): after accepting, the rider follows the
@@ -20,6 +24,8 @@ import { DeliveryPhotoCapture } from '@/features/rider/components/DeliveryPhotoC
  * cash step — the rider holds the day's cash advance), 3 In Transit,
  * 4 Confirm Delivery (photo at the drop-off). Every action is the existing
  * canonical endpoint via RiderActiveTripContext; the server enforces the gates.
+ * Each button lists what it waits for (✓ / ✗) and stays disabled until every
+ * condition is met (2026-11-10).
  */
 export default function RiderTripStatus() {
   const { deliveryId } = useParams<{ deliveryId: string }>()
@@ -64,6 +70,15 @@ export default function RiderTripStatus() {
   const pickupAddress = firstPickup?.pickup_address ?? offer.pickups[0]?.address ?? offer.pickup.address
   const stageLabel = stage === 'done' ? 'Delivered' : stage === 'cancelled' ? 'Cancelled' : 'In Progress'
   const error = trip.actionError ?? trip.confirmStopError ?? trip.confirmArrivalError
+
+  // Distance to the tourist, from this device's live GPS (null until known).
+  const dropLat = offer.dropoff.latitude ?? (isThisTrip ? trip.activeDelivery?.delivery_lat ?? null : null)
+  const dropLng = offer.dropoff.longitude ?? (isThisTrip ? trip.activeDelivery?.delivery_lng ?? null : null)
+  const locationKnown = isThisTrip && !!trip.positionKnown && Array.isArray(trip.riderPosition)
+  const dropoffDistance = locationKnown && dropLat != null && dropLng != null
+    ? distanceMeters(trip.riderPosition, [Number(dropLat), Number(dropLng)])
+    : null
+  const arrivalConditions = dropoffArrivalConditions(dropoffDistance, locationKnown)
 
   const stopImage = (stop: PickupStop) => {
     const food = offer.items.find((i) => i.business_id === stop.business_id && i.image)?.image
@@ -137,6 +152,7 @@ export default function RiderTripStatus() {
                   stop={stop}
                   image={stopImage(stop)}
                   action={stopsData ? stopAction(stop, stopsData) : { kind: 'collected' }}
+                  conditions={stopsData ? stopConditions(stop, stopsData) : []}
                   busy={trip.confirmStopBusy || trip.confirmArrivalBusy}
                   onArrive={() => trip.confirmArrivalStop(stop.business_id)}
                   onPickup={() => trip.confirmPickupStop(stop.business_id)}
@@ -166,7 +182,10 @@ export default function RiderTripStatus() {
           aside={stepState(3, stage) === 'upcoming' && <Badge tone="blue">Waiting for all pickups…</Badge>}
         >
           {stepState(3, stage) === 'current' && isThisTrip && (
-            <ActionButton onClick={trip.onArrivedDrop} disabled={trip.busy} icon={<MapPin className="h-5 w-5" />}>I've Arrived</ActionButton>
+            <div className="space-y-3">
+              <TripConditions items={arrivalConditions} />
+              <ActionButton onClick={trip.onArrivedDrop} disabled={trip.busy || !allMet(arrivalConditions)} icon={<MapPin className="h-5 w-5" />}>I've Arrived</ActionButton>
+            </div>
           )}
         </Step>
 
@@ -179,7 +198,7 @@ export default function RiderTripStatus() {
           aside={stepState(4, stage) === 'upcoming' && <Badge tone="gray" icon={<Lock className="h-3.5 w-3.5" />}>Available after delivery arrival</Badge>}
         >
           {stepState(4, stage) === 'current' && isThisTrip && (
-            <DeliveryProof busy={trip.busy} onConfirm={trip.onConfirmDelivery} isCod={!!offer.is_cod} />
+            <DeliveryProof busy={trip.busy} onConfirm={trip.onConfirmDelivery} isCod={!!offer.is_cod} distance={dropoffDistance} locationKnown={locationKnown} />
           )}
           {stage === 'done' && <p className="text-sm font-semibold text-[#166534]">Delivered. Thank you!</p>}
         </Step>
@@ -262,10 +281,11 @@ function Step({ n, state, title, subtitle, aside, icon, children }: {
   )
 }
 
-function StopRow({ stop, image, action, busy, onArrive, onPickup }: {
+function StopRow({ stop, image, action, conditions, busy, onArrive, onPickup }: {
   stop: PickupStop
   image: string | null
   action: ReturnType<typeof stopAction>
+  conditions: Condition[]
   busy: boolean
   onArrive: () => void
   onPickup: () => void
@@ -296,6 +316,7 @@ function StopRow({ stop, image, action, busy, onArrive, onPickup }: {
               <Circle className="h-4 w-4" aria-hidden="true" /> {stop.arrived_at ? (stop.is_ready ? 'Ready for pickup' : 'Arrived — waiting') : 'Pending'}
             </p>
             {action.hint && <p className="mt-0.5 text-xs text-[#92400E]">{action.hint}</p>}
+            <TripConditions items={conditions} className="mt-1.5" />
           </>
         )}
       </div>
@@ -303,7 +324,7 @@ function StopRow({ stop, image, action, busy, onArrive, onPickup }: {
         <button
           type="button"
           onClick={action.kind === 'arrive' ? onArrive : onPickup}
-          disabled={!action.enabled || busy}
+          disabled={!action.enabled || !allMet(conditions) || busy}
           aria-label={`${action.kind === 'arrive' ? 'Confirm arrival' : 'Confirm pick up'} at ${name}`}
           className="flex shrink-0 items-center gap-1.5 rounded-xl bg-[#16803C] px-3 py-2.5 text-sm font-semibold text-white disabled:bg-[#E5E7EB] disabled:text-[#9CA3AF]"
         >
@@ -315,10 +336,17 @@ function StopRow({ stop, image, action, busy, onArrive, onPickup }: {
   )
 }
 
-function DeliveryProof({ busy, onConfirm, isCod }: { busy: boolean; onConfirm: (photo: File) => void; isCod: boolean }) {
-  // The rider takes and submits a photo of the tourist receiving the food;
-  // only a submitted photo unlocks "Confirm Delivered".
+function DeliveryProof({ busy, onConfirm, isCod, distance, locationKnown }: {
+  busy: boolean
+  onConfirm: (photo: File) => void
+  isCod: boolean
+  distance: number | null
+  locationKnown: boolean
+}) {
+  // The rider takes and submits a photo of the tourist receiving the food, at
+  // the drop-off (≤ 50 m); only then does "Confirm Delivered" unlock.
   const [photo, setPhoto] = useState<File | null>(null)
+  const conditions = deliveryConditions(distance, locationKnown, !!photo)
 
   return (
     <div className="space-y-3">
@@ -327,7 +355,8 @@ function DeliveryProof({ busy, onConfirm, isCod }: { busy: boolean; onConfirm: (
         onSubmit={setPhoto}
         note={isCod ? 'Confirming means the tourist paid you in cash.' : undefined}
       />
-      <ActionButton onClick={() => photo && onConfirm(photo)} disabled={!photo || busy} icon={<Check className="h-5 w-5" />}>
+      <TripConditions items={conditions} />
+      <ActionButton onClick={() => photo && onConfirm(photo)} disabled={!photo || !allMet(conditions) || busy} icon={<Check className="h-5 w-5" />}>
         Confirm Delivered
       </ActionButton>
     </div>

@@ -463,6 +463,8 @@ class PurchasingCashFlowTest extends TestCase
         $deliveryUrl = '/api/rider/deliveries/'.$delivery->id;
         $this->be($this->riderA);
         $this->patchJson($deliveryUrl.'/status', ['status' => 'in_transit'])->assertOk();
+        // "I've arrived" needs the rider's fresh GPS fix at the drop-off (2026-11-10).
+        $this->riderIsAtDropoff($delivery, $this->riderA);
         $this->patchJson($deliveryUrl.'/status', ['status' => 'arrived_destination'])->assertOk();
         // Reconciled 2026-11-08 (AGENTS.md §12; product decision): the rider completes a food delivery with a proof photo at the drop-off, which also records the COD cash; the tourist confirm-delivery step is retired.
         $this->riderCompletesDelivery($delivery, $this->riderA)->assertOk();
@@ -2061,6 +2063,8 @@ class PurchasingCashFlowTest extends TestCase
         // 4) Leave after ALL COLLECTED, then deliver.
         //    Reconciled 2026-11-08 (AGENTS.md §12; product decision): the rider completes a food delivery with a proof photo at the drop-off, which also records the COD cash; the tourist confirm-delivery step is retired.
         $this->assertSame('picked_up', $delivery->fresh()->status->value, 'The final restaurant pickup transitions the shared delivery.');
+        // "I've arrived" needs the rider's fresh GPS fix at the drop-off (2026-11-10).
+        $this->riderIsAtDropoff($delivery, $this->riderA);
         foreach (['in_transit', 'arrived_destination'] as $status) {
             $this->patchJson($purchasesUrl . '/status', ['status' => $status])->assertOk();
         }

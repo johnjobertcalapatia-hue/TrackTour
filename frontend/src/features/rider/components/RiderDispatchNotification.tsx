@@ -7,12 +7,10 @@ import { useAuthStore } from '@/features/auth/services/auth-store'
 import { useRiderSocketReceiver } from '@/shared/hooks/useRiderSocketReceiver'
 import RiderDeliveryRequestAlert, { type RiderDeliveryRequestData } from '@/features/rider/components/RiderDeliveryRequestAlert'
 import RiderOffersPanel from '@/features/rider/components/RiderOffersPanel'
-import NewBookingAlertDrawer from '@/features/rider/components/NewBookingAlertDrawer'
 
-const TELEMETRY_SYNC_MS = 2000
 const OFFERS_POLL_MS = 4000
 
-type Phase = 'idle' | 'loading' | 'receipt'
+type Phase = 'idle' | 'receipt'
 
 export default function RiderDispatchNotification() {
   const queryClient = useQueryClient()
@@ -29,28 +27,12 @@ export default function RiderDispatchNotification() {
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
 
   const shownDeliveryId = useRef<number | null>(null)
-  const telemetryTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const offersRef = useRef<RiderDeliveryRequestData[]>([])
   offersRef.current = offers
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type })
     setTimeout(() => setToast(null), 3000)
-  }
-
-  const clearTelemetryTimer = () => {
-    if (telemetryTimer.current) {
-      clearTimeout(telemetryTimer.current)
-      telemetryTimer.current = null
-    }
-  }
-
-  const scheduleReceipt = (deliveryId: number) => {
-    clearTelemetryTimer()
-    telemetryTimer.current = setTimeout(() => {
-      shownDeliveryId.current = deliveryId
-      setPhase('receipt')
-    }, TELEMETRY_SYNC_MS)
   }
 
   // Authoritative (HTTP) list of the rider's LIVE offers. The socket is only a
@@ -69,15 +51,12 @@ export default function RiderDispatchNotification() {
     if (!req) {
       setPhase('idle')
       shownDeliveryId.current = null
-      clearTelemetryTimer()
       return
     }
-    if (shownDeliveryId.current === req.delivery_id) {
-      setPhase('receipt')
-      return
-    }
-    setPhase('loading')
-    scheduleReceipt(req.delivery_id ?? 0)
+    // The offer card opens straight away (the old dark "Request Incoming"
+    // drawer that ran first was removed, 2026-11-10).
+    shownDeliveryId.current = req.delivery_id ?? null
+    setPhase('receipt')
   }, [])
 
   // Reconcile the live offer list with the UI: one offer → the single alert
@@ -89,7 +68,6 @@ export default function RiderDispatchNotification() {
     if (live.length >= 2) {
       setRequest(null)
       setPhase('idle')
-      clearTelemetryTimer()
       setChoosing(true)
       return
     }
@@ -144,7 +122,6 @@ export default function RiderDispatchNotification() {
     const interval = setInterval(syncOffers, OFFERS_POLL_MS)
     return () => {
       clearInterval(interval)
-      clearTelemetryTimer()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncOffers, user?.id])
@@ -155,7 +132,6 @@ export default function RiderDispatchNotification() {
     setChoosing(false)
     setAcceptingId(null)
     shownDeliveryId.current = null
-    clearTelemetryTimer()
   }, [])
 
   const acceptMutation = useMutation({
@@ -253,12 +229,6 @@ export default function RiderDispatchNotification() {
     },
   })
 
-  const skipToReceipt = () => {
-    clearTelemetryTimer()
-    shownDeliveryId.current = request?.delivery_id ?? shownDeliveryId.current
-    setPhase('receipt')
-  }
-
   return (
     <>
       {toast && (
@@ -281,19 +251,17 @@ export default function RiderDispatchNotification() {
       )}
 
       {showAccepted ? (
-        <div className="fixed inset-0 z-[9999] flex items-end justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-zinc-950/70 backdrop-blur-2xl rounded-t-[24px] p-8 max-w-[480px] w-full text-center border-t border-white/10 rider-request-sheet">
-            <div className="w-16 h-16 bg-emerald-500/10 border border-emerald-500/30 rounded-full flex items-center justify-center mx-auto mb-4">
+        <div className="fixed inset-0 z-[9999] flex items-end justify-center bg-black/40">
+          <div className="bg-[#fff] rounded-t-[24px] p-8 max-w-[480px] w-full text-center border-t border-[#CFE8D6] shadow-2xl rider-request-sheet">
+            <div className="w-16 h-16 bg-[#DCFCE7] border border-[#16803C]/30 rounded-full flex items-center justify-center mx-auto mb-4">
               <CheckCircleIcon />
             </div>
-            <h2 className="text-xl font-bold text-white mb-2">Order Accepted</h2>
-            <p className="text-sm text-zinc-400">Starting navigation to the pickup location.</p>
+            <h2 className="text-xl font-bold text-[#17201B] mb-2">Order Accepted</h2>
+            <p className="text-sm text-[#56615B]">Starting navigation to the pickup location.</p>
           </div>
         </div>
       ) : choosing && offers.length >= 2 ? (
         <RiderOffersPanel offers={offers} onAccept={handleAccept} acceptDeliveryId={acceptingId} />
-      ) : phase === 'loading' ? (
-        <NewBookingAlertDrawer isVisible onTransitionComplete={skipToReceipt} />
       ) : (
         <RiderDeliveryRequestAlert
           orderData={phase === 'receipt' ? request : null}
@@ -309,7 +277,7 @@ export default function RiderDispatchNotification() {
 
 function CheckCircleIcon() {
   return (
-    <svg className="w-8 h-8 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <svg className="w-8 h-8 text-[#16803C]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
     </svg>
   )

@@ -114,6 +114,14 @@ class RiderMapController extends Controller
         $spd = $request->has('speed') ? (float) $request->speed : null;
         $acc = $request->has('accuracy') ? (float) $request->accuracy : null;
 
+        // A fix with an exact 0 latitude or longitude is a reading missing an
+        // axis (e.g. an emulated / overridden location with an empty field),
+        // never a real position here. Saving it put the rider ~13,000 km away
+        // and blocked delivery completion (production, 2026-11-10).
+        if ($lat == 0.0 || $lng == 0.0) {
+            return $this->errorResponse('Your device reported an invalid location. Check the location settings on your phone and try again.', 422);
+        }
+
         $lastLocation = RiderLocation::where('rider_id', $riderId)
             ->latest('recorded_at')
             ->first();

@@ -103,12 +103,6 @@ function renderDispatch() {
   )
 }
 
-/** Advance the alert out of the "loading" drawer into the actual request card. */
-function revealReceipt() {
-  const simulate = screen.getByRole('button', { name: /simulate receipt pop/i })
-  fireEvent.click(simulate)
-}
-
 // ---- Tests ----
 
 describe('RiderDispatchNotification — real incoming order ping renders rider UI', () => {
@@ -160,11 +154,11 @@ describe('RiderDispatchNotification — real incoming order ping renders rider U
       })
     })
 
-    // The "Request Incoming" drawer is the instantaneous new-order signal…
-    await screen.findByText(/new booking detected/i)
-    // …and the HTTP-recovered receipt card follows.
-    revealReceipt()
+    // The offer card opens straight away; the old dark "Request Incoming /
+    // New Booking Detected" drawer is gone (2026-11-10).
     await screen.findByRole('heading', { name: 'Restaurant A' })
+    expect(screen.queryByText(/new booking detected/i)).not.toBeInTheDocument()
+    expect(screen.queryByText(/request incoming/i)).not.toBeInTheDocument()
 
     // Order details the rider actually sees.
     expect(screen.getByText(/new delivery offer/i)).toBeInTheDocument()
@@ -195,8 +189,6 @@ describe('RiderDispatchNotification — real incoming order ping renders rider U
     apiMock.patch.mockResolvedValue({ success: true, data: { success: true } })
 
     renderDispatch()
-    await screen.findByText(/new booking detected/i)
-    revealReceipt()
     await screen.findByRole('heading', { name: 'Restaurant A' })
     await screen.findByRole('button', { name: /accept order request/i })
 
@@ -222,8 +214,6 @@ describe('RiderDispatchNotification — real incoming order ping renders rider U
     renderDispatch()
 
     await waitFor(() => expect(apiMock.get).toHaveBeenCalledWith('/rider/dispatch/offers'))
-    await screen.findByText(/new booking detected/i)
-    revealReceipt()
 
     await screen.findByRole('heading', { name: 'Restaurant A' })
     expect(screen.getByText('456 Mabini St, Bansud')).toBeInTheDocument()
@@ -255,8 +245,6 @@ describe('RiderDispatchNotification — real incoming order ping renders rider U
       socketMock.emit('order_received_ping', { deliveryId: '42', restaurantName: 'Restaurant A', timeoutSeconds: 45, distanceKm: 1.2 })
     })
 
-    await screen.findByText(/new booking detected/i)
-    revealReceipt()
     await screen.findByRole('heading', { name: 'Restaurant A' })
 
     // A repeated ping for an already-shown delivery just reconciles the same

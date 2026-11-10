@@ -9,6 +9,7 @@ import { RiderActiveTripContext } from '@/features/rider/context/RiderActiveTrip
 import type { User as AppUser } from '@/shared/types'
 import { cn, getInitials, toAssetUrl } from '@/shared/utils'
 import { ChevronLeft, ChevronRight, ChevronDown, LogOut, Power, User, Settings, Star, Layers, MapPin, Activity, Zap, Bike, UtensilsCrossed, Check } from 'lucide-react'
+import { isUsableGpsFix } from '@/features/rider/gps'
 
 const bottomPanelActions = [
   { label: 'Service Types', icon: Layers },
@@ -137,6 +138,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
     const beat = () =>
       navigator.geolocation.getCurrentPosition(
         (pos) => {
+          if (!isUsableGpsFix(pos.coords.latitude, pos.coords.longitude)) return
           void post('/rider/map/location', {
             latitude: pos.coords.latitude,
             longitude: pos.coords.longitude,

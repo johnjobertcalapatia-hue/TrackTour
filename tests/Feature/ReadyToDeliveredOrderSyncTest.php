@@ -125,6 +125,8 @@ class ReadyToDeliveredOrderSyncTest extends TestCase
         $this->assertSame('out_for_delivery', $this->order->fresh()->status);
 
         // Rider arrives at the destination.
+        // "I've arrived" needs the rider's fresh GPS fix at the drop-off (2026-11-10).
+        $this->riderIsAtDropoff($this->delivery, $this->rider);
         $this->patchStatus('arrived_destination');
         $this->assertSame('out_for_delivery', $this->order->fresh()->status);
 
