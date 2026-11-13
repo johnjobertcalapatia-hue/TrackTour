@@ -73,6 +73,7 @@ export const API_ENDPOINTS = {
   },
   ADMIN: {
     DASHBOARD: '/admin/dashboard',
+    PROFILE: '/admin/profile',
     USERS: '/admin/users',
     BUSINESSES: '/admin/businesses',
     CATEGORIES: '/admin/business-categories',

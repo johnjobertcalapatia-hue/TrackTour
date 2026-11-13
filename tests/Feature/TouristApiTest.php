@@ -552,4 +552,15 @@ class TouristApiTest extends TestCase
                 ],
             ]);
     }
+
+    public function test_landing_map_preserves_absolute_logo_urls(): void
+    {
+        $logoUrl = rtrim(config('filesystems.disks.public.url'), '/').'/businesses/logos/test-logo.png';
+        $this->business->update(['logo' => $logoUrl]);
+
+        $this->actingAs($this->tourist, 'sanctum')
+            ->getJson('/api/map/businesses')
+            ->assertOk()
+            ->assertJsonPath('data.0.logo', $logoUrl);
+    }
 }

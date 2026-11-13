@@ -25,12 +25,16 @@ class ExploreController extends Controller
     public function __construct(private TouristService $touristService) {}
 
     /**
-     * Convert a stored media path (raw or already /storage/-prefixed) into a URL.
+     * Convert a stored media path or URL into a URL.
      */
     private static function resolveMediaUrl(?string $path): ?string
     {
         if (! $path) {
             return null;
+        }
+
+        if (preg_match('#^https?://#i', $path)) {
+            return $path;
         }
 
         $clean = ltrim($path, '/');

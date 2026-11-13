@@ -124,9 +124,14 @@ MAIL_FROM_NAME="Track-Tour App"
    migration warning and remediate before releasing traffic (see §7 item 8).
    If the initial DB is empty, optionally seed a base
    set once: Railway shell → `php artisan db:seed --force`.
-5. (Recommended) bind a **volume** at `/var/www/html/storage/app/public` so
-   uploaded documents/media survive redeploys, and file expiry runs via
-   `CleanupRiderLocations`.
+5. Bind a **persistent volume** at `/var/www/html/storage/app/public`. This is
+   required for uploaded images and media to survive container replacement or
+   redeploys; the container filesystem is ephemeral. If private uploads must
+   also survive, persist `/var/www/html/storage/app/private` separately (or
+   mount the complete `/var/www/html/storage/app` directory while preserving
+   the public/private access boundary). Verify the volume is mounted on the API
+   service and that an uploaded image still returns successfully after a
+   redeploy.
 6. Point PayMongo webhooks at `https://<your-api-service>.up.railway.app/api/payments/webhook`
    and the payment return URL at the API's `/api/payments/return`.
 7. **Payment return page.** Set `FRONTEND_URL` on the API service to the
