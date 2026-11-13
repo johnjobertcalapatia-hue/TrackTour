@@ -12,6 +12,7 @@ import { ChevronLeft, ChevronRight, ChevronDown, LogOut, Power, User, Settings, 
 import { isUsableGpsFix, locationSentRecently, markLocationSent, RIDER_LOCATION_INTERVAL_MS } from '@/features/rider/gps'
 import RiderDiagnosticsSheet, { OPEN_RIDER_DIAGNOSTICS_EVENT } from '@/features/rider/components/RiderDiagnosticsSheet'
 import RiderDestinationSheet, { useRiderDestination } from '@/features/rider/components/RiderDestinationSheet'
+import { useOfficeProfile } from '@/features/admin/hooks/use-office-profile'
 
 const bottomPanelActions = [
   { label: 'Service Types', icon: Layers },
@@ -63,6 +64,9 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
   const tourismOffice = theme === 'tourism-office'
   const tourism = theme === 'tourism' || tourismOffice
   const admin = theme === 'admin'
+  // The office's own branding (set on /admin/profile) drives the sidebar mark.
+  const { data: officeProfile } = useOfficeProfile(admin)
+  const officeLogo = admin ? toAssetUrl(officeProfile?.logo_url) : ''
   const user = useAuthStore((s) => s.user)
   const setUser = useAuthStore((s) => s.setUser)
   const fetchUser = useAuthStore((s) => s.fetchUser)
@@ -552,6 +556,43 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
     }
   }
 
+  // The "Signed in as" card is a link whenever the role has a profile page
+  // (Admin → /admin/profile, Rider → /rider/profile).
+  const identityCardClass = cn(
+    'mx-3 mt-3 px-3 py-2.5 rounded-xl border',
+    admin ? 'bg-[#F3F8F4] border-[#DDF4E6]' : tourism ? 'bg-[#E9F7EF] border-[#D7E8DB]' : 'bg-white/60 border-white/40',
+    profilePath && 'group block transition hover:border-[#16803C]/50 hover:bg-[#EAF6ED] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#16803C]/40'
+  )
+
+  const identityCard = (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <p className={cn('text-[10px] font-medium uppercase tracking-wider', admin ? 'text-[#087F3F]' : tourism ? 'text-[#087F3F]' : 'text-primary')}>
+          Signed in as
+        </p>
+        {profilePath && (
+          <ChevronRight
+            className="h-3.5 w-3.5 shrink-0 text-[#087F3F] transition-transform group-hover:translate-x-0.5"
+            aria-hidden="true"
+          />
+        )}
+      </div>
+      <div className="flex items-center gap-2.5 mt-1.5">
+        <div className={cn('w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 overflow-hidden', admin ? 'bg-[#087F3F] text-white' : tourism ? 'bg-[#087F3F] text-white' : 'bg-white/70 backdrop-blur-md border border-white/50 text-primary')}>
+          {toAssetUrl(user?.profile_photo) ? (
+            <img src={toAssetUrl(user?.profile_photo)} alt={user?.name} className="w-full h-full object-cover" />
+          ) : (
+            getInitials(user?.name)
+          )}
+        </div>
+        <div className="min-w-0">
+          <p className={cn('text-sm font-medium truncate', admin ? 'text-[#087F3F]' : tourism ? 'text-[#17201B]' : 'text-ink-soft')}>{user?.name}</p>
+          <p className={cn('text-[11px] truncate', admin ? 'text-[#16803C]' : tourism ? 'text-[#68736D]' : 'text-ink-soft')}>{roleLabel}</p>
+        </div>
+      </div>
+    </>
+  )
+
   return (
     <div className={cn('flex h-[100dvh] w-full min-w-0 overflow-x-hidden text-ink', tourism ? 'tourism-bg text-[#17201B]' : 'glass-bg', riderMapPage && 'rider-map-flat')}>
       <aside
@@ -564,37 +605,30 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
       >
         <div className={cn('h-16 flex items-center shrink-0', admin ? 'border-b border-[#E5E9E7]' : tourism ? 'border-b border-[#E5E9E7]' : 'border-b border-white/30', collapsed ? 'justify-center px-2' : 'gap-3 px-5')}>
           <img
-            src="/assets/logo/tracktour.png"
-            alt="TrackTour Logo"
+            src={officeLogo || '/assets/logo/tracktour.png'}
+            alt={officeLogo ? 'Bansud Tourism Office logo' : 'TrackTour Logo'}
             className="w-24 h-24 object-contain shrink-0"
           />
           {!collapsed && (
-            <span className={cn('text-base font-bold', admin ? 'text-[#087F3F]' : 'text-[#087F3F]')}>
-              TrackTour
+            <span className={cn('text-base font-bold min-w-0 truncate', officeLogo ? 'text-[#17201B]' : 'text-[#087F3F]')}>
+              {officeLogo ? officeProfile?.name || 'Bansud Tourism Office' : 'TrackTour'}
             </span>
           )}
         </div>
 
-        {!collapsed && (
-          <div className={cn('mx-3 mt-3 px-3 py-2.5 rounded-xl border', admin ? 'bg-[#F3F8F4] border-[#DDF4E6]' : tourism ? 'bg-[#E9F7EF] border-[#D7E8DB]' : 'bg-white/60 border-white/40')}>
-            <p className={cn('text-[10px] font-medium uppercase tracking-wider', admin ? 'text-[#087F3F]' : tourism ? 'text-[#087F3F]' : 'text-primary')}>
-              Signed in as
-            </p>
-            <div className="flex items-center gap-2.5 mt-1.5">
-              <div className={cn('w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 overflow-hidden', admin ? 'bg-[#087F3F] text-white' : tourism ? 'bg-[#087F3F] text-white' : 'bg-white/70 backdrop-blur-md border border-white/50 text-primary')}>
-                {toAssetUrl(user?.profile_photo) ? (
-                  <img src={toAssetUrl(user?.profile_photo)} alt={user?.name} className="w-full h-full object-cover" />
-                ) : (
-                  getInitials(user?.name)
-                )}
-              </div>
-              <div className="min-w-0">
-                <p className={cn('text-sm font-medium truncate', admin ? 'text-[#087F3F]' : tourism ? 'text-[#17201B]' : 'text-ink-soft')}>{user?.name}</p>
-                <p className={cn('text-[11px] truncate', admin ? 'text-[#16803C]' : tourism ? 'text-[#68736D]' : 'text-ink-soft')}>{roleLabel}</p>
-              </div>
-            </div>
-          </div>
-        )}
+        {!collapsed &&
+          (profilePath ? (
+            <Link
+              to={profilePath}
+              aria-label={`Open the ${roleLabel} profile`}
+              title={`Open the ${roleLabel} profile`}
+              className={identityCardClass}
+            >
+              {identityCard}
+            </Link>
+          ) : (
+            <div className={identityCardClass}>{identityCard}</div>
+          ))}
 
         {sidebarTopSlot && (
           <div className={collapsed ? 'mx-1 mt-3' : 'mx-3 mt-3'}>
@@ -705,10 +739,12 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                       <User className="h-4 w-4 text-[#087F3F]" />
                       Profile
                     </Link>
-                    <Link to="/rider/settings" onClick={() => setProfileMenuOpen(false)} className="flex items-center gap-2 px-4 py-2.5 text-sm text-[#17201B] transition hover:bg-[#F3F8F4]" role="menuitem">
-                      <Settings className="h-4 w-4 text-[#087F3F]" />
-                      Settings
-                    </Link>
+                    {roleLabel === 'Rider' && (
+                      <Link to="/rider/settings" onClick={() => setProfileMenuOpen(false)} className="flex items-center gap-2 px-4 py-2.5 text-sm text-[#17201B] transition hover:bg-[#F3F8F4]" role="menuitem">
+                        <Settings className="h-4 w-4 text-[#087F3F]" />
+                        Settings
+                      </Link>
+                    )}
                     <button
                       type="button"
                       onClick={async () => {

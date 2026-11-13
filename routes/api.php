@@ -10,6 +10,7 @@ use App\Http\Controllers\Admin\AdminLiveController;
 use App\Http\Controllers\Admin\AdminMapController;
 use App\Http\Controllers\Admin\AdminMunicipalityController;
 use App\Http\Controllers\Admin\AdminNotificationController;
+use App\Http\Controllers\Admin\AdminOfficeProfileController;
 use App\Http\Controllers\Admin\AdminPosSalesController;
 use App\Http\Controllers\Admin\AdminReportController;
 use App\Http\Controllers\Admin\AdminRiderController;
@@ -564,6 +565,11 @@ Route::middleware('token.only')->group(function () {
         // Dashboard
         Route::get('/dashboard', [AdminDashboardController::class, 'index']);
         Route::get('/map-data', [AdminMapController::class, 'index']);
+
+        // Bansud Tourism Office profile (logo, cover, contact details).
+        // POST because the payload is multipart (image uploads).
+        Route::get('/profile', [AdminOfficeProfileController::class, 'show']);
+        Route::post('/profile', [AdminOfficeProfileController::class, 'update'])->middleware('throttle:30,1');
 
         // Users
         Route::get('/users', [AdminUserController::class, 'index']);

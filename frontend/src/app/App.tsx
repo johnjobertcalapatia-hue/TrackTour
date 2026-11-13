@@ -17,7 +17,7 @@ import {
   Package, BookOpen, Percent, BarChart3, Activity, ShoppingCart, UserPlus,
   CircleAlert, Megaphone, FileText, Scan, Wallet, CreditCard,
   ChefHat, CalendarDays, BedDouble, Image, Home,
-  ClipboardCheck, DollarSign, Archive, Eye, Settings2, Store
+  ClipboardCheck, DollarSign, Archive, Eye, Settings2, Store, IdCard
 } from 'lucide-react'
 
 // Auth pages (not lazy — small, needed immediately)
@@ -69,6 +69,7 @@ const AdminReports = lazy_(() => import('@/features/admin/pages/AdminReports'))
 const AdminPosSales = lazy_(() => import('@/features/admin/pages/AdminPosSales'))
 const AdminAuditLogs = lazy_(() => import('@/features/admin/pages/AdminAuditLogs'))
 const AdminNotifications = lazy_(() => import('@/features/admin/pages/AdminNotifications'))
+const AdminOfficeProfile = lazy_(() => import('@/features/admin/pages/AdminOfficeProfile'))
 const AdminSystemConfig = lazy_(() => import('@/features/admin/pages/AdminSystemConfig'))
 const AdminSystemBackup = lazy_(() => import('@/features/admin/pages/AdminSystemBackup'))
 const AdminSystemSecurity = lazy_(() => import('@/features/admin/pages/AdminSystemSecurity'))
@@ -255,6 +256,7 @@ const adminSections = [
     { to: '/admin/roles', label: 'Roles', icon: <Shield className="w-5 h-5" /> },
   ]},
   { label: 'System', items: [
+    { to: '/admin/profile', label: 'Office Profile', icon: <IdCard className="w-5 h-5" /> },
     { to: '/admin/reports', label: 'Reports', icon: <FileBarChart className="w-5 h-5" /> },
     { to: '/admin/audit-logs', label: 'Audit Logs', icon: <ScrollText className="w-5 h-5" /> },
     { to: '/admin/notifications', label: 'Notifications', icon: <Bell className="w-5 h-5" /> },
@@ -632,11 +634,12 @@ export default function App() {
             path="/admin"
             element={
               <ProtectedRoute roles={['bansud_tourism_office']}>
-                <DashboardLayout sections={adminSections} roleLabel="Admin" theme="admin" />
+                <DashboardLayout sections={adminSections} roleLabel="Admin" theme="admin" profilePath="/admin/profile" />
               </ProtectedRoute>
             }
           >
             <Route path="dashboard" element={<AdminDashboard />} />
+            <Route path="profile" element={<AdminOfficeProfile />} />
             <Route path="users" element={<AdminUsers />} />
             <Route path="users/create" element={<AdminUsersCreate />} />
             <Route path="users/:id/edit" element={<AdminUsersEdit />} />

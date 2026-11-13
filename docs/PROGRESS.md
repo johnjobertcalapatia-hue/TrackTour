@@ -1,5 +1,25 @@
 # Project Progress — Tourism Management Portal
 
+## Bansud Tourism Office Profile — IMPLEMENTED & VERIFIED (2026-11-13)
+
+- The Admin sidebar's **"Signed in as"** card is now a link. Clicking it opens `/admin/profile` (also reachable from the new **System → Office Profile** nav item), where the Bansud Tourism Office sets its own logo, cover photo, office name, about text, contact email, contact number and office address.
+- The office identity is municipal-wide branding, so it is stored in the existing canonical `tourism_settings` key/value store (`municipality_id = null`) — **no new table**. Keys: `office_name`, `office_about`, `office_email`, `office_phone`, `office_address`, `office_logo`, `office_cover`.
+- Backend: new `AdminOfficeProfileController` in the `role:bansud_tourism_office` admin group.
+  - `GET /api/admin/profile` returns the profile with defaults (`Bansud Tourism Office`, `Municipal Hall, Bansud, Oriental Mindoro`) when nothing has been configured.
+  - `POST /api/admin/profile` accepts multipart updates (POST because of image uploads), supports partial updates, clears text fields on empty values, replaces or removes (`remove_logo` / `remove_cover`) images, and never accumulates orphan files: the replaced file is deleted from the `public` disk.
+  - Validation: office name required when sent (max 150); about 1000; email valid/max 255; phone 30; address 255; logo JPG/PNG/WebP ≤ 5 MB; cover JPG/PNG/WebP ≤ 10 MB.
+  - Every successful update records one `ActivityLog::record('office.profile_updated', ..., ActivityLog::TYPE_SETTINGS)` entry listing the changed fields.
+  - Images follow the existing business-logo convention: stored value is `Storage::url($path)` on the `public` disk under `office/logo` and `office/cover`; the frontend resolves it through `toAssetUrl()`.
+- Frontend:
+  - New lazy page `frontend/src/features/admin/pages/AdminOfficeProfile.tsx` with cover/logo previews, staged uploads, staged removals, compact size guards (5 MB / 10 MB) before upload, sticky save bar with unsaved-changes hint, and success/error alerts. The overlapping logo row is explicitly positioned (`relative z-10`) so the cover block cannot paint over the logo.
+  - Shared hook `frontend/src/features/admin/hooks/use-office-profile.ts` (`OfficeProfile`, `OFFICE_PROFILE_QUERY_KEY`, `useOfficeProfile(enabled)`) is used by both the page and `DashboardLayout`, so a saved logo/name appears in the Admin sidebar immediately through the shared React Query cache.
+  - `DashboardLayout` (admin theme) shows the uploaded office logo and office name in the sidebar brand block, falling back to the TrackTour mark/name while nothing is configured.
+  - The header avatar menu's **Settings** item is now rider-only (it previously always pointed at `/rider/settings`, which is not an Admin route).
+- **Tests added:** `tests/Feature/AdminOfficeProfileTest.php` — **11 passed / 73 assertions** (admin-only RBAC including `tourism_office` denial, defaults, save/partial update/clear, logo upload + replacement deletes the old file, cover upload + removal, logo-only removal, invalid mime/size rejection, blank name rejection, audit trail). Frontend: `tests/ui/admin-office-profile.test.tsx` (7 tests) and `tests/ui/admin-profile-entry.test.tsx` (4 tests) — defaults, logo-above-cover stacking, multipart payload contents, staged cover removal, edited contact details, oversized-image guard, server error surfacing, `Signed in as` navigation, office-logo brand, TrackTour fallback, and the non-linked card when no profile route exists.
+- **Regression:** full Laravel suite **1,131 passed / 7,149 assertions / 0 failures / 3 skipped** (known environment-dependent skips). Full frontend suite **101 files / 704 tests passed**; `npm run build` clean. The only non-zero vitest signal is the pre-existing unhandled `axios` request in `tests/ui/tourist-checkout-401-keeps-session.test.tsx` (unrelated to this change; reproduces when that file runs alone).
+- **Database:** no migration or schema change. `tourism_settings` already existed (`2026_07_10_133433_create_tourism_settings_table`, unique `(municipality_id, key)`), and `storage:link` already exists, so `/storage/office/...` resolves.
+- **Deferred:** the `tourism_office` role cannot edit the office profile (intentionally admin-only for now); the profile page is not surfaced to tourists on the public landing pages yet.
+
 ## Home Food Menu Item Details — IMPLEMENTED & VERIFIED (2026-11-04)
 
 - The signed-in Tourist Home's Recommended Food cards now open `/tourist/food/item/:id` using the food offering ID, not `business_id`; clicking a dish no longer opens the restaurant detail page. Home's map business detail panel menu cards also open that offering detail page. Existing business/restaurant cards and Tourist Explore business listings retain their prior routes.
