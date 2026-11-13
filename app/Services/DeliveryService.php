@@ -61,9 +61,9 @@ class DeliveryService
         return $this->deliveryRepository->getActiveDeliveries($riderId);
     }
 
-    public function getCompletedDeliveries(int $riderId, int $perPage = 15): LengthAwarePaginator
+    public function getCompletedDeliveries(int $riderId, int $perPage = 15, ?string $type = null): LengthAwarePaginator
     {
-        return $this->deliveryRepository->getCompletedDeliveries($riderId, $perPage);
+        return $this->deliveryRepository->getCompletedDeliveries($riderId, $perPage, $type);
     }
 
     public function getRiderStats(int $riderId): array

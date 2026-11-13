@@ -132,7 +132,7 @@ class RefundPathHardeningTest extends TestCase
         $this->createPaidPayment($order, 'pm_success');
 
         Http::fake([
-            'api.paymongo.com/v1/payments/pm_success/refunds' => Http::response([
+            'api.paymongo.com/v1/refunds' => Http::response([
                 'data' => [
                     'id' => 'ref_success_1',
                     'attributes' => ['status' => 'succeeded'],
@@ -179,7 +179,9 @@ class RefundPathHardeningTest extends TestCase
         $payment = $this->createPaidPayment($order, 'pm_fail');
 
         Http::fake([
-            'api.paymongo.com/v1/payments/pm_fail/refunds' => Http::response(null, 500),
+            // A DEFINITE rejection (PayMongo's own error body). A 500 is no longer
+            // a failure: it is uncertain and stays reserved (RefundUncertainOutcomeTest).
+            'api.paymongo.com/v1/refunds' => Http::response(['errors' => [['code' => 'parameter_invalid', 'detail' => 'The payment cannot be refunded.']]], 400),
         ]);
 
         $response = $this->actingAs($this->tourist, 'sanctum')
@@ -217,7 +219,7 @@ class RefundPathHardeningTest extends TestCase
         $payment = $this->createPaidPayment($order, 'pm_pending');
 
         Http::fake([
-            'api.paymongo.com/v1/payments/pm_pending/refunds' => Http::response([
+            'api.paymongo.com/v1/refunds' => Http::response([
                 'data' => [
                     'id' => 'ref_pending_1',
                     'attributes' => ['status' => 'pending'],
@@ -513,7 +515,7 @@ class RefundPathHardeningTest extends TestCase
         // error out. Reconciliation must not blind-mark the refund anything.
         Http::fake([
             'api.paymongo.com/v1/refunds/ref_recon_unknown' => Http::response(null, 500),
-            'api.paymongo.com/v1/payments/pm_recon_unreachable/refunds' => Http::response(null, 500),
+            'api.paymongo.com/v1/refunds' => Http::response(null, 500),
         ]);
 
         $this->artisan('payments:reconcile-refunds')->assertSuccessful();
@@ -531,7 +533,9 @@ class RefundPathHardeningTest extends TestCase
         $payment = $this->createPaidPayment($order, 'pm_cancel_fail');
 
         Http::fake([
-            'api.paymongo.com/v1/payments/pm_cancel_fail/refunds' => Http::response(null, 500),
+            // A DEFINITE rejection (PayMongo's own error body). A 500 is no longer
+            // a failure: it is uncertain and stays reserved (RefundUncertainOutcomeTest).
+            'api.paymongo.com/v1/refunds' => Http::response(['errors' => [['code' => 'parameter_invalid', 'detail' => 'The payment cannot be refunded.']]], 400),
         ]);
 
         $response = $this->actingAs($this->tourist, 'sanctum')
@@ -557,7 +561,7 @@ class RefundPathHardeningTest extends TestCase
         $payment = $this->createPaidPayment($order, 'pm_cancel_ok');
 
         Http::fake([
-            'api.paymongo.com/v1/payments/pm_cancel_ok/refunds' => Http::response([
+            'api.paymongo.com/v1/refunds' => Http::response([
                 'data' => [
                     'id' => 'ref_cancel_ok',
                     'attributes' => ['status' => 'succeeded'],
@@ -589,7 +593,7 @@ class RefundPathHardeningTest extends TestCase
         $payment = $this->createPaidPayment($order, 'pm_effects');
 
         Http::fake([
-            'api.paymongo.com/v1/payments/pm_effects/refunds' => Http::response([
+            'api.paymongo.com/v1/refunds' => Http::response([
                 'data' => [
                     'id' => 'ref_effects',
                     'attributes' => ['status' => 'succeeded'],

@@ -25,19 +25,48 @@ class RiderOfferPresenter
         $primary = $orders->first();
         $items = $this->activeItems($orders);
         $speed = $this->speed($primary);
+        $ride = $this->ride($delivery, $primary);
 
         return [
             'order_id' => $primary?->id,
             'order_number' => $primary?->order_number,
+            'order_type' => $primary?->order_type,
+            // Ride booking facts (vehicle, passengers, fare, trip); null for food.
+            'ride' => $ride,
             'delivery_speed' => $speed,
-            'delivery_type_label' => $speed === 'fast' ? 'Priority Delivery' : 'Standard Delivery',
+            'delivery_type_label' => $ride !== null
+                ? ucfirst($ride['vehicle_type']).' ride'
+                : ($speed === 'fast' ? 'Priority Delivery' : 'Standard Delivery'),
             'pickup_names' => $this->businesses($orders, $items)->pluck('name')->filter()->values()->all(),
             'items_count' => (int) $items->sum(fn (OrderItem $i) => $i->activeQuantity()),
             'rider_tip' => (float) ($primary?->rider_tip ?? 0),
             'delivery_fee' => $delivery->delivery_fee !== null ? (float) $delivery->delivery_fee : null,
-            'distance_km' => $delivery->distance_km !== null ? (float) $delivery->distance_km : null,
+            'distance_km' => $delivery->distance_km !== null
+                ? (float) $delivery->distance_km
+                : ($ride['distance_km'] ?? null),
             'payment_method' => $primary?->payment_method,
             'is_cod' => strtolower((string) ($primary?->payment_method ?? '')) === 'cash',
+        ];
+    }
+
+    /**
+     * Ride booking facts from the booking (TransportationService::createRide
+     * stores them on the delivery notes; the fare is the order total).
+     */
+    private function ride(Delivery $delivery, ?Order $primary): ?array
+    {
+        if ($primary?->order_type !== 'transport') {
+            return null;
+        }
+        $notes = is_string($delivery->notes) ? (json_decode($delivery->notes, true) ?: []) : [];
+
+        return [
+            'vehicle_type' => (string) ($notes['vehicle_type'] ?? 'motorcycle'),
+            'passenger_count' => (int) ($notes['passenger_count'] ?? 1),
+            'fare' => round((float) ($primary->total ?? $notes['fare'] ?? 0), 2),
+            'distance_km' => isset($notes['estimated_distance_km']) ? round((float) $notes['estimated_distance_km'], 2) : null,
+            'duration_minutes' => isset($notes['estimated_duration_min']) ? (int) $notes['estimated_duration_min'] : null,
+            'booking_notes' => ($notes['booking_notes'] ?? '') !== '' ? (string) $notes['booking_notes'] : null,
         ];
     }
 
@@ -70,6 +99,7 @@ class RiderOfferPresenter
             'order_id' => $summary['order_id'],
             'order_number' => $summary['order_number'],
             'order_type' => $delivery->primaryOrder()?->order_type,
+            'ride' => $summary['ride'] === null ? null : array_diff_key($summary['ride'], ['booking_notes' => true]),
             'delivery_speed' => $summary['delivery_speed'],
             'delivery_type_label' => $summary['delivery_type_label'],
             'pickup_names' => $summary['pickup_names'],

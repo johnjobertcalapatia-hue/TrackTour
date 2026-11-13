@@ -158,46 +158,149 @@ class PaymongoService
     }
 
     /**
-     * Create a refund for a payment.
+     * Create a refund for a payment; the refund resource, or null on ANY
+     * non-success. Callers that act on failure must use createRefundOutcome:
+     * null does not mean PayMongo did not create the refund.
      */
-    public function createRefund(string $paymentId, int $amountInCents, string $reason = ''): ?array
+    public function createRefund(string $paymentId, int $amountInCents, string $reason = '', ?string $idempotencyKey = null): ?array
+    {
+        $outcome = $this->createRefundOutcome($paymentId, $amountInCents, $reason, $idempotencyKey);
+
+        return $outcome['outcome'] === self::REFUND_CREATED ? $outcome['data'] : null;
+    }
+
+    /** PayMongo returned the refund (it exists). */
+    public const REFUND_CREATED = 'created';
+
+    /** PayMongo definitively refused: the response proves no refund was created. */
+    public const REFUND_REJECTED = 'rejected';
+
+    /**
+     * Unknown whether PayMongo created the refund (timeout, connection failure,
+     * 5xx, 429, 408, 409, or a response we cannot read). NEVER retry the
+     * create on this: PayMongo ignores Idempotency-Key on refunds (verified
+     * live in test mode 2026-11-12), so a second POST can refund twice.
+     */
+    public const REFUND_UNCERTAIN = 'uncertain';
+
+    /**
+     * Create a refund and classify the result conservatively.
+     *
+     * @return array{outcome: string, data: ?array, http_status: ?int, error: ?string}
+     */
+    public function createRefundOutcome(string $paymentId, int $amountInCents, string $reason = '', ?string $idempotencyKey = null): array
+    {
+        $result = fn (string $outcome, ?array $data = null, ?int $status = null, ?string $error = null) => [
+            'outcome' => $outcome, 'data' => $data, 'http_status' => $status, 'error' => $error,
+        ];
+
+        if (! $this->isConfigured()) {
+            // Nothing was sent, so nothing can have been created.
+            return $result(self::REFUND_REJECTED, error: 'PayMongo is not configured.');
+        }
+
+        try {
+            // Documented "Create a Refund" (docs.paymongo.com, read 2026-11-11):
+            // POST /refunds with amount, payment_id and a reason from a fixed
+            // list; our free-text reason travels in `notes`. (Previously this
+            // posted to an undocumented /payments/{id}/refunds path without
+            // payment_id and with a free-text reason.)
+            $attributes = [
+                'amount' => $amountInCents,
+                'payment_id' => $paymentId,
+                'reason' => self::refundReason($reason),
+            ];
+            if (trim($reason) !== '') {
+                $attributes['notes'] = mb_substr($reason, 0, 255);
+            }
+            if ($idempotencyKey) {
+                $attributes['metadata'] = ['local_refund_key' => $idempotencyKey];
+            }
+
+            // The header is still sent, but PayMongo does NOT honour it on
+            // refunds (a repeated POST with the same key created a second
+            // refund, test mode 2026-11-12). The guarantee is ours: one POST
+            // per local "requested" refund. The key also travels in metadata,
+            // which PayMongo echoes — that is how a lost refund is found.
+            $headers = $this->headers() + ($idempotencyKey ? ['Idempotency-Key' => $idempotencyKey] : []);
+            $response = Http::withHeaders($headers)
+                ->timeout(15)
+                ->post('https://api.paymongo.com/v1/refunds', ['data' => ['attributes' => $attributes]]);
+        } catch (\Illuminate\Http\Client\ConnectionException $e) {
+            // Timeout / connection failure: the request may have reached PayMongo.
+            Log::warning('PayMongo createRefund outcome uncertain (connection): '.$e->getMessage());
+
+            return $result(self::REFUND_UNCERTAIN, error: 'No response from PayMongo: '.$e->getMessage());
+        } catch (\Throwable $e) {
+            Log::error('PayMongo createRefund outcome uncertain (exception): '.$e->getMessage());
+
+            return $result(self::REFUND_UNCERTAIN, error: $e->getMessage());
+        }
+
+        $status = $response->status();
+        $body = $response->json();
+        $data = is_array($body) ? ($body['data'] ?? null) : null;
+
+        if ($response->successful()) {
+            return is_array($data) && ! empty($data['id'])
+                ? $result(self::REFUND_CREATED, $data, $status)
+                : $result(self::REFUND_UNCERTAIN, null, $status, 'PayMongo answered without a refund id.');
+        }
+
+        $errors = is_array($body) ? collect($body['errors'] ?? [])->filter(fn ($e) => is_array($e)) : collect();
+        $detail = $errors->map(fn ($e) => trim(($e['code'] ?? '').' '.($e['detail'] ?? '')))->filter()->implode('; ');
+
+        Log::warning('PayMongo createRefund failed', ['status' => $status, 'body' => $body]);
+
+        // Only a client error that PayMongo explained in its error format
+        // proves the refund was refused. Rate limits, timeouts, conflicts,
+        // server errors and unreadable bodies stay uncertain.
+        $definite = $status >= 400 && $status < 500
+            && ! in_array($status, [408, 409, 425, 429], true)
+            && $errors->isNotEmpty();
+
+        return $result($definite ? self::REFUND_REJECTED : self::REFUND_UNCERTAIN, null, $status, $detail !== '' ? $detail : "HTTP {$status}");
+    }
+
+    /**
+     * Retrieve a payment (documented GET /v1/payments/{id}). Its attributes
+     * list the payment's refunds with their metadata (seen live 2026-11-12),
+     * which is how a refund whose create response was lost is found by our
+     * local key — without ever creating another.
+     */
+    public function retrievePayment(string $paymentId): ?array
     {
         if (! $this->isConfigured()) {
             return null;
         }
 
         try {
-            $payload = [
-                'data' => [
-                    'attributes' => [
-                        'amount' => $amountInCents,
-                    ],
-                ],
-            ];
-
-            if ($reason !== '') {
-                $payload['data']['attributes']['reason'] = $reason;
-            }
-
             $response = Http::withHeaders($this->headers())
-                ->timeout(15)
-                ->post("https://api.paymongo.com/v1/payments/{$paymentId}/refunds", $payload);
+                ->timeout(10)
+                ->get("https://api.paymongo.com/v1/payments/{$paymentId}");
 
-            if ($response->successful()) {
-                return $response->json('data');
-            }
-
-            Log::warning('PayMongo createRefund failed', [
-                'status' => $response->status(),
-                'body' => $response->json(),
-            ]);
-
-            return null;
-        } catch (\Exception $e) {
-            Log::error('PayMongo createRefund exception: '.$e->getMessage());
+            return $response->successful() ? $response->json('data') : null;
+        } catch (\Throwable $e) {
+            Log::error('PayMongo retrievePayment exception: '.$e->getMessage());
 
             return null;
         }
+    }
+
+    /**
+     * PayMongo accepts only these refund reasons: duplicate, fraudulent,
+     * requested_by_customer, others. Our reasons are free text (kept in notes).
+     */
+    public static function refundReason(string $text): string
+    {
+        $t = strtolower($text);
+
+        return match (true) {
+            str_contains($t, 'duplicate') => 'duplicate',
+            str_contains($t, 'fraud') => 'fraudulent',
+            (bool) preg_match('/cancel|changed|tourist|customer|requested|no rider|not delivered|timeout|unavailable/', $t) => 'requested_by_customer',
+            default => 'others',
+        };
     }
 
     /**
@@ -270,38 +373,6 @@ class PaymongoService
             return null;
         } catch (\Exception $e) {
             Log::error('PayMongo retrieveRefund exception: '.$e->getMessage());
-
-            return null;
-        }
-    }
-
-    /**
-     * List the refunds issued against a specific payment.
-     */
-    public function listPaymentRefunds(string $paymentId): ?array
-    {
-        if (! $this->isConfigured()) {
-            return null;
-        }
-
-        try {
-            $response = Http::withHeaders($this->headers())
-                ->timeout(10)
-                ->get("https://api.paymongo.com/v1/payments/{$paymentId}/refunds");
-
-            if ($response->successful()) {
-                return $response->json('data') ?? [];
-            }
-
-            Log::warning('PayMongo listPaymentRefunds failed', [
-                'payment_id' => $paymentId,
-                'status' => $response->status(),
-                'body' => $response->json(),
-            ]);
-
-            return null;
-        } catch (\Exception $e) {
-            Log::error('PayMongo listPaymentRefunds exception: '.$e->getMessage());
 
             return null;
         }

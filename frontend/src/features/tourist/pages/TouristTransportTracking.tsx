@@ -12,21 +12,15 @@ import { useUserSocketNotifier } from '@/shared/hooks/useUserSocketNotifier'
 import { useOsrmRoute } from '@/features/rider/hooks/useOsrmRoute'
 import { riderMarkerIcon, pickupMarkerIcon, destinationMarkerIcon } from '@/shared/utils/map-markers'
 import TripReceipt from '@/features/tourist/components/TripReceipt'
-import RatingSheet from '@/features/tourist/components/RatingSheet'
+import {
+  CompletedScreen, DriverCard, EtaBanner, InTripStats, RideProgress, SafetyActions, SearchingScreen, vehicleLabel,
+} from '@/features/tourist/components/ride/RidePhases'
 import {
   Navigation,
-  Star,
   Phone,
-  XCircle,
-  Clock,
-  CheckCircle2,
   Car,
-  User,
   ArrowLeft,
-  Smartphone,
   ShieldCheck,
-  Loader2,
-  Share2,
   AlertTriangle,
 } from 'lucide-react'
 
@@ -68,7 +62,6 @@ interface TripData {
   id: number
   order_number: string
   status: RideStatus
-  ride_pin: string | null
   pickup_address: string
   pickup_latitude?: number | null
   pickup_longitude?: number | null
@@ -104,42 +97,6 @@ interface TripData {
   cancelled_at: string | null
   cancellation_reason: string | null
   cancellation_fee: number
-}
-
-const STATUS_STEPS = [
-  { key: 'assigned', label: 'Assigned', icon: UserCheck },
-  { key: 'arriving', label: 'Arriving', icon: Navigation },
-  { key: 'in_progress', label: 'In Progress', icon: Car },
-  { key: 'completed', label: 'Completed', icon: CheckCircle2 },
-]
-
-function UserCheck(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-      <circle cx="9" cy="7" r="4" />
-      <polyline points="16 11 18 13 22 9" />
-    </svg>
-  )
-}
-
-const STATUS_INDEX: Record<string, number> = {
-  searching: -1,
-  assigned: 0,
-  arriving: 1,
-  driver_arrived: 1,
-  in_progress: 2,
-  completed: 3,
-  cancelled: -1,
-}
-
-const STATUS_LABEL: Record<RideStatus, string> = {
-  searching: 'Finding a Driver',
-  arriving: 'Driver Arriving',
-  driver_arrived: 'Driver Arrived',
-  in_progress: 'Trip In Progress',
-  completed: 'Trip Completed',
-  cancelled: 'Trip Cancelled',
 }
 
 function num(v: number | string | null | undefined): number | null {
@@ -361,13 +318,9 @@ export default function TouristTransportTracking() {
   }
 
   const displayStatus: RideStatus = tripCancelled ? 'cancelled' : tripCompleted ? 'completed' : trip.status
-  const currentStep = STATUS_INDEX[displayStatus] ?? -1
-  const progress = Math.max(0, (currentStep / (STATUS_STEPS.length - 1)) * 100)
-  const isActiveNow = !['completed', 'cancelled'].includes(displayStatus)
-  const showVerify = displayStatus === 'driver_arrived' && trip.rider
 
   const tripPoints: [number, number][] =
-    routeQuery.data && routeQuery.data.polyline.length >= 2 && pickupCoords && destCoords
+    Array.isArray(routeQuery.data?.polyline) && routeQuery.data.polyline.length >= 2 && pickupCoords && destCoords
       ? routeQuery.data.polyline
       : pickupCoords && destCoords
         ? [pickupCoords, destCoords]
@@ -391,12 +344,75 @@ export default function TouristTransportTracking() {
   const onlinePayMethod = trip?.payment_method === 'card' ? 'card' : trip?.payment_method === 'gcash' ? 'gcash' : null
   const showPayButton =
     displayStatus === 'completed' && onlinePayMethod != null && trip.payment_status !== 'paid'
-  const showRateButton = displayStatus === 'completed' && !trip.is_rated
+
+  // Live ETA / distance from the road route to the current target (pickup
+  // while arriving, destination on the trip); the booked figures otherwise.
+  const etaMinutes = liveRouteResult.durationMin != null
+    ? Math.max(1, Math.round(liveRouteResult.durationMin))
+    : (trip.eta_minutes ?? null)
+  const remainingKm = liveRouteResult.distanceKm ?? (displayStatus === 'in_progress' ? trip.distance_km : null)
+  const isPaid = trip.payment_status === 'paid'
+  const payMethodName = trip.payment_method === 'gcash' ? 'GCash' : trip.payment_method === 'card' ? 'card' : 'cash'
+  const paymentLabel = isPaid
+    ? `Paid via ${payMethodName}`
+    : trip.payment_method === 'cash' ? 'Pay your driver in cash' : `Payment due via ${payMethodName}`
+  const onTheMove = displayStatus === 'arriving' || displayStatus === 'driver_arrived' || displayStatus === 'in_progress'
 
   return (
-    <div className="h-screen flex flex-col bg-white">
-      {/* ───────────── Live map ───────────── */}
-      <div className="flex-1 relative min-h-0">
+    <div className="min-h-[100dvh] bg-[#fff]">
+      {displayStatus === 'searching' ? (
+        /* ───────────── Phase 2: finding your driver ───────────── */
+        <SearchingScreen
+          since={trip.created_at}
+          vehicleType={trip.vehicle_type}
+          onCancel={() => setShowCancelModal(true)}
+          cancelling={cancelMutation.isPending}
+          onBack={() => navigate('/tourist/transport')}
+        />
+      ) : displayStatus === 'completed' ? (
+        /* ───────────── Phase 5: completed, payment & review ───────────── */
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => navigate('/tourist/transport')}
+            aria-label="Back to transport"
+            className="absolute left-4 top-4 z-10 rounded-full bg-[#F3F4F6] p-2.5 text-[#17201B] hover:bg-[#E5E7EB]"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <CompletedScreen
+            fare={trip.fare}
+            paymentLabel={paymentLabel}
+            paid={isPaid || trip.payment_method === 'cash'}
+            onPay={showPayButton ? handlePayNow : undefined}
+            paying={isRedirecting}
+            driverName={trip.rider?.name ?? null}
+            alreadyRated={trip.is_rated}
+            rating={trip.rating}
+            allowedTags={trip.allowed_rating_tags ?? []}
+            onSubmitReview={(payload) => rateMutation.mutate(payload)}
+            submitting={rateMutation.isPending}
+            receipt={(
+              <TripReceipt
+                orderNumber={trip.order_number}
+                completedLabel={trip.completed_at ? formatDateTime(trip.completed_at) : ''}
+                distanceKm={trip.distance_km}
+                baseFare={trip.base_fare}
+                distanceFare={trip.distance_fare}
+                serviceFee={trip.service_fee}
+                total={trip.fare}
+                estimateFare={trip.estimate_fare}
+                paymentMethod={trip.payment_method}
+                paymentStatus={trip.payment_status}
+                paidAmount={trip.paid_amount}
+              />
+            )}
+          />
+        </div>
+      ) : (
+        /* ───────────── Phases 3–4: driver on the way / in trip ───────────── */
+        <div className="tourist-map-page -mx-4 -mt-4 sm:-mx-6 sm:-mt-6 flex flex-col">
+          <div className="relative min-h-0 flex-1">
         <MapContainer
           center={mapAnchor}
           zoom={14}
@@ -459,312 +475,93 @@ export default function TouristTransportTracking() {
           )}
         </MapContainer>
 
-        {/* Back */}
-        <button
-          onClick={() => navigate(-1)}
-          aria-label="Back to transport"
-          className="absolute top-4 left-4 z-[1000] p-3 bg-white/95 backdrop-blur border border-[#E5E9E7] rounded-xl text-[#17201B] hover:text-[#087F3F] hover:border-[#087F3F]/40 transition-all shadow-lg"
-        >
-          <ArrowLeft className="w-5 h-5" />
-        </button>
-
-        {/* Status badge */}
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[1000] flex flex-col items-center gap-2">
-          <div
-            className={cn(
-              'px-4 py-2 bg-white/95 backdrop-blur border rounded-xl shadow-lg flex items-center gap-2',
-              displayStatus === 'cancelled'
-                ? 'border-red-200 text-red-600'
-                : displayStatus === 'completed'
-                  ? 'border-[#087F3F]/20 text-[#087F3F]'
-                  : 'border-[#087F3F]/20 text-[#17201B]'
-            )}
-          >
-            {isActiveNow && <span className="w-2 h-2 bg-[#087F3F] rounded-full animate-pulse" />}
-            <span className="text-sm font-medium">{STATUS_LABEL[displayStatus]}</span>
-          </div>
-          {liveStatus && (
-            <div className={cn('px-3 py-1 rounded-lg border shadow-md flex items-center gap-1.5 text-xs font-medium', liveStatus.className)}>
-              {liveStatus.pulse && <span className={cn('w-1.5 h-1.5 rounded-full animate-pulse', liveStatus.dot)} />}
-              {liveStatus.text}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ───────────── Bottom sheet ───────────── */}
-      <div className="bg-white border-t border-[#E5E9E7] max-h-[45vh] overflow-y-auto shadow-[0_-8px_24px_rgba(0,0,0,0.06)]">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-5">
-          {/* Status stepper */}
-          {displayStatus !== 'cancelled' && (
-            <div className="flex items-center justify-between mb-5 relative">
-              <div className="absolute top-4 left-0 right-0 h-0.5 bg-[#E5E9E7]" />
-              <div
-                className="absolute top-4 left-0 h-0.5 bg-[#087F3F] transition-all duration-500"
-                style={{ width: `${progress}%` }}
-              />
-              {STATUS_STEPS.map((step, index) => {
-                const Icon = step.icon
-                const isCompleted = index <= currentStep
-                return (
-                  <div key={step.key} className="relative flex flex-col items-center z-10">
-                    <div
-                      className={cn(
-                        'w-8 h-8 rounded-full flex items-center justify-center transition-all',
-                        isCompleted ? 'bg-[#087F3F] text-white shadow-lg shadow-[#087F3F]/25' : 'bg-[#F3F4F6] text-[#9CA3AF]'
-                      )}
-                    >
-                      <Icon className="w-4 h-4" />
-                    </div>
-                    <span className={cn('text-[10px] mt-1', isCompleted ? 'text-[#087F3F] font-medium' : 'text-[#9CA3AF]')}>
-                      {step.label}
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-[1000] flex items-start gap-3 p-4">
+              <button
+                type="button"
+                onClick={() => navigate('/tourist/transport')}
+                aria-label="Back to transport"
+                className="pointer-events-auto shrink-0 rounded-full bg-[#fff] p-3 text-[#17201B] shadow-lg hover:text-[#087F3F]"
+              >
+                <ArrowLeft className="h-5 w-5" />
+              </button>
+              {onTheMove && (
+                <div className="min-w-0 flex-1">
+                  <EtaBanner status={displayStatus as 'arriving' | 'driver_arrived' | 'in_progress'} minutes={etaMinutes} />
+                  {liveStatus && (
+                    <span className={cn('pointer-events-auto mt-2 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium shadow', liveStatus.className)}>
+                      {liveStatus.pulse && <span className={cn('h-1.5 w-1.5 animate-pulse rounded-full', liveStatus.dot)} />}
+                      {liveStatus.text}
                     </span>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-
-          {/* Searching for a driver */}
-          {displayStatus === 'searching' && (
-            <div className="mb-5 flex items-start gap-3 bg-[#E9F7EF] border border-[#087F3F]/20 rounded-xl p-4">
-              <Loader2 className="w-5 h-5 text-[#087F3F] shrink-0 animate-spin" />
-              <div className="flex-1">
-                <p className="text-sm font-semibold text-[#087F3F]">Finding a nearby driver…</p>
-                <p className="text-xs text-[#68736D] mt-1">
-                  {trip.vehicle_type} • {formatCurrency(trip.fare)} • {trip.payment_method}
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Driver verification callout */}
-          {showVerify && (
-            <div className="mb-5 flex items-start gap-3 bg-[#E9F7EF] border border-[#087F3F]/30 rounded-xl p-4">
-              <ShieldCheck className="w-5 h-5 text-[#087F3F] shrink-0" />
-              <div className="flex-1">
-                <p className="text-sm font-semibold text-[#087F3F]">Verify before boarding</p>
-                <p className="text-xs text-[#68736D] mt-1">
-                  Driver: {trip.rider?.name} • Plate: {trip.rider?.plate_number || '—'}
-                </p>
-                <p className="text-2xl font-bold tracking-[0.2em] text-[#17201B] mt-2">
-                  {trip.ride_pin || '— — — —'}
-                </p>
-                <p className="text-[11px] text-[#9CA3AF] mt-1">
-                  Share this PIN with your driver before boarding.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Pickup & destination */}
-          <div className="flex items-center gap-3 mb-5">
-            <div className="flex flex-col items-center gap-1">
-              <div className="w-3 h-3 bg-[#D97706] rounded-full" />
-              <div className="w-0.5 h-6 bg-[#E5E9E7]" />
-              <div className="w-3 h-3 bg-[#DC2626] rounded-full" />
-            </div>
-            <div className="flex-1 space-y-3">
-              <div>
-                <p className="text-[10px] text-[#68736D] uppercase tracking-wider">Pickup</p>
-                <p className="text-sm text-[#17201B]">{trip.pickup_address || 'Current location'}</p>
-              </div>
-              <div>
-                <p className="text-[10px] text-[#68736D] uppercase tracking-wider">Destination</p>
-                <p className="text-sm text-[#17201B]">{trip.destination_address}</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
-            {/* Driver card */}
-            {trip.rider && (
-              <div className="bg-white rounded-xl border border-[#E5E9E7] p-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-full overflow-hidden bg-[#E9F7EF] border border-[#087F3F]/20 shrink-0">
-                    {trip.rider.photo ? (
-                      <img src={trip.rider.photo} alt={trip.rider.name} className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-[#087F3F]">
-                        <User className="w-5 h-5" />
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-[#17201B] truncate">{trip.rider.name}</p>
-                    <p className="text-xs text-[#68736D]">
-                      {trip.rider.rating != null ? `★ ${trip.rider.rating.toFixed(1)}` : 'New driver'}
-                    </p>
-                    <p className="text-xs text-[#68736D] capitalize">
-                      {trip.rider.vehicle_type} • {trip.rider.plate_number || '—'}
-                    </p>
-                  </div>
-                  {trip.rider.contact_number && (
-                    <a
-                      href={`tel:${trip.rider.contact_number}`}
-                      aria-label={`Call ${trip.rider.name}`}
-                      className="p-2.5 bg-[#E9F7EF] border border-[#087F3F]/20 rounded-xl text-[#087F3F] hover:bg-[#087F3F] hover:text-white transition-all"
-                    >
-                      <Phone className="w-4 h-4" />
-                    </a>
                   )}
                 </div>
-              </div>
-            )}
-
-            {/* Fare / ETA */}
-            <div className="bg-white rounded-xl border border-[#E5E9E7] p-4">
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-[#68736D]">Distance</span>
-                  <span className="text-[#17201B]">{Number(trip.distance_km).toFixed(1)} km</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-[#68736D]">Duration</span>
-                  <span className="text-[#17201B]">{trip.duration_min} min</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-[#68736D]">ETA</span>
-                  <span className="text-[#17201B]">{trip.eta_minutes ?? trip.duration_min} min</span>
-                </div>
-                <div className="flex justify-between text-base font-semibold pt-2 border-t border-[#E5E9E7]">
-                  <span className="text-[#17201B]">Fare</span>
-                  <span className="text-[#087F3F]">{formatCurrency(trip.fare)}</span>
-                </div>
-              </div>
+              )}
             </div>
           </div>
 
-          {/* Timeline */}
-          <div className="flex flex-wrap items-center gap-4 text-xs text-[#68736D] mb-5">
-            <div className="flex items-center gap-1">
-              <Clock className="w-3 h-3" />
-              <span>Booked: {formatDateTime(trip.created_at)}</span>
+          <div className="relative z-[1001] -mt-5 max-h-[52dvh] overflow-y-auto rounded-t-[28px] bg-[#fff] px-5 pb-6 pt-3 shadow-[0_-10px_30px_rgba(23,32,27,0.12)]">
+            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-[#D7DED9]" aria-hidden="true" />
+            <div className="mx-auto max-w-xl space-y-4">
+              {displayStatus === 'cancelled' ? (
+                <div className="space-y-4 text-center">
+                  <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-left">
+                    <AlertTriangle className="h-5 w-5 shrink-0 text-red-500" />
+                    <div>
+                      <p className="text-sm font-semibold text-red-700">Ride cancelled</p>
+                      <p className="mt-1 text-xs text-red-600/80">
+                        {trip.cancellation_reason ? `Reason: ${trip.cancellation_reason}` : 'No driver could be assigned.'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/tourist/transport')}
+                    className="h-12 w-full rounded-full bg-[#087F3F] text-base font-bold text-white hover:bg-[#056B35]"
+                  >
+                    Book another ride
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {displayStatus === 'in_progress' && <InTripStats minutes={etaMinutes} km={remainingKm} />}
+
+                  {trip.rider && (
+                    <DriverCard driver={trip.rider} />
+                  )}
+
+                  {displayStatus !== 'in_progress' && <RideProgress status={displayStatus} />}
+
+                  <div className="space-y-2 rounded-2xl border border-[#E5E9E7] p-3 text-sm">
+                    <p className="flex items-start gap-2">
+                      <span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-[#087F3F]" aria-hidden="true" />
+                      <span className="min-w-0"><span className="block text-xs text-[#56615B]">Pickup</span><span className="block truncate font-medium text-[#17201B]">{trip.pickup_address || 'Pickup point'}</span></span>
+                    </p>
+                    <p className="flex items-start gap-2">
+                      <span className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full bg-[#DC2626]" aria-hidden="true" />
+                      <span className="min-w-0"><span className="block text-xs text-[#56615B]">Drop-off</span><span className="block truncate font-medium text-[#17201B]">{trip.destination_address}</span></span>
+                    </p>
+                    <p className="flex items-center justify-between border-t border-[#EEF1EF] pt-2">
+                      <span className="text-xs text-[#56615B]">{vehicleLabel(trip.vehicle_type)} · {payMethodName === 'cash' ? 'Cash' : payMethodName === 'GCash' ? 'GCash' : 'Card'}</span>
+                      <span className="font-bold text-[#17201B]">{formatCurrency(trip.fare)}</span>
+                    </p>
+                  </div>
+
+                  <SafetyActions showSos={displayStatus === 'in_progress'} onSos={() => setShowSafety(true)} onShare={shareTrip} />
+
+                  {canCancel && (
+                    <button
+                      type="button"
+                      onClick={() => setShowCancelModal(true)}
+                      className="w-full text-center text-sm font-semibold text-[#B91C1C] hover:underline"
+                    >
+                      Cancel ride
+                    </button>
+                  )}
+                </>
+              )}
             </div>
-            {trip.started_at && (
-              <div className="flex items-center gap-1">
-                <Navigation className="w-3 h-3" />
-                <span>Started: {formatDateTime(trip.started_at)}</span>
-              </div>
-            )}
-            {trip.completed_at && (
-              <div className="flex items-center gap-1">
-                <CheckCircle2 className="w-3 h-3 text-[#087F3F]" />
-                <span>Completed: {formatDateTime(trip.completed_at)}</span>
-              </div>
-            )}
-            {trip.cancellation_reason && (
-              <div className="flex items-center gap-1">
-                <XCircle className="w-3 h-3 text-red-500" />
-                <span>Reason: {trip.cancellation_reason}</span>
-              </div>
-            )}
-          </div>
-
-          {/* Cancelled state */}
-          {displayStatus === 'cancelled' && (
-            <div className="mb-5 flex items-start gap-3 bg-red-50 border border-red-200 rounded-xl p-4">
-              <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" />
-              <div className="flex-1">
-                <p className="text-sm font-semibold text-red-700">Trip Cancelled</p>
-                <p className="text-xs text-red-600/80 mt-1">
-                  {trip.cancellation_reason
-                    ? `Reason: ${trip.cancellation_reason}`
-                    : 'No driver could be assigned.'}
-                  {trip.cancellation_fee > 0 && ` • Fee: ${formatCurrency(trip.cancellation_fee)}`}
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Completed receipt */}
-          {displayStatus === 'completed' && (
-            <TripReceipt
-              orderNumber={trip.order_number}
-              completedLabel={trip.completed_at ? formatDateTime(trip.completed_at) : ''}
-              distanceKm={trip.distance_km}
-              baseFare={trip.base_fare}
-              distanceFare={trip.distance_fare}
-              serviceFee={trip.service_fee}
-              total={trip.fare}
-              estimateFare={trip.estimate_fare}
-              paymentMethod={trip.payment_method}
-              paymentStatus={trip.payment_status}
-              paidAmount={trip.paid_amount}
-            />
-          )}
-
-          {/* Actions */}
-          <div className="flex flex-col sm:flex-row gap-3">
-            {canCancel && (
-              <button
-                onClick={() => setShowCancelModal(true)}
-                className="flex items-center justify-center gap-2 px-5 py-2.5 bg-red-50 border border-red-200 text-red-600 rounded-xl hover:bg-red-500 hover:text-white transition-all text-sm font-medium"
-              >
-                <XCircle className="w-4 h-4" />
-                Cancel Ride
-              </button>
-            )}
-            <button
-              onClick={shareTrip}
-              className="flex items-center justify-center gap-2 px-5 py-2.5 bg-[#E9F7EF] border border-[#087F3F]/20 text-[#087F3F] rounded-xl hover:bg-[#087F3F] hover:text-white transition-all text-sm font-medium"
-            >
-              <Share2 className="w-4 h-4" />
-              Share trip
-            </button>
-            <button
-              onClick={() => setShowSafety(true)}
-              className="flex items-center justify-center gap-2 px-5 py-2.5 bg-white border border-[#E5E9E7] text-[#17201B] rounded-xl hover:border-[#087F3F]/40 transition-all text-sm font-medium"
-            >
-              <ShieldCheck className="w-4 h-4 text-[#087F3F]" />
-              Safety
-            </button>
-            {showPayButton && (
-              <button
-                onClick={handlePayNow}
-                disabled={isRedirecting}
-                className="flex items-center justify-center gap-2 px-5 py-2.5 bg-[#17201B] text-white rounded-xl hover:bg-black transition-all text-sm font-medium disabled:opacity-50"
-              >
-                <Smartphone className="w-4 h-4" />
-                {isRedirecting
-                  ? onlinePayMethod === 'card'
-                    ? 'Redirecting to Card Checkout...'
-                    : 'Redirecting to GCash...'
-                  : onlinePayMethod === 'card'
-                    ? 'Pay with Card'
-                    : 'Pay with GCash'}
-              </button>
-            )}
-            {displayStatus === 'completed' && trip.payment_method === 'maya' && trip.payment_status !== 'paid' && (
-              <p className="text-[10px] text-[#9CA3AF] px-1">
-                Maya checkout is not available yet for ride settlement — contact support to complete payment.
-              </p>
-            )}
-            {showPayButton && showRateButton && <span className="px-1 hidden sm:block" />}
-            {showRateButton && (
-              <button
-                onClick={() => setShowRatingModal(true)}
-                className="flex items-center justify-center gap-2 px-5 py-2.5 bg-[#087F3F] text-white rounded-xl hover:bg-[#056B35] transition-all text-sm font-medium"
-              >
-                <Star className="w-4 h-4" />
-                Rate Trip
-              </button>
-            )}
-            {displayStatus === 'cancelled' && (
-              <Link
-                to="/tourist/transport"
-                className="flex items-center justify-center gap-2 px-5 py-2.5 bg-[#087F3F] text-white rounded-xl hover:bg-[#056B35] transition-all text-sm font-medium"
-              >
-                <Car className="w-4 h-4" />
-                Book another ride
-              </Link>
-            )}
-            {displayStatus === 'in_progress' && trip.payment_method !== 'cash' && (
-              <p className="text-[10px] text-[#9CA3AF] px-1">Payment will be settled after the trip.</p>
-            )}
           </div>
         </div>
-      </div>
+      )}
 
       {/* Cancel modal */}
       {showCancelModal && (
@@ -802,16 +599,6 @@ export default function TouristTransportTracking() {
           </div>
         </div>
       )}
-
-      {/* Rating modal */}
-      <RatingSheet
-        open={showRatingModal}
-        riderName={trip.rider?.name ?? null}
-        allowedTags={trip.allowed_rating_tags ?? []}
-        isSubmitting={rateMutation.isPending}
-        onClose={() => setShowRatingModal(false)}
-        onSubmit={(payload) => rateMutation.mutate(payload)}
-      />
 
       {/* Safety modal */}
       {showSafety && (

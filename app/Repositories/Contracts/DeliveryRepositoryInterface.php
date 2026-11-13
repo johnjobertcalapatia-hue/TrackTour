@@ -26,7 +26,8 @@ interface DeliveryRepositoryInterface
 
     public function getActiveDeliveries(int $riderId): Collection;
 
-    public function getCompletedDeliveries(int $riderId, int $perPage = 15): LengthAwarePaginator;
+    /** @param  'food'|'ride'|null  $type  food orders only, ride bookings only, or both */
+    public function getCompletedDeliveries(int $riderId, int $perPage = 15, ?string $type = null): LengthAwarePaginator;
 
     public function getRiderEarnings(int $riderId, int $perPage = 15): LengthAwarePaginator;
 

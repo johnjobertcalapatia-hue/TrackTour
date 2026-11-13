@@ -82,6 +82,7 @@ export const API_ENDPOINTS = {
     ROLES: '/admin/roles',
     RIDERS: '/admin/riders',
     RIDERS_FARES: '/admin/riders/fares',
+    RIDERS_RIDE_FARES: '/admin/riders/ride-fares',
     REPORTS: '/admin/reports',
     POS: '/admin/pos/sales',
     POS_SUMMARY: '/admin/pos/sales/summary',

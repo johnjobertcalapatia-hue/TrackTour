@@ -20,6 +20,9 @@ class OrderRefundService
      */
     public function refundPaidOrder(Order $order, string $reason): void
     {
+        if ($this->blockedAfterAcceptance($order, $reason)) {
+            return;
+        }
         $payment = Payment::where('payable_type', Order::class)
             ->where('payable_id', $order->id)
             ->whereIn('status', ['authorized', 'paid', 'pending_refund'])
@@ -32,15 +35,19 @@ class OrderRefundService
             return;
         }
 
-        // Already in flight with the provider — the refund webhook or the
-        // reconciliation command finalizes it. Never mark refunded locally.
-        if ($payment->status === 'pending_refund') {
+        // A refund already with PayMongo reserves its own amount; the processor
+        // (under the payment lock) refuses a second order-level refund and a
+        // legacy in-flight refund, and refunds only what remains otherwise.
+        // Refund what is still refundable: the whole payment, or what is left
+        // after earlier partial (e.g. rejected-item) refunds.
+        $remaining = app(PaymentRefundProcessor::class)->refundTotals($payment)['remaining'];
+        if ($remaining <= 0) {
             return;
         }
 
         app(PaymentRefundProcessor::class)->initiateRefund(
             payment: $payment,
-            amount: (float) $payment->amount,
+            amount: $remaining,
             reason: $reason,
             forOrder: $order,
             userId: $order->user_id,
@@ -58,6 +65,9 @@ class OrderRefundService
      */
     public function refundPaidGroupChild(Order $order, string $reason): void
     {
+        if ($this->blockedAfterAcceptance($order, $reason)) {
+            return;
+        }
         $group = $order->groupOrder;
         if (! $group) {
             return;
@@ -107,6 +117,9 @@ class OrderRefundService
         if (! $order) {
             return;
         }
+        if ($this->blockedAfterAcceptance($order, $reason)) {
+            return;
+        }
 
         $base = round((float) $item->unit_price * $quantity, 2);
         $deduction = round($base * (float) config('refunds.deduction_rate'), 2);
@@ -118,6 +131,11 @@ class OrderRefundService
             'cancellation_reason' => $reason ?: 'Cancelled by tourist',
             'cancelled_at' => now(),
         ]);
+        // Nothing left of this line: it is no longer food to cook or collect
+        // (rider acceptance only starts 'pending' / 'accepted' items).
+        if ($item->fresh()->activeQuantity() <= 0) {
+            $item->update(['status' => 'cancelled']);
+        }
 
         $group = $order->groupOrder;
         $payment = $group
@@ -144,6 +162,14 @@ class OrderRefundService
 
         $order->load('items');
         $remainingActiveQty = $order->items->sum(fn ($i) => $i->activeQuantity());
+
+        // Unpaid order (cash on delivery, or GCash not paid yet): nothing to
+        // refund, so the price itself must drop. Otherwise the rider would
+        // collect, buy and settle the cancelled food (bug found 2026-11-10:
+        // a COD group with one restaurant dropped still charged its food).
+        if (! $payment && $remainingActiveQty > 0 && (string) $order->payment_status !== 'paid') {
+            $this->repriceUnpaidOrder($order, $group);
+        }
 
         if ($remainingActiveQty <= 0) {
             $refundDeliveryFee = $order->order_type === 'delivery'
@@ -183,6 +209,35 @@ class OrderRefundService
                 $this->markPaymentFullyRefunded($payment, $group);
             }
             $group->refreshAggregateStatus();
+        }
+    }
+
+    /**
+     * Re-price an unpaid order from the quantities still ordered, with the
+     * same formulas used at checkout (GroupOrderService / Order). The quoted
+     * delivery fee and rider tip are kept. Feeds the COD cash due, the
+     * purchase allocation and the 80/20 settlement base.
+     */
+    private function repriceUnpaidOrder(Order $order, ?GroupCheckout $group): void
+    {
+        $subtotal = round($order->items->sum(fn ($i) => (float) $i->unit_price * $i->activeQuantity()), 2);
+        $systemFee = Order::calculateSystemFee($subtotal);
+        $financed = Order::calculateRiderFinancedAmount($subtotal, $systemFee);
+
+        $order->update([
+            'subtotal' => $subtotal,
+            'system_fee' => $systemFee,
+            'rider_financed_amount' => $financed,
+            'total' => round($subtotal + (float) $order->delivery_fee + $systemFee + (float) $order->rider_tip, 2),
+        ]);
+
+        if ($group) {
+            // One canonical order per group checkout (AGENTS.md §4.1).
+            $group->update([
+                'subtotal' => $subtotal,
+                'system_fee_total' => $systemFee,
+                'grand_total' => round($subtotal + (float) $group->delivery_total + $systemFee + (float) $group->rider_tip - (float) $group->discount, 2),
+            ]);
         }
     }
 
@@ -266,5 +321,20 @@ class OrderRefundService
             $payment->update(['status' => 'refunded', 'refunded_at' => now()]);
             $group->update(['payment_status' => 'refunded']);
         }
+    }
+
+    /**
+     * Product-owner rule (2026-11-11): no refund once a rider has accepted the
+     * delivery. The refused attempt is escalated for the Tourism Office.
+     */
+    private function blockedAfterAcceptance(Order $order, string $reason): bool
+    {
+        $policy = app(AcceptedOrderPolicy::class);
+        if (! $policy->riderAccepted($order)) {
+            return false;
+        }
+        $policy->escalate($order, 'refund_blocked_after_acceptance', 'A refund was refused because a rider had already accepted the order.', ['refund_reason' => $reason], \App\Models\ActivityLog::TYPE_FINANCIAL);
+
+        return true;
     }
 }

@@ -103,6 +103,7 @@ class AuthController extends Controller
                 $userData['name'] = trim($request->first_name.' '.$request->last_name);
             } elseif ($request->role === User::ROLE_RIDER) {
                 $userData['name'] = trim($request->first_name.' '.$request->last_name);
+                $userData['municipality_id'] = (int) $request->municipality_id;
             } else {
                 $userData['name'] = $request->name;
             }
@@ -117,6 +118,7 @@ class AuthController extends Controller
                     'suffix' => $request->suffix,
                     'date_of_birth' => $request->date_of_birth,
                     'mobile_number' => $request->mobile_number,
+                    'municipality_id' => (int) $request->municipality_id,
                 ]);
 
                 $user->riderDetail()->create([

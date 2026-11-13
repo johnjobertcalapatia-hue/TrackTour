@@ -2,71 +2,60 @@
 
 namespace App\Console\Commands;
 
-use App\Events\OrderStatusChanged;
+use App\Models\ActivityLog;
 use App\Models\Order;
-use App\Models\OrderCancellation;
-use App\Notifications\OrderAutoCancelled;
-use App\Services\NearestRiderService;
-use App\Services\OrderRefundService;
+use App\Services\AcceptedOrderPolicy;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\DB;
 
+/**
+ * Late accepted orders (product-owner rule, 2026-11-11).
+ *
+ * Every order this command looks at already has an accepted rider (it was
+ * assigned or accepted more than --minutes ago and is still undelivered).
+ * Once a rider has accepted, the order must be fulfilled: it is NEVER
+ * auto-cancelled or refunded here. The late order stays active and is
+ * flagged ONCE for Tourism Office investigation (activity log + transaction
+ * history escalation, reported by the integrity check).
+ *
+ * Previously this command cancelled and refunded these orders. Orders that
+ * never got a rider keep the D5 rule (dispatch deadline: cancel + refund).
+ */
 class AutoCancelUndeliveredOrder extends Command
 {
     protected $signature = 'orders:auto-cancel-undelivered
-        {--minutes=60 : Minutes a paid delivery order may remain undelivered before auto-cancel and refund}';
+        {--minutes=60 : Minutes an accepted, paid order may remain undelivered before it is flagged}';
 
-    protected $description = 'Auto-cancel and refund paid delivery orders that are not delivered within the timeout';
+    protected $description = 'Flag accepted orders not delivered within the timeout for Tourism Office investigation (never cancels or refunds them)';
 
-    public function handle(OrderRefundService $refundService): int
+    private const ACTIVE = [
+        'waiting',
+        'assigned',
+        'en_route_pickup',
+        'arrived_pickup',
+        'picked_up',
+        'in_transit',
+        'en_route_destination',
+        'arrived_destination',
+    ];
+
+    public function handle(AcceptedOrderPolicy $policy): int
     {
         $minutes = (int) $this->option('minutes');
-        $reason = "Order was not delivered within {$minutes} minutes.";
-
         $cutoff = now()->subMinutes($minutes);
 
-        // Active delivery orders that still have an active trip and were assigned
-        // (or accepted) more than $minutes ago without being delivered. Group
-        // children ride on the group's single delivery (4.4). Transport rides are
-        // included: they carry order_type 'transport' and are equally stuck when
-        // no rider ever completes them.
+        // Active delivery orders still on an active trip that were assigned (or
+        // accepted) more than $minutes ago. Group children ride on the group's
+        // single delivery; rides (order_type 'transport') are included.
         $orders = Order::whereIn('order_type', ['delivery', 'transport'])
             ->where('payment_status', 'paid')
             ->where(function ($q) {
-                $q->whereHas('delivery', function ($q2) {
-                    $q2->whereIn('status', [
-                        'waiting',
-                        'assigned',
-                        'en_route_pickup',
-                        'arrived_pickup',
-                        'picked_up',
-                        'in_transit',
-                        'en_route_destination',
-                        'arrived_destination',
-                    ]);
-                })->orWhereHas('groupOrder.delivery', function ($q2) {
-                    $q2->whereIn('status', [
-                        'waiting',
-                        'assigned',
-                        'en_route_pickup',
-                        'arrived_pickup',
-                        'picked_up',
-                        'in_transit',
-                        'en_route_destination',
-                        'arrived_destination',
-                    ]);
-                });
+                $q->whereHas('delivery', fn ($d) => $d->whereIn('status', self::ACTIVE))
+                    ->orWhereHas('groupOrder.delivery', fn ($d) => $d->whereIn('status', self::ACTIVE));
             })
             ->where(function ($q) use ($cutoff) {
-                $q->whereHas('delivery', function ($q2) use ($cutoff) {
-                    $q2->whereNotNull('assigned_at')->where('assigned_at', '<=', $cutoff);
-                })
-                    ->orWhereHas('groupOrder.delivery', function ($q2) use ($cutoff) {
-                        $q2->whereNotNull('assigned_at')->where('assigned_at', '<=', $cutoff);
-                    })
-                    ->orWhere(function ($q2) use ($cutoff) {
-                        $q2->whereNotNull('accepted_at')->where('accepted_at', '<=', $cutoff);
-                    });
+                $q->whereHas('delivery', fn ($d) => $d->whereNotNull('assigned_at')->where('assigned_at', '<=', $cutoff))
+                    ->orWhereHas('groupOrder.delivery', fn ($d) => $d->whereNotNull('assigned_at')->where('assigned_at', '<=', $cutoff))
+                    ->orWhere(fn ($o) => $o->whereNotNull('accepted_at')->where('accepted_at', '<=', $cutoff));
             })
             ->get();
 
@@ -76,110 +65,35 @@ class AutoCancelUndeliveredOrder extends Command
             return self::SUCCESS;
         }
 
-        $processed = 0;
+        $flagged = 0;
         $failed = 0;
 
         foreach ($orders as $order) {
             try {
-                DB::transaction(function () use ($order, $refundService, $reason) {
-                    // Re-check under lock so an order delivered right now is not double-processed.
-                    $locked = Order::with('delivery', 'groupOrder.delivery')
-                        ->where('id', $order->id)
-                        ->where('payment_status', 'paid')
-                        ->where(function ($q) {
-                            $q->whereHas('delivery', function ($q2) {
-                                $q2->whereNotIn('status', ['delivered', 'completed', 'cancelled']);
-                            })->orWhereHas('groupOrder.delivery', function ($q2) {
-                                $q2->whereNotIn('status', ['delivered', 'completed', 'cancelled']);
-                            });
-                        })
-                        ->lockForUpdate()
-                        ->first();
+                $alreadyFlagged = ActivityLog::where('action', 'escalation.late_after_acceptance')
+                    ->where('model_type', Order::class)
+                    ->where('model_id', $order->id)
+                    ->exists();
+                if ($alreadyFlagged) {
+                    continue;
+                }
 
-                    if (! $locked) {
-                        return;
-                    }
-
-                    // Idempotency: skip if already refunded or being refunded
-                    if (! in_array($locked->refund_status ?? 'none', ['none', 'failed'])) {
-                        return;
-                    }
-
-                    // Mark the order as cancelled (auto-cancelled by system)
-                    $locked->update([
-                        'status' => 'cancelled',
-                        'cancelled_by' => null,
-                        'cancellation_reason' => $reason,
-                        'cancelled_at' => now(),
-                        'refund_status' => 'pending',
-                    ]);
-
-                    // Cancel the active delivery/dispatch under its own row lock (group
-                    // children cancel the shared group trip only when no other
-                    // sibling still needs it).
-                    app(NearestRiderService::class)->cancelDeliveryForOrder($locked);
-
-                    // Process refund — standalone or grouped
-                    if ($locked->group_order_id) {
-                        $refundService->refundPaidGroupChild($locked, $reason);
-                    } else {
-                        $refundService->refundPaidOrder($locked, $reason);
-                    }
-
-                    // Calculate actual refund amount from the refunds ledger and
-                    // keep the refund_status set by the refund service (the P11.3
-                    // processor: 'refunded' | 'pending' | 'failed').
-                    $fresh = $locked->fresh();
-                    $refundAmount = round((float) $fresh->refunded_amount, 2);
-                    $refundStatus = $fresh->refund_status ?: ($refundAmount > 0 ? 'refunded' : 'pending');
-
-                    // Update refund tracking fields on the order
-                    $locked->update([
-                        'refund_status' => $refundStatus,
-                        'refund_amount' => $refundAmount,
-                        'refunded_at' => $fresh->refunded_at ?: ($refundStatus === 'refunded' ? now() : null),
-                    ]);
-
-                    // Create cancellation audit record
-                    OrderCancellation::create([
-                        'order_id' => $locked->id,
-                        'cancelled_by' => 'system',
-                        'reason_code' => 'delivery_timeout',
-                        'reason' => $reason,
-                        'cancelled_at' => now(),
-                        'refund_status' => match ($refundStatus) {
-                            'refunded' => 'succeeded',
-                            'failed' => 'failed',
-                            default => 'pending',
-                        },
-                        'refund_amount' => $refundAmount,
-                        'refunded_at' => $refundStatus === 'refunded' ? now() : null,
-                    ]);
-
-                    // Notify the tourist
-                    $user = $locked->user;
-                    if ($user) {
-                        $user->notify(new OrderAutoCancelled($locked, $reason));
-                    }
-
-                    // Broadcast status change to the restaurant (existing Realtime channel)
-                    OrderStatusChanged::dispatch(
-                        $locked->fresh(),
-                        'delivery',
-                        'cancelled'
-                    );
-                });
-
-                $groupId = $order->group_order_id ? "group: {$order->group_order_id}" : 'standalone';
-                $this->info("Auto-cancelled undelivered order #{$order->order_number} ({$groupId}).");
-                $processed++;
+                $delivery = $order->activeDelivery();
+                $policy->escalate(
+                    $order,
+                    'late_after_acceptance',
+                    "Order #{$order->order_number} was accepted by a rider but not delivered within {$minutes} minutes. It stays active for investigation.",
+                    ['minutes' => $minutes, 'delivery_status' => (string) ($delivery?->status?->value ?? $delivery?->status)],
+                );
+                $this->info("Flagged late accepted order #{$order->order_number} for investigation (not cancelled).");
+                $flagged++;
             } catch (\Exception $e) {
-                $this->error("Failed to auto-cancel order #{$order->order_number}: {$e->getMessage()}");
+                $this->error("Failed to flag order #{$order->order_number}: {$e->getMessage()}");
                 $failed++;
             }
         }
 
-        $this->info("Done. Processed: {$processed}, failed: {$failed}.");
+        $this->info("Done. Flagged: {$flagged}, failed: {$failed}.");
 
         return self::SUCCESS;
     }

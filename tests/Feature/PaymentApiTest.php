@@ -935,7 +935,7 @@ class PaymentApiTest extends TestCase
         ]);
 
         Http::fake([
-            'api.paymongo.com/v1/payments/pm_test_refund_src/refunds' => Http::response([
+            'api.paymongo.com/v1/refunds' => Http::response([
                 'data' => [
                     'id' => 'ref_test_123',
                     'attributes' => ['status' => 'succeeded'],
@@ -983,7 +983,7 @@ class PaymentApiTest extends TestCase
         ]);
 
         Http::fake([
-            'api.paymongo.com/v1/payments/pm_test_refund_bk/refunds' => Http::response([
+            'api.paymongo.com/v1/refunds' => Http::response([
                 'data' => [
                     'id' => 'ref_test_bk',
                     'attributes' => ['status' => 'succeeded'],
@@ -1022,7 +1022,7 @@ class PaymentApiTest extends TestCase
         ]);
 
         Http::fake([
-            'api.paymongo.com/v1/payments/pm_test_partial/refunds' => Http::response([
+            'api.paymongo.com/v1/refunds' => Http::response([
                 'data' => [
                     'id' => 'ref_partial',
                     'attributes' => ['status' => 'succeeded'],
@@ -1054,7 +1054,9 @@ class PaymentApiTest extends TestCase
         ]);
 
         Http::fake([
-            'api.paymongo.com/v1/payments/pm_test_refund_fail/refunds' => Http::response(null, 500),
+            // A DEFINITE rejection (PayMongo's own error body). A 500 is no longer
+            // a failure: it is uncertain and stays reserved (RefundUncertainOutcomeTest).
+            'api.paymongo.com/v1/refunds' => Http::response(['errors' => [['code' => 'parameter_invalid', 'detail' => 'The payment cannot be refunded.']]], 400),
         ]);
 
         $response = $this->actingAs($this->tourist, 'sanctum')
@@ -1079,7 +1081,7 @@ class PaymentApiTest extends TestCase
         ]);
 
         Http::fake([
-            'api.paymongo.com/v1/payments/pm_test_refund_pending/refunds' => Http::response([
+            'api.paymongo.com/v1/refunds' => Http::response([
                 'data' => [
                     'id' => 'ref_pending',
                     'attributes' => ['status' => 'pending'],

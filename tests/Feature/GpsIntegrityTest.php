@@ -197,12 +197,12 @@ class GpsIntegrityTest extends TestCase
         $rider = $this->makeRider();
         $this->be($rider);
 
-        // Last fix at the same position 61s ago (older than checkpoint_seconds).
-        RiderLocation::create([
+        // Last fix at the same position 6 s ago (older than checkpoint_seconds = 5).
+        $last = RiderLocation::create([
             'rider_id' => $rider->id,
             'latitude' => 12.52,
             'longitude' => 121.32,
-            'recorded_at' => now()->subSeconds(61),
+            'recorded_at' => now()->subSeconds(6),
         ]);
 
         $this->postJson('/api/rider/map/location', [
@@ -211,9 +211,12 @@ class GpsIntegrityTest extends TestCase
         ])->assertOk()
             ->assertJsonPath('data.moved', false);
 
-        // An elapsed-based checkpoint must be persisted so a stationary online
-        // rider does not age out of the gps_stale COD/radar eligibility gate.
-        $this->assertDatabaseCount('rider_locations', 2);
+        // Reconciled 2026-11-11 (AGENTS.md §12): the location now refreshes
+        // every 5 s, so a stationary rider refreshes the latest point's time
+        // in place (no new row every 5 s) and never ages out of the gps_stale
+        // COD/radar eligibility gate.
+        $this->assertDatabaseCount('rider_locations', 1);
+        $this->assertTrue($last->fresh()->recorded_at->greaterThan(now()->subSeconds(2)), 'recorded_at refreshed to now');
     }
 
     public function test_stationary_fix_within_checkpoint_window_does_not_write(): void
@@ -221,12 +224,14 @@ class GpsIntegrityTest extends TestCase
         $rider = $this->makeRider();
         $this->be($rider);
 
-        RiderLocation::create([
+        // Within the 5 s window (reconciled 2026-11-11 from 30 s / 60 s).
+        $last = RiderLocation::create([
             'rider_id' => $rider->id,
             'latitude' => 12.52,
             'longitude' => 121.32,
-            'recorded_at' => now()->subSeconds(30),
+            'recorded_at' => now()->subSeconds(2),
         ]);
+        $before = $last->fresh()->recorded_at->toDateTimeString();
 
         $this->postJson('/api/rider/map/location', [
             'latitude' => 12.52,
@@ -235,6 +240,7 @@ class GpsIntegrityTest extends TestCase
             ->assertJsonPath('data.moved', false);
 
         $this->assertDatabaseCount('rider_locations', 1);
+        $this->assertSame($before, $last->fresh()->recorded_at->toDateTimeString(), 'No write inside the window.');
     }
 
     public function test_stationary_low_accuracy_fix_does_not_write_checkpoint(): void

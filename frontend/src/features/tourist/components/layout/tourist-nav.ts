@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
-import { Home, Compass, UtensilsCrossed, BedDouble, ClipboardList, Heart, User } from 'lucide-react'
+import { Home, Compass, UtensilsCrossed, BedDouble, ClipboardList, Bike, User } from 'lucide-react'
 
 export interface TouristNavItem {
   to: string
@@ -29,9 +29,10 @@ export const TOURIST_NAV_ITEMS: TouristNavItem[] = [
     label: 'My Activities',
     shortLabel: 'Activities',
     icon: ClipboardList,
-    alsoActive: ['/tourist/orders', '/tourist/trips', '/tourist/booking', '/tourist/history', '/tourist/transport', '/tourist/reviews'],
+    alsoActive: ['/tourist/orders', '/tourist/trips', '/tourist/booking', '/tourist/history', '/tourist/reviews'],
   },
-  { to: '/tourist/favorites', label: 'Saved', shortLabel: 'Saved', icon: Heart },
+  // Ride hailing (2026-11-10: replaced the Saved tab, named Transport; Saved stays on the header heart button).
+  { to: '/tourist/transport', label: 'Transport', shortLabel: 'Transport', icon: Bike },
   { to: '/tourist/profile', label: 'Profile', shortLabel: 'Profile', icon: User },
 ]
 

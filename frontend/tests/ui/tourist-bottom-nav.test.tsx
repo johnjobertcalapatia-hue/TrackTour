@@ -39,10 +39,10 @@ describe('Tourist mobile bottom navigation', () => {
 
     const links = bottomNav().getAllByRole('link')
     expect(links.map((l) => l.getAttribute('aria-label'))).toEqual([
-      'Home', 'Explore', 'Food & Dining', 'Stays', 'My Activities', 'Saved', 'Profile',
+      'Home', 'Explore', 'Food & Dining', 'Stays', 'My Activities', 'Transport', 'Profile',
     ])
     expect(links.map((l) => l.getAttribute('href'))).toEqual([
-      '/tourist/dashboard', '/tourist/explore', '/tourist/food', '/tourist/stays', '/tourist/activities', '/tourist/favorites', '/tourist/profile',
+      '/tourist/dashboard', '/tourist/explore', '/tourist/food', '/tourist/stays', '/tourist/activities', '/tourist/transport', '/tourist/profile',
     ])
     // Compact labels for narrow phones; full labels from sm up.
     expect(bottomNav().getByText('Food')).toBeInTheDocument()
@@ -57,7 +57,9 @@ describe('Tourist mobile bottom navigation', () => {
     ['/tourist/food/item/501', 'Food & Dining'],
     ['/tourist/stays', 'Stays'],
     ['/tourist/trips', 'My Activities'],
-    ['/tourist/favorites', 'Saved'],
+    ['/tourist/transport', 'Transport'],
+    ['/tourist/transport/tracking/31', 'Transport'],
+    ['/tourist/transport/map', 'Transport'],
     ['/tourist/profile', 'Profile'],
   ])('on %s highlights %s', (path, label) => {
     renderAt(path)

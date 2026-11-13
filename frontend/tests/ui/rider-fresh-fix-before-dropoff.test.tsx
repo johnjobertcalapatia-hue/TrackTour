@@ -99,6 +99,11 @@ describe('location-gated drop-off actions save a fresh fix first', () => {
     act(() => trip!.setRiderPosition(12.96049, 0))
     expect(trip!.positionKnown).toBe(false)
     calls.order = []
+    // With no usable fix the app asks the phone for one fresh reading first
+    // (2026-11-12); here the phone has none to give.
+    vi.mocked(navigator.geolocation.getCurrentPosition).mockImplementation((_ok, fail) => {
+      fail?.({ code: 2, message: 'unavailable' } as GeolocationPositionError)
+    })
 
     await act(async () => { trip!.onArrivedDrop() })
     await waitFor(() => expect(api.patch).toHaveBeenCalled())

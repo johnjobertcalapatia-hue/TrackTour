@@ -263,6 +263,13 @@ class PurchasingCashService
      */
     public function isFullyCollected(Delivery $delivery): bool
     {
+        // Nothing to buy (a cash ride has no restaurant purchase): nothing to
+        // collect. Without this a cash ride could never reach picked_up
+        // ("Collect food from every restaurant…", bug 2026-11-11).
+        if (! $this->isCod($delivery)) {
+            return true;
+        }
+
         $rows = $delivery->codPurchases;
 
         if ($rows->isEmpty()) {
@@ -425,6 +432,10 @@ class PurchasingCashService
         foreach ($delivery->childOrders() as $order) {
             $orderBusiness = $order->business;
             foreach ($order->items()->with('business')->get() as $item) {
+                // Fully cancelled / rejected lines are nothing to collect.
+                if ($item->activeQuantity() <= 0 || in_array($item->status, ['cancelled', 'rejected'], true)) {
+                    continue;
+                }
                 $businessId = (int) ($item->business_id ?: $order->business_id);
                 if ($businessId <= 0) {
                     continue;
@@ -532,8 +543,19 @@ class PurchasingCashService
         ];
     }
 
+    /**
+     * A COD food delivery: the rider buys the food from the restaurant(s).
+     * A cash ride is paid in cash too, but there is no restaurant purchase,
+     * so it never gets cod_purchases or a purchasing-cash link (bug
+     * 2026-11-11: claiming a cash ride inserted a purchase with business_id 0,
+     * the FK refused it and every accept answered 409).
+     */
     private function isCod(Delivery $delivery): bool
     {
+        if ($delivery->primaryOrder()?->order_type === 'transport') {
+            return false;
+        }
+
         return app(NearestRiderService::class)->isCodDelivery($delivery);
     }
 

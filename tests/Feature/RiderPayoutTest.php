@@ -30,6 +30,10 @@ use Tests\TestCase;
 class RiderPayoutTest extends TestCase
 {
     use RefreshDatabase;
+    // Reconciled 2026-11-11 (AGENTS.md §12, secure cashout): only earnings that
+    // trace to a provider-confirmed online payment and a completed delivery
+    // by the rider can be cashed out, so fixtures build that chain.
+    use \Tests\Concerns\MakesVerifiedEarnings;
 
     private User $owner;
     private User $rider;
@@ -111,6 +115,7 @@ class RiderPayoutTest extends TestCase
     private function makeEarning(float $amount, float $tip = 0.0): RiderEarning
     {
         $order = $this->makeOrder();
+        $this->verifyEarningSource($order, $this->rider->id);
 
         return RiderEarning::create([
             'rider_id' => $this->rider->id,
@@ -180,7 +185,11 @@ class RiderPayoutTest extends TestCase
         $approved = $this->service->approve($payout, $this->admin);
         $this->assertSame(RiderPayout::STATUS_APPROVED, $approved->status);
 
-        $paid = $this->service->markPaid($approved, $this->admin);
+        // Paid only with the GCash transfer evidence (2026-11-11).
+        $paid = $this->service->markPaid($approved, $this->admin, null, [
+            'reference' => '1234567890123', 'amount' => 120.0, 'recipient_number' => '09171234567',
+            'recipient_name' => 'Rider', 'paid_at' => now()->toDateTimeString(), 'proof_path' => 'payout-proofs/test.jpg',
+        ]);
         $this->assertSame(RiderPayout::STATUS_PAID, $paid->status);
 
         // Paid earnings stay locked forever.
@@ -192,7 +201,7 @@ class RiderPayoutTest extends TestCase
         $this->makeEarning(90.0);
         $payout = $this->service->requestPayout($this->rider);
 
-        $rejected = $this->service->reject($payout, $this->admin);
+        $rejected = $this->service->reject($payout, $this->admin, 'Duplicate request');
         $this->assertSame(RiderPayout::STATUS_REJECTED, $rejected->status);
 
         // Earnings released → available again.

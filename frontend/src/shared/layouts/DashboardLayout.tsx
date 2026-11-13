@@ -9,7 +9,9 @@ import { RiderActiveTripContext } from '@/features/rider/context/RiderActiveTrip
 import type { User as AppUser } from '@/shared/types'
 import { cn, getInitials, toAssetUrl } from '@/shared/utils'
 import { ChevronLeft, ChevronRight, ChevronDown, LogOut, Power, User, Settings, Star, Layers, MapPin, Activity, Zap, Bike, UtensilsCrossed, Check } from 'lucide-react'
-import { isUsableGpsFix } from '@/features/rider/gps'
+import { isUsableGpsFix, locationSentRecently, markLocationSent, RIDER_LOCATION_INTERVAL_MS } from '@/features/rider/gps'
+import RiderDiagnosticsSheet, { OPEN_RIDER_DIAGNOSTICS_EVENT } from '@/features/rider/components/RiderDiagnosticsSheet'
+import RiderDestinationSheet, { useRiderDestination } from '@/features/rider/components/RiderDestinationSheet'
 
 const bottomPanelActions = [
   { label: 'Service Types', icon: Layers },
@@ -17,13 +19,9 @@ const bottomPanelActions = [
   { label: 'Diagnostics', icon: Activity },
 ] as const
 
-// Cadence for the MySQL rider-location heartbeat (see the effect below).
-// MUST stay well under `delivery.cod_location_max_age_minutes` (5 min) — the
-// gate whose violation is logged as `gps_stale` and silently excludes a rider
-// from every COD dispatch wave.
-const RIDER_LOCATION_HEARTBEAT_MS = 60_000
-/** On a trip the saved fix gates arrival / delivery: refresh it more often. */
-const RIDER_TRIP_LOCATION_HEARTBEAT_MS = 30_000
+// The rider-location heartbeat runs every RIDER_LOCATION_INTERVAL_MS (5 s,
+// gps.ts; decision 2026-11-11): well under `delivery.cod_location_max_age_minutes`
+// (the `gps_stale` gate) and fresh enough for the arrival / delivery checks.
 
 // Rider-selectable service types. The value is persisted to
 // rider_details.current_service, which is the column NearestRiderService
@@ -72,6 +70,12 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
   // null whenever this layout is rendered outside the /rider routes — every
   // trip flag below therefore stays inert for the other roles.
   const riderTrip = useContext(RiderActiveTripContext)
+  // Latest trip context for the location heartbeat (reports refused fixes).
+  const riderTripRef = useRef(riderTrip)
+  riderTripRef.current = riderTrip
+  // My Destination: only offers on the way to a preferred end point.
+  const riderDestination = useRiderDestination(roleLabel === 'Rider')
+  const destinationActive = Boolean(riderDestination.state?.active)
   const location = useLocation()
   const navigate = useNavigate()
   const riderSettingsPage = bottomNavigation && location.pathname === '/rider/settings'
@@ -103,6 +107,15 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
   const [serviceError, setServiceError] = useState<string | null>(null)
   const [autoAcceptSaving, setAutoAcceptSaving] = useState(false)
   const [autoAcceptError, setAutoAcceptError] = useState<string | null>(null)
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false)
+  const [destinationOpen, setDestinationOpen] = useState(false)
+
+  // Trip error messages carry a "Run diagnostics" link that opens this sheet.
+  useEffect(() => {
+    const open = () => setDiagnosticsOpen(true)
+    window.addEventListener(OPEN_RIDER_DIAGNOSTICS_EVENT, open)
+    return () => window.removeEventListener(OPEN_RIDER_DIAGNOSTICS_EVENT, open)
+  }, [])
   const serviceMenuRef = useRef<HTMLDivElement | null>(null)
   // Server-owned rider preference (rider_details.auto_accept). While it is on,
   // the rider's device accepts the first ping it receives — see
@@ -137,24 +150,33 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
     if (roleLabel !== 'Rider' || !riderOnline) return
     if (!navigator.geolocation) return
 
-    const beat = () =>
+    // Every 5 s (decision 2026-11-11), skipped when the map's GPS stream
+    // already sent a fix within the interval (shared clock in gps.ts).
+    const beat = () => {
+      if (locationSentRecently()) return
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           if (!isUsableGpsFix(pos.coords.latitude, pos.coords.longitude)) return
-          void post('/rider/map/location', {
+          if (locationSentRecently()) return
+          markLocationSent()
+          void post<{ reason?: string | null }>('/rider/map/location', {
             latitude: pos.coords.latitude,
             longitude: pos.coords.longitude,
-          }).catch(() => undefined)
+            ...(Number.isFinite(pos.coords.accuracy) ? { accuracy: pos.coords.accuracy } : {}),
+          })
+            .then((result) => riderTripRef.current?.reportLocationResult(result?.reason))
+            .catch(() => undefined)
         },
         // A rider without a fix simply stays eligible-until-stale; never log-spam.
         () => undefined,
-        { enableHighAccuracy: false, timeout: 10000, maximumAge: 30000 }
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: RIDER_LOCATION_INTERVAL_MS - 1000 }
       )
+    }
 
     beat()
-    const id = window.setInterval(beat, inTrip ? RIDER_TRIP_LOCATION_HEARTBEAT_MS : RIDER_LOCATION_HEARTBEAT_MS)
+    const id = window.setInterval(beat, RIDER_LOCATION_INTERVAL_MS)
     return () => window.clearInterval(id)
-  }, [roleLabel, riderOnline, inTrip])
+  }, [roleLabel, riderOnline])
 
   // Auto-dismiss the availability conflict message so it never gets stuck.
   useEffect(() => {
@@ -779,11 +801,11 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
               aria-label={inTrip ? 'On a trip' : effectivelyOnline ? 'Go Offline' : 'Go Online'}
               className={cn(
                 'rider-availability-button group relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full shadow-lg transition-all duration-[1000ms] ease-[cubic-bezier(0.25,0.1,0.25,1)] disabled:cursor-wait disabled:opacity-60',
-                // Same 48 px button in both states. Offline is a light surface
-                // with a dark icon so it never blends into the (dark) map.
+                // Same 48 px button in both states. Offline (owner choice
+                // 2026-11-12): a black circle with a white icon.
                 effectivelyOnline
                   ? 'bg-[#16803C] text-white rider-circle-bounce'
-                  : 'border-2 border-[#17201B] bg-[#F8FAF6] text-[#17201B] hover:bg-white'
+                  : 'bg-black text-white hover:bg-[#1F1F1F]'
               )}
             >
               {effectivelyOnline ? (
@@ -796,7 +818,7 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                 // ring, so going offline never looks like the button shrank.
                 <span className="offline-ring" aria-hidden="true" data-testid="rider-offline-ring" />
               )}
-              <Power className={cn('w-4 h-4 sm:w-5 sm:h-5 shrink-0 relative z-10', effectivelyOnline ? 'text-white' : 'text-[#17201B]')} />
+              <Power className="w-4 h-4 sm:w-5 sm:h-5 shrink-0 relative z-10 text-white" />
               <span className="pointer-events-none absolute left-full ml-3 whitespace-nowrap rounded-lg bg-[#17201B] px-3 py-1.5 text-xs font-medium text-white opacity-0 shadow-lg transition-opacity duration-200 group-hover:opacity-100">
                 {inTrip ? 'On a trip — complete the delivery to go offline' : effectivelyOnline ? 'Go Offline' : 'Go Online'}
               </span>
@@ -884,6 +906,28 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                 )}
               </div>
             )}
+            {riderDestination.endedNotice && (
+              <div role="status" className="mb-2 flex items-start gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-medium text-[#17201B]">
+                <span className="flex-1">{riderDestination.endedNotice}</span>
+                <button type="button" onClick={riderDestination.dismissEndedNotice} className="font-semibold text-[#087F3F]">
+                  OK
+                </button>
+              </div>
+            )}
+            {destinationActive && (
+              <button
+                type="button"
+                onClick={() => setDestinationOpen(true)}
+                data-testid="destination-banner"
+                className="mb-2 flex w-full items-center gap-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-left text-xs font-semibold text-[#17201B]"
+              >
+                <span aria-hidden="true">&#9873;</span>
+                <span className="flex-1 truncate">
+                  Heading to {riderDestination.state?.destination?.label || 'my destination'}: only offers on your way
+                </span>
+                <span className="text-[#087F3F]">Change</span>
+              </button>
+            )}
             <div className={cn('grid gap-2', effectivelyOnline ? 'grid-cols-4' : 'grid-cols-3')}>
               {bottomPanelActions.map((action) => (
                 <button
@@ -897,18 +941,26 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
                     } else {
                       // Every other panel button dismisses the open choices.
                       setServiceMenuOpen(false)
+                      if (action.label === 'Diagnostics') setDiagnosticsOpen(true)
+                      if (action.label === 'My Destination') setDestinationOpen(true)
                     }
                   }}
                   aria-expanded={action.label === 'Service Types' ? serviceMenuOpen : undefined}
+                  aria-pressed={action.label === 'My Destination' ? destinationActive : undefined}
                   className={cn(
                     'clay-menu-item flex flex-col items-center justify-center gap-1.5 rounded-xl border px-2 py-3 text-center transition',
-                    action.label === 'Service Types' && serviceMenuOpen
+                    (action.label === 'Service Types' && serviceMenuOpen) || (action.label === 'My Destination' && destinationActive)
                       ? 'border-emerald-500/60 bg-emerald-500/15'
                       : 'border-[#E5E9E7] bg-[#F3F8F5] hover:border-emerald-500/40 hover:bg-emerald-500/10'
                   )}
                 >
                   <action.icon className="h-5 w-5 text-[#087F3F]" />
                   <span className="text-[11px] font-semibold leading-tight text-[#17201B]">{action.label}</span>
+                  {action.label === 'My Destination' && destinationActive && (
+                    <span className="max-w-full truncate text-[10px] font-bold uppercase leading-none tracking-wider text-[#087F3F]">
+                      On
+                    </span>
+                  )}
                 </button>
               ))}
               {effectivelyOnline && (
@@ -952,6 +1004,21 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
           </div>
           <RiderOrderInfoSheet />
         </div>
+      )}
+      {roleLabel === 'Rider' && (
+        <RiderDestinationSheet
+          isOpen={destinationOpen}
+          onClose={() => setDestinationOpen(false)}
+          riderPosition={riderTrip?.riderPosition}
+          destination={riderDestination}
+        />
+      )}
+      {roleLabel === 'Rider' && (
+        <RiderDiagnosticsSheet
+          isOpen={diagnosticsOpen}
+          onClose={() => setDiagnosticsOpen(false)}
+          onFreshFix={riderTrip?.setRiderPosition}
+        />
       )}
       {bottomNavigation && roleLabel === 'Rider' && !riderAvatarHidden && (
         <div className="fixed top-3 right-3 z-[1200] flex flex-col items-center gap-1">

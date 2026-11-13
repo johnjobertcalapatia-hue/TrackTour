@@ -28,7 +28,6 @@ interface MenuItem {
   price: number
   compare_price: number | null
   unit: string | null
-  stock: number | null
   status: string
   category: MenuCategory | string | null
   is_available: boolean
@@ -113,7 +112,6 @@ export default function BusinessOwnerMenu() {
   const [bulkOpen, setBulkOpen] = useState(false)
   const [confirmArchive, setConfirmArchive] = useState<MenuItem | null>(null)
   const [inventoryItem, setInventoryItem] = useState<MenuItem | null>(null)
-  const [stockValue, setStockValue] = useState(0)
   const [unitValue, setUnitValue] = useState('')
   const [categoryModal, setCategoryModal] = useState(false)
   const [bulkCategory, setBulkCategory] = useState('')
@@ -189,10 +187,10 @@ export default function BusinessOwnerMenu() {
   })
 
   const inventoryMutation = useMutation({
-    mutationFn: ({ id, stock, unit }: { id: number; stock: number; unit: string }) =>
-      put(`/business-owner/menu/${id}`, { stock, unit }),
-    onSuccess: () => { invalidate(); setInventoryItem(null); showToast('Inventory updated') },
-    onError: () => showToast('Failed to update inventory', 'error'),
+    mutationFn: ({ id, unit }: { id: number; unit: string }) =>
+      put(`/business-owner/menu/${id}`, { unit }),
+    onSuccess: () => { invalidate(); setInventoryItem(null); showToast('Unit updated') },
+    onError: () => showToast('Failed to update the unit', 'error'),
   })
 
   const bulkActionMutation = useMutation({
@@ -218,14 +216,14 @@ export default function BusinessOwnerMenu() {
 
   // ── Import / Export ──────────────────────────────────────────────────
   const exportCsv = () => {
-    const headers = ['Name', 'Category', 'Price', 'Available', 'Featured', 'Stock', 'Unit', 'Description']
+    // Availability is a manual Yes/No; TrackTour keeps no stock quantities.
+    const headers = ['Name', 'Category', 'Price', 'Available', 'Featured', 'Unit', 'Description']
     const rows = items.map((item) => [
       `"${(item.name || '').replace(/"/g, '""')}"`,
       `"${getCategoryLabel(item.category).replace(/"/g, '""')}"`,
       item.price,
       item.is_available ? 'yes' : 'no',
       item.is_featured ? 'yes' : 'no',
-      item.stock ?? 0,
       `"${(item.unit || '').replace(/"/g, '""')}"`,
       `"${(item.description || '').replace(/"/g, '""')}"`,
     ])
@@ -252,6 +250,8 @@ export default function BusinessOwnerMenu() {
       const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
       const header = lines.shift()
       const isHeader = header && header.toLowerCase().includes('name') && header.toLowerCase().includes('price')
+      // Files exported before stock was removed still carry a Stock column: skip it.
+      const legacyStockColumn = !!isHeader && (parseCsvLine(header) ?? []).some((h) => h.trim().toLowerCase() === 'stock')
       if (isHeader) {
         // skip header
       } else if (header) {
@@ -262,7 +262,8 @@ export default function BusinessOwnerMenu() {
       for (const line of lines) {
         const parsed = parseCsvLine(line)
         if (!parsed || parsed.length < 3) { failed++; continue }
-        const [name, category, price, available = 'yes', featured = 'no', stock = '0', unit = '', description = ''] = parsed
+        const columns = legacyStockColumn ? [...parsed.slice(0, 5), ...parsed.slice(6)] : parsed
+        const [name = '', category = '', price = '', available = 'yes', featured = 'no', unit = '', description = ''] = columns
         if (!name || Number.isNaN(Number(price))) { failed++; continue }
         try {
           const categoryName = category.trim()
@@ -276,7 +277,6 @@ export default function BusinessOwnerMenu() {
             description: description.trim() || undefined,
             is_available: String(available).toLowerCase() === 'yes',
             is_featured: String(featured).toLowerCase() === 'yes',
-            stock: Math.max(0, Number(stock) || 0),
             unit: unit.trim() || undefined,
           })
           created++
@@ -571,9 +571,9 @@ export default function BusinessOwnerMenu() {
                             className="w-full text-left px-3 py-2 text-xs text-[#4B5563] hover:bg-[#F3F8F4] flex items-center gap-2 transition">
                             <Copy className="w-3.5 h-3.5" /> Duplicate
                           </button>
-                          <button onClick={() => { setOpenMenuId(null); setInventoryItem(item); setStockValue(item.stock ?? 0); setUnitValue(item.unit ?? '') }}
+                          <button onClick={() => { setOpenMenuId(null); setInventoryItem(item); setUnitValue(item.unit ?? '') }}
                             className="w-full text-left px-3 py-2 text-xs text-[#4B5563] hover:bg-[#F3F8F4] flex items-center gap-2 transition">
-                            <Boxes className="w-3.5 h-3.5" /> Manage Inventory
+                            <Boxes className="w-3.5 h-3.5" /> Set unit
                           </button>
                           <div className="border-t border-[#E2E8E3] my-1" />
                           <button onClick={() => { setOpenMenuId(null); toggleAvailabilityMutation.mutate(item) }}
@@ -703,20 +703,15 @@ export default function BusinessOwnerMenu() {
         </div>
       </Modal>
 
-      {/* Inventory modal */}
+      {/* Unit modal (no stock quantities: availability is a manual Yes/No) */}
       <Modal show={inventoryItem !== null} onClose={() => setInventoryItem(null)} maxWidth="sm">
         <div className="p-6">
-          <h3 className="text-lg font-semibold text-[#17201A] mb-1">Manage Inventory</h3>
+          <h3 className="text-lg font-semibold text-[#17201A] mb-1">Set unit</h3>
           <p className="text-sm text-[#647067] mb-6">{inventoryItem?.name}</p>
-          <div className="grid grid-cols-2 gap-3">
+          <div>
             <div>
-              <label className="block text-xs text-[#647067] mb-1">Stock</label>
-              <input type="number" min={0} value={stockValue} onChange={(e) => setStockValue(Number(e.target.value))}
-                className="w-full px-3 py-2 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition" />
-            </div>
-            <div>
-              <label className="block text-xs text-[#647067] mb-1">Unit</label>
-              <input type="text" value={unitValue} onChange={(e) => setUnitValue(e.target.value)} placeholder="e.g. pc, kg"
+              <label htmlFor="menu-unit" className="block text-xs text-[#647067] mb-1">Unit</label>
+              <input id="menu-unit" type="text" value={unitValue} onChange={(e) => setUnitValue(e.target.value)} placeholder="e.g. pc, kg"
                 className="w-full px-3 py-2 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition" />
             </div>
           </div>
@@ -724,7 +719,7 @@ export default function BusinessOwnerMenu() {
             <button onClick={() => setInventoryItem(null)} className="px-4 py-2 rounded-xl bg-white text-[#16803C] border border-[#D7E8DB] text-sm font-medium hover:bg-[#F3F8F4] transition">
               Cancel
             </button>
-            <button onClick={() => inventoryItem && inventoryMutation.mutate({ id: inventoryItem.id, stock: stockValue, unit: unitValue })}
+            <button onClick={() => inventoryItem && inventoryMutation.mutate({ id: inventoryItem.id, unit: unitValue })}
               disabled={inventoryMutation.isPending}
               className="px-4 py-2 rounded-xl bg-[#16803C] hover:bg-[#126B32] disabled:opacity-50 text-white text-sm font-semibold transition">
               {inventoryMutation.isPending ? 'Saving...' : 'Save'}

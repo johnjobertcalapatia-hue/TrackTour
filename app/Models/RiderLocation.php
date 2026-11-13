@@ -11,6 +11,7 @@ class RiderLocation extends Model
         'rider_id',
         'latitude',
         'longitude',
+        'accuracy_m',
         'recorded_at',
     ];
 

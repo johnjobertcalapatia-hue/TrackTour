@@ -55,7 +55,6 @@ class BusinessOwnerMenuController extends Controller
                 'available' => $query->where('is_available', true),
                 'unavailable' => $query->where('is_available', false),
                 'featured' => $query->where('bestseller', true),
-                'out_of_stock' => $query->where('stock', '<=', 0)->where('is_available', true),
                 'archived' => $query->where('status', 'archived'),
                 default => $query->where('status', $st),
             };
@@ -144,7 +143,6 @@ class BusinessOwnerMenuController extends Controller
             'new_category' => ['nullable', 'string', 'max:255'],
             'bestseller' => ['nullable', 'boolean'],
             'unit' => ['nullable', 'string', 'max:50'],
-            'stock' => ['nullable', 'integer', 'min:0'],
         ]);
 
         if (! empty($validated['new_category'])) {
@@ -170,7 +168,7 @@ class BusinessOwnerMenuController extends Controller
         $validated['type'] = 'product';
         $validated['has_variations'] = $request->boolean('has_variations');
 
-        $offering = $business->offerings()->create($validated);
+        $offering = app(\App\Services\MenuAvailabilityService::class)->create(fn () => $business->offerings()->create($validated), 'owner_menu.create');
 
         $this->syncVariations($offering, $request);
 
@@ -200,7 +198,6 @@ class BusinessOwnerMenuController extends Controller
             'new_category' => ['nullable', 'string', 'max:255'],
             'bestseller' => ['nullable', 'boolean'],
             'unit' => ['nullable', 'string', 'max:50'],
-            'stock' => ['nullable', 'integer', 'min:0'],
             'remove_image' => ['nullable', 'boolean'],
         ]);
 
@@ -234,7 +231,7 @@ class BusinessOwnerMenuController extends Controller
         $validated['bestseller'] = $request->boolean('bestseller');
         $validated['has_variations'] = $request->boolean('has_variations');
 
-        $offering->update($validated);
+        app(\App\Services\MenuAvailabilityService::class)->update($offering, $validated, 'owner_menu.edit');
 
         $this->syncVariations($offering, $request);
 
@@ -250,7 +247,7 @@ class BusinessOwnerMenuController extends Controller
             return $this->forbiddenResponse('You do not own this business.');
         }
 
-        $offering->update(['status' => 'archived', 'is_available' => false]);
+        app(\App\Services\MenuAvailabilityService::class)->update($offering, ['status' => 'archived', 'is_available' => false], 'owner_menu.archive');
 
         return $this->noContentResponse('Menu item archived successfully.');
     }
@@ -261,7 +258,7 @@ class BusinessOwnerMenuController extends Controller
             return $this->forbiddenResponse('You do not own this business.');
         }
 
-        $offering->update(['status' => 'available', 'is_available' => true]);
+        app(\App\Services\MenuAvailabilityService::class)->update($offering, ['status' => 'available', 'is_available' => true], 'owner_menu.restore');
 
         return $this->successResponse(
             OfferingResource::make($offering->fresh()->load('category')),
@@ -278,10 +275,10 @@ class BusinessOwnerMenuController extends Controller
         $cycle = ['available' => 'unavailable', 'unavailable' => 'hidden', 'hidden' => 'available'];
         $new = $cycle[$offering->status] ?? 'available';
 
-        $offering->update([
+        app(\App\Services\MenuAvailabilityService::class)->update($offering, [
             'status' => $new,
             'is_available' => $new === 'available',
-        ]);
+        ], 'owner_menu.toggle');
 
         return $this->successResponse([
             'status' => $new,
@@ -323,11 +320,11 @@ class BusinessOwnerMenuController extends Controller
             if (! empty($v['id'])) {
                 $variation = $offering->variations()->find($v['id']);
                 if ($variation) {
-                    $variation->update($variationData);
+                    app(\App\Services\MenuAvailabilityService::class)->updateVariation($variation, $variationData, 'owner_menu.variation');
                     $submittedIds[] = $variation->id;
                 }
             } else {
-                $variation = $offering->variations()->create($variationData);
+                $variation = app(\App\Services\MenuAvailabilityService::class)->createVariation(fn () => $offering->variations()->create($variationData), 'owner_menu.variation');
                 $submittedIds[] = $variation->id;
             }
 

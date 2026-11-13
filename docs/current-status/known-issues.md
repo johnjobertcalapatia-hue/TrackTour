@@ -21,13 +21,57 @@ scope for the integration fix. Reference: `docs/architecture/ride-hailing-rider-
 | 3 | Booking payload incompatible | RESOLVED | `BookRideSheet.tsx` now sends the full canonical payload; `BookTransportRequest` matches |
 | 4 | Estimate shape mismatch | RESOLVED | `BookRideSheet.tsx` parses `fares[vehicle].fare_text` from `estimateFare()` |
 | 5 | Tracking screen is a stub | RESOLVED | `tourist/transport/trip/{id}/status` returns the rich snake_case contract; `TouristTransportTracking.tsx` consumes it |
-| 6 | Rider-side passenger verification impossible | OPEN | `ride_pin` is tourist-only (`TransportController::tracking`); never returned by `RiderDeliveryController`/`DeliveryResource` |
+| 6 | Rider-side passenger verification impossible | CLOSED — superseded 2026-11-11: no passenger PIN in TrackTour (decision); the PIN was removed. Ride pickup evidence is location-based (Stage 4, docs/secure-transaction-audit.md) | `ride_pin` is tourist-only (`TransportController::tracking`); never returned by `RiderDeliveryController`/`DeliveryResource` |
 | 7 | Booking trusts client fare | RESOLVED | `TransportationService::createRide()` now re-derives the authoritative fare/distance/duration server-side (spec §64); `BookTransportRequest.fare` is advisory-only |
 | 8 | Transport rides have no payment flow | OPEN | `payment_method` recorded, but no `Payment` row / PayMongo intent for non-cash; food COD settlement would mis-allocate against fake `business_id = 1` |
 | 9 | Rider rating is fake | OPEN | `RiderController.php:45` hard-codes `rating = 0` |
 
 ## Recently Reconciled
 
+- **Rider navigation mode laggy on a PC (2026-11-12).** Navigation draws the map as a large tilted, rotating 3D plane (1.9 × the screen diagonal, about 2,500 px square at 1101×726). Three costs stacked on top of it:
+  - **Backdrop blur:** the `backdrop-blur` panels over the plane were re-blurred on every frame it moved. In navigation mode, `body:has(.rider-map-area[data-view-mode='navigation'])` now drops the blur (`index.css`); the panels are about 95 % opaque, so nothing visible changes.
+  - **Tile updates:** the tile layer in navigation mode now loads tiles when a pan settles (`updateWhenIdle`, `updateWhenZooming: false`, `keepBuffer: 1`).
+  - **GPS jitter:** readings that moved under 1 m (jitter, or the same Wi-Fi / DevTools point repeated) re-rendered the whole map and every trip panel. `RiderMap` and `RiderActiveTripContext` now ignore them; the latest fix is still kept for the drop-off actions, and device accuracy is kept in whole metres.
+  - **Not changed:** the plane size and tilt. They are the remaining lever if a PC still lags.
+- **Navigation mode: map buttons vanished when zoomed far out (2026-11-12).** With the browser zoomed out, the CSS viewport and the plane (1.9 × the diagonal) grow until the plane's near edge, which comes toward the viewer by (size / 2)·sin 50°, reaches the 1,000 px perspective and passes the camera. The GPU then drew the map over the buttons. A straight line across the map was visible at that depth.
+  - **Fix:** `navPerspectiveFor(planeSize)` in `navigation-view.ts` keeps 1,000 px and deepens the perspective only when needed, keeping the near edge within 96 % of it. Normal windows look the same (1101×726 stays at 1,000 px); large viewports get a slightly gentler tilt.
+  - The plane's size and tilt are unchanged. The drag and puck math (`planePointForScreen`, `planeOffsetForScreenY`) and `RiderNavPuck` use the same perspective.
+  - Applied to the rider map and the tourist Explore map. Rendered at 1740×1000 in headless Chromium: the screen is fully covered and the buttons stay on top.
+  - **Also:** `useAboveRiderStatus` re-measured on every `transitionend` in the document, including each map tile's fade-in. It now reacts only to the rider bar's own transitions.
+  - **Tests:** `rider-navigation-view.test.ts` (+6).
+  - **Tests:** `rider-position-jitter.test.tsx` (1). Frontend suite 687 passed.
+- **Confirm Delivered locked at 29 m by GPS precision (2026-11-12; owner decision: phone fix allowed up to ±200 m, first set at ±100 m and raised the same day; flagged past ±50 m).** The phone reported worse than ±50 m at the doorway. The server refused to save such fixes and confirms only from the saved fix, and the checklist locked the button on that refusal.
+  - **`app/Services/DropoffLocationProof.php`** (used by "I've Arrived" at the tourist and Confirm Delivered):
+    1. A fresh saved fix within 50 m passes, as before.
+    2. Otherwise the phone's own fix sent with the action passes when it is ≤ 30 s old, within 50 m, at most ±200 m, and plausible against the last saved fix (speed rule).
+    3. An accepted fix coarser than ±50 m is logged as `escalation.dropoff_low_precision_gps` for review. Coarser than ±200 m is refused with what to do (turn on Precise location or step outside).
+  - **Config:** `tracking.max_saved_accuracy_m` (50), `tracking.dropoff_max_fix_accuracy_m` (200; env `TRACKING_DROPOFF_MAX_FIX_ACCURACY_M`), `tracking.device_fix_max_age_seconds` (30).
+  - **Frontend:**
+    - Confirm Delivered sends the phone fix with the photo.
+    - A fresh GPS reading is taken before both drop-off actions; it is skipped when the latest is < 10 s old and never waits more than 5 s.
+    - `withDropoffLocation` shows "Location checked from your phone (±X m)" up to ±200 m.
+    - **Follow-up:** the checklist now judges the phone's own precision too. A rider standing still gets no save refusal back, so a ±149 m fix showed every line ✓ and the server refused on tap. Past ±200 m it now shows an unmet "GPS precise enough" line. Chrome DevTools' simulated location defaults to ±150 m, so it passes (flagged).
+    - **Closed a gap:** `sendFreshFix` posted the location without its accuracy, so the server saved any fix as if precise. It now sends the accuracy.
+  - Rides keep the saved-location rule.
+  - **Tests:** `DropoffLocationProofTest` (9), `dropoff-location-condition.test.ts` (4). `rider-fresh-fix-before-dropoff` was reconciled: with no usable fix, the app now asks the phone for one reading first.
+- **Rider stuck at "Arrived — waiting" (TT-04544, 2026-11-12).** The rider's arrival was saved, but **Confirm Pick Up** never unlocked.
+  - **Cause:** the business owner's order page "Ready for Pickup" (`PATCH /business-owner/orders/{id}/status`) and the staff API and web status endpoints saved the **order** as `ready` but left its **items** at `preparing`. The rider's pickup gate (`PickupSequenceService::businessReadiness`) reads the items, so it kept answering `waiting_ready` ("The restaurant is still preparing your order"). The per-item Mark Ready buttons are hidden once the order is `ready`, so the restaurant could not undo it.
+  - **Fix (model level, every path):** `Order::booted()` now has an `updated` hook. When status changes to `ready`, `markOwnItemsReady()` carries the order's **own restaurant's** active items to `ready`. Items are saved one by one, so the COD guard and the ledger observer run. Cancelled and rejected items are untouched, and another restaurant's items in a multi-restaurant order are never declared ready.
+  - **Existing data:** `php artisan orders:repair-ready-items` reports affected orders; it writes only with `--apply`, and `--order=` limits it to one order. **Run it report-only on production at deploy, review the list, then `--apply`.** On dev it found only TT-04544, which was repaired after backing up `order_items` (`C:/xampp/backups/track_tour_db-order_items-before-ready-repair-20261112-112015.sql`). Its gate now returns `can_confirm: true`.
+  - **Tests:** `OrderReadyCarriesItemsTest` (7).
+- **Trip diagnostics: canonical path, fixes, step resets (2026-11-12, owner decisions: rider fixes, Tourism Office resets; whole food trip).**
+  - **`app/Services/TripPathDiagnostics.php`** holds the canonical food-trip path: accepted → for each restaurant, in route order: arrive (≤ 50 m) → [COD: restaurant confirms payment] → food ready → confirm pickup → leave for the tourist → arrive at the tourist (≤ 50 m) → tourist photo confirmation → [COD: settle cash].
+  - `diagnose()` works out where a trip is from the recorded facts. It lists each step (done / current / to do), states the one next thing to do, and sorts findings into three kinds:
+    - **fix:** re-syncs derived state, e.g. order `ready` but items behind (TT-04544), an arrival saved but the delivery status not moved, every pickup confirmed but not advanced, missing pickup stops.
+    - **reset:** Tourism Office only, with a reason of at least 10 characters, written to the audit log with the previous record: `redo_pickup_arrival` (clears the stop arrival and evidence, and goes back to `en_route_pickup` if no other stop was reached) and `redo_dropoff_arrival` (`arrived_destination` → `in_transit`).
+    - **person:** COD payment, food cooking, GPS stale or too far, a trip that moved on with unconfirmed pickups. These are reported, never forced.
+  - It never marks a step done.
+  - **Rider:** the existing `/rider/diagnostics` (`RiderDiagnosticsService::checkTrip`) now delegates to it, applying fixes only. The response gains `trip` (path, next step, `reset_available`), and the Diagnostics sheet shows the path.
+  - **Admin:** `GET /api/admin/deliveries/{id}/diagnostics`, `POST …/fix` and `POST …/reset` (`AdminTripDiagnosticsController`, `bansud_tourism_office` role, throttled), surfaced as a **Diagnose** button on Live Deliveries (`TripDiagnosticsPanel`).
+  - **Operations:** `php artisan trips:diagnose {order-number|delivery-id} [--fix]`.
+  - **Tests:** `TripPathDiagnosticsTest` (10), `frontend/tests/ui/trip-diagnostics.test.tsx` (4).
+  - **Test drift reconciled (AGENTS §12):** the `RiderDiagnosticsTest` fixture created an order `ready` with a `pending` item, the TT-04544 mismatch itself; it now creates the item `ready`.
+  - Ride-hailing trips are not covered yet.
 - **COD ping root causes (4 fixed)** — the rider "never gets a ping" was **eligibility + offer lifecycle, not Socket.IO transport**. Fixed: (A) MySQL `gps_stale` — 60 s location heartbeat in `DashboardLayout` while online, so a stationary/away rider no longer ages past the 5-min COD gate; (B) `radar_gps_stale` — radar re-registration every 60 s inside the 120 s window (`rider_location_update` is ownership-gated to an *assigned* rider, so idle riders previously froze at connect time); (C) `already_offered` — a **timed-out** offer is now re-offerable by reopening the same row (`updateOrCreate`, `UNIQUE` preserved); `declined`/`pending`/`accepted` still block; (D) socket reconnect was `3` attempts (~6 s) then permanent silence → now infinite with backoff. New: `DispatchTimedOutReofferTest` (5). Full record: `docs/PROGRESS.md`.
 - **Removed restaurant accept/reject routes** — the five retired entry points (`acceptOrder`, `rejectOrder`, `acceptAll`, `acceptItem`, `rejectItem`) were deliberately removed (restaurants no longer manually accept); the 16 tests that still called them were migrated to the surviving API and the retired endpoints are now pinned as 404s. The §4.2 rider-acceptance gate was pinned **directly** at its canonical layer by the new `PreparationStartServiceGateTest` (5 tests), closing a coverage gap — no test previously referenced that service. Also fixed: ambiguous `updated_at` in `ScheduledDispatchProcessor::dueDeliveryIds()` and the pickup-status expectation in `PaymentApiTest`. Full record: `docs/PROGRESS.md` → *Test Reconciliation*.
 

@@ -51,14 +51,21 @@ export function useAboveRiderStatus(gap = RIDER_CONTROLS_GAP_PX): [(el: HTMLElem
     }
     window.addEventListener('resize', update)
     window.visualViewport?.addEventListener('resize', update)
-    // The bar animates (online/offline); settle on the final position.
-    document.addEventListener('transitionend', update, true)
+    // The bar animates (online/offline); settle on the final position. Only
+    // the bar's own transitions: every map tile's fade-in also fires
+    // transitionend, and re-measuring on each one cost layout work (2026-11-12).
+    const onTransitionEnd = (e: Event) => {
+      const target = e.target as Node | null
+      const bar = document.querySelector<HTMLElement>(RIDER_STATUS_SELECTOR)
+      if (target && bar && (bar.contains(target) || target.contains(bar))) update()
+    }
+    document.addEventListener('transitionend', onTransitionEnd, true)
 
     return () => {
       observer?.disconnect()
       window.removeEventListener('resize', update)
       window.visualViewport?.removeEventListener('resize', update)
-      document.removeEventListener('transitionend', update, true)
+      document.removeEventListener('transitionend', onTransitionEnd, true)
     }
   }, [el, gap])
 

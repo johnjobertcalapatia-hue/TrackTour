@@ -304,3 +304,96 @@ describe('Available Deliveries → delivery offer', () => {
     expect(await screen.findByText('Active Delivery Map')).toBeInTheDocument()
   })
 })
+
+// Decision 2026-11-11: a ride booking (one "Ride: …" line item) is shown as a
+// booking, never as a food delivery.
+const RIDE_CARD = {
+  ...CARD,
+  id: 77,
+  order_id: 90,
+  order_number: 'TRP-6AF362EB5E076',
+  order_type: 'transport',
+  delivery_speed: 'standard',
+  delivery_type_label: 'Motorcycle ride',
+  pickup_address: 'Gloria, Oriental Mindoro',
+  delivery_address: 'Pag-asa, Bansud, Oriental Mindoro',
+  pickup_names: [],
+  items_count: 1,
+  rider_tip: 0,
+  delivery_fee: null,
+  distance_km: 10.76,
+  payment_method: 'cash',
+  is_cod: true,
+  ride: { vehicle_type: 'motorcycle', passenger_count: 1, fare: 211.36, distance_km: 10.76, duration_minutes: 33, booking_notes: 'Near the chapel' },
+}
+
+const RIDE_OFFER = {
+  ...RIDE_CARD,
+  is_mine: false,
+  offered_to_me: true,
+  reviewing_by_me: true,
+  review_expires_at: inSeconds(90),
+  review_seconds: 90,
+  estimated_duration_minutes: null,
+  pickup: { address: 'Gloria, Oriental Mindoro', latitude: 12.97, longitude: 121.47 },
+  dropoff: { address: 'Pag-asa, Bansud, Oriental Mindoro', latitude: 12.86, longitude: 121.45 },
+  pickups: [],
+  items: [{ id: 9, business_id: 0, product_name: 'Ride: Motorcycle (1 pax)', quantity: 1, unit_price: 211.36, subtotal: 211.36, notes: null, image: null }],
+  items_total: 211.36,
+}
+
+describe('Available Bookings → booking offer (Ride Hailing)', () => {
+  beforeEach(() => {
+    api.get.mockImplementation((url: string) => Promise.resolve(url === '/rider/deliveries/pending' ? [RIDE_CARD] : null))
+    api.post.mockImplementation((url: string) => Promise.resolve(url === '/rider/deliveries/77/review' ? { ...RIDE_OFFER, review_expires_at: inSeconds(90) } : null))
+    api.patch.mockResolvedValue({ success: true })
+    api.del.mockResolvedValue(null)
+    useAuthStore.setState({ user: { ...RIDER, current_service: 'transport' }, loading: false })
+  })
+
+  afterEach(() => {
+    useAuthStore.setState({ user: null, loading: false })
+    vi.clearAllMocks()
+  })
+
+  it('lists the booking with vehicle, trip distance, fare and payment', async () => {
+    renderAt('/rider/deliveries/pending')
+    expect(await screen.findByRole('heading', { name: 'Available Bookings' })).toBeInTheDocument()
+    const card = within(await screen.findByRole('link', { name: /booking #TRP-6AF362EB5E076/ }))
+    expect(card.getByText('Motorcycle ride')).toBeInTheDocument()
+    expect(card.getByText('Trip distance').nextSibling).toHaveTextContent('10.8 km')
+    expect(card.getByText('Ride fare').nextSibling).toHaveTextContent('₱211.36')
+    expect(card.getByText('Payment').nextSibling).toHaveTextContent('Cash')
+    expect(card.queryByText('Delivery fee')).toBeNull()
+    expect(card.queryByText('Food items')).toBeNull()
+    expect(card.getByText('View Booking Offer')).toBeInTheDocument()
+  })
+
+  it('the offer page reads as a booking: ride overview, trip, fare, no food items', async () => {
+    renderAt('/rider/deliveries/offer/77')
+    expect(await screen.findByRole('heading', { name: 'Booking Offer' })).toBeInTheDocument()
+    expect(screen.getByText('Booking #TRP-6AF362EB5E076')).toBeInTheDocument()
+    expect(screen.getByText('Motorcycle ride')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Available bookings/ })).toBeInTheDocument()
+
+    expect(screen.getByRole('heading', { name: 'Ride overview' })).toBeInTheDocument()
+    expect(screen.getByText('Trip distance').nextSibling).toHaveTextContent('10.8 km')
+    expect(screen.getByText('Estimated time').nextSibling).toHaveTextContent('33 min')
+    expect(screen.getByText('Ride fare').nextSibling).toHaveTextContent('₱211.36')
+    expect(screen.getByText('Passengers').nextSibling).toHaveTextContent('1')
+    expect(screen.getByText('Payment').nextSibling).toHaveTextContent('Cash')
+    expect(screen.getByText(/collect the fare from the passenger/)).toBeInTheDocument()
+
+    expect(screen.getByRole('heading', { name: 'Trip' })).toBeInTheDocument()
+    expect(screen.getByText('Passenger pickup')).toBeInTheDocument()
+    expect(screen.getByText('Drop-off')).toBeInTheDocument()
+    expect(screen.getByText('Motorcycle · 1 passenger')).toBeInTheDocument()
+    expect(screen.getByText('Note: Near the chapel')).toBeInTheDocument()
+
+    for (const food of ['Delivery overview', 'Delivery fee', 'Customer tip', 'Food items', 'Ordered items', 'Food total', 'Delivery destination']) {
+      expect(screen.queryByText(food)).toBeNull()
+    }
+    expect(screen.getByRole('button', { name: /Accept Booking/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Decline Booking' })).toBeInTheDocument()
+  })
+})

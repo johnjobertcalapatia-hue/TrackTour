@@ -34,7 +34,33 @@ interface OrderInfo {
   delivery_lng: number | null
   business_name?: string | null
   customer_name?: string | null
+  /** 'transport' for a ride booking. */
+  order_type?: string | null
+  order_number?: string | null
   created_at?: string | null
+}
+
+const isRide = (d?: { order_type?: string | null } | null) => d?.order_type === 'transport'
+
+/** Ride booking status in ride words (the shared badge speaks of food). */
+const RIDE_STATUS: Record<string, string> = {
+  assigned: 'Going to pickup',
+  en_route_pickup: 'Going to pickup',
+  arrived_pickup: 'At pickup',
+  picked_up: 'On the way',
+  in_transit: 'On the way',
+  arrived_destination: 'At drop-off',
+  delivered: 'Completed',
+  completed: 'Completed',
+  cancelled: 'Cancelled',
+}
+
+function RideStatusChip({ status }: { status: string }) {
+  return (
+    <span className="inline-flex items-center rounded-full border border-[#BFDBFE] bg-[#EFF6FF] px-2.5 py-0.5 text-xs font-medium text-[#1D4ED8]">
+      {RIDE_STATUS[status] ?? status}
+    </span>
+  )
 }
 
 function formatWaitingTime(totalSeconds: number): string {
@@ -144,6 +170,7 @@ export default function RiderOrderInfoSheet() {
   const active =
     activeId != null ? (deliveries.find((d) => d.id === activeId) ?? activeDelivery) : null
   const others = activeId != null ? deliveries.filter((d) => d.id !== activeId) : deliveries
+  const activeIsRide = isRide(active)
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLElement>) => {
     startYRef.current = event.clientY
@@ -201,7 +228,7 @@ export default function RiderOrderInfoSheet() {
         <button
           type="button"
           aria-expanded={false}
-          aria-label="Show order details"
+          aria-label={activeIsRide ? 'Show booking details' : 'Show order details'}
           onClick={handleClick}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
@@ -210,7 +237,7 @@ export default function RiderOrderInfoSheet() {
           className="flex w-full touch-none items-center justify-center gap-2 px-4 py-2.5"
         >
           <span className="h-1 w-10 shrink-0 rounded-full bg-[#DCDEE3]" aria-hidden="true" />
-          <span className="text-[11px] font-semibold text-[#17201B]">Order details</span>
+          <span className="text-[11px] font-semibold text-[#17201B]">{activeIsRide ? 'Booking details' : 'Order details'}</span>
           {orderCount > 0 && (
             <span className="rounded-full bg-[#E9F7EF] px-1.5 py-0.5 text-[10px] font-bold text-[#087F3F]">
               {orderCount}
@@ -223,7 +250,7 @@ export default function RiderOrderInfoSheet() {
           <button
             type="button"
             aria-expanded={true}
-            aria-label="Hide order details"
+            aria-label={activeIsRide ? 'Hide booking details' : 'Hide order details'}
             onClick={handleClick}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
@@ -233,7 +260,7 @@ export default function RiderOrderInfoSheet() {
           >
             <div className="flex min-w-0 items-center gap-2">
               <span className="h-1 w-10 shrink-0 rounded-full bg-[#DCDEE3]" aria-hidden="true" />
-              <span className="text-xs font-bold text-[#17201B]">Order details</span>
+              <span className="text-xs font-bold text-[#17201B]">{activeIsRide ? 'Booking details' : 'Order details'}</span>
               {orderCount > 0 && (
                 <span className="rounded-full bg-[#E9F7EF] px-1.5 py-0.5 text-[10px] font-bold text-[#087F3F]">
                   {orderCount}
@@ -248,33 +275,37 @@ export default function RiderOrderInfoSheet() {
             <div className="space-y-3 border-b border-[#E5E9E7] px-4 py-3">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-2">
-                  <span className="text-xs font-extrabold text-[#17202A]">Order #{active.order_id}</span>
-                  <StatusBadge status={active.status} />
+                  <span className="text-xs font-extrabold text-[#17202A]">
+                    {activeIsRide ? `Booking #${active.order_number ?? active.order_id}` : `Order #${active.order_id}`}
+                  </span>
+                  {activeIsRide ? <RideStatusChip status={active.status} /> : <StatusBadge status={active.status} />}
                 </div>
                 {active.created_at && (
                   <span className="shrink-0 text-[10px] font-medium text-[#9CA3AF]">{formatDate(active.created_at)}</span>
                 )}
               </div>
-              {!active.business_name && !active.customer_name && (
+              {!activeIsRide && !active.business_name && !active.customer_name && (
                 <p className="text-[10px] font-medium uppercase tracking-wider text-[#6B7280]">Active delivery</p>
               )}
               <div className="flex items-start gap-2.5">
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#EAF6ED]">
-                  <Store className="h-4 w-4 text-[#087F3F]" />
+                  {activeIsRide ? <User className="h-4 w-4 text-[#087F3F]" /> : <Store className="h-4 w-4 text-[#087F3F]" />}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-[#087F3F]">Pickup</p>
-                  <p className="truncate text-xs font-semibold text-[#17202A]">{active.business_name || 'Restaurant'}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-[#087F3F]">{activeIsRide ? 'Pickup · Passenger' : 'Pickup'}</p>
+                  <p className="truncate text-xs font-semibold text-[#17202A]">
+                    {activeIsRide ? active.customer_name || 'Passenger' : active.business_name || 'Restaurant'}
+                  </p>
                   <p className="text-[11px] leading-snug text-[#68727C]">{active.pickup_address}</p>
                 </div>
               </div>
               <div className="flex items-start gap-2.5">
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#FDECEC]">
-                  <User className="h-4 w-4 text-[#DC2626]" />
+                  {activeIsRide ? <MapPin className="h-4 w-4 text-[#DC2626]" /> : <User className="h-4 w-4 text-[#DC2626]" />}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-[#DC2626]">Delivery</p>
-                  <p className="truncate text-xs font-semibold text-[#17202A]">{active.customer_name || 'Tourist'}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-[#DC2626]">{activeIsRide ? 'Drop-off' : 'Delivery'}</p>
+                  <p className="truncate text-xs font-semibold text-[#17202A]">{activeIsRide ? 'Destination' : active.customer_name || 'Tourist'}</p>
                   <p className="text-[11px] leading-snug text-[#68727C]">{active.delivery_address}</p>
                 </div>
               </div>
@@ -452,8 +483,10 @@ export default function RiderOrderInfoSheet() {
                 {others.map((delivery) => (
                   <div key={delivery.id} className="rounded-xl border border-[#E4E9E6] bg-[#FAFBFB] px-3 py-2.5">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-[#17202A]">Order #{delivery.order_id}</span>
-                      <StatusBadge status={delivery.status} />
+                      <span className="text-xs font-bold text-[#17202A]">
+                        {isRide(delivery) ? `Booking #${delivery.order_number ?? delivery.order_id}` : `Order #${delivery.order_id}`}
+                      </span>
+                      {isRide(delivery) ? <RideStatusChip status={delivery.status} /> : <StatusBadge status={delivery.status} />}
                     </div>
                     <div className="mt-1.5 flex items-start gap-1.5">
                       <MapPin className="mt-0.5 h-3 w-3 shrink-0 text-emerald-400" />

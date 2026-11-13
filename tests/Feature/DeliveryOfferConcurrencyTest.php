@@ -268,10 +268,12 @@ class DeliveryOfferConcurrencyTest extends TestCase
         $this->assertNotNull($delivery->fresh()->dispatch_expires_at);
     }
 
-    public function test_transport_dispatch_still_offers_every_eligible_rider_in_a_single_wave(): void
+    public function test_transport_dispatch_offers_the_nearest_rider_first_one_at_a_time(): void
     {
-        // Ride-hailing keeps the simultaneous wave (approved decision D1).
-        $business = $this->makeBusiness('Transport Wave');
+        // Reconciled 2026-11-11 (AGENTS.md §12): ride bookings no longer use the
+        // simultaneous wave (old decision D1). Like food, a booking is offered
+        // to ONE rider at a time, nearest to the tourist's pickup first.
+        $business = $this->makeBusiness('Transport Sequential');
         $riders = collect(['tw-a', 'tw-b', 'tw-c'])->map(fn ($e) => $this->makeRider("{$e}@example.com", ['current_service' => 'transport']));
         $this->setCandidates($riders->all());
 
@@ -279,8 +281,36 @@ class DeliveryOfferConcurrencyTest extends TestCase
 
         $nearest = $this->service->dispatchToNearest($delivery, 'transport');
 
-        $this->assertSame($riders[0]->id, $nearest->id, 'Nearest candidate is returned as the wave representative.');
-        $this->assertSame(3, $this->pendingLogs($delivery)->where('response', 'pending')->count());
+        $this->assertSame($riders[0]->id, $nearest->id, 'The rider nearest the tourist is pinged first.');
+        $this->assertSame(1, $this->pendingLogs($delivery)->where('response', 'pending')->count());
+        $this->assertSame('targeted', $delivery->fresh()->dispatch_phase);
+    }
+
+    public function test_a_declined_booking_goes_to_the_next_nearest_rider_and_after_the_4th_to_available_bookings(): void
+    {
+        $business = $this->makeBusiness('Transport Escalation');
+        $riders = collect(['te-1', 'te-2', 'te-3', 'te-4', 'te-5'])
+            ->map(fn ($e) => $this->makeRider("{$e}@example.com", ['current_service' => 'transport']));
+        $this->setCandidates($riders->all());
+
+        $delivery = $this->makeManualDelivery($this->makeTransportOrder($business));
+        $this->service->dispatchToNearest($delivery, 'transport');
+
+        for ($i = 0; $i < 4; $i++) {
+            $this->assertSame(
+                $riders[$i]->id,
+                (int) $this->pendingLogs($delivery)->where('response', 'pending')->value('rider_id'),
+                'Offer '.($i + 1).' goes to the next nearest rider.'
+            );
+            $this->service->handleRiderResponse($delivery->id, $riders[$i]->id, 'declined');
+        }
+
+        // Four riders declined: no fifth ping, the booking is on Available Bookings.
+        $fresh = $delivery->fresh();
+        $this->assertSame('manual', $fresh->dispatch_phase);
+        $this->assertSame(0, $this->pendingLogs($delivery)->where('response', 'pending')->count());
+        $this->assertFalse($this->pendingLogs($delivery, $riders[4])->exists(), 'The 5th rider is never pinged.');
+        $this->assertNull($fresh->rider_id);
     }
 
     private function makeTransportOrder(Business $business): Order
@@ -353,19 +383,20 @@ class DeliveryOfferConcurrencyTest extends TestCase
 
     public function test_three_riders_each_offered_and_losers_cancelled_and_notified(): void
     {
-        // Reconciled 2026-11-07 (AGENTS.md §12; docs/dispatch-escalation-plan.md, approved): the multi-offer
-        // wave now exists only for transport (D1), so this loser-cancellation
-        // contract is exercised on a transport ride.
+        // Reconciled 2026-11-07 and 2026-11-11 (AGENTS.md §12): dispatch no
+        // longer creates simultaneous offers for any service (rides became
+        // sequential on 2026-11-11), but the loser-cancellation contract still
+        // guards any delivery holding several pending offers, so the offers
+        // are created directly here.
         $business = $this->makeBusiness('C Three Riders');
         $riderA = $this->makeRider('three-a@example.com', ['current_service' => 'transport']);
         $riderB = $this->makeRider('three-b@example.com', ['current_service' => 'transport']);
         $riderC = $this->makeRider('three-c@example.com', ['current_service' => 'transport']);
-        $this->setCandidates([$riderA, $riderB, $riderC]);
 
         $delivery = $this->makeManualDelivery($this->makeTransportOrder($business));
-
-        // Real wave: everyone gets their own offer.
-        $this->service->dispatchToNearest($delivery, 'transport');
+        foreach ([$riderA, $riderB, $riderC] as $rider) {
+            $this->makePendingOffer($delivery, $rider);
+        }
         $this->assertSame(3, $this->pendingLogs($delivery)->where('response', 'pending')->count());
 
         // Rider C (whoever is chosen) accepts.

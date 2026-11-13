@@ -22,6 +22,25 @@ export const NAV_PERSPECTIVE_PX = 1000
  * square this many times the screen diagonal so no blank corner shows.
  */
 export const NAV_TILT_SIZE_FACTOR = 1.9
+/**
+ * The plane's near edge must stay in front of the camera. Tipped back by the
+ * tilt, the bottom half of the (screen-diagonal-sized) plane comes toward the
+ * viewer by (size / 2)·sinθ; once that reaches the perspective distance, the
+ * near part passes the camera and GPUs draw it wrongly (2026-11-12: with the
+ * browser zoomed out, the map buttons disappeared behind the map).
+ */
+const NAV_NEAR_EDGE_MAX_FRACTION = 0.96
+
+/**
+ * The perspective for a plane of `planeSize` px: the usual NAV_PERSPECTIVE_PX,
+ * deepened only as much as needed to keep the near edge in front of the
+ * camera on large viewports (normal windows keep the usual look).
+ */
+export function navPerspectiveFor(planeSize: number, tiltDeg = NAV_TILT_DEG): number {
+  const nearZ = (Math.max(0, planeSize) / 2) * Math.sin((tiltDeg * Math.PI) / 180)
+  return Math.max(NAV_PERSPECTIVE_PX, Math.ceil(nearZ / NAV_NEAR_EDGE_MAX_FRACTION))
+}
+
 /** Gap between the rider's position puck and the top of the Go Online button. */
 export const NAV_PUCK_GAP_PX = 30
 /** Half the puck's height (44 px marker): the puck is centred on the rider's position. */

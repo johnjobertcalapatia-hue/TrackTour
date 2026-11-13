@@ -155,6 +155,7 @@ class OtpAttemptLimitTest extends TestCase
             'password' => 'Password123!',
             'password_confirmation' => 'Password123!',
             'role' => 'rider',
+            'municipality_id' => \App\Models\Municipality::firstOrCreate(['name' => 'Bansud'], ['district' => '2nd District', 'province' => 'Oriental Mindoro'])->id,
             'mobile_number' => self::MOBILE,
             'otp_code' => '123456',
             'confirm_age' => true,

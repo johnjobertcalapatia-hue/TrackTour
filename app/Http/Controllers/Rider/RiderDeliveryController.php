@@ -168,11 +168,55 @@ class RiderDeliveryController extends Controller
         );
     }
 
+    /**
+     * GET /rider/deliveries/completed?type=food|ride — the rider's History.
+     * Each row says what the rider needs to recognise the trip and its money:
+     * order / booking number, customer, restaurant, payment, order total (or
+     * ride fare) and the rider's own earning (rider_earnings, never COD cash).
+     */
     public function completed(Request $request): JsonResponse
     {
-        $deliveries = $this->deliveryService->getCompletedDeliveries($request->user()->id, 15);
+        $validated = $request->validate(['type' => ['nullable', 'in:food,ride']]);
+        $riderId = (int) $request->user()->id;
+
+        $deliveries = $this->deliveryService
+            ->getCompletedDeliveries($riderId, 15, $validated['type'] ?? null)
+            ->through(fn (Delivery $delivery) => $this->historyRow($delivery, $riderId));
 
         return $this->paginatedResponse($deliveries, 'Completed deliveries retrieved.');
+    }
+
+    private function historyRow(Delivery $delivery, int $riderId): array
+    {
+        $orders = $delivery->childOrders();
+        $order = $delivery->primaryOrder();
+        $isRide = $order?->order_type === 'transport';
+        $earning = \App\Models\RiderEarning::query()
+            ->where('rider_id', $riderId)
+            ->where('status', 'earned')
+            ->whereIn('order_id', $orders->pluck('id')->all() ?: [0])
+            ->sum('total_earning');
+        $restaurants = $isRide ? [] : $orders->map(fn ($o) => $o->business?->business_name)->filter()->unique()->values()->all();
+
+        return [
+            'id' => $delivery->id,
+            'order_id' => $delivery->order_id ?? $order?->id,
+            'order_number' => $order?->order_number,
+            'type' => $isRide ? 'ride' : 'food',
+            'customer_name' => $order?->customer_name,
+            'business_name' => $restaurants !== [] ? implode(', ', $restaurants) : null,
+            'pickup_address' => $delivery->pickup_address,
+            'delivery_address' => $delivery->delivery_address,
+            'status' => $delivery->status?->value ?? $delivery->status,
+            'payment_method' => $order?->payment_method,
+            'is_cod' => $this->dispatchService->isCodDelivery($delivery),
+            // Food: what the customer paid; ride: the fare.
+            'total_amount' => round((float) $orders->sum(fn ($o) => (float) $o->total), 2),
+            'earning' => round((float) $earning, 2),
+            'completed_at' => $delivery->delivered_at ?? $delivery->updated_at,
+            'created_at' => $delivery->created_at,
+            'updated_at' => $delivery->updated_at,
+        ];
     }
 
     /** "80 m" below a kilometre, "12.3 km" / "12,949 km" above. */
@@ -197,27 +241,17 @@ class RiderDeliveryController extends Controller
             && $delivery->delivery_longitude !== null;
     }
 
-    /** Why the rider may not confirm arrival at the drop-off yet (null = allowed). */
-    private function dropOffArrivalBlockedMessage(Delivery $delivery, int $riderId): ?string
+    /**
+     * Why the rider may not confirm arrival at the drop-off yet (null = allowed).
+     * The saved fix decides; the phone's own fix (sent with the request) may
+     * stand in up to ±200 m, flagged when coarser than ±50 m (DropoffLocationProof).
+     */
+    private function dropOffArrivalBlockedMessage(Delivery $delivery, int $riderId, ?array $deviceFix = null): ?string
     {
-        $sequence = app(\App\Services\PickupSequenceService::class);
-        $location = $sequence->latestRiderLocation($riderId);
-        $maxAge = (int) config('tracking.proof_location_max_age_seconds', 120);
-        if (! $location || ! $location['recorded_at'] || $location['recorded_at']->lt(now()->subSeconds($maxAge))) {
-            return 'We need your current location. Keep the map open with location on, then try again.';
-        }
+        $proof = app(\App\Services\DropoffLocationProof::class)->evaluate($delivery, $riderId, $deviceFix, "I've Arrived at the tourist",
+            'Move closer to the delivery address to confirm arrival (within %d m; you are %s away).');
 
-        $distance = $sequence->distanceMeters(
-            (float) $location['latitude'],
-            (float) $location['longitude'],
-            (float) $delivery->delivery_latitude,
-            (float) $delivery->delivery_longitude,
-        );
-        $radius = (float) config('tracking.dropoff_radius_meters', 50);
-
-        return $distance > $radius
-            ? sprintf('Move closer to the delivery address to confirm arrival (within %d m; you are %s away).', (int) $radius, $this->formatDistance($distance))
-            : null;
+        return $proof['ok'] ? null : $proof['message'];
     }
 
     public function updateStatus(Request $request, Delivery $delivery): JsonResponse
@@ -245,7 +279,7 @@ class RiderDeliveryController extends Controller
         // from the rider's own fresh saved GPS fix (never a client-sent number),
         // like the pickup arrival and the delivery proof. Rides keep their flow.
         if ($newStatus === 'arrived_destination' && $this->dropOffArrivalGateApplies($delivery)) {
-            $blocked = $this->dropOffArrivalBlockedMessage($delivery, (int) $request->user()->id);
+            $blocked = $this->dropOffArrivalBlockedMessage($delivery, (int) $request->user()->id, \App\Services\PickupEvidenceService::deviceFixFrom($request));
             if ($blocked !== null) {
                 return $this->errorResponse($blocked, 422);
             }
@@ -300,6 +334,11 @@ class RiderDeliveryController extends Controller
                     return ['error' => 'not_all_collected'];
                 }
 
+                // Stage 4: passenger-on-board evidence for rides (observe-only).
+                app(\App\Services\RideTripEvidenceService::class)->recordStep(
+                    $locked->fresh() ?? $locked, 'picked_up', (int) $request->user()->id, \App\Services\PickupEvidenceService::deviceFixFrom($request)
+                );
+
                 return [
                     'error' => null,
                     'old_status' => $transition['old_status'],
@@ -328,6 +367,12 @@ class RiderDeliveryController extends Controller
             }
 
             $locked->update($updateData);
+
+            // Stage 4: ride location evidence for this step (observe-only,
+            // written once; never allows or blocks the transition).
+            app(\App\Services\RideTripEvidenceService::class)->recordStep(
+                $locked, $newStatus, (int) $request->user()->id, \App\Services\PickupEvidenceService::deviceFixFrom($request)
+            );
 
             $finalStatus = $newStatus;
 
@@ -358,9 +403,11 @@ class RiderDeliveryController extends Controller
         }
 
         if ($outcome['error'] === 'invalid_transition') {
+            // Says where the delivery IS (the old wording "must be PICKED UP
+            // before moving to DELIVERED" read as an instruction, 2026-11-11).
             return $this->errorResponse(
-                'Delivery must be ' . strtoupper(str_replace('_', ' ', $outcome['current'])) .
-                ' before moving to ' . strtoupper(str_replace('_', ' ', $newStatus)) . '.',
+                'This trip is ' . strtoupper(str_replace('_', ' ', $outcome['current'])) .
+                ', so it cannot move to ' . strtoupper(str_replace('_', ' ', $newStatus)) . ' yet.',
                 409
             );
         }
@@ -492,25 +539,17 @@ class RiderDeliveryController extends Controller
             return $this->errorResponse('This delivery has no drop-off location.', 422);
         }
 
-        $location = app(\App\Services\PickupSequenceService::class)->latestRiderLocation($riderId);
-        $maxAge = (int) config('tracking.proof_location_max_age_seconds', 120);
-        if (! $location || ! $location['recorded_at'] || $location['recorded_at']->lt(now()->subSeconds($maxAge))) {
-            return $this->errorResponse('We need your current location. Keep the map open with location on, then try again.', 422);
-        }
-
-        $distance = app(\App\Services\PickupSequenceService::class)->distanceMeters(
-            (float) $location['latitude'],
-            (float) $location['longitude'],
-            (float) $delivery->delivery_latitude,
-            (float) $delivery->delivery_longitude,
+        // The saved fix decides; the phone's own fix sent with the photo may
+        // stand in up to ±200 m, flagged when coarser than ±50 m (owner
+        // decision 2026-11-12, DropoffLocationProof).
+        $proof = app(\App\Services\DropoffLocationProof::class)->evaluate(
+            $delivery, $riderId, \App\Services\PickupEvidenceService::deviceFixFrom($request), 'Confirm Delivered',
+            'You must be within %d m of the delivery address to complete it (you are %s away).'
         );
-        $radius = (float) config('tracking.dropoff_radius_meters', 50);
-        if ($distance > $radius) {
-            return $this->errorResponse(
-                sprintf('You must be within %d m of the delivery address to complete it (you are %s away).', (int) $radius, $this->formatDistance($distance)),
-                422
-            );
+        if (! $proof['ok']) {
+            return $this->errorResponse($proof['message'], 422);
         }
+        $distance = (float) $proof['distance'];
 
         $path = $request->file('photo')->store('delivery-proofs', 'public');
 

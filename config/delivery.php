@@ -47,7 +47,17 @@ return [
     // deliveries are offered to ONE nearest eligible rider at a time for
     // offer_seconds (30 s, product decision 2026-11-07); after max_attempts unsuccessful offers (or when no
     // eligible targeted rider remains) the delivery moves to the manual
-    // Available Deliveries board. Transport rides keep the wave dispatch.
+    // Available Deliveries / Available Bookings board. Ride bookings use the
+    // same sequence (nearest rider to the tourist first) since 2026-11-11.
+    // Rider "My Destination" mode (RiderDestinationService, 2026-11-11):
+    // while set, offers are limited to jobs whose pickup and drop-off are
+    // within corridor_km of the rider's straight route to the destination and
+    // that bring the rider closer. Off on arrival or after duration_minutes.
+    'destination_mode' => [
+        'corridor_km' => (float) env('RIDER_DESTINATION_CORRIDOR_KM', 2.0),
+        'arrival_radius_m' => (int) env('RIDER_DESTINATION_ARRIVAL_RADIUS_M', 300),
+        'duration_minutes' => (int) env('RIDER_DESTINATION_DURATION_MINUTES', 180),
+    ],
     'sequential' => [
         'offer_seconds' => (int) env('DISPATCH_TARGETED_OFFER_SECONDS', 30),
         'max_attempts' => (int) env('DISPATCH_TARGETED_MAX_ATTEMPTS', 4),

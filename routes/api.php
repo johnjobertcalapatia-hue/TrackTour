@@ -52,6 +52,7 @@ use App\Http\Controllers\BusinessOwnerSalesController;
 use App\Http\Controllers\BusinessOwnerStaffController;
 use App\Http\Controllers\Rider\RiderController;
 use App\Http\Controllers\Rider\RiderDeliveryController;
+use App\Http\Controllers\Rider\RiderDiagnosticsController;
 use App\Http\Controllers\Rider\RiderDispatchController;
 use App\Http\Controllers\Rider\RiderPayoutController;
 use App\Http\Controllers\Rider\RiderMapController;
@@ -533,9 +534,18 @@ Route::middleware('token.only')->group(function () {
         Route::get('/dispatch/offers', [RiderDispatchController::class, 'offers']);
         Route::get('/dispatch/board', [RiderDispatchController::class, 'board']);
         Route::get('/dispatch/eligibility', [RiderDispatchController::class, 'eligibility']);
+        Route::get('/diagnostics', [RiderDiagnosticsController::class, 'show']);
+        Route::post('/diagnostics/repair', [RiderDiagnosticsController::class, 'repair'])->middleware('throttle:10,1');
         Route::patch('/dispatch/accept', [RiderDispatchController::class, 'accept']);
         Route::patch('/dispatch/decline', [RiderDispatchController::class, 'decline']);
         Route::get('/map/location', [RiderMapController::class, 'location']);
+        // My Destination: only offers on the way to a preferred end point.
+        Route::get('/destination', [\App\Http\Controllers\Rider\RiderDestinationController::class, 'show']);
+        Route::put('/destination', [\App\Http\Controllers\Rider\RiderDestinationController::class, 'update']);
+        Route::delete('/destination', [\App\Http\Controllers\Rider\RiderDestinationController::class, 'destroy']);
+        // Place search for picking the destination (same local registry + geocoder as ride booking).
+        Route::get('/locations/search', [\App\Http\Controllers\Tourist\TransportLocationController::class, 'search']);
+        Route::get('/locations/reverse-geocode', [\App\Http\Controllers\Tourist\TransportLocationController::class, 'reverseGeocode']);
         Route::post('/map/location', [RiderMapController::class, 'updateLocation']);
         Route::get('/messages', [MessageController::class, 'index']);
 
@@ -604,16 +614,30 @@ Route::middleware('token.only')->group(function () {
         Route::get('/riders', [AdminRiderController::class, 'index']);
         Route::get('/riders/fares', [AdminRiderController::class, 'fareSettings']);
         Route::put('/riders/fares', [AdminRiderController::class, 'updateFareSettings']);
+        Route::get('/riders/ride-fares', [AdminRiderController::class, 'rideFareSettings']);
+        Route::put('/riders/ride-fares', [AdminRiderController::class, 'updateRideFareSettings']);
         Route::get('/riders/{rider}', [AdminRiderController::class, 'show']);
+        Route::put('/riders/{rider}/municipality', [AdminRiderController::class, 'updateMunicipality']);
+        Route::get('/riders/{rider}/records', [AdminRiderController::class, 'records']);
         Route::post('/riders/{rider}/approve', [AdminRiderController::class, 'approve']);
         Route::post('/riders/{rider}/reject', [AdminRiderController::class, 'reject']);
         Route::post('/riders/{rider}/suspend', [AdminRiderController::class, 'suspend']);
         // Rider Payouts (admin review workflow)
         Route::get('/payouts', [AdminPayoutController::class, 'index']);
+        Route::get('/payouts/summary', [AdminPayoutController::class, 'summary']);
+        Route::post('/payouts/{payout}/validate', [AdminPayoutController::class, 'validateNow']);
+        Route::get('/rider-earnings/{earning}/ledger', [\App\Http\Controllers\Admin\AdminRiderEarningController::class, 'show']);
+        Route::post('/rider-earnings/{earning}/adjust', [\App\Http\Controllers\Admin\AdminRiderEarningController::class, 'adjust']);
+        Route::get('/integrity/orders/{order}', [\App\Http\Controllers\Admin\AdminTransactionIntegrityController::class, 'show'])->whereNumber('order');
+        Route::post('/integrity/orders/{order}/verify', [\App\Http\Controllers\Admin\AdminTransactionIntegrityController::class, 'verify'])->whereNumber('order');
         Route::get('/payouts/{payout}', [AdminPayoutController::class, 'show']);
         Route::post('/payouts/{payout}/approve', [AdminPayoutController::class, 'approve']);
         Route::post('/payouts/{payout}/reject', [AdminPayoutController::class, 'reject']);
         Route::post('/payouts/{payout}/mark-paid', [AdminPayoutController::class, 'markPaid']);
+        Route::post('/payouts/{payout}/start-review', [AdminPayoutController::class, 'startReview']);
+        Route::post('/payouts/{payout}/mark-failed', [AdminPayoutController::class, 'markFailed']);
+        Route::get('/payouts/{payout}/proof', [AdminPayoutController::class, 'proof']);
+        Route::get('/payouts/{payout}/earnings/{earning}', [AdminPayoutController::class, 'investigate']);
 
         // Purchasing-cash (COD)
         Route::post('/deliveries/{delivery}/issue-purchasing-cash', [AdminPurchasingCashController::class, 'issue']);
@@ -667,6 +691,11 @@ Route::middleware('token.only')->group(function () {
         Route::get('/system/security/logs', [AdminSystemController::class, 'securityLogs']);
         Route::get('/system/ocr-settings', [AdminSystemController::class, 'ocrSettings']);
         Route::put('/system/ocr-settings', [AdminSystemController::class, 'updateOcrSettings']);
+
+        // Trip diagnostics (2026-11-12): canonical path, safe fixes, step resets.
+        Route::get('/deliveries/{delivery}/diagnostics', [\App\Http\Controllers\Admin\AdminTripDiagnosticsController::class, 'show'])->whereNumber('delivery');
+        Route::post('/deliveries/{delivery}/diagnostics/fix', [\App\Http\Controllers\Admin\AdminTripDiagnosticsController::class, 'fix'])->whereNumber('delivery')->middleware('throttle:20,1');
+        Route::post('/deliveries/{delivery}/diagnostics/reset', [\App\Http\Controllers\Admin\AdminTripDiagnosticsController::class, 'reset'])->whereNumber('delivery')->middleware('throttle:20,1');
 
         // Live Monitoring
         Route::get('/live/deliveries', [AdminLiveController::class, 'deliveries']);

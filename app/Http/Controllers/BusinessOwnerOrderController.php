@@ -127,6 +127,12 @@ class BusinessOwnerOrderController extends Controller
 
         $validated = $request->validated();
 
+        if ($validated['status'] === 'cancelled' && app(\App\Services\AcceptedOrderPolicy::class)->riderAccepted($order)) {
+            app(\App\Services\AcceptedOrderPolicy::class)->escalate($order, 'restaurant_rejection_blocked', 'Restaurant tried to cancel an order a rider had already accepted.', ['by' => $request->user()->id]);
+
+            return $this->errorResponse('A rider has accepted this order, so it must be prepared and cannot be cancelled. The Tourism Office has been notified.', 422);
+        }
+
         $previousStatus = (string) $order->status;
 
         if ($this->requiresAcceptedRider($order) && in_array($validated['status'], ['preparing', 'ready'], true)) {
@@ -266,6 +272,12 @@ class BusinessOwnerOrderController extends Controller
             return $this->forbiddenResponse('You do not own this business.');
         }
 
+        if (app(\App\Services\AcceptedOrderPolicy::class)->riderAccepted($order)) {
+            app(\App\Services\AcceptedOrderPolicy::class)->escalate($order, 'restaurant_rejection_blocked', 'Restaurant tried to reject an order a rider had already accepted.', ['by' => $request->user()->id, 'reason' => $request->input('reason')]);
+
+            return $this->errorResponse('A rider has accepted this order, so it must be prepared and cannot be rejected. The Tourism Office has been notified.', 422);
+        }
+
         if ($order->status !== 'waiting_restaurant') {
             return $this->errorResponse('This order is not waiting for acceptance.', 422);
         }
@@ -315,7 +327,7 @@ class BusinessOwnerOrderController extends Controller
         $message = match ($fresh->refund_status) {
             'refunded' => 'Order rejected. Payment has been refunded.',
             'pending' => 'Order rejected. Your refund is being processed.',
-            'failed' => 'Order rejected. The refund failed and will be retried automatically.',
+            'failed' => 'Order rejected. The refund did not go through, so the payment has not been refunded yet. It needs to be retried.',
             default => 'Order rejected.',
         };
 
@@ -627,6 +639,12 @@ class BusinessOwnerOrderController extends Controller
             return $this->forbiddenResponse('You do not own this restaurant item.');
         }
 
+        if (app(\App\Services\AcceptedOrderPolicy::class)->riderAccepted($order)) {
+            app(\App\Services\AcceptedOrderPolicy::class)->escalate($order, 'restaurant_rejection_blocked', 'Restaurant tried to reject a dish of an order a rider had already accepted.', ['by' => $request->user()->id, 'item_id' => $item->id, 'reason' => $request->input('reason')]);
+
+            return $this->errorResponse('A rider has accepted this order, so it must be prepared and cannot be rejected. The Tourism Office has been notified.', 422);
+        }
+
         if (! $item->canReject()) {
             return $this->errorResponse('This item cannot be rejected.', 422);
         }
@@ -679,9 +697,11 @@ class BusinessOwnerOrderController extends Controller
         // The P11.3 processor records the refunds ledger row (with the provider
         // refund id), tracks refund_status, and never marks anything refunded
         // unless the provider confirms the refund succeeded.
+        // pending_refund: another (partial) refund is with PayMongo; this item's
+        // refund may still go ahead within the remaining balance.
         $payment = Payment::where('payable_type', Order::class)
             ->where('payable_id', $order->id)
-            ->where('status', 'paid')
+            ->whereIn('status', ['paid', 'pending_refund'])
             ->first();
 
         if ($payment && $payment->provider_payment_id) {

@@ -146,7 +146,10 @@ class SmartDispatchService
                     'delivery_address' => $lockedOrder->delivery_address,
                     'delivery_latitude' => $lockedOrder->delivery_latitude,
                     'delivery_longitude' => $lockedOrder->delivery_longitude,
-                    'rider_commission' => 40.00,
+                    // Product-owner rule (2026-11-11): the rider earns the full delivery
+                    // fee calculated at checkout (before any delivery-fee promotion —
+                    // none exist today); previously a flat ₱40.
+                    'rider_commission' => round((float) $lockedOrder->delivery_fee, 2),
                 ]);
 
                 // If dispatch time is now or past, dispatch immediately
@@ -267,7 +270,8 @@ class SmartDispatchService
                     'delivery_address' => $lockedGroup->delivery_address,
                     'delivery_latitude' => $lockedGroup->delivery_latitude,
                     'delivery_longitude' => $lockedGroup->delivery_longitude,
-                    'rider_commission' => 40.00,
+                    // Full delivery fee to the rider (rule 2026-11-11; was a flat ₱40).
+                    'rider_commission' => round((float) $orders->first()->delivery_fee, 2),
                 ]);
             });
         } catch (UniqueConstraintViolationException $e) {

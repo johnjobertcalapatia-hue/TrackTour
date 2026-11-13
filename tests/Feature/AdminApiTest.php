@@ -452,4 +452,90 @@ class AdminApiTest extends TestCase
 
         $this->assertDatabaseMissing('tourism_settings', ['key' => 'delivery_base_fare']);
     }
+
+    // Ride hailing fares (separate from the food delivery fee)
+
+    private function rideFarePayload(array $overrides = []): array
+    {
+        return array_replace_recursive([
+            'motorcycle' => ['base_fare' => 45, 'per_km' => 12],
+            'tricycle' => ['base_fare' => 65, 'per_km' => 18],
+            'car' => ['base_fare' => 110, 'per_km' => 26],
+            'van' => ['base_fare' => 160, 'per_km' => 32],
+        ], $overrides);
+    }
+
+    public function test_admin_gets_default_ride_fares_per_vehicle(): void
+    {
+        $data = $this->actingAs($this->admin, 'sanctum')
+            ->getJson('/api/admin/riders/ride-fares')
+            ->assertOk()
+            ->json('data');
+
+        $this->assertEquals(\App\Services\RideFareSettings::DEFAULTS, $data);
+    }
+
+    public function test_admin_can_update_ride_fares_without_touching_food_delivery_fee(): void
+    {
+        $foodBefore = app(\App\Services\DeliveryFareSettings::class)->all();
+
+        $this->actingAs($this->admin, 'sanctum')
+            ->putJson('/api/admin/riders/ride-fares', $this->rideFarePayload())
+            ->assertOk()
+            ->assertJsonPath('data.motorcycle.base_fare', 45)
+            ->assertJsonPath('data.van.per_km', 32);
+
+        $this->assertDatabaseHas('tourism_settings', ['key' => 'ride_motorcycle_base_fare', 'value' => '45']);
+        $this->assertDatabaseMissing('tourism_settings', ['key' => 'delivery_base_fare']);
+        $this->assertSame($foodBefore, app(\App\Services\DeliveryFareSettings::class)->all());
+
+        $this->actingAs($this->admin, 'sanctum')
+            ->getJson('/api/admin/riders/ride-fares')
+            ->assertJsonPath('data.car.base_fare', 110);
+
+        $this->assertDatabaseHas('activity_logs', ['action' => 'ride_fare_settings.updated']);
+    }
+
+    public function test_food_delivery_fee_update_does_not_change_ride_fares(): void
+    {
+        $this->actingAs($this->admin, 'sanctum')
+            ->putJson('/api/admin/riders/fares', $this->farePayload())
+            ->assertOk();
+
+        $this->assertEquals(
+            \App\Services\RideFareSettings::DEFAULTS,
+            app(\App\Services\RideFareSettings::class)->all()
+        );
+    }
+
+    public function test_ride_fares_reject_invalid_or_missing_values(): void
+    {
+        $this->actingAs($this->admin, 'sanctum')
+            ->putJson('/api/admin/riders/ride-fares', $this->rideFarePayload(['car' => ['base_fare' => -1]]))
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['car.base_fare']);
+
+        $payload = $this->rideFarePayload();
+        unset($payload['van']);
+        $this->actingAs($this->admin, 'sanctum')
+            ->putJson('/api/admin/riders/ride-fares', $payload)
+            ->assertStatus(422)
+            ->assertJsonValidationErrors(['van']);
+
+        $this->assertDatabaseMissing('tourism_settings', ['key' => 'ride_motorcycle_base_fare']);
+    }
+
+    public function test_non_admin_cannot_access_ride_fares(): void
+    {
+        $tourist = User::create([
+            'email' => 'tourist3@example.com',
+            'password' => Hash::make('Password123!'),
+            'role' => 'tourist',
+            'account_status' => 'approved',
+        ]);
+
+        $this->actingAs($tourist, 'sanctum')->getJson('/api/admin/riders/ride-fares')->assertStatus(403);
+        $this->actingAs($tourist, 'sanctum')->putJson('/api/admin/riders/ride-fares', $this->rideFarePayload())->assertStatus(403);
+        $this->assertDatabaseMissing('tourism_settings', ['key' => 'ride_motorcycle_base_fare']);
+    }
 }

@@ -30,6 +30,10 @@ use Tests\TestCase;
 class AdminFoundationTest extends TestCase
 {
     use RefreshDatabase;
+    // Reconciled 2026-11-11 (AGENTS.md §12, secure cashout): only earnings that
+    // trace to a provider-confirmed online payment and a completed delivery
+    // by the rider can be cashed out, so fixtures build that chain.
+    use \Tests\Concerns\MakesVerifiedEarnings;
 
     private User $admin;
     private User $tourist;
@@ -319,6 +323,7 @@ class AdminFoundationTest extends TestCase
             'total' => 380,
         ]);
 
+        $this->verifyEarningSource($order, $rider->id);
         RiderEarning::create([
             'rider_id' => $rider->id,
             'order_id' => $order->id,
@@ -332,7 +337,7 @@ class AdminFoundationTest extends TestCase
         $payout = app(RiderPayoutService::class)->requestPayout($rider);
 
         $this->actingAs($this->admin, 'sanctum')
-            ->postJson("/api/admin/payouts/{$payout->id}/approve")
+            ->postJson("/api/admin/payouts/{$payout->id}/approve", ['password' => 'Password123!'])
             ->assertOk();
 
         $this->assertDatabaseHas('activity_logs', [

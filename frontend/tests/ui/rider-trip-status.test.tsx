@@ -269,3 +269,91 @@ describe('RiderTripStatus page', () => {
     expect(await screen.findByText("This delivery isn't assigned to you.")).toBeInTheDocument()
   })
 })
+
+// 2026-11-11: a ride booking is not a restaurant delivery.
+const RIDE = {
+  ...OFFER,
+  order_number: 'TRP-6AF362EB5E076',
+  order_type: 'transport',
+  delivery_type_label: 'Motorcycle ride',
+  pickup_names: [], items_count: 1, delivery_fee: null, distance_km: 10.76, payment_method: 'cash', is_cod: true,
+  pickup: { address: 'Gloria, Oriental Mindoro', latitude: 12.97, longitude: 121.47 },
+  dropoff: { address: 'Pag-asa, Bansud, Oriental Mindoro', latitude: 12.86, longitude: 121.45 },
+  pickups: [],
+  items: [{ id: 9, business_id: 0, product_name: 'Ride: Motorcycle (1 pax)', quantity: 1, unit_price: 211.36, subtotal: 211.36, notes: null, image: null }],
+  items_total: 211.36, rider_earnings: 84.54, customer_name: 'Jayvie De Torres',
+  ride: { vehicle_type: 'motorcycle', passenger_count: 1, fare: 211.36, distance_km: 10.76, duration_minutes: 33, booking_notes: null },
+}
+
+describe('ride booking trip page', () => {
+  beforeEach(() => {
+    api.get.mockReset()
+  })
+
+  function setRide(status: string, over: Record<string, unknown> = {}) {
+    api.get.mockResolvedValue({ ...RIDE, status })
+    setTrip(status, [], { onArrivedPickup: vi.fn(), onCompleteRide: vi.fn(), settleCod: vi.fn(), settleBusy: false, settleError: null, pendingSettlement: null, ...over })
+  }
+
+  it('reads as a booking with a passenger, never restaurants or food', async () => {
+    setRide('assigned', { riderPosition: [12.9702, 121.4701] })
+    renderPage()
+    expect(await screen.findByRole('heading', { name: 'Booking #TRP-6AF362EB5E076' })).toBeInTheDocument()
+    expect(screen.getByText(/10\.8 km • ~33 min • Motorcycle • 1 passenger/)).toBeInTheDocument()
+    expect(screen.getByText('Jayvie De Torres')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '2. Pick Up Passenger' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '3. On the Way' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '4. Complete Ride' })).toBeInTheDocument()
+    for (const food of [/restaurant/i, /food/i, 'Customer Tip', 'Delivery Fee', 'Tourist Location']) {
+      expect(screen.queryByText(food)).toBeNull()
+    }
+    const info = within(screen.getByRole('region', { name: 'Ride information' }))
+    expect(info.getByText('Your Earnings').nextSibling).toHaveTextContent('₱84.54')
+    expect(info.getByText('Ride Fare').nextSibling).toHaveTextContent('₱211.36')
+    expect(info.getByText('Payment').nextSibling).toHaveTextContent('Cash')
+  })
+
+  it('pickup: arrive near the passenger, then Passenger On Board', async () => {
+    setRide('assigned', { riderPosition: [12.9702, 121.4701] })
+    const { unmount } = renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: /I've Arrived at Pickup/ }))
+    expect(trip.value.onArrivedPickup).toHaveBeenCalledTimes(1)
+    unmount()
+
+    setRide('arrived_pickup')
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: /Passenger On Board/ }))
+    expect(trip.value.onMarkPickedUp).toHaveBeenCalledTimes(1)
+  })
+
+  it('far from the pickup point the arrival button waits', async () => {
+    setRide('assigned', { riderPosition: [12.86, 121.45] })
+    renderPage()
+    expect(await screen.findByRole('button', { name: /I've Arrived at Pickup/ })).toBeDisabled()
+    expect(screen.getByText(/Within 100 m of the pickup point/)).toBeInTheDocument()
+  })
+
+  it('at the drop-off a cash ride collects the fare and completes', async () => {
+    setRide('arrived_destination')
+    renderPage()
+    expect(await screen.findByText('Collect ₱211.36 in cash from the passenger.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Fare Collected · Complete Ride/ }))
+    expect(trip.value.onCompleteRide).toHaveBeenCalledWith(211.36)
+  })
+
+  it('a cash ride already marked delivered but not settled records the fare', async () => {
+    setRide('delivered', { pendingSettlement: { deliveryId: 6, orderId: 9, cashDue: 211.36 } })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: /Fare Collected · Complete Ride/ }))
+    expect(trip.value.settleCod).toHaveBeenCalledWith(211.36)
+  })
+
+  it('an online-paid ride completes with nothing to collect', async () => {
+    api.get.mockResolvedValue({ ...RIDE, status: 'arrived_destination', is_cod: false, payment_method: 'gcash' })
+    setTrip('arrived_destination', [], { onCompleteRide: vi.fn(), settleCod: vi.fn(), settleBusy: false, settleError: null, pendingSettlement: null })
+    renderPage()
+    expect(await screen.findByText('Paid online. Nothing to collect.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^Complete Ride$/ }))
+    expect(trip.value.onCompleteRide).toHaveBeenCalledWith(null)
+  })
+})

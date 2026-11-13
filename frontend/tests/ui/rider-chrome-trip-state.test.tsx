@@ -148,11 +148,12 @@ describe('Rider go-online chrome — mid-trip state', () => {
     expect(screen.getByText('Offline')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /go online/i })).toHaveClass('rider-availability-button')
     // Offline keeps the same size and footprint as online (no "shrinking"):
-    // same h-12 w-12 button, a static ring like the online pulse ring, and a
-    // light surface that stays visible on the dark map.
+    // same h-12 w-12 button and a static ring like the online pulse ring.
+    // Owner choice 2026-11-12: a black circle with a white icon.
     const offlineButton = screen.getByRole('button', { name: /go online/i })
-    expect(offlineButton).toHaveClass('h-12', 'w-12', 'bg-[#F8FAF6]')
-    expect(offlineButton).not.toHaveClass('bg-[#17201B]')
+    expect(offlineButton).toHaveClass('h-12', 'w-12', 'bg-black', 'text-white')
+    expect(offlineButton).not.toHaveClass('bg-[#F8FAF6]')
+    expect(offlineButton.querySelector('svg')).toHaveClass('text-white')
     expect(screen.getByTestId('rider-offline-ring')).toHaveClass('offline-ring')
 
     fireEvent.click(screen.getByRole('button', { name: /go online/i }))

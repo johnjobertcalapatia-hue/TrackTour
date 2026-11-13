@@ -41,6 +41,8 @@ class DeliveryPickupStop extends Model
         'status',
         'arrived_at',
         'pickup_confirmed_at',
+        'arrival_evidence',
+        'pickup_evidence',
     ];
 
     protected function casts(): array
@@ -52,6 +54,8 @@ class DeliveryPickupStop extends Model
             'pickup_longitude' => 'decimal:7',
             'arrived_at' => 'datetime',
             'pickup_confirmed_at' => 'datetime',
+            'arrival_evidence' => 'array',
+            'pickup_evidence' => 'array',
         ];
     }
 

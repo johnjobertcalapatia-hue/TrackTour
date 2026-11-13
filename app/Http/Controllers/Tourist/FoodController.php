@@ -381,40 +381,53 @@ class FoodController extends Controller
         $riderDeliveryEarnings = $deliveryFee;
         $total = $subtotal + $deliveryFee + $systemFee + $riderTip;
 
-        $order = Order::create([
-            'order_number' => 'TT-'. strtoupper(str_pad(random_int(1, 99999), 5, '0', STR_PAD_LEFT)),
-            'business_id' => $business->id,
-            'user_id' => Auth::id(),
-            'customer_name' => Auth::user()->fullName,
-            'customer_email' => Auth::user()->email,
-            'customer_phone' => $validated['customer_phone'],
-            'order_type' => $validated['order_type'],
-            'delivery_speed' => $deliverySpeed,
-            'payment_method' => $validated['payment_method'] ?? 'gcash',
-            'payment_status' => 'pending',
-            'status' => $validated['payment_method'] === 'cash' ? 'waiting_restaurant' : 'pending_payment',
-            'subtotal' => $subtotal,
-            'delivery_fee' => $deliveryFee,
-            'rider_tip' => $riderTip,
-            'discount' => 0,
-            'system_fee' => $systemFee,
-            'rider_financed_amount' => $riderFinancedAmount,
-            'rider_delivery_earnings' => $riderDeliveryEarnings,
-            'total' => $total,
-            'notes' => $validated['notes'] ?? null,
-            'delivery_address' => $validated['delivery_address'] ?? null,
-            'delivery_distance_km' => $fee['distance_km'] ?? null,
-            'delivery_duration_minutes' => $fee['estimated_duration_minutes'] ?? null,
-            'pickup_latitude' => $fee['pickup_latitude'] ?? null,
-            'pickup_longitude' => $fee['pickup_longitude'] ?? null,
-            'delivery_latitude' => $fee['delivery_latitude'] ?? null,
-            'delivery_longitude' => $fee['delivery_longitude'] ?? null,
-            'delivery_fee_calculated_at' => $fee['calculated_at'] ?? null,
-            'delivery_distance_is_estimated' => $fee['is_estimated'] ?? false,
-        ]);
+        // Stage 3: order + items are created in ONE transaction, after a final
+        // availability / price recheck under row locks. A failure leaves no
+        // partial order behind.
+        try {
+            $order = DB::transaction(function () use ($validated, $business, $orderItems, $deliverySpeed, $subtotal, $deliveryFee, $riderTip, $systemFee, $riderFinancedAmount, $riderDeliveryEarnings, $total, $fee) {
+                app(\App\Services\CheckoutAvailabilityGuard::class)->assertOrderable($orderItems, (int) $business->id);
 
-        foreach ($orderItems as $item) {
-            $order->items()->create($item);
+                $order = Order::create([
+                    'order_number' => 'TT-'. strtoupper(str_pad(random_int(1, 99999), 5, '0', STR_PAD_LEFT)),
+                    'business_id' => $business->id,
+                    'user_id' => Auth::id(),
+                    'customer_name' => Auth::user()->fullName,
+                    'customer_email' => Auth::user()->email,
+                    'customer_phone' => $validated['customer_phone'],
+                    'order_type' => $validated['order_type'],
+                    'delivery_speed' => $deliverySpeed,
+                    'payment_method' => $validated['payment_method'] ?? 'gcash',
+                    'payment_status' => 'pending',
+                    'status' => $validated['payment_method'] === 'cash' ? 'waiting_restaurant' : 'pending_payment',
+                    'subtotal' => $subtotal,
+                    'delivery_fee' => $deliveryFee,
+                    'rider_tip' => $riderTip,
+                    'discount' => 0,
+                    'system_fee' => $systemFee,
+                    'rider_financed_amount' => $riderFinancedAmount,
+                    'rider_delivery_earnings' => $riderDeliveryEarnings,
+                    'total' => $total,
+                    'notes' => $validated['notes'] ?? null,
+                    'delivery_address' => $validated['delivery_address'] ?? null,
+                    'delivery_distance_km' => $fee['distance_km'] ?? null,
+                    'delivery_duration_minutes' => $fee['estimated_duration_minutes'] ?? null,
+                    'pickup_latitude' => $fee['pickup_latitude'] ?? null,
+                    'pickup_longitude' => $fee['pickup_longitude'] ?? null,
+                    'delivery_latitude' => $fee['delivery_latitude'] ?? null,
+                    'delivery_longitude' => $fee['delivery_longitude'] ?? null,
+                    'delivery_fee_calculated_at' => $fee['calculated_at'] ?? null,
+                    'delivery_distance_is_estimated' => $fee['is_estimated'] ?? false,
+                ]);
+
+                foreach ($orderItems as $item) {
+                    $order->items()->create($item);
+                }
+
+                return $order;
+            });
+        } catch (\InvalidArgumentException $exception) {
+            return $this->errorResponse($exception->getMessage(), 422);
         }
 
         if ($order->order_type === 'delivery' && $order->status === 'waiting_restaurant') {

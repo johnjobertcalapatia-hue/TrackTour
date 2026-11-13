@@ -100,7 +100,7 @@ class RiderCashFundService
 
                 $refundExists = Refund::query()
                     ->where('order_id', $order->id)
-                    ->whereIn('status', ['pending', 'succeeded'])
+                    ->whereIn('status', ['requested', 'pending', 'succeeded'])
                     ->exists();
                 if ($refundExists) {
                     $exclusionReason = 'An order has a pending or successful refund.';

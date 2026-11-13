@@ -216,6 +216,8 @@ class NearestRiderService
         $riders = $isCod
             ? $this->findNearestEligibleCodRiders($delivery, $lat, $lng, $serviceType, $pool, $municipalityId)
             : $this->findNearestAvailableRiders($lat, $lng, $serviceType, $pool, $municipalityId);
+        // My Destination: a rider heading somewhere is offered only jobs on the way.
+        $riders = app(RiderDestinationService::class)->rejectOffRoute($riders, $delivery);
 
         $candidates = $riders
             ->reject(fn (User $r) => in_array((int) $r->id, $excluded, true))
@@ -585,10 +587,13 @@ class NearestRiderService
             }
         }
 
-        // Food deliveries use the sequential targeted dispatch: ONE nearest
-        // eligible rider at a time (60 s each, max 4), then the manual board
-        // (docs/dispatch-escalation-plan.md). Transport rides keep the wave.
-        if ($serviceType === 'food') {
+        // Food deliveries AND ride bookings use the sequential targeted
+        // dispatch: ONE nearest eligible rider at a time (offer_seconds each,
+        // max_attempts), then the manual board (docs/dispatch-escalation-plan.md).
+        // For a ride the pickup is the tourist's location, so the rider nearest
+        // the tourist is pinged first; after the 4th rider declines or lets it
+        // time out the booking moves to Available Bookings (decision 2026-11-11).
+        if (in_array($serviceType, ['food', 'transport'], true)) {
             return app(SequentialDispatchService::class)->offerNext($delivery, $serviceType, $municipalityId);
         }
 
@@ -616,6 +621,8 @@ class NearestRiderService
         $nearestRiders = $isCod
             ? $this->findNearestEligibleCodRiders($delivery, (float) $pickupLat, (float) $pickupLng, $serviceType, 5, $municipalityId)
             : $this->findNearestAvailableRiders((float) $pickupLat, (float) $pickupLng, $serviceType, 5, $municipalityId);
+        // My Destination: a rider heading somewhere is offered only jobs on the way.
+        $nearestRiders = app(RiderDestinationService::class)->rejectOffRoute($nearestRiders, $delivery);
 
         Log::info('[SocketDispatch] eligible MySQL riders', [
             'delivery_id' => $delivery->id,
@@ -825,6 +832,10 @@ class NearestRiderService
             }
             if (in_array($riderId, $blockedRiderIds, true)) {
                 $radarExclusions[$riderId] = 'already_offered';
+                continue;
+            }
+            if (! app(RiderDestinationService::class)->allows($riderId, $lat, $lng, $delivery)) {
+                $radarExclusions[$riderId] = 'off_destination_route';
                 continue;
             }
 
@@ -2015,15 +2026,35 @@ class NearestRiderService
         $tip = (float) ($order->rider_tip ?? 0);
         $commission = $commissionOverride ?? (float) ($delivery->rider_commission ?? $deliveryFee);
 
-        RiderEarning::updateOrCreate(
-            ['rider_id' => $riderId, 'order_id' => $order->id, 'status' => 'earned'],
-            [
+        // Stage 5: an earning is recorded once (write-once row + ledger
+        // entries). A later recalculation never edits it: the difference is
+        // posted as a system adjustment in the append-only ledger.
+        $total = round($commission + $tip, 2);
+        $existing = RiderEarning::where('rider_id', $riderId)->where('order_id', $order->id)->where('status', 'earned')->lockForUpdate()->first();
+        if (! $existing) {
+            RiderEarning::create([
+                'rider_id' => $riderId,
+                'order_id' => $order->id,
+                'status' => 'earned',
                 'delivery_fee' => $deliveryFee,
                 'rider_tip' => $tip,
-                'total_earning' => round($commission + $tip, 2),
+                'total_earning' => $total,
                 'earned_at' => now(),
-            ]
-        );
+            ]);
+
+            return;
+        }
+        $ledger = app(\App\Services\RiderEarningLedger::class);
+        $delta = round($total - $ledger->earned($existing->id), 2);
+        if ($delta != 0.0) {
+            try {
+                $ledger->adjust($existing, $delta, 'Recalculated when the delivery was completed again.', null, null,
+                    "recalc:{$existing->id}:".number_format($total, 2, '.', ''), ['recalculated_total' => number_format($total, 2, '.', '')]);
+            } catch (\App\Exceptions\PayoutConflictException $e) {
+                // Locked in a live cashout: leave it for staff review.
+                \Illuminate\Support\Facades\Log::warning('Earning recalculation skipped', ['earning_id' => $existing->id, 'reason' => $e->getMessage()]);
+            }
+        }
     }
 
     // ------------------------------------------------------------------

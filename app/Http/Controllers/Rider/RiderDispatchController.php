@@ -96,6 +96,20 @@ class RiderDispatchController extends Controller
         $claimedLimit = (int) config('delivery.board_claimed_limit', 8);
         $eligibility = $this->buildBoardEligibility($rider, $location);
 
+        // My Destination: the board still lists every nearby job; while the
+        // mode is on, each actionable row says whether it is on the way.
+        // Ride Hailing riders get bookings only, Food Delivery riders orders only
+        // (the same rule as Available Bookings / Available Deliveries).
+        $rides = $rider->riderDetail?->current_service === 'transport';
+        $forService = fn (?Delivery $delivery): bool => $delivery !== null
+            && (($delivery->primaryOrder()?->order_type === 'transport') === $rides);
+
+        $destinations = app(\App\Services\RiderDestinationService::class);
+        $destination = $destinations->active($rider->riderDetail);
+        $onYourWay = fn (Delivery $delivery): ?bool => $destination === null
+            ? null
+            : $destinations->onTheWay($location?->latitude, $location?->longitude, $destination, $delivery);
+
         $orders = [];
         $seen = [];
 
@@ -115,7 +129,7 @@ class RiderDispatchController extends Controller
             // already accepted elsewhere) is not actionable; the read-only
             // sections below surface it instead.
             if (empty($payload) || empty($payload['delivery_id']) || ! $delivery
-                || $delivery->status !== TripStatus::WAITING) {
+                || $delivery->status !== TripStatus::WAITING || ! $forService($delivery)) {
                 continue;
             }
 
@@ -132,6 +146,7 @@ class RiderDispatchController extends Controller
                 'cod' => $isCod,
                 'distance_km' => $distance !== null ? round($distance, 2) : $payload['distance_km'],
                 'restaurants' => $this->buildStopDetails($delivery),
+                'on_your_way' => $onYourWay($delivery),
             ]);
             $seen[$delivery->id] = true;
         }
@@ -203,7 +218,7 @@ class RiderDispatchController extends Controller
             ->get();
 
         foreach ($open as $delivery) {
-            if (isset($seen[$delivery->id])) {
+            if (isset($seen[$delivery->id]) || ! $forService($delivery)) {
                 continue;
             }
             $distance = $this->deliveryDistance($delivery, $location);
@@ -220,12 +235,14 @@ class RiderDispatchController extends Controller
                 'accept_blocked_reason' => $blocked,
                 'cod' => $isCod,
                 'restaurants' => $this->buildStopDetails($delivery),
+                'on_your_way' => $onYourWay($delivery),
             ]);
             $seen[$delivery->id] = true;
         }
 
         return $this->successResponse([
             'eligibility' => $eligibility,
+            'destination' => $destination,
             'orders' => $orders,
         ], 'Rider order board retrieved.');
     }

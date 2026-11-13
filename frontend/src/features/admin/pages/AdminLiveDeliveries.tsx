@@ -1,9 +1,11 @@
-﻿import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+﻿import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { get, post } from '@/shared/services/api'
 import { TableSkeleton } from '@/shared/components/Skeleton'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { formatDateTime } from '@/shared/utils'
-import { Truck, MapPin, Package, Clock, Banknote, Wallet } from 'lucide-react'
+import { Truck, MapPin, Package, Clock, Banknote, Wallet, Stethoscope } from 'lucide-react'
+import TripDiagnosticsPanel from '@/features/admin/components/TripDiagnosticsPanel'
 
 interface LiveOrder {
   payment_method?: string | null
@@ -39,6 +41,7 @@ const PICKUP_STAGE_STATUSES = ['assigned', 'arrived_pickup']
 
 export default function AdminLiveDeliveries() {
   const queryClient = useQueryClient()
+  const [diagnosing, setDiagnosing] = useState<number | null>(null)
   const { data, isLoading } = useQuery({
     queryKey: ['admin-live-deliveries'],
     queryFn: () => get<{ data: LiveDelivery[] }>('/admin/live/deliveries'),
@@ -180,6 +183,14 @@ export default function AdminLiveDeliveries() {
                           </span>
                         )}
                       </div>
+                      <button
+                        type="button"
+                        onClick={() => setDiagnosing(delivery.id)}
+                        aria-label={`Diagnose trip ${delivery.order_number}`}
+                        className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-[#16803C] hover:underline"
+                      >
+                        <Stethoscope className="w-3.5 h-3.5" /> Diagnose
+                      </button>
                     </td>
                     <td className="px-5 lg:px-6 py-3 whitespace-nowrap">{purchasingStatus(delivery)}</td>
                     <td className="px-5 lg:px-6 py-3 whitespace-nowrap">
@@ -195,6 +206,8 @@ export default function AdminLiveDeliveries() {
           </div>
         )}
       </div>
+
+      {diagnosing !== null && <TripDiagnosticsPanel deliveryId={diagnosing} onClose={() => setDiagnosing(null)} />}
     </div>
   )
 }

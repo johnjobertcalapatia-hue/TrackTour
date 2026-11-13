@@ -12,6 +12,7 @@ use Illuminate\Support\Collection;
 class Delivery extends Model
 {
     protected $fillable = [
+        'trip_evidence',
         'order_id',
         'group_checkout_id',
         'rider_id',
@@ -70,6 +71,7 @@ class Delivery extends Model
     protected function casts(): array
     {
         return [
+            'trip_evidence' => 'array',
             'assigned_at' => 'datetime',
             'review_expires_at' => 'datetime',
             'arrived_pickup_at' => 'datetime',

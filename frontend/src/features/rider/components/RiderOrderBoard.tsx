@@ -47,6 +47,8 @@ export interface BoardOrder {
   rider_status: string
   can_accept?: boolean
   accept_blocked_reason?: string | null
+  /** My Destination: true on the way, false off the route, null when the mode is off. */
+  on_your_way?: boolean | null
 }
 
 export interface BoardEligibility {
@@ -127,6 +129,12 @@ function OrderHeader({ order }: { order: BoardOrder }) {
           </span>
           {order.cod && (
             <span className="rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">COD</span>
+          )}
+          {order.on_your_way === true && (
+            <span className="rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-[#087F3F]">On your way</span>
+          )}
+          {order.on_your_way === false && (
+            <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">Off your route</span>
           )}
         </div>
         <p className="mt-0.5 truncate text-[11px] font-semibold text-[#68727C]">

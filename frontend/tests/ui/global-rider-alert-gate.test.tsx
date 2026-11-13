@@ -411,3 +411,103 @@ describe('GlobalRiderAlert — per-stop pickup appearing message (view-only Orde
     expect(onMarkPickedUp).toHaveBeenCalledTimes(1)
   })
 })
+describe('GlobalRiderAlert — ride booking wording (2026-11-11)', () => {
+  const ride = {
+    ...h.defaults.activeDelivery,
+    order_type: 'transport',
+    business_name: null,
+    customer_name: 'Maria Santos',
+    pickup_address: 'Gloria, Oriental Mindoro',
+    delivery_address: 'Pag-asa, Bansud, Oriental Mindoro',
+  }
+
+  beforeEach(() => {
+    h.setOverrides({})
+  })
+
+  it('at the pickup it asks to confirm the passenger is on board, never food', () => {
+    const onMarkPickedUp = vi.fn()
+    // Even if a stale restaurant gate were reported, a ride never shows it.
+    h.setOverrides({ activeDelivery: ride, arrivalAlert: 'PICKUP', tripState: 'ARRIVED_AT_PICKUP', onMarkPickedUp, pickupGateBlocked: true })
+
+    render(<GlobalRiderAlert />)
+
+    expect(screen.getByText('Passenger Pickup')).toBeInTheDocument()
+    expect(screen.getByText('Maria Santos')).toBeInTheDocument()
+    expect(screen.getByText('Gloria, Oriental Mindoro')).toBeInTheDocument()
+    expect(screen.getByText(/continue the ride/)).toBeInTheDocument()
+    expect(screen.queryByText('Location unavailable')).toBeNull()
+    expect(screen.queryByText(/food/i)).toBeNull()
+    expect(screen.queryByText(/restaurant/i)).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /passenger on board/i }))
+    expect(onMarkPickedUp).toHaveBeenCalledTimes(1)
+  })
+
+  it('at the drop-off a cash ride collects the fare and completes the ride (no food photo)', () => {
+    const onCompleteRide = vi.fn()
+    h.setOverrides({
+      activeDelivery: { ...ride, status: 'arrived_destination', is_cod: true, order_total: 211.36 },
+      arrivalAlert: 'DROPOFF', tripState: 'ARRIVED_AT_DROPOFF', onCompleteRide,
+      positionKnown: true, riderPosition: [12.86, 121.48],
+    })
+
+    render(<GlobalRiderAlert />)
+
+    expect(screen.getByText(/Collect ₱211\.36 in cash from the passenger/)).toBeInTheDocument()
+    expect(screen.queryByText(/food/i)).toBeNull()
+    expect(screen.queryByText(/photo/i)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /fare collected · complete ride/i }))
+    expect(onCompleteRide).toHaveBeenCalledWith(211.36)
+  })
+
+  it('after Complete Ride the closing message never flashes the food photo step', () => {
+    h.setOverrides({
+      activeDelivery: { ...ride, status: 'arrived_destination', is_cod: true, order_total: 211.36 },
+      arrivalAlert: 'DROPOFF', tripState: 'ARRIVED_AT_DROPOFF',
+      positionKnown: true, riderPosition: [12.86, 121.48],
+    })
+    const { rerender } = render(<GlobalRiderAlert />)
+    expect(screen.queryByText(/photo/i)).toBeNull()
+
+    // The ride is completed: the trip is gone and the message animates out.
+    h.setOverrides({ activeDelivery: null, arrivalAlert: null, tripState: 'IDLE' })
+    rerender(<GlobalRiderAlert />)
+
+    expect(screen.queryByText(/photo/i)).toBeNull()
+    expect(screen.queryByText(/food/i)).toBeNull()
+    expect(screen.queryByRole('button', { name: /camera|photo/i })).toBeNull()
+  })
+
+  it('a cash ride waiting for its fare asks in ride words', () => {
+    h.setOverrides({ activeDelivery: { ...ride, status: 'arrived_destination', is_cod: true, order_total: 211.36 }, arrivalAlert: 'DROPOFF' })
+    const { rerender } = render(<GlobalRiderAlert />)
+
+    h.setOverrides({
+      activeDelivery: null, arrivalAlert: null,
+      pendingSettlement: { deliveryId: 12, orderId: 16, cashDue: 211.36 }, settleCod: vi.fn(), settleBusy: false, settleError: null,
+    })
+    rerender(<GlobalRiderAlert />)
+
+    expect(screen.getByText('Fare collected?')).toBeInTheDocument()
+    expect(screen.getByText('Enter the cash the passenger paid to finish the ride')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Fare Collected — Finish Ride/ })).toBeInTheDocument()
+    expect(screen.queryByText(/tourist|delivery/i)).toBeNull()
+  })
+
+  it('when the server refused the latest location, the checklist says so and Confirm waits (TT-23255, 2026-11-11)', () => {
+    // Device GPS says 0 m from the drop-off, but the server still has the
+    // rider 10.6 km away because the jump was refused.
+    const photo = new File(['x'], 'proof.jpg', { type: 'image/jpeg' })
+    h.setOverrides({
+      activeDelivery: { ...h.defaults.activeDelivery, status: 'arrived_destination' },
+      arrivalAlert: 'DROPOFF', tripState: 'ARRIVED_AT_DROPOFF',
+      positionKnown: true, riderPosition: [12.86, 121.48],
+      locationRefusal: 'implausible_movement',
+    })
+    render(<GlobalRiderAlert />)
+    expect(screen.getByText(/Location saved \(waiting: it jumped too far/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /confirm delivered/i })).toBeDisabled()
+    void photo
+  })
+})
