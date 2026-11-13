@@ -251,7 +251,7 @@ describe('TouristSidebar', () => {
 
     const nav = screen.getByRole('navigation', { name: 'Tourist navigation' })
     expect(within(nav).getAllByRole('link').map((l) => l.textContent)).toEqual([
-      'Home', 'Explore', 'Food & Dining', 'Stays', 'My Activities', 'Saved', 'Profile',
+      'Home', 'Explore', 'Food & Dining', 'Stays', 'My Activities', 'Transport', 'Profile',
     ])
     expect(within(nav).getByRole('link', { name: 'Food & Dining' })).toHaveAttribute('aria-current', 'page')
     expect(screen.getByText('Jayvie De Torres')).toBeInTheDocument()

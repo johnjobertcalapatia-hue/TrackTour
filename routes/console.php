@@ -34,7 +34,7 @@ Schedule::command(AdvancePreparationOrders::class)
 
 Schedule::command(AutoCancelUndeliveredOrder::class)
     ->everyMinute()
-    ->description('Auto-cancel and refund paid delivery orders not delivered within 60 minutes');
+    ->description('Flag accepted orders not delivered within 60 minutes (never cancels or refunds them)');
 
 Schedule::command(DispatchScheduledDeliveries::class)
     ->everyMinute()
@@ -57,3 +57,15 @@ Schedule::command(RecomputeFoodPopularity::class)
 Schedule::command(ReconcilePendingRefunds::class)
     ->everyThirtyMinutes()
     ->description('Reconcile pending_refund payments against the PayMongo refund state');
+
+// Secure transaction architecture (docs/secure-transaction-audit.md): sign
+// the changed transaction histories hourly; re-verify recent ones daily.
+Schedule::command(\App\Console\Commands\CreateTransactionCheckpoint::class)
+    ->hourly()
+    ->withoutOverlapping()
+    ->description('Sign a checkpoint of changed transaction histories');
+
+Schedule::command(\App\Console\Commands\VerifyTransactionIntegrity::class, ['--hours' => 48])
+    ->dailyAt('02:30')
+    ->withoutOverlapping()
+    ->description('Re-verify transaction histories changed in the last 48 hours');

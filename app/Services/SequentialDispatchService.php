@@ -10,8 +10,9 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
- * Sequential targeted dispatch for food deliveries
- * (docs/dispatch-escalation-plan.md, Stage 2).
+ * Sequential targeted dispatch for food deliveries and ride bookings
+ * (docs/dispatch-escalation-plan.md, Stage 2; rides since 2026-11-11, where
+ * the "first pickup" is the tourist's pickup point).
  *
  *   plan pickup sequence (farthest restaurant from the tourist first)
  *   → offer to the nearest eligible rider to the FIRST pickup, 30 s

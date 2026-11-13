@@ -9,6 +9,8 @@ use App\Models\RiderReview;
 use App\Models\User;
 use App\Notifications\RiderAccountStatusChanged;
 use App\Services\DeliveryFareSettings;
+use App\Services\RideFareSettings;
+use App\Services\RiderRecordsService;
 use App\Services\UserService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -18,8 +20,50 @@ class AdminRiderController extends Controller
 {
     public function __construct(
         private UserService $userService,
-        private DeliveryFareSettings $fareSettings
+        private DeliveryFareSettings $fareSettings,
+        private RideFareSettings $rideFareSettings
     ) {}
+
+    /** Ride-hailing fares per vehicle type (separate from the food delivery fee). */
+    public function rideFareSettings(): JsonResponse
+    {
+        return $this->successResponse($this->rideFareSettings->all());
+    }
+
+    public function updateRideFareSettings(Request $request): JsonResponse
+    {
+        $rules = [];
+        foreach (array_keys(RideFareSettings::DEFAULTS) as $vehicle) {
+            $rules[$vehicle] = ['required', 'array'];
+            $rules["{$vehicle}.base_fare"] = ['required', 'numeric', 'min:0', 'max:100000'];
+            $rules["{$vehicle}.per_km"] = ['required', 'numeric', 'min:0', 'max:100000'];
+        }
+        $validated = $request->validate($rules);
+
+        $before = $this->rideFareSettings->all();
+        $after = $this->rideFareSettings->save($validated);
+
+        $changes = [];
+        foreach ($after as $vehicle => $fields) {
+            foreach ($fields as $field => $value) {
+                $old = (float) ($before[$vehicle][$field] ?? 0);
+                if ((float) $value !== $old) {
+                    $changes[] = sprintf('%s %s: %s → %s', $vehicle, $field, number_format($old, 2), number_format((float) $value, 2));
+                }
+            }
+        }
+
+        ActivityLog::record(
+            'ride_fare_settings.updated',
+            $changes !== []
+                ? 'Ride hailing fares updated (' . implode(', ', $changes) . ').'
+                : 'Ride hailing fares updated (values unchanged).',
+            null,
+            ActivityLog::TYPE_SETTINGS
+        );
+
+        return $this->successResponse($after, 'Ride hailing fares updated successfully.');
+    }
 
     public function fareSettings(): JsonResponse
     {
@@ -118,9 +162,60 @@ class AdminRiderController extends Controller
             return $this->notFoundResponse('Rider not found.');
         }
 
-        $rider->load('profile.municipality', 'profile.barangay', 'riderDetail', 'riderReviews.admin');
+        $rider->load('municipality', 'profile.municipality', 'profile.barangay', 'riderDetail', 'riderReviews.admin');
 
         return $this->successResponse(UserResource::make($rider));
+    }
+
+    /**
+     * Read-only rider record: status, deliveries (COD vs online), earnings,
+     * cash out online, and the day's COD cash from the daily receipt.
+     */
+    public function records(Request $request, User $rider, RiderRecordsService $records): JsonResponse
+    {
+        if ($rider->role !== User::ROLE_RIDER) {
+            return $this->notFoundResponse('Rider not found.');
+        }
+
+        $validated = $request->validate([
+            'date' => ['nullable', 'date_format:Y-m-d', 'before_or_equal:'.now('Asia/Manila')->toDateString()],
+        ]);
+
+        $rider->load('riderDetail', 'municipality');
+
+        return $this->successResponse(
+            $records->summary(Auth::user(), $rider, $validated['date'] ?? now('Asia/Manila')->toDateString())
+        );
+    }
+
+    /**
+     * Set the rider's municipality. It decides which Tourism Office sees the
+     * rider on the COD cash advance list and may issue them cash.
+     */
+    public function updateMunicipality(Request $request, User $rider): JsonResponse
+    {
+        if ($rider->role !== User::ROLE_RIDER) {
+            return $this->notFoundResponse('Rider not found.');
+        }
+
+        $validated = $request->validate([
+            'municipality_id' => ['required', 'integer', 'exists:municipalities,id'],
+        ]);
+
+        $before = $rider->municipality?->name;
+        $rider->update(['municipality_id' => (int) $validated['municipality_id']]);
+        $rider->profile?->update(['municipality_id' => (int) $validated['municipality_id']]);
+        $rider->load('municipality');
+
+        ActivityLog::record(
+            'rider.municipality_updated',
+            sprintf('Rider municipality changed (%s): %s → %s.', $rider->email, $before ?? 'none', $rider->municipality?->name),
+            $rider
+        );
+
+        $rider->load('profile.municipality', 'profile.barangay', 'riderDetail', 'riderReviews.admin');
+
+        return $this->successResponse(UserResource::make($rider), 'Rider municipality updated.');
     }
 
     public function approve(Request $request, User $rider): JsonResponse

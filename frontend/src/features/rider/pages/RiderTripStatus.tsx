@@ -2,16 +2,19 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
-  ArrowLeft, Bike, Camera, Check, CheckCircle2, Circle, Clock, Coins, Info, Lock, MapPin, Phone, Play, Receipt, UtensilsCrossed,
+  ArrowLeft, Banknote, Bike, Camera, Check, CheckCircle2, Circle, Clock, Coins, Flag, Info, Lock, MapPin, Phone, Play, Receipt, UserRound,
+  UtensilsCrossed, Users,
 } from 'lucide-react'
 import { get } from '@/shared/services/api'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { cn, toAssetUrl } from '@/shared/utils'
 import { useRiderActiveTrip } from '@/features/rider/context/RiderActiveTripContext'
-import { km, orderLabel, peso, type DeliveryOffer } from '@/features/rider/services/delivery-offers'
+import { RunDiagnosticsLink } from '@/features/rider/components/RiderDiagnosticsSheet'
+import { isRideBooking, km, orderLabel, peso, type DeliveryOffer } from '@/features/rider/services/delivery-offers'
 import type { PickupStop } from '@/features/rider/pickup-stops'
 import {
-  allMet, deliveryConditions, distanceMeters, dropoffArrivalConditions, stepState, stepTime, stopAction, stopConditions, tripStage,
+  allMet, deliveryConditions, distanceMeters, dropoffArrivalConditions, rideDropoffConditions, ridePickupConditions, stepState, stepTime,
+  stopAction, stopConditions, tripStage, withDropoffLocation, withSavedLocation,
   type Condition, type TripStepState,
 } from '@/features/rider/trip-steps'
 import { DeliveryPhotoCapture } from '@/features/rider/components/DeliveryPhotoCapture'
@@ -64,6 +67,11 @@ export default function RiderTripStatus() {
     )
   }
 
+  // Ride bookings follow their own steps: passenger, not restaurants.
+  if (isRideBooking(offer)) {
+    return <RideTrip offer={offer} id={id} isThisTrip={isThisTrip} status={status} />
+  }
+
   const restaurantCount = Math.max(offer.pickups.length, stops.length, 1)
   const firstPickup = stops[0]
   const pickupName = firstPickup?.business_name ?? offer.pickups[0]?.name ?? offer.pickup_names[0] ?? 'Restaurant'
@@ -78,7 +86,7 @@ export default function RiderTripStatus() {
   const dropoffDistance = locationKnown && dropLat != null && dropLng != null
     ? distanceMeters(trip.riderPosition, [Number(dropLat), Number(dropLng)])
     : null
-  const arrivalConditions = dropoffArrivalConditions(dropoffDistance, locationKnown)
+  const arrivalConditions = withDropoffLocation(dropoffArrivalConditions(dropoffDistance, locationKnown), trip.locationRefusal, trip.deviceAccuracy)
 
   const stopImage = (stop: PickupStop) => {
     const food = offer.items.find((i) => i.business_id === stop.business_id && i.image)?.image
@@ -131,7 +139,12 @@ export default function RiderTripStatus() {
         </div>
       </section>
 
-      {error && <p role="alert" className="rounded-xl bg-[#FEF2F2] px-4 py-3 text-sm font-medium text-[#B3261E]">{error}</p>}
+      {error && (
+        <div className="rounded-xl bg-[#FEF2F2] px-4 py-3">
+          <p role="alert" className="text-sm font-medium text-[#B3261E]">{error}</p>
+          <RunDiagnosticsLink />
+        </div>
+      )}
 
       {/* Stages */}
       <ol className="relative space-y-4" aria-label="Delivery steps">
@@ -198,7 +211,7 @@ export default function RiderTripStatus() {
           aside={stepState(4, stage) === 'upcoming' && <Badge tone="gray" icon={<Lock className="h-3.5 w-3.5" />}>Available after delivery arrival</Badge>}
         >
           {stepState(4, stage) === 'current' && isThisTrip && (
-            <DeliveryProof busy={trip.busy} onConfirm={trip.onConfirmDelivery} isCod={!!offer.is_cod} distance={dropoffDistance} locationKnown={locationKnown} />
+            <DeliveryProof busy={trip.busy} onConfirm={trip.onConfirmDelivery} isCod={!!offer.is_cod} distance={dropoffDistance} locationKnown={locationKnown} locationRefusal={trip.locationRefusal} deviceAccuracy={trip.deviceAccuracy} />
           )}
           {stage === 'done' && <p className="text-sm font-semibold text-[#166534]">Delivered. Thank you!</p>}
         </Step>
@@ -220,6 +233,189 @@ export default function RiderTripStatus() {
         {offer.customer_phone ? (
           <a href={`tel:${offer.customer_phone}`} className="flex h-12 items-center justify-center gap-2 rounded-full border-2 border-[#16803C] bg-white font-semibold text-[#16803C]">
             <Phone className="h-5 w-5" aria-hidden="true" /> Contact Tourist
+          </a>
+        ) : (
+          <span aria-disabled="true" className="flex h-12 items-center justify-center gap-2 rounded-full border-2 border-[#D1D5DB] text-sm font-semibold text-[#9CA3AF]">
+            <Phone className="h-5 w-5" aria-hidden="true" /> No phone number
+          </span>
+        )}
+        <button type="button" onClick={() => navigate('/rider/map')} className="flex h-12 items-center justify-center gap-2 rounded-full bg-[#DCF2E3] font-semibold text-[#166534]">
+          <MapPin className="h-5 w-5" aria-hidden="true" /> View on Map
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Ride booking trip (2026-11-11): 1 Booking Accepted → 2 Pick Up Passenger
+ * (I've Arrived at Pickup → Passenger On Board) → 3 On the Way (I've Arrived)
+ * → 4 Complete Ride (collect the cash fare, or nothing when paid online).
+ * Same canonical endpoints as food (status transitions; settle-cod for cash).
+ */
+function RideTrip({ offer, id, isThisTrip, status }: {
+  offer: DeliveryOffer
+  id: number
+  isThisTrip: boolean
+  status: string | undefined
+}) {
+  const navigate = useNavigate()
+  const trip = useRiderActiveTrip()
+  const ride = offer.ride ?? null
+  const fare = ride?.fare ?? null
+
+  // A cash ride already 'delivered' but whose fare is not recorded yet stays on step 4.
+  const unsettled = trip.pendingSettlement?.deliveryId === id
+  const stage = unsettled ? 4 : tripStage(status, isThisTrip && trip.tripState === 'ARRIVED_AT_DROP')
+  const stageLabel = stage === 'done' ? 'Completed' : stage === 'cancelled' ? 'Cancelled' : 'In Progress'
+  const error = trip.actionError ?? trip.settleError
+
+  const locationKnown = isThisTrip && !!trip.positionKnown && Array.isArray(trip.riderPosition)
+  const distanceTo = (lat: number | null | undefined, lng: number | null | undefined) =>
+    locationKnown && lat != null && lng != null ? distanceMeters(trip.riderPosition, [Number(lat), Number(lng)]) : null
+  const pickupConditions = withSavedLocation(ridePickupConditions(distanceTo(offer.pickup.latitude, offer.pickup.longitude), locationKnown), trip.locationRefusal)
+  const dropConditions = withSavedLocation(rideDropoffConditions(distanceTo(offer.dropoff.latitude, offer.dropoff.longitude), locationKnown), trip.locationRefusal)
+  const vehicle = ride ? ride.vehicle_type.charAt(0).toUpperCase() + ride.vehicle_type.slice(1) : 'Ride'
+  const passengers = ride?.passenger_count ?? 1
+
+  return (
+    <div className="space-y-4 pb-4" data-testid="ride-trip">
+      <button type="button" onClick={() => navigate('/rider/map')} className="inline-flex items-center gap-2 text-sm text-[#6B7280] hover:text-[#17201B]">
+        <ArrowLeft className="h-4 w-4" aria-hidden="true" /> Map
+      </button>
+
+      <section className="rounded-2xl border border-[#CFE8D6] bg-[#EEF8F1] p-4" aria-label="Booking summary">
+        <div className="flex items-start justify-between gap-3">
+          <h1 className="text-xl font-bold text-[#17201B]">Booking {orderLabel(offer)}</h1>
+          <span className={cn(
+            'inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold',
+            stage === 'done' ? 'bg-[#DCFCE7] text-[#166534]' : stage === 'cancelled' ? 'bg-[#FEE2E2] text-[#B91C1C]' : 'bg-[#EEF5A8] text-[#3F4A12]',
+          )}>
+            <Clock className="h-3.5 w-3.5" aria-hidden="true" /> {stageLabel}
+          </span>
+        </div>
+        <p className="mt-1 text-sm text-[#374151]">
+          {[
+            (ride?.distance_km ?? offer.distance_km) != null ? km(ride?.distance_km ?? offer.distance_km) : null,
+            ride?.duration_minutes != null ? `~${ride.duration_minutes} min` : null,
+            vehicle,
+            `${passengers} ${passengers === 1 ? 'passenger' : 'passengers'}`,
+          ].filter(Boolean).join(' • ')}
+        </p>
+      </section>
+
+      <section className="grid grid-cols-2 divide-x divide-[#E5E7EB] rounded-2xl border border-[#E5E9E7] bg-white p-4">
+        <div className="flex gap-2 pr-3">
+          <UserRound className="mt-0.5 h-5 w-5 shrink-0 text-[#16803C]" aria-hidden="true" />
+          <div className="min-w-0 text-sm">
+            <p className="text-[#6B7280]">Pick up</p>
+            <p className="font-semibold text-[#17201B]">{offer.customer_name ?? 'Passenger'}</p>
+            {offer.pickup.address && <p className="truncate text-xs text-[#6B7280]">{offer.pickup.address}</p>}
+          </div>
+        </div>
+        <div className="flex gap-2 pl-3">
+          <Flag className="mt-0.5 h-5 w-5 shrink-0 text-[#DC2626]" aria-hidden="true" />
+          <div className="min-w-0 text-sm">
+            <p className="text-[#6B7280]">Drop-off</p>
+            <p className="font-semibold text-[#17201B]">Destination</p>
+            {offer.dropoff.address && <p className="truncate text-xs text-[#6B7280]">{offer.dropoff.address}</p>}
+          </div>
+        </div>
+      </section>
+
+      {ride?.booking_notes && (
+        <p className="rounded-xl border border-[#E5E9E7] bg-white px-4 py-2 text-sm text-[#374151]">Note from the passenger: {ride.booking_notes}</p>
+      )}
+
+      {error && (
+        <div className="rounded-xl bg-[#FEF2F2] px-4 py-3">
+          <p role="alert" className="text-sm font-medium text-[#B3261E]">{error}</p>
+          <RunDiagnosticsLink />
+        </div>
+      )}
+
+      <ol className="relative space-y-4" aria-label="Ride steps">
+        <Step n={1} state={stepState(1, stage)} title="Booking Accepted" aside={stepTime(offer.assigned_at) && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-white/80 px-2.5 py-1 text-xs text-[#374151]">
+            <Clock className="h-3.5 w-3.5" aria-hidden="true" /> {stepTime(offer.assigned_at)}
+          </span>
+        )}>
+          <p className="text-sm text-[#374151]">You accepted this ride booking.</p>
+        </Step>
+
+        <Step n={2} state={stepState(2, stage)} title="Pick Up Passenger" subtitle="Go to the pickup point and let the passenger on board."
+          icon={<Users className="h-10 w-10 text-[#16803C]" aria-hidden="true" />}>
+          {stepState(2, stage) === 'current' && isThisTrip && (
+            status === 'arrived_pickup' ? (
+              <ActionButton onClick={trip.onMarkPickedUp} disabled={trip.busy} icon={<Users className="h-5 w-5" />}>Passenger On Board</ActionButton>
+            ) : (
+              <div className="space-y-3">
+                <TripConditions items={pickupConditions} />
+                <ActionButton onClick={trip.onArrivedPickup} disabled={trip.busy || !allMet(pickupConditions)} icon={<MapPin className="h-5 w-5" />}>
+                  I've Arrived at Pickup
+                </ActionButton>
+              </div>
+            )
+          )}
+        </Step>
+
+        <Step
+          n={3}
+          state={stepState(3, stage)}
+          title="On the Way"
+          subtitle="Take the passenger to the drop-off."
+          icon={<Bike className="h-10 w-10 text-[#16803C]" aria-hidden="true" />}
+          aside={stepState(3, stage) === 'upcoming' && <Badge tone="blue">After the passenger boards</Badge>}
+        >
+          {stepState(3, stage) === 'current' && isThisTrip && (
+            <div className="space-y-3">
+              <TripConditions items={dropConditions} />
+              <ActionButton onClick={trip.onArrivedDrop} disabled={trip.busy || !allMet(dropConditions)} icon={<MapPin className="h-5 w-5" />}>I've Arrived</ActionButton>
+            </div>
+          )}
+        </Step>
+
+        <Step
+          n={4}
+          state={stepState(4, stage)}
+          title="Complete Ride"
+          subtitle={offer.is_cod ? 'Collect the fare in cash, then complete the ride.' : 'The fare was paid online.'}
+          icon={<Banknote className="h-10 w-10 text-[#16803C]" aria-hidden="true" />}
+          aside={stepState(4, stage) === 'upcoming' && <Badge tone="gray" icon={<Lock className="h-3.5 w-3.5" />}>Available at the drop-off</Badge>}
+        >
+          {stepState(4, stage) === 'current' && isThisTrip && (
+            <div className="space-y-3">
+              <p className="rounded-xl border border-[#CFE8D6] bg-[#F4FBF6] px-3 py-2.5 text-sm font-medium text-[#17201B]">
+                {offer.is_cod ? `Collect ${peso(fare)} in cash from the passenger.` : 'Paid online. Nothing to collect.'}
+              </p>
+              <ActionButton
+                onClick={() => (unsettled ? trip.settleCod(fare ?? trip.pendingSettlement?.cashDue ?? 0) : trip.onCompleteRide(offer.is_cod ? fare : null))}
+                disabled={trip.busy || trip.settleBusy}
+                icon={<Check className="h-5 w-5" />}
+              >
+                {offer.is_cod ? 'Fare Collected · Complete Ride' : 'Complete Ride'}
+              </ActionButton>
+            </div>
+          )}
+          {stage === 'done' && <p className="text-sm font-semibold text-[#166534]">Ride completed. Thank you!</p>}
+        </Step>
+      </ol>
+
+      <section className="rounded-2xl border border-[#CFE8D6] bg-[#F4FBF6] p-4" aria-label="Ride information">
+        <h2 className="flex items-center gap-2 font-bold text-[#17201B]">
+          <Info className="h-5 w-5 text-[#16803C]" aria-hidden="true" /> Ride Information
+        </h2>
+        <dl className="mt-3 grid grid-cols-3 divide-x divide-[#DDE7E0] text-sm">
+          <Money icon={<Coins className="h-5 w-5" />} label="Your Earnings" value={peso(offer.rider_earnings)} />
+          <Money icon={<Receipt className="h-5 w-5" />} label="Ride Fare" value={peso(fare)} />
+          <Money icon={<Banknote className="h-5 w-5" />} label="Payment" value={offer.is_cod ? 'Cash' : 'Paid online'} />
+        </dl>
+      </section>
+
+      <div className="grid grid-cols-2 gap-3">
+        {offer.customer_phone ? (
+          <a href={`tel:${offer.customer_phone}`} className="flex h-12 items-center justify-center gap-2 rounded-full border-2 border-[#16803C] bg-white font-semibold text-[#16803C]">
+            <Phone className="h-5 w-5" aria-hidden="true" /> Contact Passenger
           </a>
         ) : (
           <span aria-disabled="true" className="flex h-12 items-center justify-center gap-2 rounded-full border-2 border-[#D1D5DB] text-sm font-semibold text-[#9CA3AF]">
@@ -336,17 +532,19 @@ function StopRow({ stop, image, action, conditions, busy, onArrive, onPickup }: 
   )
 }
 
-function DeliveryProof({ busy, onConfirm, isCod, distance, locationKnown }: {
+function DeliveryProof({ busy, onConfirm, isCod, distance, locationKnown, locationRefusal, deviceAccuracy }: {
   busy: boolean
   onConfirm: (photo: File) => void
   isCod: boolean
   distance: number | null
   locationKnown: boolean
+  locationRefusal?: string | null
+  deviceAccuracy?: number | null
 }) {
   // The rider takes and submits a photo of the tourist receiving the food, at
   // the drop-off (≤ 50 m); only then does "Confirm Delivered" unlock.
   const [photo, setPhoto] = useState<File | null>(null)
-  const conditions = deliveryConditions(distance, locationKnown, !!photo)
+  const conditions = withDropoffLocation(deliveryConditions(distance, locationKnown, !!photo), locationRefusal, deviceAccuracy)
 
   return (
     <div className="space-y-3">

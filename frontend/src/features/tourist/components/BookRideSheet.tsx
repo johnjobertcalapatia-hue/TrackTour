@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { get, post } from '@/shared/services/api'
@@ -21,6 +21,14 @@ interface RideSheetProps {
   initialQuery?: string
   /** Vehicle already chosen (e.g. on the map's route card). */
   initialVehicle?: string
+  /**
+   * Pickup confirmed on the Ride Hailing page. With a destination that has
+   * coordinates the sheet opens at the trip summary, and the points are
+   * locked: they are changed only on the page's Pickup / Drop-off cards.
+   */
+  pickupPoint?: { name: string; lat: number; lng: number }
+  /** Called once the ride is booked (before going to the tracking page). */
+  onBooked?: () => void
 }
 
 interface LocationResult {
@@ -45,6 +53,8 @@ interface VehicleFare {
   fare: number
   total_fare: number
   fare_text: string
+  /** Estimated trip minutes (TransportationService::estimateFare). */
+  duration_min?: number
 }
 
 interface EstimateResult {
@@ -70,14 +80,21 @@ interface BookResponse {
 
 type Step = 'destination' | 'pickup' | 'summary'
 
-const VEHICLES: { type: string; name: string; icon: typeof Bike }[] = [
-  { type: 'motorcycle', name: 'Motorcycle', icon: Bike },
-  { type: 'tricycle', name: 'Tricycle', icon: Bike },
-  { type: 'car', name: 'Car', icon: Car },
-  { type: 'van', name: 'Van', icon: Bus },
+/** Same vehicles and passenger limits as TransportationService::getVehicleTypes(). */
+const VEHICLES: { type: string; name: string; icon: typeof Bike; pax: number }[] = [
+  { type: 'motorcycle', name: 'Motorcycle', icon: Bike, pax: 1 },
+  { type: 'tricycle', name: 'Tricycle', icon: Bike, pax: 3 },
+  { type: 'car', name: 'Car', icon: Car, pax: 4 },
+  { type: 'van', name: 'Van', icon: Bus, pax: 8 },
 ]
 
-const PAYMENT_METHODS = ['cash', 'gcash', 'maya', 'card']
+/** Rides: cash to the driver, or GCash online (PayMongo). Server: BookTransportRequest. */
+const PAYMENT_METHODS = ['cash', 'gcash']
+const PAYMENT_LABELS: Record<string, string> = { cash: 'Cash', gcash: 'GCash (online)' }
+const PAYMENT_HINTS: Record<string, string> = {
+  cash: 'Pay your driver in cash at drop-off.',
+  gcash: 'Pay online with GCash through PayMongo when the ride ends.',
+}
 
 const RECENT_KEY = 'tracktour_recent_locations'
 const FALLBACK_CENTER: [number, number] = [12.5, 121.3]
@@ -159,7 +176,7 @@ function FitRoute({ points }: { points: [number, number][] }) {
   useEffect(() => {
     if (points.length >= 2) {
       map.fitBounds(points, { padding: [24, 24] })
-    } else if (points.length === 1) {
+    } else if (points[0]) {
       map.setView(points[0], 14)
     }
   }, [map, points])
@@ -203,7 +220,7 @@ function RoutePreview({
   )
 }
 
-export default function BookRideSheet({ isOpen, onClose, destination, destinationCoords, destinationAddress, initialQuery, initialVehicle }: RideSheetProps) {
+export default function BookRideSheet({ isOpen, onClose, destination, destinationCoords, destinationAddress, initialQuery, initialVehicle, pickupPoint, onBooked }: RideSheetProps) {
   const navigate = useNavigate()
   const [step, setStep] = useState<Step>('destination')
   const [dest, setDest] = useState<{ name: string; address: string; lat: number | null; lng: number | null }>()
@@ -234,7 +251,12 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
           lat: destinationCoords?.lat ?? null,
           lng: destinationCoords?.lng ?? null,
         })
-        setStep('pickup')
+        if (pickupPoint && destinationCoords) {
+          setPickup({ name: pickupPoint.name, lat: pickupPoint.lat, lng: pickupPoint.lng })
+          setStep('summary')
+        } else {
+          setStep('pickup')
+        }
       } else if (initialQuery) {
         setSearchQuery(initialQuery)
         setStep('destination')
@@ -243,7 +265,7 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
     if (!isOpen) {
       seededRef.current = false
     }
-  }, [isOpen, destination, destinationCoords, destinationAddress, initialQuery, initialVehicle])
+  }, [isOpen, destination, destinationCoords, destinationAddress, initialQuery, initialVehicle, pickupPoint])
 
   const saveRecent = (entry: RecentLocation) => {
     setRecent((prev) => {
@@ -298,6 +320,9 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
     ),
   })
 
+  // Stage 4: the server books only the fare the tourist saw. If rates or the
+  // route changed, it refuses (409) with the new fare: re-quote and say so.
+  const [bookingNotice, setBookingNotice] = useState<string | null>(null)
   const requestRideMutation = useMutation({
     mutationFn: () => {
       const fare = estimate?.fares?.[vehicleType]?.fare ?? 0
@@ -317,10 +342,24 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
         booking_notes: '',
       })
     },
+    onError: (error: unknown) => {
+      const response = (error as { response?: { status?: number; data?: { message?: string } } })?.response
+      if (response?.status === 409) {
+        setBookingNotice(response.data?.message ?? 'The fare changed. Please review it and book again.')
+        if (pickup?.lat != null && pickup.lng != null && dest?.lat != null && dest.lng != null) {
+          estimateMut.mutate({ from: { lat: pickup.lat, lng: pickup.lng }, to: { lat: dest.lat, lng: dest.lng } })
+        }
+      } else {
+        setBookingNotice('Could not book the ride. Please try again.')
+      }
+      requestRideMutation.reset()
+    },
     onSuccess: (data) => {
+      setBookingNotice(null)
       if (dest?.lat != null && dest.lng != null) {
         saveRecent({ name: dest.name, address: dest.address, lat: dest.lat, lng: dest.lng })
       }
+      onBooked?.()
       if (data?.redirect) {
         navigate(data.redirect)
       } else {
@@ -331,6 +370,8 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
 
   if (!isOpen) return null
 
+  /** Points confirmed on the Ride Hailing page cards: no going back to change them here. */
+  const pointsLocked = Boolean(pickupPoint && destinationCoords)
   const hasDest = Boolean(dest?.name && dest.lat != null && dest.lng != null)
   const hasPickup = Boolean(pickup?.name && pickup.lat != null && pickup.lng != null)
   const canBook = hasDest && hasPickup && estimate != null && requestRideMutation.isIdle
@@ -444,7 +485,7 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
         {/* Header */}
         <div className="flex items-center justify-between px-5 pb-2">
           <div className="flex items-center gap-2">
-            {step !== 'destination' && (
+            {step !== 'destination' && !pointsLocked && (
               <button
                 onClick={() => {
                   setStep(step === 'pickup' ? 'destination' : 'pickup')
@@ -698,8 +739,8 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
 
               {/* Vehicle selection */}
               <div>
-                <label className="text-xs text-[#68736D] mb-1.5 block">Vehicle</label>
-                <div className="grid grid-cols-2 gap-2">
+                <p className="text-sm font-bold text-[#17201B] mb-2">Choose a ride</p>
+                <div className="space-y-2" role="radiogroup" aria-label="Vehicle">
                   {VEHICLES.map((v) => {
                     const Icon = v.icon
                     const fare = estimate?.fares?.[v.type]
@@ -707,17 +748,31 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
                     return (
                       <button
                         key={v.type}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        aria-label={v.name}
                         onClick={() => setVehicleType(v.type)}
                         className={cn(
-                          'flex items-center gap-2.5 px-3 py-2.5 rounded-xl border text-sm transition',
-                          selected
-                            ? 'border-[#087F3F] bg-[#E9F7EF] text-[#087F3F]'
-                            : 'border-[#E5E9E7] bg-white text-[#68736D] hover:border-[#087F3F]/40'
+                          'relative flex w-full items-center gap-3 rounded-2xl border-2 px-3 py-3 text-left transition',
+                          selected ? 'border-[#087F3F] bg-[#F3FAF6]' : 'border-[#E5E9E7] bg-[#fff] hover:border-[#087F3F]/40',
                         )}
                       >
-                        <Icon className="w-4 h-4 shrink-0" />
-                        <span className="flex-1 text-left capitalize">{v.name}</span>
-                        {fare && <span className="text-xs font-semibold">{formatCurrency(fare.fare)}</span>}
+                        <span className={cn('flex h-12 w-14 shrink-0 items-center justify-center rounded-xl', selected ? 'bg-[#087F3F] text-white' : 'bg-[#E9F7EF] text-[#087F3F]')}>
+                          <Icon className="h-6 w-6" aria-hidden="true" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-bold text-[#17201B]">{v.name}</span>
+                          <span className="block text-xs text-[#56615B]">
+                            {fare?.duration_min ? `${fare.duration_min} min • ` : ''}{v.pax} {v.pax === 1 ? 'passenger' : 'pax'}
+                          </span>
+                        </span>
+                        <span className="shrink-0 text-base font-extrabold text-[#17201B]">{fare ? formatCurrency(fare.fare) : '—'}</span>
+                        {selected && (
+                          <span className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-[#087F3F] text-white ring-2 ring-white">
+                            <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+                          </span>
+                        )}
                       </button>
                     )
                   })}
@@ -725,24 +780,28 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
               </div>
 
               {/* Payment method */}
-              <div>
-                <label className="text-xs text-[#68736D] mb-1.5 block">Payment method</label>
-                <div className="flex flex-wrap gap-2">
+              <div className="rounded-2xl border border-[#E5E9E7] p-3">
+                <p className="text-xs font-semibold text-[#56615B] mb-2">Pay with</p>
+                <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Payment method">
                   {PAYMENT_METHODS.map((m) => (
                     <button
                       key={m}
+                      type="button"
+                      role="radio"
+                      aria-checked={paymentMethod === m}
                       onClick={() => setPaymentMethod(m)}
                       className={cn(
-                        'px-3 py-2 rounded-lg border text-xs font-medium capitalize transition',
+                        'h-9 px-4 rounded-full border text-xs font-semibold transition',
                         paymentMethod === m
-                          ? 'border-[#087F3F] bg-[#E9F7EF] text-[#087F3F]'
-                          : 'border-[#E5E9E7] bg-white text-[#68736D] hover:border-[#087F3F]/40'
+                          ? 'border-[#087F3F] bg-[#087F3F] text-white'
+                          : 'border-[#E5E9E7] bg-[#fff] text-[#56615B] hover:border-[#087F3F]/40'
                       )}
                     >
-                      {m}
+                      {PAYMENT_LABELS[m] ?? m}
                     </button>
                   ))}
                 </div>
+                <p className="mt-2 text-xs text-[#56615B]">{PAYMENT_HINTS[paymentMethod] ?? ''}</p>
               </div>
 
               {/* Fare breakdown */}
@@ -778,20 +837,25 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
                 </div>
               )}
 
+              {bookingNotice && (
+                <p role="alert" className="rounded-xl bg-[#FFF7E6] px-3 py-2 text-sm text-[#8A5A00]">
+                  {bookingNotice}
+                </p>
+              )}
               <button
-                onClick={() => requestRideMutation.mutate()}
+                onClick={() => { setBookingNotice(null); requestRideMutation.mutate() }}
                 disabled={!canBook}
                 className={cn(
-                  'w-full py-3.5 rounded-xl font-semibold text-sm transition flex items-center justify-center gap-2',
+                  'w-full h-14 rounded-full font-bold text-base transition flex items-center justify-center gap-2 shadow-md',
                   canBook
                     ? 'bg-[#087F3F] text-white hover:bg-[#056B35]'
-                    : 'bg-[#E5E9E7] text-[#9CA3AF] cursor-not-allowed'
+                    : 'bg-[#E5E9E7] text-[#9CA3AF] cursor-not-allowed shadow-none'
                 )}
               >
                 {requestRideMutation.isPending ? (
-                  <><Loader2 className="w-4 h-4 animate-spin" /> Requesting…</>
+                  <><Loader2 className="w-5 h-5 animate-spin" /> Booking…</>
                 ) : (
-                  <><CheckCircle2 className="w-4 h-4" /> Request Ride</>
+                  <>Book Ride Now{currentFare ? ` · ${formatCurrency(currentFare.total_fare)}` : ''}</>
                 )}
               </button>
               <p className="text-xs text-[#9CA3AF] text-center">Ride managed by Tourism Office transportation</p>

@@ -1,9 +1,22 @@
 import type { Delivery } from '@/shared/types'
 
 /** Card fields added by GET /rider/deliveries/pending (RiderOfferPresenter::summary). */
+/** Ride booking facts on an offer (RiderOfferPresenter::ride); null for food. */
+export interface RideInfo {
+  vehicle_type: string
+  passenger_count: number
+  fare: number
+  distance_km: number | null
+  duration_minutes: number | null
+  booking_notes?: string | null
+}
+
 export interface OfferSummary {
   order_id: number | null
   order_number: string | null
+  /** 'transport' for a ride booking. */
+  order_type?: string | null
+  ride?: RideInfo | null
   delivery_speed: 'standard' | 'fast'
   delivery_type_label: string
   pickup_names: string[]
@@ -116,8 +129,13 @@ export const peso = (n: number | null | undefined) =>
 
 export const km = (n: number | null | undefined) => (n == null ? '—' : `${Number(n).toFixed(1)} km`)
 
-export const paymentLabel = (o: Pick<OfferSummary, 'is_cod' | 'payment_method'>) =>
-  o.is_cod ? 'Cash on delivery' : o.payment_method ? 'Paid online' : '—'
+export const paymentLabel = (o: Pick<OfferSummary, 'is_cod' | 'payment_method' | 'order_type'>) =>
+  o.is_cod
+    ? o.order_type === 'transport' ? 'Cash' : 'Cash on delivery'
+    : o.payment_method ? 'Paid online' : '—'
+
+/** A ride booking (not a food delivery). */
+export const isRideBooking = (o: Pick<OfferSummary, 'order_type' | 'ride'>) => o.order_type === 'transport' || Boolean(o.ride)
 
 export const orderLabel = (o: Pick<OfferSummary, 'order_number' | 'order_id'>) =>
   o.order_number ? `#${o.order_number}` : o.order_id ? `#${o.order_id}` : ''

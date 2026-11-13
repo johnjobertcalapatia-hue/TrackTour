@@ -56,7 +56,7 @@ class StaffMenuController extends Controller
         $validated['offering_type'] = 'menu';
         $validated['status'] = 'available';
 
-        $offering = Offering::create($validated);
+        $offering = app(\App\Services\MenuAvailabilityService::class)->create(fn () => Offering::create($validated), 'staff_api.create');
 
         return $this->createdResponse($offering);
     }
@@ -64,7 +64,7 @@ class StaffMenuController extends Controller
     public function update(Request $request, int $id): JsonResponse
     {
         $offering = Offering::where('business_id', $request->user()->staff?->business_id)->findOrFail($id);
-        $offering->update($request->only(['name', 'description', 'price', 'offering_category_id', 'image', 'is_available']));
+        app(\App\Services\MenuAvailabilityService::class)->update($offering, $request->only(['name', 'description', 'price', 'offering_category_id', 'image', 'is_available']), 'staff_api.edit');
 
         return $this->successResponse($offering->fresh());
     }

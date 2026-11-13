@@ -330,9 +330,9 @@ class PickupSequenceService
      *
      * @throws InvalidArgumentException
      */
-    public function confirmArrival(Delivery $delivery, int $businessId, int $riderId): array
+    public function confirmArrival(Delivery $delivery, int $businessId, int $riderId, ?array $deviceFix = null): array
     {
-        return DB::transaction(function () use ($delivery, $businessId, $riderId) {
+        return DB::transaction(function () use ($delivery, $businessId, $riderId, $deviceFix) {
             $locked = Delivery::lockForUpdate()->find($delivery->id);
 
             if (! $locked) {
@@ -384,7 +384,11 @@ class PickupSequenceService
                     );
                 }
 
-                $stop->update(['arrived_at' => now()]);
+                $stop->update([
+                    'arrived_at' => now(),
+                    // Stage 3 evidence (written once): device + server fixes.
+                    'arrival_evidence' => $stop->arrival_evidence ?? app(PickupEvidenceService::class)->capture($riderId, $stop, $deviceFix),
+                ]);
                 $deliveryStatusChange = app(PickupDeliveryTransitionService::class)->arriveAtPickup($locked);
             }
 
@@ -415,9 +419,9 @@ class PickupSequenceService
      *
      * @throws InvalidArgumentException
      */
-    public function confirmStop(Delivery $delivery, int $businessId, int $riderId): array
+    public function confirmStop(Delivery $delivery, int $businessId, int $riderId, ?array $deviceFix = null): array
     {
-        return DB::transaction(function () use ($delivery, $businessId, $riderId) {
+        return DB::transaction(function () use ($delivery, $businessId, $riderId, $deviceFix) {
             $locked = Delivery::lockForUpdate()->find($delivery->id);
 
             if (! $locked) {
@@ -491,6 +495,8 @@ class PickupSequenceService
                 $stop->update([
                     'status' => DeliveryPickupStop::STATUS_COLLECTED,
                     'pickup_confirmed_at' => now(),
+                    // Stage 3 evidence (written once): device + server fixes.
+                    'pickup_evidence' => $stop->pickup_evidence ?? app(PickupEvidenceService::class)->capture($riderId, $stop, $deviceFix),
                 ]);
             }
 

@@ -15,7 +15,7 @@ import { NAV_PERSPECTIVE_PX, NAV_TILT_DEG } from '@/features/rider/navigation-vi
  * markers drawn on the tilted map), around its centre, so it looks flat on the
  * ground without leaving the rider's position.
  */
-export function RiderNavPuck({ offsetY, offsetX = 0 }: { offsetY: number; offsetX?: number }) {
+export function RiderNavPuck({ offsetY, offsetX = 0, perspective = NAV_PERSPECTIVE_PX }: { offsetY: number; offsetX?: number; perspective?: number }) {
   return (
     <div
       data-testid="rider-nav-puck"
@@ -32,7 +32,7 @@ export function RiderNavPuck({ offsetY, offsetX = 0 }: { offsetY: number; offset
         aria-hidden="true"
         data-testid="rider-nav-puck-marker"
         className="block"
-        style={{ transform: `perspective(${NAV_PERSPECTIVE_PX}px) rotateX(${NAV_TILT_DEG}deg)`, transformOrigin: '50% 50%' }}
+        style={{ transform: `perspective(${perspective}px) rotateX(${NAV_TILT_DEG}deg)`, transformOrigin: '50% 50%' }}
       >
         <circle cx="22" cy="22" r="16.5" fill="#087F3F" stroke="#FFFFFF" strokeWidth="3" />
         <path d="M 22 10 L 30 29 L 22 24 L 14 29 Z" fill="#FFFFFF" />

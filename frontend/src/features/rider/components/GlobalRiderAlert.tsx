@@ -2,10 +2,11 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { CheckCircle, ShoppingBag, Loader2, AlertTriangle, Zap, Banknote, Store, MapPin, ChevronDown, ChevronUp } from 'lucide-react'
 import { useRiderActiveTrip } from '@/features/rider/context/RiderActiveTripContext'
 import { formatCurrency } from '@/shared/utils'
+import { RunDiagnosticsLink } from './RiderDiagnosticsSheet'
 import { formatStopDistance } from '@/features/rider/stop-arrival'
 import { DeliveryPhotoCapture } from '@/features/rider/components/DeliveryPhotoCapture'
 import { TripConditions } from '@/features/rider/components/TripConditions'
-import { allMet, deliveryConditions, distanceMeters } from '@/features/rider/trip-steps'
+import { allMet, deliveryConditions, distanceMeters, withDropoffLocation, withSavedLocation } from '@/features/rider/trip-steps'
 
 export default function GlobalRiderAlert() {
   const {
@@ -17,6 +18,7 @@ export default function GlobalRiderAlert() {
     pickupGateMessage,
     onMarkPickedUp,
     onConfirmDelivery,
+    onCompleteRide,
     dismissArrivalAlert,
     pendingSettlement,
     settleCod,
@@ -34,7 +36,16 @@ export default function GlobalRiderAlert() {
     pickupStopsData,
     riderPosition,
     positionKnown,
+    locationRefusal,
+    deviceAccuracy,
   } = useRiderActiveTrip()
+
+  // Ride or food: remembered after the trip ends, so the closing animation
+  // (and a cash ride waiting for its fare) never falls back to the food photo
+  // step (bug 2026-11-11: the camera step flashed after "Complete Ride").
+  const lastTripKind = useRef<{ id: number | null; ride: boolean }>({ id: null, ride: false })
+  if (activeDelivery) lastTripKind.current = { id: activeDelivery.id, ride: activeDelivery.order_type === 'transport' }
+  const isRide = activeDelivery ? activeDelivery.order_type === 'transport' : lastTripKind.current.ride
 
   const [exiting, setExiting] = useState(false)
   // Which leg is animating OUT. Retained across the exit so the confirm label
@@ -94,20 +105,22 @@ export default function GlobalRiderAlert() {
           <div className="px-4 pt-5 pb-2 text-center">
             <div className="inline-flex items-center gap-2 px-3 py-1 bg-[#FEF3C7] border border-[#FDE68A] text-[#92400E] rounded-full text-xs font-bold uppercase tracking-wider mb-1">
               <Banknote className="w-3 h-3" />
-              Cash on Delivery
+              {isRide ? 'Cash Fare' : 'Cash on Delivery'}
             </div>
-            <h2 className="text-lg font-extrabold text-[#17201B] tracking-tight">Payment settled?</h2>
-            <p className="text-xs text-[#6B7280]">Enter the cash the tourist paid to finish the delivery</p>
+            <h2 className="text-lg font-extrabold text-[#17201B] tracking-tight">{isRide ? 'Fare collected?' : 'Payment settled?'}</h2>
+            <p className="text-xs text-[#6B7280]">
+              {isRide ? 'Enter the cash the passenger paid to finish the ride' : 'Enter the cash the tourist paid to finish the delivery'}
+            </p>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
             <div className="bg-[#F4FBF6] border border-[#CFE8D6] rounded-xl p-4 space-y-3">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-[#6B7280] font-semibold">Order #{pendingSettlement.orderId}</span>
-                <span className="text-[#6B7280] font-semibold">Amount due</span>
+                <span className="text-[#6B7280] font-semibold">{isRide ? 'Booking' : 'Order'} #{pendingSettlement.orderId}</span>
+                <span className="text-[#6B7280] font-semibold">{isRide ? 'Ride fare' : 'Amount due'}</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-xs text-[#6B7280]">Cash received from customer</span>
+                <span className="text-xs text-[#6B7280]">{isRide ? 'Cash received from the passenger' : 'Cash received from customer'}</span>
                 <span className="text-xl font-extrabold text-[#17201B]">{formatCurrency(cashDue)}</span>
               </div>
               <div className="relative">
@@ -142,7 +155,7 @@ export default function GlobalRiderAlert() {
               {settleError && (
                 <div className="flex items-start gap-2 rounded-xl border border-[#FCA5A5] bg-[#FEF2F2] px-3 py-2.5 text-sm font-medium text-[#B91C1C]">
                   <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-                  <span>{settleError}</span>
+                  <div><span>{settleError}</span><br /><RunDiagnosticsLink /></div>
                 </div>
               )}
             </div>
@@ -163,7 +176,7 @@ export default function GlobalRiderAlert() {
               ) : (
                 <>
                   <Banknote className="h-4 w-4" />
-                  Payment Settled — Finish Delivery
+                  {isRide ? 'Fare Collected — Finish Ride' : 'Payment Settled — Finish Delivery'}
                 </>
               )}
             </button>
@@ -216,7 +229,7 @@ export default function GlobalRiderAlert() {
             {confirmArrivalError && (
               <div className="flex items-start gap-2 rounded-xl border border-[#FCA5A5] bg-[#FEF2F2] px-3 py-2.5 text-sm font-medium text-[#B91C1C]">
                 <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-                <span>{confirmArrivalError}</span>
+                <div><span>{confirmArrivalError}</span><br /><RunDiagnosticsLink /></div>
               </div>
             )}
           </div>
@@ -292,7 +305,7 @@ export default function GlobalRiderAlert() {
               {confirmStopError && (
                 <div className="flex items-start gap-2 rounded-xl border border-[#FCA5A5] bg-[#FEF2F2] px-3 py-2.5 text-sm font-medium text-[#B91C1C]">
                   <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-                  <span>{confirmStopError}</span>
+                  <div><span>{confirmStopError}</span><br /><RunDiagnosticsLink /></div>
                 </div>
               )}
             </div>
@@ -339,19 +352,28 @@ export default function GlobalRiderAlert() {
   const isPickup = arrivalAlert === 'PICKUP' || exitAlertKind === 'PICKUP' || finalPickupFallback
   const isConfirming = busy
 
-  const confirmLabel = isPickup ? 'I Picked Up the Food' : 'Confirm Delivered'
-  const confirmIcon = isPickup ? ShoppingBag : CheckCircle
+  const confirmLabel = isPickup
+    ? isRide ? 'Passenger On Board' : 'I Picked Up the Food'
+    : isRide ? (activeDelivery?.is_cod ? 'Fare Collected · Complete Ride' : 'Complete Ride') : 'Confirm Delivered'
+  const confirmIcon = isPickup && !isRide ? ShoppingBag : CheckCircle
 
   // Waypoint shown in the receipt slice — the relevant name/address for this leg.
-  const targetName = isPickup ? activeDelivery?.business_name : activeDelivery?.delivery_address
+  const targetName = isPickup
+    ? isRide ? activeDelivery?.customer_name ?? 'Passenger' : activeDelivery?.business_name
+    : activeDelivery?.delivery_address
   const targetAddress = isPickup ? activeDelivery?.pickup_address : activeDelivery?.delivery_address
-  const waypointLabel = isPickup ? 'Pickup Location' : 'Delivery Location'
+  const waypointLabel = isPickup
+    ? isRide ? 'Passenger Pickup' : 'Pickup Location'
+    : isRide ? 'Drop-off' : 'Delivery Location'
 
+  const rideFare = activeDelivery?.order_total ?? null
+  const rideCash = isRide && Boolean(activeDelivery?.is_cod)
   const handleConfirm = () => {
     if (isPickup) onMarkPickedUp()
+    else if (isRide) onCompleteRide(rideCash ? rideFare : null)
     else if (proofPhoto) onConfirmDelivery(proofPhoto)
   }
-  const needsPhoto = !isPickup && !proofPhoto
+  const needsPhoto = !isPickup && !isRide && !proofPhoto
   const isCod = Boolean(pickupStopsData?.is_cod)
   // Confirm Delivered: within 50 m of the address (live GPS) + submitted photo,
   // the same conditions as the trip page; the server re-checks both.
@@ -360,7 +382,11 @@ export default function GlobalRiderAlert() {
   const dropoffDistance = positionKnown && Array.isArray(riderPosition) && dropLat != null && dropLng != null
     ? distanceMeters(riderPosition, [Number(dropLat), Number(dropLng)])
     : null
-  const deliveryChecks = deliveryConditions(dropoffDistance, !!positionKnown, !!proofPhoto)
+  // Rides keep the saved-location rule; the food drop-off may use the
+  // phone's own fix up to ±200 m (owner decision 2026-11-12).
+  const deliveryChecks = isRide
+    ? withSavedLocation(deliveryConditions(dropoffDistance, !!positionKnown, true).slice(0, 1), locationRefusal)
+    : withDropoffLocation(deliveryConditions(dropoffDistance, !!positionKnown, !!proofPhoto), locationRefusal, deviceAccuracy)
   const deliveryBlocked = !isPickup && !allMet(deliveryChecks)
 
   // Collapsed: a small bar instead of the full-screen popup; the rider keeps
@@ -368,9 +394,11 @@ export default function GlobalRiderAlert() {
   if (collapsed && arrivingNow) {
     return (
       <CollapsedBar
-        label={isPickup ? 'Show pickup confirmation' : 'Show delivery confirmation'}
+        label={isPickup ? 'Show pickup confirmation' : isRide ? 'Show drop-off confirmation' : 'Show delivery confirmation'}
         title="You've Arrived"
-        subtitle={isPickup ? 'Tap to confirm the pickup' : 'Tap to confirm the delivery'}
+        subtitle={isPickup
+          ? isRide ? 'Tap to confirm the passenger is on board' : 'Tap to confirm the pickup'
+          : isRide ? 'Tap to confirm the drop-off' : 'Tap to confirm the delivery'}
         icon={<Zap className="h-4 w-4" aria-hidden="true" />}
         onExpand={expand}
       />
@@ -396,7 +424,7 @@ export default function GlobalRiderAlert() {
             Arrival Confirmation
           </div>
           <h2 className="text-lg font-extrabold text-[#17201B] tracking-tight">You've Arrived</h2>
-          <p className="text-xs text-[#6B7280]">Confirm the leg to continue the delivery flow</p>
+          <p className="text-xs text-[#6B7280]">Confirm the leg to continue the {isRide ? 'ride' : 'delivery flow'}</p>
         </div>
 
         {/* RECEIPT BODY */}
@@ -427,10 +455,14 @@ export default function GlobalRiderAlert() {
               </div>
               <div className="flex flex-col min-w-0">
                 <span className="text-xs text-[#6B7280] font-bold uppercase tracking-wide">
-                  {isPickup ? 'Dropoff Destination' : 'Trip Completion'}
+                  {isPickup ? (isRide ? 'Drop-off' : 'Dropoff Destination') : 'Trip Completion'}
                 </span>
                 <span className="text-sm text-[#17201B] font-bold truncate">
-                  {isPickup ? (activeDelivery?.delivery_address ?? 'Destination Location') : 'Take a photo of the tourist receiving the food, submit it, then confirm'}
+                  {isPickup
+                    ? (activeDelivery?.delivery_address ?? 'Destination Location')
+                    : isRide
+                      ? 'Drop the passenger off, collect the fare if cash, then complete the ride'
+                      : 'Take a photo of the tourist receiving the food, submit it, then confirm'}
                 </span>
               </div>
             </div>
@@ -439,7 +471,7 @@ export default function GlobalRiderAlert() {
 
         {/* ERROR / ACTION CONSOLE */}
         <div className="p-4 pt-2 space-y-3">
-          {isPickup && pickupGateBlocked ? (
+          {isPickup && pickupGateBlocked && !isRide ? (
             <>
               {pickupGateMessage ? (
                 <div className="flex items-start gap-2 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] px-3 py-2.5 text-sm font-medium text-[#92400E]">
@@ -480,17 +512,26 @@ export default function GlobalRiderAlert() {
               {actionError && arrivalAlert && (
                 <div className="flex items-start gap-2 rounded-xl border border-[#FCA5A5] bg-[#FEF2F2] px-3 py-2.5 text-sm font-medium text-[#B91C1C]">
                   <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
-                  <span>{actionError}</span>
+                  <div><span>{actionError}</span><br /><RunDiagnosticsLink /></div>
                 </div>
               )}
 
-              {!isPickup && (
+              {!isPickup && isRide && (
+                <p className="rounded-xl border border-[#CFE8D6] bg-[#F4FBF6] px-3 py-2.5 text-sm font-medium text-[#17201B]">
+                  {rideCash
+                    ? `Collect ${rideFare != null ? `₱${rideFare.toFixed(2)}` : 'the fare'} in cash from the passenger, then complete the ride.`
+                    : 'The fare was paid online. Nothing to collect.'}
+                </p>
+              )}
+              {!isPickup && !isRide && arrivingNow && (
                 <DeliveryPhotoCapture
                   photo={proofPhoto}
                   onSubmit={setProofPhoto}
-                  note={isCod
-                    ? 'You must be within 50 m of the address. Confirming means the tourist has received the food and paid you in cash.'
-                    : 'You must be within 50 m of the address. Confirming means the tourist has received the food.'}
+                  note={isRide
+                    ? 'You must be within 50 m of the drop-off. Confirming means the passenger has arrived and paid the fare.'
+                    : isCod
+                      ? 'You must be within 50 m of the address. Confirming means the tourist has received the food and paid you in cash.'
+                      : 'You must be within 50 m of the address. Confirming means the tourist has received the food.'}
                 />
               )}
               {!isPickup && <TripConditions items={deliveryChecks} />}

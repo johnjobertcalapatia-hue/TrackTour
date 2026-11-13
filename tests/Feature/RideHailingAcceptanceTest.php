@@ -198,7 +198,6 @@ class RideHailingAcceptanceTest extends TestCase
             'destination_address' => 'Destination St',
             'vehicle_type' => 'motorcycle',
             'passenger_count' => 1,
-            'fare' => 150,
             'distance_km' => 3.5,
             'duration_min' => 12,
             'payment_method' => 'gcash',

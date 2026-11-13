@@ -19,9 +19,9 @@ import { NavigationCamera } from '@/shared/components/map/NavigationCamera'
 import { requestCompassPermission, useNavigationBearing } from '@/features/tourist/hooks/use-navigation-bearing'
 import { routeProgress } from '@/features/tourist/utils/route-progress'
 import {
-  NAV_PERSPECTIVE_PX,
   NAV_TILT_DEG,
   NAV_TILT_SIZE_FACTOR,
+  navPerspectiveFor,
   navPuckScreenOffset,
   planeOffsetForScreenY,
   planePointForScreen,
@@ -38,7 +38,10 @@ import { riderNavigationMarkerIcon, destinationMarkerIcon } from '@/shared/utils
 import { businessLogoIcon, pinIcon } from '@/shared/utils/pin-icon'
 import { toAssetUrl } from '@/shared/utils'
 import { RiderHeadingController } from '@/shared/utils/rider-heading'
-import { INVALID_GPS_MESSAGE, isUsableGpsFix } from '@/features/rider/gps'
+import {
+  INVALID_GPS_MESSAGE, RIDER_LOCATION_INTERVAL_MS, isUsableGpsFix, locationSentRecently, locationSyncWarning, markLocationSent,
+} from '@/features/rider/gps'
+import { RunDiagnosticsLink } from '@/features/rider/components/RiderDiagnosticsSheet'
 
 const deliveryDestIcon = destinationMarkerIcon
 
@@ -256,6 +259,7 @@ export default function RiderMap() {
     activeDelivery,
     tripState,
     pickupStopsData,
+    reportLocationResult,
   } = useRiderActiveTrip()
 
   const { data, isLoading } = useQuery({
@@ -279,8 +283,15 @@ export default function RiderMap() {
     enabled: !!user?.id && earningsOpen,
   })
 
+  // Shown when the server refuses a fix the map is displaying (the trip
+  // buttons judge the SAVED location, not the map's).
+  const [locationSyncError, setLocationSyncError] = useState<string | null>(null)
   const locationMutation = useMutation({
-    mutationFn: (location: RiderLocation) => post('/rider/map/location', location),
+    mutationFn: (location: RiderLocation) => post<{ reason?: string } | null>('/rider/map/location', location),
+    onSuccess: (result, location) => {
+      setLocationSyncError(locationSyncWarning(result?.reason, location.accuracy))
+      reportLocationResult(result?.reason)
+    },
   })
   // useMutation returns a new object every render; reading `mutate` through a
   // ref keeps sendLocation stable, so the GPS watch below is set up once
@@ -337,6 +348,10 @@ export default function RiderMap() {
 
   const lastLocationSent = useRef(0)
   const locationInFlight = useRef(false)
+  // Last position put on screen: readings that moved less than a metre
+  // (GPS jitter, or the same Wi-Fi / simulated point repeated) don't
+  // re-render the whole map (navigation lag on a PC, 2026-11-12).
+  const shownPositionRef = useRef<[number, number] | null>(null)
 
   const riderMarkerEvents = useMemo<L.LeafletEventHandlerFnMap>(() => ({
     add: (event) => {
@@ -369,15 +384,24 @@ export default function RiderMap() {
       accuracy,
       timestamp: position.timestamp,
     })
-    setRiderPosition([latitude, longitude])
+    const shown = shownPositionRef.current
+    const movedM = shown
+      ? Math.hypot((latitude - shown[0]) * 111_320, (longitude - shown[1]) * 111_320 * Math.cos((latitude * Math.PI) / 180))
+      : Infinity
+    if (movedM >= 1) {
+      shownPositionRef.current = [latitude, longitude]
+      setRiderPosition([latitude, longitude])
+    }
     if (heading !== null && Number.isFinite(heading) && (speed ?? 0) > 0.5) setCourse(heading)
     setLocationSource('gps')
     setGpsError(null)
-    setTripRiderPosition(latitude, longitude)
+    setTripRiderPosition(latitude, longitude, accuracy, position.timestamp)
     if (locationInFlight.current) return
     const now = Date.now()
-    if (now - lastLocationSent.current < 3000) return
+    // Every 5 s (decision 2026-11-11), on the clock shared with the heartbeat.
+    if (now - lastLocationSent.current < RIDER_LOCATION_INTERVAL_MS - 250 || locationSentRecently(now)) return
     lastLocationSent.current = now
+    markLocationSent(now)
     locationInFlight.current = true
     const location: RiderLocation = { latitude, longitude }
     if (heading !== null && Number.isFinite(heading)) location.heading = heading
@@ -565,12 +589,14 @@ export default function RiderMap() {
     if (navFree) setFreeBearing(0) // exploring: face north
     else setNorthUp((n) => !n) // following: north-up ↔ heading-up
   }
+  // The perspective in use (deepened on large viewports, see navPerspectiveFor).
+  const navPerspectiveRef = useRef(navPerspectiveFor(0))
   /** A point on the tilted map (client px) → its offset on the map plane. */
   const navScreenToPlanePoint = useCallback((p: { x: number; y: number }) => {
     const rect = mapAreaRef.current?.getBoundingClientRect()
     const cx = rect ? rect.left + rect.width / 2 : 0
     const cy = rect ? rect.top + rect.height / 2 : 0
-    return planePointForScreen(p.x - cx, p.y - cy)
+    return planePointForScreen(p.x - cx, p.y - cy, NAV_TILT_DEG, navPerspectiveRef.current)
   }, [])
 
   // Tilted, rotated map plane: a square much larger than the screen so no
@@ -596,7 +622,12 @@ export default function RiderMap() {
     }
   }, [navActive])
   const planeSize = Math.ceil(Math.hypot(areaSize.w, areaSize.h) * NAV_TILT_SIZE_FACTOR)
-  const navPlaneOffset = useMemo(() => ({ x: 0, y: Math.round(planeOffsetForScreenY(puckScreenY)) }), [puckScreenY])
+  const navPerspective = navPerspectiveFor(planeSize)
+  navPerspectiveRef.current = navPerspective
+  const navPlaneOffset = useMemo(
+    () => ({ x: 0, y: Math.round(planeOffsetForScreenY(puckScreenY, NAV_TILT_DEG, navPerspective)) }),
+    [puckScreenY, navPerspective],
+  )
 
   const changeView = (mode: RiderMapViewMode) => {
     if (mode === 'navigation') {
@@ -610,6 +641,9 @@ export default function RiderMap() {
   // Collected restaurants disappear from the map (their route leg is done).
   const visibleStops = purchaseStops.filter((stop) => stop.status !== 'collected')
       
+  // A ride booking speaks of a passenger, not food.
+  const rideTrip = activeDelivery?.order_type === 'transport'
+
   const tripStatus = (() => {
     if (!activeDelivery) {
       return {
@@ -623,7 +657,9 @@ export default function RiderMap() {
     if (tripState === 'EN_ROUTE_TO_PICKUP') {
       const nextStop = purchaseStops.find((p) => p.status !== 'collected') ?? null
       const parts: string[] = []
-      if (purchaseStops.length && nextStop) {
+      if (rideTrip) {
+        parts.push(activeDelivery.customer_name || 'Passenger')
+      } else if (purchaseStops.length && nextStop) {
         parts.push(`Stop ${nextStop.sequence}/${purchaseStops.length}`)
       } else if (activeDelivery.business_name) {
         parts.push(activeDelivery.business_name)
@@ -641,7 +677,7 @@ export default function RiderMap() {
       return {
         icon: MapPin,
         title: 'Arrived at Pickup',
-        meta: ' · Confirm Pickup',
+        meta: rideTrip ? ' · Passenger on board?' : ' · Confirm Pickup',
         tone: 'text-emerald-700',
         accent: 'text-emerald-600',
       }
@@ -653,8 +689,8 @@ export default function RiderMap() {
       if (dropLabel) parts.push(`→ ${dropLabel}`)
       if (routeEtaLabel) parts.push(routeEtaLabel)
       return {
-        icon: Truck,
-        title: 'Delivering',
+        icon: rideTrip ? Car : Truck,
+        title: rideTrip ? 'On the Way' : 'Delivering',
         meta: parts.length ? ` ${parts.join(' · ')}` : '',
         tone: 'text-[#17202A]',
         accent: 'text-emerald-600',
@@ -664,14 +700,14 @@ export default function RiderMap() {
       return {
         icon: MapPin,
         title: 'Arrived',
-        meta: ' · Confirm Drop',
+        meta: rideTrip ? ' · Complete Ride' : ' · Confirm Drop',
         tone: 'text-emerald-700',
         accent: 'text-emerald-600',
       }
     }
     return {
       icon: CheckCircle,
-      title: 'Delivery Completed',
+      title: rideTrip ? 'Ride Completed' : 'Delivery Completed',
       meta: ' · Available',
       tone: 'text-emerald-700',
       accent: 'text-emerald-600',
@@ -691,7 +727,7 @@ export default function RiderMap() {
       ref={mapAreaRef}
       data-view-mode={navActive ? 'navigation' : 'overview'}
       className={`rider-map-area fixed top-0 left-0 w-full h-[100dvh] z-0 ${tiles.containerClass ?? ''}`}
-      style={navActive ? { perspective: `${NAV_PERSPECTIVE_PX}px` } : undefined}
+      style={navActive ? { perspective: `${navPerspective}px` } : undefined}
     >
       {/* Rotator/tilter: in the navigation view the map becomes a large square,
           turned so the road ahead points up and tipped back like the ground. */}
@@ -719,7 +755,10 @@ export default function RiderMap() {
         zoomControl={false}
       >
           <TileLayer
-            key={tiles.id}
+            // Navigation draws a much larger, tilted plane: load tiles when a
+            // pan settles (not on every animation frame) and keep fewer
+            // off-screen tiles. Leaflet reads these at creation, hence the key.
+            key={`${tiles.id}-${navActive ? 'nav' : 'overview'}`}
             attribution={tiles.attribution}
             url={tiles.url}
             {...(tiles.subdomains ? { subdomains: tiles.subdomains } : {})}
@@ -727,6 +766,7 @@ export default function RiderMap() {
             maxZoom={20}
             noWrap
             bounds={WORLD_BOUNDS}
+            {...(navActive ? { updateWhenIdle: true, updateWhenZooming: false, keepBuffer: 1 } : {})}
           />
           <MapZoomOutLimit />
           {navActive ? (
@@ -826,7 +866,7 @@ export default function RiderMap() {
           <>
             {/* Soft horizon where the tilted map fades into the distance. */}
             <div aria-hidden="true" className="nav-horizon pointer-events-none absolute inset-x-0 top-0 z-[400] h-[22%]" />
-            {!navFree && <RiderNavPuck offsetY={puckScreenY} />}
+            {!navFree && <RiderNavPuck offsetY={puckScreenY} perspective={navPerspective} />}
           </>
         )}
 
@@ -859,6 +899,13 @@ export default function RiderMap() {
           </button>
         </div>
 
+        {locationSyncError && !(gpsError && locationSource !== 'gps') && (
+          <div role="alert" data-testid="location-sync-warning" className="absolute left-1/2 -translate-x-1/2 top-16 z-[1000] max-w-[90%] rounded-xl bg-[#FEF3C7] border border-[#FCD34D] px-3 py-2 text-xs font-semibold text-[#92400E] shadow">
+            {locationSyncError}
+            <br />
+            <RunDiagnosticsLink />
+          </div>
+        )}
         {gpsError && locationSource !== 'gps' && (
           <div role="status" className="absolute left-1/2 -translate-x-1/2 top-16 z-[1000] max-w-[90%] rounded-xl bg-[#FEF3C7] border border-[#FCD34D] px-3 py-2 text-xs font-semibold text-[#92400E] shadow">
             {gpsError}

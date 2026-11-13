@@ -25,7 +25,8 @@ class BookTransportRequest extends FormRequest
             'fare' => ['sometimes', 'numeric', 'min:0'],
             'distance_km' => ['sometimes', 'numeric', 'min:0'],
             'duration_min' => ['sometimes', 'integer', 'min:1'],
-            'payment_method' => ['required', 'string', 'in:cash,gcash,maya,card'],
+            // Rides: cash to the driver, or GCash online through PayMongo (2026-11-10).
+            'payment_method' => ['required', 'string', 'in:cash,gcash'],
             'booking_notes' => ['nullable', 'string', 'max:500'],
         ];
     }

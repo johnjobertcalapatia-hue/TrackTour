@@ -44,6 +44,7 @@ class TransportController extends Controller
         $fareBreakdown = $this->transport->getFareBreakdown(
             (string) $ride['vehicle_type'],
             (float) ($ride['booking_fare'] ?? 0),
+            $ride['booking_base_fare'] ?? null,
         );
 
         $riderLocation = null;
@@ -57,7 +58,6 @@ class TransportController extends Controller
             'id' => $trip->id,
             'order_number' => $ride['order_number'],
             'status' => $ride['ride_status'],
-            'ride_pin' => $ride['ride_pin'],
             'pickup_address' => $ride['pickup_address'],
             'pickup_latitude' => $ride['pickup_lat'],
             'pickup_longitude' => $ride['pickup_lng'],
@@ -218,7 +218,15 @@ class TransportController extends Controller
 
         // createRide() re-derives the authoritative fare server-side (spec §64),
         // so any client-supplied fare/distance/duration is advisory only.
-        $order = $this->transport->createRide($validated);
+        try {
+            $order = $this->transport->createRide($validated);
+        } catch (\App\Exceptions\RideFareChangedException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+                'data' => ['fare' => $e->currentFare, 'quoted_fare' => $e->quotedFare],
+            ], 409);
+        }
 
         return $this->createdResponse([
             'order_id' => $order->id,
@@ -242,7 +250,6 @@ class TransportController extends Controller
             return $this->successResponse([
                 'ride_status' => $ride['ride_status'],
                 'order_number' => $ride['order_number'],
-                'ride_pin' => $ride['ride_pin'],
                 'vehicle_type' => $ride['vehicle_type'],
                 'vehicle_color' => $ride['vehicle_color'],
                 'payment_method' => $ride['payment_method'],

@@ -73,6 +73,12 @@ class PaymentController extends Controller
                 if ($order->status === 'cancelled') {
                     return $this->errorResponse('This ride was cancelled and can no longer be paid.', 422);
                 }
+
+                // Stage 4 decision: rides are paid online after the trip, once
+                // it is completed (the app's Pay button rule, now enforced here).
+                if ($order->status !== 'completed') {
+                    return $this->errorResponse('You can pay for this ride once it is completed.', 422);
+                }
             } else {
                 $lineItems = [
                     [
@@ -401,9 +407,70 @@ class PaymentController extends Controller
             'checkout_session.payment.paid' => $this->handleCheckoutSessionPaymentPaid($eventData),
             'payment.paid', 'payment.succeeded' => $this->handlePaymentPaid($eventData),
             'payment.failed' => $this->handlePaymentFailed($eventData),
-            'refund.pending', 'refund.succeeded', 'refund.failed', 'refund.updated', 'payment.refunded' => $this->handleRefundWebhook($eventType, $eventData),
+            'refund.pending', 'refund.succeeded', 'refund.failed', 'refund.updated',
+            'payment.refunded', 'payment.refund.updated' => $this->handleRefundWebhook($eventType, $eventData),
             default => null,
         };
+    }
+
+    /**
+     * Refund lifecycle events. `payment.refund.updated` and `payment.refunded`
+     * are the documented PayMongo names (docs.paymongo.com webhook resource,
+     * read 2026-11-12); the `refund.*` names are kept for compatibility.
+     */
+    private const REFUND_EVENTS = [
+        'refund.pending', 'refund.succeeded', 'refund.failed', 'refund.updated',
+        'payment.refunded', 'payment.refund.updated',
+    ];
+
+    /**
+     * The refunds carried by a refund webhook, flattened.
+     *
+     * `payment.refund.updated` carries a refund resource
+     * ({id: "ref_…", type: "refund", attributes: {payment_id, status, amount,
+     * metadata, …}}). The `payment.refunded` payload is undocumented: when it
+     * is a payment resource (id "pay_…") its id is a PAYMENT id and is never
+     * used as a refund id — only refund resources found in its `refunds` list
+     * are applied. Legacy flat shapes ({id, payment_id, status}) still work.
+     *
+     * @return list<array{id: string, status: ?string, payment_id: ?string, local_key: ?string, attributes: array}>
+     */
+    protected function refundsFromWebhook(array $eventData): array
+    {
+        $isPayment = ($eventData['type'] ?? null) === 'payment'
+            || str_starts_with((string) ($eventData['id'] ?? ''), 'pay_');
+
+        if ($isPayment) {
+            $paymentId = (string) $eventData['id'];
+            $resources = array_filter(
+                (array) ($eventData['attributes']['refunds'] ?? []),
+                fn ($r) => is_array($r) && (($r['type'] ?? null) === 'refund' || str_starts_with((string) ($r['id'] ?? ''), 'ref_')),
+            );
+
+            return array_values(array_map(fn (array $r) => $this->flattenRefund($r, $paymentId), $resources));
+        }
+
+        // Older payloads nested the refund one level down.
+        $resource = isset($eventData['data']) && is_array($eventData['data']) && ! isset($eventData['id'])
+            ? $eventData['data']
+            : $eventData;
+
+        return empty($resource['id']) ? [] : [$this->flattenRefund($resource, null)];
+    }
+
+    private function flattenRefund(array $resource, ?string $paymentId): array
+    {
+        $attributes = is_array($resource['attributes'] ?? null) ? $resource['attributes'] : [];
+        $flat = array_merge(\Illuminate\Support\Arr::except($resource, ['attributes']), $attributes);
+        $metadata = is_array($flat['metadata'] ?? null) ? $flat['metadata'] : [];
+
+        return [
+            'id' => (string) $resource['id'],
+            'status' => isset($flat['status']) ? (string) $flat['status'] : null,
+            'payment_id' => isset($flat['payment_id']) && $flat['payment_id'] !== '' ? (string) $flat['payment_id'] : $paymentId,
+            'local_key' => isset($metadata['local_refund_key']) ? (string) $metadata['local_refund_key'] : null,
+            'attributes' => $flat,
+        ];
     }
 
     /**
@@ -411,22 +478,28 @@ class PaymentController extends Controller
      */
     protected function resolveWebhookPaymentId(string $eventType, array $eventData): ?int
     {
+        if (in_array($eventType, self::REFUND_EVENTS, true)) {
+            // A refund's own id (ref_…) is never a payment reference. Lock the
+            // payment through the refund's payment_id (serialising with the
+            // refund processor's phase 3, which takes the same lock), else
+            // through a refund we already recorded.
+            foreach ($this->refundsFromWebhook($eventData) as $refund) {
+                if ($refund['payment_id'] && ($payment = $this->lockPaymentByProvider([$refund['payment_id']], []))) {
+                    return $payment->id;
+                }
+                if ($ledger = \App\Models\Refund::query()->where('provider_refund_id', $refund['id'])->first()) {
+                    return $ledger->payment_id;
+                }
+            }
+
+            return null;
+        }
+
         $sessionId = $eventData['checkout_session_id'] ?? $eventData['payment_intent_id'] ?? null;
         $resourceId = $eventData['id'] ?? null;
 
         $payment = $this->lockPaymentByProvider((array) ($sessionId ?: []), (array) ($resourceId ?: []));
-        if ($payment) {
-            return $payment->id;
-        }
-
-        if (in_array($eventType, ['refund.pending', 'refund.succeeded', 'refund.failed', 'refund.updated', 'payment.refunded'], true)
-            && is_string($resourceId) && $resourceId !== '') {
-            $refundLedger = \App\Models\Refund::query()->where('provider_refund_id', $resourceId)->first();
-
-            return $refundLedger?->payment_id;
-        }
-
-        return null;
+        return $payment?->id;
     }
 
     protected function handleCheckoutSessionCompleted(array $eventData): void
@@ -585,41 +658,42 @@ class PaymentController extends Controller
      * Idempotent: re-delivered events converge to the same state, never create
      * a second provider refund, never duplicate ledger effects, and never
      * downgrade a successful refund. refund.pending / refund.succeeded /
-     * refund.failed are authoritative by event type; refund.updated reads the
-     * status carried in the payload.
+     * refund.failed are authoritative by event type; payment.refund.updated
+     * and refund.updated read the refund's own status (pending / processing
+     * stay pending; succeeded; failed keeps the payment retryable).
      */
     protected function handleRefundWebhook(string $eventType, array $eventData): void
     {
-        $refundId = $eventData['id']
-            ?? $eventData['data']['id']
-            ?? null;
-        $rawStatus = $eventData['status']
-            ?? $eventData['attributes']['status']
-            ?? $eventData['data']['status']
-            ?? null;
-        $paymentId = $eventData['payment_id']
-            ?? $eventData['attributes']['payment_id']
-            ?? $eventData['data']['payment_id']
-            ?? null;
+        $refunds = $this->refundsFromWebhook($eventData);
 
-        if (! $refundId) {
-            Log::warning('Refund webhook missing refund id', ['type' => $eventType]);
+        if ($refunds === []) {
+            // e.g. payment.refunded carrying only a payment resource: nothing
+            // identifies the refund, so leave it to payments:reconcile-refunds.
+            Log::warning('Refund webhook without an identifiable refund — left to reconciliation', ['type' => $eventType]);
+
             return;
         }
 
-        $status = match ($eventType) {
-            'refund.pending' => 'pending',
-            'refund.succeeded', 'payment.refunded' => 'succeeded',
-            'refund.failed' => 'failed',
-            default => (string) ($rawStatus ?: 'pending'),
-        };
+        $isPaymentResource = ($eventData['type'] ?? null) === 'payment' || str_starts_with((string) ($eventData['id'] ?? ''), 'pay_');
 
-        app(PaymentRefundProcessor::class)->applyProviderStatus(
-            providerRefundId: (string) $refundId,
-            providerStatus: $status,
-            paymentId: $paymentId ? (string) $paymentId : null,
-            attributes: $eventData,
-        );
+        foreach ($refunds as $refund) {
+            $status = match (true) {
+                $eventType === 'refund.pending' => 'pending',
+                $eventType === 'refund.succeeded' => 'succeeded',
+                $eventType === 'refund.failed' => 'failed',
+                // Legacy refund-shaped payment.refunded: the refund completed.
+                $eventType === 'payment.refunded' && ! $isPaymentResource => 'succeeded',
+                default => $refund['status'] ?: 'pending',
+            };
+
+            app(PaymentRefundProcessor::class)->applyProviderStatus(
+                providerRefundId: $refund['id'],
+                providerStatus: $status,
+                paymentId: $refund['payment_id'],
+                attributes: $refund['attributes'],
+                localRefundKey: $refund['local_key'],
+            );
+        }
     }
 
     /**
@@ -784,8 +858,10 @@ class PaymentController extends Controller
             return $this->errorResponse('No PayMongo payment ID found for this payment.', 422);
         }
 
-        // Default to full refund if no amount specified
-        $amountPesos = ($validated['amount'] ?? (int) round($payment->amount * 100)) / 100;
+        // No amount = everything still refundable (the whole payment when no
+        // partial refund was made before). The processor enforces the cap.
+        $remaining = app(PaymentRefundProcessor::class)->refundTotals($payment)['remaining'];
+        $amountPesos = ($validated['amount'] ?? (int) round($remaining * 100)) / 100;
 
         $result = app(PaymentRefundProcessor::class)->initiateRefund(
             payment: $payment,
@@ -799,15 +875,18 @@ class PaymentController extends Controller
             'already_refunded' => $this->errorResponse('This payment has already been refunded.', 422),
             'in_flight' => $this->errorResponse('A refund is already being processed for this payment.', 422),
             'not_refundable', 'no_provider_ref' => $this->errorResponse('Only paid payments can be refunded.', 422),
+            'blocked_after_acceptance' => $this->errorResponse('A rider has accepted this order, so it can no longer be refunded.', 422),
+            'exceeds_remaining' => $this->errorResponse('The refund is more than the ₱'.number_format((float) ($result['remaining'] ?? 0), 2).' still refundable on this payment.', 422),
             default => null, // 'succeeded' | 'pending'
         } ?? (function () use ($payment, $result, $amountPesos) {
             $refundStatus = $result['status'];
 
             // The processor already finalized the payment, the refunds ledger,
-            // and the payable. For a successfully refunded ORDER, also move the
-            // order's lifecycle status to cancelled.
-            if ($refundStatus === 'succeeded') {
-                $payable = $payment->fresh()->payable;
+            // and the payable. Only a FULLY refunded order is cancelled — a
+            // partial refund leaves the order (and payment) going.
+            $fresh = $payment->fresh();
+            if ($refundStatus === 'succeeded' && $fresh->status === 'refunded') {
+                $payable = $fresh->payable;
                 if ($payable instanceof Order && $payable->status !== 'cancelled') {
                     $payable->update(['status' => 'cancelled']);
                 }
@@ -827,6 +906,14 @@ class PaymentController extends Controller
      * payment without restarting its flow.
      */
     private const IN_PROGRESS_ORDER_STATUSES = ['accepted', 'preparing', 'ready', 'picked_up', 'in_transit', 'arrived_destination'];
+
+    /**
+     * Closed before the money arrived (e.g. the tourist cancelled while the
+     * GCash checkout was still finishing). A payment landing here must never
+     * revive the order or dispatch a rider (bug found 2026-11-10): the money is
+     * recorded and refunded through the provider-authoritative refund flow.
+     */
+    private const CLOSED_ORDER_STATUSES = ['cancelled', 'cancelled_by_tourist', 'rejected', 'refunded'];
 
     /** The order is now paid online; its status / progress is left as it is. */
     private function recordOnlinePaymentOnly(Order $order, float $amount, string $method): void
@@ -865,6 +952,38 @@ class PaymentController extends Controller
                 'payment_method' => $payment->method,
                 'payment_status' => 'paid',
             ]);
+
+            // Stage 4: money that lands on a ride cancelled meanwhile (e.g. a
+            // checkout opened before the cancellation) is refunded through the
+            // provider-authoritative refund path, as for food orders.
+            if (in_array($payable->status, self::CLOSED_ORDER_STATUSES, true)) {
+                Log::warning('Payment received for a cancelled ride; refunding', ['order_id' => $payable->id, 'payment_id' => $payment->id]);
+                $orderId = $payable->id;
+                DB::afterCommit(function () use ($orderId) {
+                    $order = Order::find($orderId);
+                    if ($order) {
+                        app(\App\Services\OrderRefundService::class)->refundPaidOrder($order, 'Payment received after the ride was cancelled');
+                    }
+                });
+            }
+
+            return;
+        }
+
+        if ($payable instanceof Order && in_array($payable->status, self::CLOSED_ORDER_STATUSES, true)) {
+            $payable->update([
+                'paid_amount' => $payment->amount,
+                'payment_method' => $payment->method,
+                'payment_status' => 'paid',
+            ]);
+            Log::warning('Payment received for a closed order; refunding', ['order_id' => $payable->id, 'status' => $payable->status, 'payment_id' => $payment->id]);
+            $orderId = $payable->id;
+            DB::afterCommit(function () use ($orderId) {
+                $order = Order::find($orderId);
+                if ($order) {
+                    app(\App\Services\OrderRefundService::class)->refundPaidOrder($order, 'Payment received after the order was cancelled');
+                }
+            });
 
             return;
         }
@@ -923,9 +1042,14 @@ class PaymentController extends Controller
             ]);
 
             // Fan out: mark each child order paid/ready for restaurant acceptance.
+            // Children closed before the money arrived stay closed and are
+            // refunded (never revived / dispatched).
             $orders = $payable->orders()->get();
+            $closedChildIds = [];
             foreach ($orders as $childOrder) {
-                if (in_array($childOrder->status, self::IN_PROGRESS_ORDER_STATUSES, true)) {
+                if (in_array($childOrder->status, self::CLOSED_ORDER_STATUSES, true)) {
+                    $closedChildIds[] = $childOrder->id;
+                } elseif (in_array($childOrder->status, self::IN_PROGRESS_ORDER_STATUSES, true)) {
                     // Already under way (COD paid online mid-way): record the payment only.
                     $this->recordOnlinePaymentOnly($childOrder, (float) $childOrder->total, (string) $payment->method);
                 } elseif (! in_array($childOrder->status, ['accepted', 'preparing', 'ready', 'delivered', 'completed'])) {
@@ -940,10 +1064,23 @@ class PaymentController extends Controller
                 }
             }
 
+            if ($closedChildIds !== []) {
+                Log::warning('Group payment received for closed orders; refunding them', ['group_order_id' => $payable->id, 'order_ids' => $closedChildIds]);
+                DB::afterCommit(function () use ($closedChildIds) {
+                    foreach (Order::whereIn('id', $closedChildIds)->get() as $closed) {
+                        app(\App\Services\OrderRefundService::class)->refundPaidGroupChild($closed, 'Payment received after the order was cancelled');
+                    }
+                });
+            }
+            $orders = $orders->reject(fn (Order $o) => in_array($o->id, $closedChildIds, true))->values();
+
             // One group checkout => ONE physical delivery with ONE rider trip
             // (step 4/5). The single group trip is dispatched, never a
-            // per-restaurant delivery.
-            if ($payable->order_type === 'delivery') {
+            // per-restaurant delivery. Nothing to dispatch when every
+            // restaurant order was closed before the money arrived.
+            if ($orders->isEmpty()) {
+                // nothing left to fulfil
+            } elseif ($payable->order_type === 'delivery') {
                 try {
                     app(\App\Services\SmartDispatchService::class)->scheduleGroupDispatch($payable->fresh());
                 } catch (\Exception $e) {

@@ -36,40 +36,21 @@ class TransportationService
 
     public function getVehicleTypes(): array
     {
-        return [
-            [
-                'slug' => 'motorcycle',
-                'name' => 'Motorcycle',
-                'base_fare' => 50.00,
-                'per_km' => 15.00,
-                'max_passengers' => 1,
-                'icon' => 'motorcycle',
-            ],
-            [
-                'slug' => 'tricycle',
-                'name' => 'Tricycle',
-                'base_fare' => 60.00,
-                'per_km' => 20.00,
-                'max_passengers' => 3,
-                'icon' => 'tricycle',
-            ],
-            [
-                'slug' => 'car',
-                'name' => 'Car',
-                'base_fare' => 100.00,
-                'per_km' => 25.00,
-                'max_passengers' => 4,
-                'icon' => 'car',
-            ],
-            [
-                'slug' => 'van',
-                'name' => 'Van',
-                'base_fare' => 150.00,
-                'per_km' => 30.00,
-                'max_passengers' => 8,
-                'icon' => 'van',
-            ],
+        // Base fare and per-km rate are set by the Tourism Office (Admin >
+        // Riders > Ride Hailing Fares), separate from the food delivery fee.
+        $fares = app(RideFareSettings::class)->all();
+
+        $vehicles = [
+            ['slug' => 'motorcycle', 'name' => 'Motorcycle', 'max_passengers' => 1, 'icon' => 'motorcycle'],
+            ['slug' => 'tricycle', 'name' => 'Tricycle', 'max_passengers' => 3, 'icon' => 'tricycle'],
+            ['slug' => 'car', 'name' => 'Car', 'max_passengers' => 4, 'icon' => 'car'],
+            ['slug' => 'van', 'name' => 'Van', 'max_passengers' => 8, 'icon' => 'van'],
         ];
+
+        return array_map(fn (array $v) => $v + [
+            'base_fare' => $fares[$v['slug']]['base_fare'],
+            'per_km' => $fares[$v['slug']]['per_km'],
+        ], $vehicles);
     }
 
     public function estimateFare(float $pickupLat, float $pickupLng, float $destLat, float $destLng): array
@@ -100,6 +81,9 @@ class TransportationService
 
         return [
             'distance_km' => round($distanceKm, 2),
+            // Stage 5: the exact distance the fares above were computed from,
+            // so a booked fare can be recomputed to the centavo.
+            'distance_km_exact' => round($distanceKm, 9),
             'distance_text' => $distanceKm < 1 ? round($distanceKm * 1000).' m' : round($distanceKm, 1).' km',
             'duration_min' => $durationMin,
             'duration_text' => $durationMin.' min',
@@ -119,12 +103,17 @@ class TransportationService
      * receipt always reconciles: base + distance === total. service_fee is
      * config-driven, shown only when > 0, and NOT part of the total in MVP.
      */
-    public function getFareBreakdown(string $vehicleType, float $totalFare): array
+    public function getFareBreakdown(string $vehicleType, float $totalFare, ?float $bookedBaseFare = null): array
     {
-        $vehicle = collect($this->getVehicleTypes())
-            ->first(fn ($v) => (string) $v['slug'] === $vehicleType) ?? $this->getVehicleTypes()[0];
+        // A booked ride keeps the base fare it was priced with, so a later
+        // Tourism Office fare change never rewrites an existing receipt.
+        if ($bookedBaseFare === null) {
+            $vehicle = collect($this->getVehicleTypes())
+                ->first(fn ($v) => (string) $v['slug'] === $vehicleType) ?? $this->getVehicleTypes()[0];
+            $bookedBaseFare = (float) $vehicle['base_fare'];
+        }
 
-        $baseFare = round((float) $vehicle['base_fare'], 2);
+        $baseFare = round($bookedBaseFare, 2);
         $totalFare = round((float) $totalFare, 2);
 
         return [
@@ -396,16 +385,46 @@ class TransportationService
         }
 
         $fare = (float) $fareBlock['fare'];
+        $baseFare = (float) $fareBlock['base_fare'];
+        $perKm = (float) $fareBlock['per_km'];
         $distanceKm = (float) $estimate['distance_km'];
         $durationMin = (int) $estimate['duration_min'];
         $riderCommission = max(20, $fare * 0.4);
 
-        $ridePin = str_pad(random_int(1000, 9999), 4, '0', STR_PAD_LEFT);
+        // Stage 4: the tourist books the fare they were shown. If rates or the
+        // route changed since the quote, refuse so they can review the new
+        // fare (old clients that send no fare keep today's behaviour).
+        if (isset($data['fare']) && is_numeric($data['fare']) && abs((float) $data['fare'] - $fare) >= 0.01) {
+            throw new \App\Exceptions\RideFareChangedException((float) $data['fare'], $fare);
+        }
+
+        // The quote this ride is priced on, with a fingerprint of the Tourism
+        // Office fare settings used. Kept with the booking and, immutably, in
+        // the transaction ledger ("ride_quoted").
+        $quote = [
+            'vehicle_type' => $vehicleType,
+            'passenger_count' => $passengerCount,
+            'base_fare' => $baseFare,
+            'per_km' => $perKm,
+            'distance_km' => $distanceKm,
+            'duration_min' => $durationMin,
+            'distance_fare' => round(max($fare - $baseFare, 0), 2),
+            'fare' => $fare,
+            'quoted_fare' => isset($data['fare']) && is_numeric($data['fare']) ? (float) $data['fare'] : null,
+            'distance_km_exact' => (float) ($estimate['distance_km_exact'] ?? $distanceKm),
+            'rider_commission' => round($riderCommission, 2),
+            'commission_rule' => 'max(₱20, 40% of fare)',
+            'commission_rate' => 0.4,
+            'commission_minimum' => 20.0,
+            'payment_method' => $data['payment_method'] ?? 'cash',
+            'fare_settings_fingerprint' => hash('sha256', \App\Services\Integrity\CanonicalJson::encode(['vehicle_type' => $vehicleType, 'base_fare' => $baseFare, 'per_km' => $perKm])),
+            'quoted_at' => now()->toIso8601String(),
+        ];
 
         // Order + item + delivery must commit atomically: the item insert and the
         // delivery row are both required for the ride to reach dispatch, and a
         // partial failure previously left an orphaned order behind.
-        [$order, $delivery] = DB::transaction(function () use ($data, $fare, $vehicleType, $passengerCount, $riderCommission, $ridePin, $distanceKm, $durationMin) {
+        [$order, $delivery] = DB::transaction(function () use ($data, $fare, $baseFare, $perKm, $vehicleType, $passengerCount, $riderCommission, $distanceKm, $durationMin, $quote) {
             $order = Order::create([
                 'order_number' => 'TRP-'.strtoupper(uniqid()),
                 // Rides have no owning restaurant: a NULL business_id keeps ride
@@ -454,11 +473,16 @@ class TransportationService
                     'estimated_distance_km' => $distanceKm,
                     'estimated_duration_min' => $durationMin,
                     'booking_notes' => $data['booking_notes'] ?? '',
-                    'ride_pin' => $ridePin,
                     'payment_method' => $data['payment_method'] ?? 'cash',
                     'fare' => $fare,
+                    // Rates in force at booking (Tourism Office ride fares).
+                    'base_fare' => $baseFare,
+                    'per_km' => $perKm,
+                    'fare_quote' => $quote,
                 ]),
             ]);
+
+            app(\App\Services\Integrity\TransactionLedger::class)->record($order, 'ride_quoted', $quote, $delivery);
 
             return [$order, $delivery];
         });
@@ -526,9 +550,9 @@ class TransportationService
 
         $vehicleType = 'motorcycle';
         $passengerCount = 1;
-        $ridePin = null;
         $paymentMethod = 'cash';
         $bookingFare = 0;
+        $bookingBaseFare = null;
         $bookingNotes = '';
         $bookingDistance = 0;
         $bookingDuration = 0;
@@ -536,9 +560,9 @@ class TransportationService
             $notes = json_decode($delivery->notes, true);
             $vehicleType = $notes['vehicle_type'] ?? 'motorcycle';
             $passengerCount = $notes['passenger_count'] ?? 1;
-            $ridePin = $notes['ride_pin'] ?? null;
             $paymentMethod = $notes['payment_method'] ?? 'cash';
             $bookingFare = $notes['fare'] ?? 0;
+            $bookingBaseFare = isset($notes['base_fare']) ? (float) $notes['base_fare'] : null;
             $bookingNotes = $notes['booking_notes'] ?? '';
             $bookingDistance = $notes['estimated_distance_km'] ?? 0;
             $bookingDuration = $notes['estimated_duration_min'] ?? 0;
@@ -568,9 +592,9 @@ class TransportationService
             'vehicle_type' => $vehicleType,
             'vehicle_color' => $vehicleColors[$vehicleType] ?? '#16a34a',
             'passenger_count' => $passengerCount,
-            'ride_pin' => $ridePin,
             'payment_method' => $paymentMethod,
             'booking_fare' => $bookingFare,
+            'booking_base_fare' => $bookingBaseFare,
             'booking_notes' => $bookingNotes,
             'booking_distance' => $bookingDistance,
             'booking_duration' => $bookingDuration,
@@ -585,24 +609,69 @@ class TransportationService
         ];
     }
 
+    /**
+     * Tourist cancellation (Stage 4 hardening). Same discipline as the driver
+     * cancellation: one transaction, the delivery then the order locked and
+     * re-checked (a rider accepting at the same moment either wins first —
+     * then the stage check below still applies — or waits for this lock), an
+     * assigned rider released back to 'available', and a "ride_cancelled"
+     * ledger event recording who, why and at which stage.
+     */
     public function cancelRide(Order $order, ?string $reason = null): bool
     {
-        if (! in_array($order->status, ['pending', 'confirmed', 'preparing'])) {
+        $cancellableDelivery = ['waiting', 'assigned', 'en_route_pickup', 'arrived_pickup'];
+
+        $released = DB::transaction(function () use ($order, $reason, $cancellableDelivery) {
+            $delivery = Delivery::where('order_id', $order->id)->lockForUpdate()->first();
+            $locked = Order::whereKey($order->id)->lockForUpdate()->first();
+            if (! $locked || ! in_array($locked->status, ['pending', 'confirmed', 'preparing'], true)) {
+                return false;
+            }
+            $stage = $delivery ? ($delivery->status?->value ?? $delivery->status) : null;
+            if ($delivery && ! in_array($stage, $cancellableDelivery, true)) {
+                return false; // the passenger is already on board
+            }
+
+            $locked->update([
+                'status' => 'cancelled',
+                'cancelled_by' => Auth::id(),
+                'cancellation_reason' => $reason,
+                'cancelled_at' => now(),
+            ]);
+
+            $riderId = $delivery?->rider_id ? (int) $delivery->rider_id : null;
+            if ($delivery) {
+                $delivery->update(['status' => 'cancelled', 'dispatch_status' => null]);
+            }
+            if ($riderId) {
+                User::where('id', $riderId)->first()?->riderDetail()?->updateOrCreate(
+                    ['user_id' => $riderId],
+                    ['rider_status' => User::RIDER_STATUS_AVAILABLE, 'rider_status_updated_at' => now()]
+                );
+            }
+
+            app(\App\Services\Integrity\TransactionLedger::class)->record($locked, 'ride_cancelled', [
+                'cancelled_by' => 'tourist',
+                'actor_id' => Auth::id(),
+                'reason' => $reason,
+                'stage' => $stage,
+                'rider_id' => $riderId,
+            ], $locked);
+
+            return ['delivery_id' => $delivery?->id, 'rider_id' => $riderId];
+        });
+
+        if ($released === false) {
             return false;
         }
 
-        $order->update([
-            'status' => 'cancelled',
-            'cancelled_by' => Auth::id(),
-            'cancellation_reason' => $reason,
-            'cancelled_at' => now(),
-        ]);
-
-        if ($order->delivery) {
-            $order->delivery->update([
-                'status' => 'cancelled',
-                'dispatch_status' => null,
-            ]);
+        // Best effort: an assigned rider's trip room is dropped (MySQL stays authoritative).
+        if (! empty($released['rider_id']) && ! empty($released['delivery_id'])) {
+            try {
+                app(WebsocketNotifierService::class)->notifyTripCancelled((int) $released['delivery_id'], (int) $released['rider_id']);
+            } catch (\Throwable $e) {
+                // Best effort.
+            }
         }
 
         return true;
@@ -683,6 +752,14 @@ class TransportationService
                 ['user_id' => $riderId],
                 ['rider_status' => User::RIDER_STATUS_AVAILABLE, 'rider_status_updated_at' => now()]
             );
+
+            app(\App\Services\Integrity\TransactionLedger::class)->record($lockedOrder, 'ride_cancelled', [
+                'cancelled_by' => 'driver',
+                'actor_id' => $riderId,
+                'reason' => $reason ?: 'Driver cancelled the ride.',
+                'stage' => $lockedDeliveryStatus,
+                'rider_id' => $riderId,
+            ], $lockedOrder);
         });
 
         // Emit after the transaction commits: bridges to user:{userId} and

@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, CheckCircle2, Clock, Eye, MapPin, Package, Store, UserCheck, UtensilsCrossed } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, Clock, Eye, MapPin, Package, Store, UserCheck, Users, UtensilsCrossed } from 'lucide-react'
 import { del, patch, post } from '@/shared/services/api'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { cn, formatDateTime, toAssetUrl } from '@/shared/utils'
 import { useAuthStore } from '@/features/auth/services/auth-store'
-import { km, orderLabel, paymentLabel, peso, type DeliveryOffer, type OfferResponse, type TakenOffer } from '@/features/rider/services/delivery-offers'
+import { isRideBooking, km, orderLabel, paymentLabel, peso, type DeliveryOffer, type OfferResponse, type TakenOffer } from '@/features/rider/services/delivery-offers'
 
 /** Hold renewal while the review page is open (server hold lapses after ~90 s without it). */
 const HEARTBEAT_MS = 30_000
@@ -40,6 +40,7 @@ export default function RiderDeliveryOffer() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const fetchUser = useAuthStore((s) => s.fetchUser)
+  const rideHailing = useAuthStore((s) => s.user?.current_service === 'transport')
   const [actionError, setActionError] = useState<string | null>(null)
 
   const { data: offer, isLoading, isError, error, refetch } = useQuery({
@@ -119,11 +120,14 @@ export default function RiderDeliveryOffer() {
     },
   })
 
+  const offerIsRide = offer ? isRideBooking(offer as DeliveryOffer) : rideHailing
+  const listName = offerIsRide ? 'Available bookings' : 'Available deliveries'
+
   // `replace`: returning to the list swaps out this offer page instead of
   // stacking another list page on top (list Back ↔ offer link loop).
   const back = (
     <Link to="/rider/deliveries/pending" replace className="inline-flex items-center gap-2 text-sm text-[#6B7280] hover:text-[#17201B] mb-6 transition">
-      <ArrowLeft className="w-4 h-4" aria-hidden="true" /> Available deliveries
+      <ArrowLeft className="w-4 h-4" aria-hidden="true" /> {listName}
     </Link>
   )
 
@@ -134,7 +138,7 @@ export default function RiderDeliveryOffer() {
         {back}
         <div className="bg-white rounded-2xl border border-[#E5E9E7] p-10 text-center">
           <Package className="w-10 h-10 text-[#9CA3AF] mx-auto mb-3" aria-hidden="true" />
-          <p className="font-semibold text-[#17201B]">{apiMessage(error, 'This delivery offer is no longer available.')}</p>
+          <p className="font-semibold text-[#17201B]">{apiMessage(error, `This ${rideHailing ? 'booking' : 'delivery'} offer is no longer available.`)}</p>
           <p className="text-sm text-[#6B7280] mt-1">It may have been accepted by another rider.</p>
         </div>
       </div>
@@ -142,13 +146,15 @@ export default function RiderDeliveryOffer() {
   }
 
   if (offer.availability === 'taken' || offer.availability === 'reviewing') {
-    return <RestrictedOfferView offer={offer as TakenOffer} back={back} onRetry={() => void refetch()} />
+    return <RestrictedOfferView offer={offer as TakenOffer} back={back} onRetry={() => void refetch()} isRide={offerIsRide} />
   }
 
   // Restricted states returned above: this is the full offer.
   const detail = offer as DeliveryOffer
 
-  const isBooking = detail.items.length === 0 && detail.pickups.length === 0
+  // A ride booking carries one "Ride: …" line item, so the order type decides.
+  const isBooking = isRideBooking(detail) || (detail.items.length === 0 && detail.pickups.length === 0)
+  const ride = detail.ride ?? null
   const fast = detail.delivery_speed === 'fast'
   const busy = accept.isPending || decline.isPending || findOther.isPending
 
@@ -160,7 +166,7 @@ export default function RiderDeliveryOffer() {
         <header className="p-5 flex items-start justify-between gap-3">
           <div>
             <h1 className="text-xl font-bold text-[#17201B]">{isBooking ? 'Booking' : 'Delivery'} Offer</h1>
-            <p className="text-sm text-[#6B7280]">Order {orderLabel(detail)}</p>
+            <p className="text-sm text-[#6B7280]">{isBooking ? 'Booking' : 'Order'} {orderLabel(detail)}</p>
             <p className="text-xs text-[#9CA3AF] mt-0.5">{formatDateTime(detail.created_at)}</p>
           </div>
           <span className={fast ? 'shrink-0 rounded-full bg-[#DBEAFE] text-[#1D4ED8] px-3 py-1 text-xs font-semibold' : 'shrink-0 rounded-full bg-[#F3F4F6] text-[#4B5563] px-3 py-1 text-xs font-semibold'}>
@@ -169,23 +175,40 @@ export default function RiderDeliveryOffer() {
         </header>
 
         <section className="p-5" aria-labelledby="offer-overview">
-          <h2 id="offer-overview" className="text-sm font-bold text-[#17201B] mb-3">Delivery overview</h2>
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-4">
-            <Stat label="Estimated distance" value={km(detail.distance_km)} />
-            <Stat label="Delivery fee" value={peso(detail.delivery_fee)} />
-            <Stat label="Customer tip" value={peso(detail.rider_tip)} />
-            {!isBooking && <Stat label="Food items" value={String(detail.items_count)} />}
-            {detail.estimated_duration_minutes != null && <Stat label="Estimated time" value={`${detail.estimated_duration_minutes} min`} />}
-            <Stat label="Payment" value={paymentLabel(detail)} />
-          </dl>
+          <h2 id="offer-overview" className="text-sm font-bold text-[#17201B] mb-3">{isBooking ? 'Ride overview' : 'Delivery overview'}</h2>
+          {isBooking ? (
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-4">
+              <Stat label="Trip distance" value={km(ride?.distance_km ?? detail.distance_km)} />
+              <Stat
+                label="Estimated time"
+                value={(ride?.duration_minutes ?? detail.estimated_duration_minutes) != null ? `${ride?.duration_minutes ?? detail.estimated_duration_minutes} min` : '—'}
+              />
+              <Stat label="Ride fare" value={peso(ride?.fare)} />
+              <Stat label="Passengers" value={String(ride?.passenger_count ?? 1)} />
+              <Stat label="Payment" value={paymentLabel(detail)} />
+            </dl>
+          ) : (
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-4">
+              <Stat label="Estimated distance" value={km(detail.distance_km)} />
+              <Stat label="Delivery fee" value={peso(detail.delivery_fee)} />
+              <Stat label="Customer tip" value={peso(detail.rider_tip)} />
+              <Stat label="Food items" value={String(detail.items_count)} />
+              {detail.estimated_duration_minutes != null && <Stat label="Estimated time" value={`${detail.estimated_duration_minutes} min`} />}
+              <Stat label="Payment" value={paymentLabel(detail)} />
+            </dl>
+          )}
           {detail.is_cod && (
-            <p className="mt-3 text-xs text-[#6B7280]">Cash on delivery: you collect the payment from the customer at drop-off.</p>
+            <p className="mt-3 text-xs text-[#6B7280]">
+              {isBooking
+                ? 'Cash: collect the fare from the passenger at the drop-off.'
+                : 'Cash on delivery: you collect the payment from the customer at drop-off.'}
+            </p>
           )}
         </section>
 
         <section className="p-5 space-y-4" aria-labelledby="offer-route">
-          <h2 id="offer-route" className="text-sm font-bold text-[#17201B]">Delivery information</h2>
-          {detail.pickups.length > 0 ? (
+          <h2 id="offer-route" className="text-sm font-bold text-[#17201B]">{isBooking ? 'Trip' : 'Delivery information'}</h2>
+          {!isBooking && detail.pickups.length > 0 ? (
             <ol className="space-y-3" aria-label="Pickup locations">
               {detail.pickups.map((p, i) => (
                 <li key={p.id} className="flex items-start gap-3">
@@ -205,7 +228,7 @@ export default function RiderDeliveryOffer() {
             <div className="flex items-start gap-3">
               <MapPin className="w-5 h-5 text-[#16803C] shrink-0 mt-0.5" aria-hidden="true" />
               <div>
-                <p className="text-sm font-semibold text-[#17201B]">Pickup location</p>
+                <p className="text-sm font-semibold text-[#17201B]">{isBooking ? 'Passenger pickup' : 'Pickup location'}</p>
                 <p className="text-xs text-[#6B7280]">{detail.pickup.address}</p>
               </div>
             </div>
@@ -213,13 +236,25 @@ export default function RiderDeliveryOffer() {
           <div className="flex items-start gap-3">
             <MapPin className="w-5 h-5 text-[#DC2626] shrink-0 mt-0.5" aria-hidden="true" />
             <div>
-              <p className="text-sm font-semibold text-[#17201B]">Delivery destination</p>
+              <p className="text-sm font-semibold text-[#17201B]">{isBooking ? 'Drop-off' : 'Delivery destination'}</p>
               <p className="text-xs text-[#6B7280]">{detail.dropoff.address}</p>
             </div>
           </div>
+          {isBooking && ride && (
+            <div className="flex items-start gap-3">
+              <Users className="w-5 h-5 text-[#6B7280] shrink-0 mt-0.5" aria-hidden="true" />
+              <div>
+                <p className="text-sm font-semibold text-[#17201B]">
+                  {ride.vehicle_type.charAt(0).toUpperCase() + ride.vehicle_type.slice(1)} · {ride.passenger_count}{' '}
+                  {ride.passenger_count === 1 ? 'passenger' : 'passengers'}
+                </p>
+                {ride.booking_notes && <p className="text-xs text-[#6B7280] italic">Note: {ride.booking_notes}</p>}
+              </div>
+            </div>
+          )}
         </section>
 
-        {detail.items.length > 0 && (
+        {!isBooking && detail.items.length > 0 && (
           <section className="p-5" aria-labelledby="offer-items">
             <h2 id="offer-items" className="text-sm font-bold text-[#17201B] mb-3">Ordered items</h2>
             <ul className="space-y-3">
@@ -253,7 +288,7 @@ export default function RiderDeliveryOffer() {
           )}
           {detail.is_mine ? (
             <Link to="/rider/map" className="flex items-center justify-center gap-2 h-11 rounded-full bg-[#16803C] text-white text-sm font-semibold">
-              <CheckCircle2 className="w-4 h-4" aria-hidden="true" /> You accepted this delivery. Open trip
+              <CheckCircle2 className="w-4 h-4" aria-hidden="true" /> You accepted this {isBooking ? 'booking' : 'delivery'}. Open trip
             </Link>
           ) : (
             <>
@@ -272,7 +307,7 @@ export default function RiderDeliveryOffer() {
                   disabled={busy}
                   className="w-full h-11 rounded-full border border-[#D1D5DB] text-sm font-semibold text-[#17201B] hover:bg-[#F9FAFB] disabled:opacity-50"
                 >
-                  {decline.isPending ? 'Declining…' : 'Decline Offer'}
+                  {decline.isPending ? 'Declining…' : isBooking ? 'Decline Booking' : 'Decline Offer'}
                 </button>
               ) : (
                 <button
@@ -281,7 +316,7 @@ export default function RiderDeliveryOffer() {
                   disabled={busy}
                   className="w-full h-11 rounded-full border border-[#D1D5DB] text-sm font-semibold text-[#17201B] hover:bg-[#F9FAFB] disabled:opacity-50"
                 >
-                  Find other offers
+                  {isBooking ? 'Find other bookings' : 'Find other offers'}
                 </button>
               )}
               <p className="flex items-center justify-center gap-1 text-xs text-[#9CA3AF]">
@@ -296,7 +331,7 @@ export default function RiderDeliveryOffer() {
 }
 
 /** Another rider has it (reviewing now, or accepted): show the state, never an accept action. */
-function RestrictedOfferView({ offer, back, onRetry }: { offer: TakenOffer; back: ReactNode; onRetry: () => void }) {
+function RestrictedOfferView({ offer, back, onRetry, isRide }: { offer: TakenOffer; back: ReactNode; onRetry: () => void; isRide: boolean }) {
   const reviewing = offer.availability === 'reviewing'
   return (
     <div className="max-w-2xl">
@@ -304,8 +339,8 @@ function RestrictedOfferView({ offer, back, onRetry }: { offer: TakenOffer; back
       <div className="bg-white rounded-2xl border border-[#E5E9E7] divide-y divide-[#EEF1EF]">
         <header className="p-5 flex items-start justify-between gap-3">
           <div>
-            <h1 className="text-xl font-bold text-[#17201B]">{offer.order_type === 'transport' ? 'Booking' : 'Delivery'} Offer</h1>
-            <p className="text-sm text-[#6B7280]">Order {orderLabel(offer)}</p>
+            <h1 className="text-xl font-bold text-[#17201B]">{isRide ? 'Booking' : 'Delivery'} Offer</h1>
+            <p className="text-sm text-[#6B7280]">{isRide ? 'Booking' : 'Order'} {orderLabel(offer)}</p>
           </div>
           <span className="shrink-0 rounded-full bg-[#F3F4F6] text-[#4B5563] px-3 py-1 text-xs font-semibold">{offer.delivery_type_label}</span>
         </header>
@@ -318,19 +353,30 @@ function RestrictedOfferView({ offer, back, onRetry }: { offer: TakenOffer; back
             <p className={cn('text-xs mt-0.5', reviewing ? 'text-[#78350F]' : 'text-[#7F1D1D]')}>
               {reviewing
                 ? 'You can view or accept it only if that rider lets it go. Find another offer meanwhile.'
-                : 'This offer can no longer be accepted. Check Available Deliveries for other orders.'}
+                : isRide
+                  ? 'This booking can no longer be accepted. Check Available Bookings for other rides.'
+                  : 'This offer can no longer be accepted. Check Available Deliveries for other orders.'}
             </p>
           </div>
         </div>
         <dl className="p-5 grid grid-cols-2 gap-x-4 gap-y-4">
-          <Stat label="Estimated distance" value={km(offer.distance_km)} />
-          <Stat label="Delivery fee" value={peso(offer.delivery_fee)} />
-          <Stat label="Customer tip" value={peso(offer.rider_tip)} />
-          {offer.pickup_names.length > 0 && <Stat label="Pickup" value={offer.pickup_names.join(', ')} />}
+          {isRide ? (
+            <>
+              <Stat label="Trip distance" value={km(offer.ride?.distance_km ?? offer.distance_km)} />
+              <Stat label="Ride fare" value={peso(offer.ride?.fare)} />
+            </>
+          ) : (
+            <>
+              <Stat label="Estimated distance" value={km(offer.distance_km)} />
+              <Stat label="Delivery fee" value={peso(offer.delivery_fee)} />
+              <Stat label="Customer tip" value={peso(offer.rider_tip)} />
+              {offer.pickup_names.length > 0 && <Stat label="Pickup" value={offer.pickup_names.join(', ')} />}
+            </>
+          )}
         </dl>
         <div className="p-5 space-y-2.5">
           <Link to="/rider/deliveries/pending" replace className="flex items-center justify-center h-11 rounded-full bg-[#16803C] text-white text-sm font-semibold">
-            See other deliveries
+            {isRide ? 'See other bookings' : 'See other deliveries'}
           </Link>
           {reviewing && (
             <button type="button" onClick={onRetry} className="w-full h-11 rounded-full border border-[#D1D5DB] text-sm font-semibold text-[#17201B] hover:bg-[#F9FAFB]">

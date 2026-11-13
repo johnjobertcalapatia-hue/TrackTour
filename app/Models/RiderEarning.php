@@ -33,6 +33,23 @@ class RiderEarning extends Model
             ->withTimestamps();
     }
 
+    /** Amounts fixed when the earning is recorded (Stage 5: write-once). */
+    public const WRITE_ONCE = ['rider_id', 'order_id', 'delivery_fee', 'rider_tip', 'total_earning'];
+
+    protected static function booted(): void
+    {
+        // Every earning is posted to the append-only ledger as it is recorded.
+        static::created(fn (RiderEarning $earning) => app(\App\Services\RiderEarningLedger::class)->postEarning($earning));
+
+        // Corrections are compensating ledger adjustments, never edits.
+        static::updating(function (RiderEarning $earning) {
+            if ($earning->isDirty(self::WRITE_ONCE)) {
+                throw new \LogicException('Rider earning amounts are write-once; record an adjustment in the earnings ledger instead.');
+            }
+        });
+        static::deleting(fn () => throw new \LogicException('Rider earnings are never deleted; record an adjustment instead.'));
+    }
+
     protected function casts(): array
     {
         return [

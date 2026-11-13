@@ -4,6 +4,8 @@ import {
   NAV_PUCK_GAP_PX,
   NAV_PUCK_HALF_PX,
   NAV_TILT_DEG,
+  NAV_TILT_SIZE_FACTOR,
+  navPerspectiveFor,
   navPuckScreenOffset,
   planeOffsetForScreenY,
   planePointForScreen,
@@ -62,5 +64,34 @@ describe('rider puck placement', () => {
   it('is centred when the map area has no size yet', () => {
     expect(navPuckScreenOffset(area(0, 0))).toEqual({ x: 0, y: 0 })
     expect(navPuckScreenOffset(null)).toEqual({ x: 0, y: 0 })
+  })
+})
+
+/**
+ * 2026-11-12: with the browser zoomed out the plane grew until its near edge
+ * passed the camera, and the GPU drew the map over the map buttons. The
+ * perspective now deepens just enough to keep the near edge in front.
+ */
+describe('navPerspectiveFor (near edge stays in front of the camera)', () => {
+  const plane = (w: number, h: number) => Math.ceil(Math.hypot(w, h) * NAV_TILT_SIZE_FACTOR)
+  const nearZ = (size: number) => (size / 2) * Math.sin((NAV_TILT_DEG * Math.PI) / 180)
+
+  it('keeps the usual perspective at normal window sizes', () => {
+    expect(navPerspectiveFor(plane(1101, 726))).toBe(NAV_PERSPECTIVE_PX)
+    expect(navPerspectiveFor(plane(390, 844))).toBe(NAV_PERSPECTIVE_PX) // phone
+    expect(navPerspectiveFor(0)).toBe(NAV_PERSPECTIVE_PX)
+  })
+
+  it.each([[1920, 1080], [1740, 1000], [2560, 1440], [3840, 2160]])('keeps the near edge in front at %ix%i', (w, h) => {
+    const size = plane(w, h)
+    const p = navPerspectiveFor(size)
+    expect(p).toBeGreaterThan(NAV_PERSPECTIVE_PX)
+    expect(nearZ(size)).toBeLessThan(p)
+  })
+
+  it('keeps the drag/puck math consistent with the deeper perspective', () => {
+    const p = navPerspectiveFor(plane(1920, 1080))
+    const planeY = planeOffsetForScreenY(200, NAV_TILT_DEG, p)
+    expect(screenYForPlaneOffset(planeY, NAV_TILT_DEG, p)).toBeCloseTo(200, 6)
   })
 })

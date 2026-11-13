@@ -26,6 +26,7 @@ export default function AdminBusinessCategories() {
   const [docHasExpiration, setDocHasExpiration] = useState(false)
   const [docDescription, setDocDescription] = useState('')
   const [successMsg, setSuccessMsg] = useState('')
+  const [showArchived, setShowArchived] = useState(true)
 
   const flash = (msg: string) => {
     setSuccessMsg(msg)
@@ -157,6 +158,137 @@ export default function AdminBusinessCategories() {
   if (isLoading) return <TableSkeleton rows={6} cols={4} />
 
   const categoryList = categories ?? []
+  // Active categories first; archived ones in their own section below.
+  const activeCategories = categoryList.filter((c) => !c.archived_at)
+  const archivedCategories = categoryList.filter((c) => c.archived_at)
+
+  const renderCategory = (cat: BusinessCategory) => {
+      const isExpanded = expandedCategory === cat.id
+      const docs = cat.required_documents ?? []
+      const activeDocs = docs.filter(d => !d.archived_at)
+
+      return (
+        <div
+          key={cat.id}
+          data-testid="category-card"
+          className={`border border-[#E2E8E3] rounded-2xl shadow-tourism overflow-hidden ${cat.archived_at ? 'bg-[#FAFAF7] opacity-80' : 'bg-white'}`}
+        >
+          <div
+            className="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-[#F6F8F4] transition"
+            onClick={() => setExpandedCategory(isExpanded ? null : cat.id)}
+          >
+            <div className="flex items-center gap-3">
+              {isExpanded ? <ChevronDown className="w-5 h-5 text-[#6B7280]" /> : <ChevronRight className="w-5 h-5 text-[#6B7280]" />}
+              <div>
+                <span className="font-semibold text-[#17201A]">{cat.name}</span>
+                {cat.description && <span className="ml-3 text-sm text-[#6B7280]">{cat.description}</span>}
+              </div>
+              <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-[#EAF6ED] text-[#16803C]">
+                {activeDocs.length} doc{activeDocs.length !== 1 ? 's' : ''}
+              </span>
+              {cat.archived_at && (
+                <span className="text-xs px-2 py-0.5 rounded-full bg-[#FFF7D6] text-[#92400E]">Archived</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+              <button
+                onClick={() => openCategoryModal(cat)}
+                aria-label={`Edit ${cat.name}`}
+                className="p-2 rounded-lg text-[#6B7280] hover:text-[#2563EB] hover:bg-[#EFF6FF] transition"
+              >
+                <Pencil className="w-4 h-4" />
+              </button>
+              {cat.archived_at ? (
+                <button
+                  onClick={() => unarchiveMutation.mutate(cat.id)}
+                  aria-label={`Restore ${cat.name}`}
+                  title="Restore"
+                  className="p-2 rounded-lg text-[#6B7280] hover:text-[#16803C] hover:bg-[#EAF6ED] transition"
+                >
+                  <ArchiveRestore className="w-4 h-4" />
+                </button>
+              ) : (
+                <button
+                  onClick={() => archiveMutation.mutate(cat.id)}
+                  aria-label={`Archive ${cat.name}`}
+                  title="Archive"
+                  className="p-2 rounded-lg text-[#6B7280] hover:text-[#D97706] hover:bg-[#FFF7D6] transition"
+                >
+                  <Archive className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {isExpanded && (
+            <div className="border-t border-[#E2E8E3] px-5 py-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-[#17201A] flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-[#6B7280]" />
+                  Document Requirements
+                </h3>
+                <button
+                  onClick={() => openDocModal(cat.id)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#EAF6ED] hover:bg-[#D1FAE5] text-[#16803C] text-xs font-medium rounded-lg transition"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Add Document
+                </button>
+              </div>
+
+              {activeDocs.length === 0 ? (
+                <p className="text-sm text-[#6B7280] py-4 text-center">No document requirements yet.</p>
+              ) : (
+                <div className="space-y-2">
+                  {activeDocs.map((doc) => (
+                    <div key={doc.id} className="flex items-center justify-between p-3 bg-[#F6F8F4] rounded-xl border border-[#E2E8E3]">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 bg-[#EAF6ED] rounded-lg flex items-center justify-center">
+                          <FileText className="w-4 h-4 text-[#16803C]" />
+                        </div>
+                        <div>
+                          <span className="text-sm text-[#17201A] font-medium">{doc.document_name}</span>
+                          {doc.document_code && <span className="ml-2 text-xs text-[#6B7280] font-mono">{doc.document_code}</span>}
+                          {doc.has_expiration && <span className="ml-2 text-xs text-[#D97706]">Expires</span>}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => toggleRequiredMutation.mutate({ categoryId: cat.id, docId: doc.id })}
+                          className="flex items-center gap-1 text-xs"
+                        >
+                          {doc.is_required ? (
+                            <ToggleRight className="w-5 h-5 text-[#16803C]" />
+                          ) : (
+                            <ToggleLeft className="w-5 h-5 text-[#9CA3AF]" />
+                          )}
+                          <span className={doc.is_required ? 'text-[#16803C]' : 'text-[#9CA3AF]'}>
+                            {doc.is_required ? 'Required' : 'Optional'}
+                          </span>
+                        </button>
+                        <button
+                          onClick={() => openDocModal(cat.id, doc)}
+                          className="p-1.5 rounded-lg text-[#6B7280] hover:text-[#2563EB] hover:bg-[#EFF6FF] transition"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => archiveDocMutation.mutate({ categoryId: cat.id, docId: doc.id })}
+                          className="p-1.5 rounded-lg text-[#6B7280] hover:text-[#DC2626] hover:bg-[#FEF2F2] transition"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )
+  }
+
 
   return (
     <div className="space-y-6">
@@ -190,131 +322,49 @@ export default function AdminBusinessCategories() {
         </div>
       </div>
 
-      <div className="space-y-3">
-        {categoryList.map((cat) => {
-          const isExpanded = expandedCategory === cat.id
-          const docs = cat.required_documents ?? []
-          const activeDocs = docs.filter(d => !d.archived_at)
-
-          return (
-            <div key={cat.id} className="bg-white border border-[#E2E8E3] rounded-2xl shadow-tourism overflow-hidden">
-              <div
-                className="flex items-center justify-between px-5 py-4 cursor-pointer hover:bg-[#F6F8F4] transition"
-                onClick={() => setExpandedCategory(isExpanded ? null : cat.id)}
-              >
-                <div className="flex items-center gap-3">
-                  {isExpanded ? <ChevronDown className="w-5 h-5 text-[#6B7280]" /> : <ChevronRight className="w-5 h-5 text-[#6B7280]" />}
-                  <div>
-                    <span className="font-semibold text-[#17201A]">{cat.name}</span>
-                    {cat.description && <span className="ml-3 text-sm text-[#6B7280]">{cat.description}</span>}
-                  </div>
-                  <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-[#EAF6ED] text-[#16803C]">
-                    {activeDocs.length} doc{activeDocs.length !== 1 ? 's' : ''}
-                  </span>
-                  {cat.archived_at && (
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-[#FFF7D6] text-[#92400E]">Archived</span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
-                  <button
-                    onClick={() => openCategoryModal(cat)}
-                    className="p-2 rounded-lg text-[#6B7280] hover:text-[#2563EB] hover:bg-[#EFF6FF] transition"
-                  >
-                    <Pencil className="w-4 h-4" />
-                  </button>
-                  {cat.archived_at ? (
-                    <button
-                      onClick={() => unarchiveMutation.mutate(cat.id)}
-                      className="p-2 rounded-lg text-[#6B7280] hover:text-[#16803C] hover:bg-[#EAF6ED] transition"
-                    >
-                      <ArchiveRestore className="w-4 h-4" />
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => archiveMutation.mutate(cat.id)}
-                      className="p-2 rounded-lg text-[#6B7280] hover:text-[#D97706] hover:bg-[#FFF7D6] transition"
-                    >
-                      <Archive className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {isExpanded && (
-                <div className="border-t border-[#E2E8E3] px-5 py-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-sm font-semibold text-[#17201A] flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-[#6B7280]" />
-                      Document Requirements
-                    </h3>
-                    <button
-                      onClick={() => openDocModal(cat.id)}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#EAF6ED] hover:bg-[#D1FAE5] text-[#16803C] text-xs font-medium rounded-lg transition"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      Add Document
-                    </button>
-                  </div>
-
-                  {activeDocs.length === 0 ? (
-                    <p className="text-sm text-[#6B7280] py-4 text-center">No document requirements yet.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {activeDocs.map((doc) => (
-                        <div key={doc.id} className="flex items-center justify-between p-3 bg-[#F6F8F4] rounded-xl border border-[#E2E8E3]">
-                          <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 bg-[#EAF6ED] rounded-lg flex items-center justify-center">
-                              <FileText className="w-4 h-4 text-[#16803C]" />
-                            </div>
-                            <div>
-                              <span className="text-sm text-[#17201A] font-medium">{doc.document_name}</span>
-                              {doc.document_code && <span className="ml-2 text-xs text-[#6B7280] font-mono">{doc.document_code}</span>}
-                              {doc.has_expiration && <span className="ml-2 text-xs text-[#D97706]">Expires</span>}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => toggleRequiredMutation.mutate({ categoryId: cat.id, docId: doc.id })}
-                              className="flex items-center gap-1 text-xs"
-                            >
-                              {doc.is_required ? (
-                                <ToggleRight className="w-5 h-5 text-[#16803C]" />
-                              ) : (
-                                <ToggleLeft className="w-5 h-5 text-[#9CA3AF]" />
-                              )}
-                              <span className={doc.is_required ? 'text-[#16803C]' : 'text-[#9CA3AF]'}>
-                                {doc.is_required ? 'Required' : 'Optional'}
-                              </span>
-                            </button>
-                            <button
-                              onClick={() => openDocModal(cat.id, doc)}
-                              className="p-1.5 rounded-lg text-[#6B7280] hover:text-[#2563EB] hover:bg-[#EFF6FF] transition"
-                            >
-                              <Pencil className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={() => archiveDocMutation.mutate({ categoryId: cat.id, docId: doc.id })}
-                              className="p-1.5 rounded-lg text-[#6B7280] hover:text-[#DC2626] hover:bg-[#FEF2F2] transition"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )
-        })}
-
+      <section aria-label="Active categories" className="space-y-3">
+        <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-[#6B7280]">
+          Active
+          <span className="rounded-full bg-[#EAF6ED] px-2 py-0.5 text-xs font-semibold normal-case tracking-normal text-[#16803C]">
+            {activeCategories.length}
+          </span>
+        </h2>
+        {activeCategories.map(renderCategory)}
+        {categoryList.length > 0 && activeCategories.length === 0 && (
+          <p className="rounded-2xl border border-dashed border-[#D7E8DB] p-6 text-center text-sm text-[#6B7280]">
+            No active categories. Restore one from Archived below.
+          </p>
+        )}
         {categoryList.length === 0 && (
           <div className="bg-white border border-[#E2E8E3] rounded-2xl shadow-tourism p-12 text-center text-[#6B7280]">
             No categories found.
           </div>
         )}
-      </div>
+      </section>
+
+      {archivedCategories.length > 0 && (
+        <section aria-label="Archived categories" className="space-y-3 border-t border-[#E2E8E3] pt-6">
+          <button
+            type="button"
+            aria-expanded={showArchived}
+            onClick={() => setShowArchived((v) => !v)}
+            className="flex w-full items-center gap-2 text-left text-sm font-semibold uppercase tracking-wider text-[#6B7280] hover:text-[#17201A]"
+          >
+            {showArchived ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+            Archived
+            <span className="rounded-full bg-[#FFF7D6] px-2 py-0.5 text-xs font-semibold normal-case tracking-normal text-[#92400E]">
+              {archivedCategories.length}
+            </span>
+            <span className="ml-auto text-xs font-normal normal-case tracking-normal">{showArchived ? 'Hide' : 'Show'}</span>
+          </button>
+          {showArchived && (
+            <>
+              <p className="text-xs text-[#6B7280]">Hidden from businesses. Use the restore button to make a category active again.</p>
+              {archivedCategories.map(renderCategory)}
+            </>
+          )}
+        </section>
+      )}
 
       {/* Add/Edit Category Modal */}
       <Modal show={showCategoryModal} onClose={() => { setShowCategoryModal(false); setEditingCategory(null); }} maxWidth="md">

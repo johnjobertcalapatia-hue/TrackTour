@@ -127,7 +127,6 @@ class BusinessOwnerOfferingController extends Controller
             'new_category' => ['nullable', 'string', 'max:255'],
             'bestseller' => ['nullable', 'boolean'],
             'unit' => ['nullable', 'string', 'max:50'],
-            'stock' => ['nullable', 'integer', 'min:0'],
         ]);
 
         if (! empty($validated['new_category'])) {
@@ -151,7 +150,7 @@ class BusinessOwnerOfferingController extends Controller
         $validated['is_available'] = $validated['status'] === 'available';
         $validated['bestseller'] = $request->boolean('bestseller');
 
-        $offering = $business->offerings()->create($validated);
+        $offering = app(\App\Services\MenuAvailabilityService::class)->create(fn () => $business->offerings()->create($validated), 'owner_offerings.create');
 
         return $this->createdResponse(
             OfferingResource::make($offering->load('category')),
@@ -179,7 +178,6 @@ class BusinessOwnerOfferingController extends Controller
             'new_category' => ['nullable', 'string', 'max:255'],
             'bestseller' => ['nullable', 'boolean'],
             'unit' => ['nullable', 'string', 'max:50'],
-            'stock' => ['nullable', 'integer', 'min:0'],
         ]);
 
         if (! empty($validated['new_category'])) {
@@ -206,7 +204,7 @@ class BusinessOwnerOfferingController extends Controller
         $validated['is_available'] = $validated['status'] === 'available';
         $validated['bestseller'] = $request->boolean('bestseller');
 
-        $offering->update($validated);
+        app(\App\Services\MenuAvailabilityService::class)->update($offering, $validated, 'owner_offerings.edit');
 
         return $this->successResponse(
             OfferingResource::make($offering->fresh()->load('category')),
@@ -223,7 +221,7 @@ class BusinessOwnerOfferingController extends Controller
         $statuses = ['available', 'unavailable', 'hidden'];
         $currentIndex = array_search($offering->status, $statuses);
         $newStatus = $statuses[($currentIndex + 1) % 3];
-        $offering->update(['status' => $newStatus, 'is_available' => $newStatus === 'available']);
+        app(\App\Services\MenuAvailabilityService::class)->update($offering, ['status' => $newStatus, 'is_available' => $newStatus === 'available'], 'owner_offerings.toggle');
 
         return $this->successResponse(['status' => $newStatus], 'Status toggled successfully.');
     }
@@ -236,7 +234,7 @@ class BusinessOwnerOfferingController extends Controller
 
         $replica = $offering->replicate();
         $replica->name = $offering->name . ' (Copy)';
-        $replica->save();
+        app(\App\Services\MenuAvailabilityService::class)->saveNew($replica, 'owner_offerings.duplicate');
 
         return $this->createdResponse(
             OfferingResource::make($replica->load('category')),
@@ -263,13 +261,16 @@ class BusinessOwnerOfferingController extends Controller
 
         $offerings = $business->offerings()->whereIn('id', $validated['offering_ids']);
 
+        // Availability changes are saved item by item through the service so
+        // every one is recorded (a query-builder bulk update would skip history).
+        $availability = app(\App\Services\MenuAvailabilityService::class);
         match ($validated['action']) {
-            'available' => $offerings->update(['status' => 'available', 'is_available' => true]),
-            'unavailable' => $offerings->update(['status' => 'unavailable', 'is_available' => false]),
-            'hidden' => $offerings->update(['status' => 'hidden', 'is_available' => false]),
+            'available' => $availability->bulk($offerings->get(), ['status' => 'available', 'is_available' => true], 'owner_offerings.bulk'),
+            'unavailable' => $availability->bulk($offerings->get(), ['status' => 'unavailable', 'is_available' => false], 'owner_offerings.bulk'),
+            'hidden' => $availability->bulk($offerings->get(), ['status' => 'hidden', 'is_available' => false], 'owner_offerings.bulk'),
             'featured' => $offerings->update(['bestseller' => true]),
             'unfeatured' => $offerings->update(['bestseller' => false]),
-            'archive' => $offerings->update(['status' => 'archived', 'is_available' => false]),
+            'archive' => $availability->bulk($offerings->get(), ['status' => 'archived', 'is_available' => false], 'owner_offerings.bulk'),
             'delete' => $offerings->delete(),
         };
 
@@ -311,7 +312,7 @@ class BusinessOwnerOfferingController extends Controller
             return $this->forbiddenResponse('You do not own this business.');
         }
 
-        $offering->update(['status' => 'archived', 'is_available' => false]);
+        app(\App\Services\MenuAvailabilityService::class)->update($offering, ['status' => 'archived', 'is_available' => false], 'owner_offerings.archive');
         $offering->delete();
 
         return $this->noContentResponse('Offering archived successfully.');

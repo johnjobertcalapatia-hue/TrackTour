@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { RiderActiveTripProvider } from '@/features/rider/context/RiderActiveTripContext'
+import { useEffect } from 'react'
+import { RiderActiveTripProvider, useRiderActiveTrip } from '@/features/rider/context/RiderActiveTripContext'
 import RiderOrderInfoSheet from '@/features/rider/components/RiderOrderInfoSheet'
 import { useAuthStore } from '@/features/auth/services/auth-store'
 import type { User } from '@/shared/types'
@@ -247,5 +248,43 @@ describe('RiderOrderInfoSheet — pickup stops inside the Order details panel', 
     await waitFor(() => expect(screen.getByRole('button', { name: /show order details/i })).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: /show order details/i }))
     await waitFor(() => expect(screen.getByText(/waiting \d+:\d{2}/i)).toBeInTheDocument())
+  })
+
+  // Stage 3 pickup evidence: the device's latest fix (with accuracy and time)
+  // travels with arrive / confirm; without a fix the request is unchanged.
+  it('sends the device fix with accuracy and time as pickup evidence', async () => {
+    const fixAt = Date.parse('2026-11-11T08:00:00Z')
+    function SeedFix() {
+      const { setRiderPosition } = useRiderActiveTrip()
+      useEffect(() => {
+        setRiderPosition(12.5201, 121.3201, 9, fixAt)
+      }, [setRiderPosition])
+      return null
+    }
+    api.store.stops[1].arrived_at = null
+    api.store.stops[1].arrival_can_confirm = true
+    api.store.stops[1].can_confirm = false
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RiderActiveTripProvider>
+          <SeedFix />
+          <RiderOrderInfoSheet />
+        </RiderActiveTripProvider>
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(screen.getByRole('button', { name: /show order details/i })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /show order details/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /confirm arrival/i }))
+
+    await waitFor(() =>
+      expect(api.post).toHaveBeenCalledWith('/rider/deliveries/7/pickup-stops/2/arrive', {
+        latitude: 12.5201,
+        longitude: 121.3201,
+        accuracy: 9,
+        fix_at: '2026-11-11T08:00:00.000Z',
+      }),
+    )
   })
 })

@@ -28,7 +28,6 @@ class OfferingResource extends JsonResource
             'preparation_time' => $this->preparation_time,
             'compare_price' => $this->compare_price,
             'unit' => $this->unit,
-            'stock' => $this->stock,
             'status' => $this->status ?? ($this->is_available ? 'available' : 'unavailable'),
             'category' => $categoryData,
             'is_available' => $this->is_available,

@@ -102,7 +102,7 @@ class RiderPickupStopController extends Controller
         }
 
         try {
-            $result = $this->sequence->confirmStop($delivery, $business, (int) $request->user()?->id);
+            $result = $this->sequence->confirmStop($delivery, $business, (int) $request->user()?->id, \App\Services\PickupEvidenceService::deviceFixFrom($request));
         } catch (InvalidArgumentException $exception) {
             return $this->errorResponse($exception->getMessage(), 422);
         }
@@ -132,7 +132,7 @@ class RiderPickupStopController extends Controller
         }
 
         try {
-            $result = $this->sequence->confirmArrival($delivery, $business, (int) $request->user()?->id);
+            $result = $this->sequence->confirmArrival($delivery, $business, (int) $request->user()?->id, \App\Services\PickupEvidenceService::deviceFixFrom($request));
         } catch (InvalidArgumentException $exception) {
             return $this->errorResponse($exception->getMessage(), 422);
         }

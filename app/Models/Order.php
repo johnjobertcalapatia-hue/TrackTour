@@ -27,6 +27,33 @@ class Order extends Model
                 app(\App\Services\CodPickupPaymentGuard::class)->assertCanMarkReady($order);
             }
         });
+
+        // A READY order means its food is ready, whatever path set it. The
+        // rider's pickup gate reads the ITEM statuses, so an order saved
+        // 'ready' while its items stayed 'preparing' blocked "Confirm Pick Up"
+        // forever (TT-04544, 2026-11-12: the order page's "Ready for Pickup"
+        // and the staff status endpoints changed only the order).
+        static::updated(function (Order $order) {
+            if ($order->wasChanged('status') && $order->status === 'ready') {
+                $order->markOwnItemsReady();
+            }
+        });
+    }
+
+    /**
+     * Carry this order's restaurant's still-active items to 'ready'. Only the
+     * order's own restaurant (item business_id, falling back to the order's):
+     * in a multi-restaurant order another restaurant's food is never declared
+     * ready on its behalf. Saved one by one so the item hooks (COD guard,
+     * transaction ledger) run.
+     */
+    public function markOwnItemsReady(): void
+    {
+        $this->items()
+            ->whereNotIn('status', ['cancelled', 'rejected', 'ready'])
+            ->get()
+            ->filter(fn (OrderItem $item) => (int) ($item->business_id ?: $this->business_id) === (int) $this->business_id)
+            ->each(fn (OrderItem $item) => $item->update(['status' => 'ready', 'ready_at' => $item->ready_at ?? now()]));
     }
 
     protected $fillable = [

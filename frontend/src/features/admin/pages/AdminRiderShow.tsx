@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { apiErrorMessage, get, openAuthenticatedDocument, post } from '@/shared/services/api'
+import { apiErrorMessage, get, openAuthenticatedDocument, post, put } from '@/shared/services/api'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { Modal } from '@/shared/components/Modal'
 import { formatDateTime } from '@/shared/utils'
+import { RiderRecords } from '@/features/admin/components/RiderRecords'
 import {
   ArrowLeft,
   CheckCircle,
@@ -30,6 +31,7 @@ interface RiderDetail {
   phone: string | null
   profile_photo: string | null
   account_status: 'active' | 'suspended' | 'pending_review' | 'rejected'
+  municipality_id: number | null
   municipality: string | null
   barangay: string | null
   address: string | null
@@ -65,6 +67,26 @@ export default function AdminRiderShow() {
       setActiveModal(null)
       setRemarks('')
     },
+  })
+
+  // The rider's municipality decides which Tourism Office sees them on the
+  // COD cash advance list and may issue them cash.
+  const { data: municipalities } = useQuery({
+    queryKey: ['public-municipalities'],
+    queryFn: () => get<{ id: number; name: string }[]>('/municipalities'),
+  })
+  const [municipalityChoice, setMunicipalityChoice] = useState<string | null>(null)
+  const [municipalityNotice, setMunicipalityNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const municipalityMutation = useMutation({
+    mutationFn: (municipalityId: number) => put(`/admin/riders/${id}/municipality`, { municipality_id: municipalityId }),
+    onSuccess: () => {
+      setMunicipalityChoice(null)
+      setMunicipalityNotice({ type: 'success', message: 'Municipality saved.' })
+      queryClient.invalidateQueries({ queryKey: ['admin-rider', id] })
+      queryClient.invalidateQueries({ queryKey: ['admin-rider-cash'] })
+    },
+    onError: (error) =>
+      setMunicipalityNotice({ type: 'error', message: apiErrorMessage(error, 'Could not save the municipality.') }),
   })
 
   const handleAction = () => {
@@ -129,6 +151,8 @@ export default function AdminRiderShow() {
         </div>
       </div>
 
+      <RiderRecords riderId={rider.id} />
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
           <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-tourism p-6">
@@ -158,11 +182,56 @@ export default function AdminRiderShow() {
                 </p>
               </div>
               <div>
-                <label className="text-xs text-[#6B7280] uppercase tracking-wider">Municipality</label>
-                <p className="text-[#17201A] mt-1 flex items-center gap-2">
-                  <MapPin className="w-3.5 h-3.5 text-[#6B7280]" />
-                  {rider.municipality || '—'}
-                </p>
+                <label htmlFor="rider-municipality" className="text-xs text-[#6B7280] uppercase tracking-wider">
+                  Municipality
+                </label>
+                <form
+                  className="mt-1 flex items-center gap-2"
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    if (municipalityChoice) municipalityMutation.mutate(Number(municipalityChoice))
+                  }}
+                >
+                  <MapPin className="w-3.5 h-3.5 shrink-0 text-[#6B7280]" />
+                  <select
+                    id="rider-municipality"
+                    value={municipalityChoice ?? (rider.municipality_id ? String(rider.municipality_id) : '')}
+                    onChange={(e) => {
+                      setMunicipalityNotice(null)
+                      setMunicipalityChoice(e.target.value)
+                    }}
+                    className="min-w-0 flex-1 rounded-lg border border-[#D7E8DB] bg-[#F6F8F4] px-2 py-1 text-sm text-[#17201A]"
+                  >
+                    <option value="" disabled>
+                      Not set
+                    </option>
+                    {(municipalities ?? []).map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                  </select>
+                  {municipalityChoice && municipalityChoice !== String(rider.municipality_id ?? '') && (
+                    <button
+                      type="submit"
+                      disabled={municipalityMutation.isPending}
+                      className="rounded-lg bg-[#16803C] px-3 py-1 text-sm font-semibold text-white hover:bg-[#126B32] disabled:opacity-50"
+                    >
+                      {municipalityMutation.isPending ? 'Saving…' : 'Save'}
+                    </button>
+                  )}
+                </form>
+                {!rider.municipality_id && !municipalityChoice && (
+                  <p className="mt-1 text-xs text-[#B45309]">Not set: the Tourism Office cannot issue this rider COD cash.</p>
+                )}
+                {municipalityNotice && (
+                  <p
+                    role={municipalityNotice.type === 'error' ? 'alert' : 'status'}
+                    className={`mt-1 text-xs ${municipalityNotice.type === 'error' ? 'text-[#B91C1C]' : 'text-[#16803C]'}`}
+                  >
+                    {municipalityNotice.message}
+                  </p>
+                )}
               </div>
               <div>
                 <label className="text-xs text-[#6B7280] uppercase tracking-wider">Barangay</label>

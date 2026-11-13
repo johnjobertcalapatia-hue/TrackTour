@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import type { LucideIcon } from 'lucide-react'
 import { get } from '@/shared/services/api'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
+import { RiderCashoutCard } from '@/features/rider/components/RiderCashoutCard'
 import { cn, formatCurrency, formatDateTime } from '@/shared/utils'
 import { ArrowLeft, ChevronLeft, ChevronRight, ChevronDown, Bike, MapPin, Store } from 'lucide-react'
 
@@ -237,6 +238,8 @@ export default function RiderEarnings() {
           </div>
         </div>
       </div>
+
+      <RiderCashoutCard />
 
       {earnings.length === 0 ? (
         <div className="bg-white rounded-2xl border border-[#E5E9E7] p-12 text-center">

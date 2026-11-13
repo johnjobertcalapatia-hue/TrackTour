@@ -85,6 +85,12 @@ class RiderMapController extends Controller
                 // Restaurant photo for the map pin (logo, else cover), as on the tourist map.
                 'business_logo' => $delivery->primaryOrder()?->business?->logo ?: $delivery->primaryOrder()?->business?->cover_photo,
                 'customer_name' => $delivery->primaryOrder()?->customer_name,
+                // 'transport' = a ride booking: the trip UI speaks of a passenger, not food.
+                'order_type' => $delivery->primaryOrder()?->order_type,
+                'order_number' => $delivery->primaryOrder()?->order_number,
+                // Ride: the fare to collect when the passenger pays cash.
+                'order_total' => $delivery->primaryOrder()?->total !== null ? (float) $delivery->primaryOrder()->total : null,
+                'is_cod' => app(\App\Services\NearestRiderService::class)->isCodDelivery($delivery),
                 'created_at' => $delivery->created_at,
             ]);
 
@@ -119,6 +125,8 @@ class RiderMapController extends Controller
         // never a real position here. Saving it put the rider ~13,000 km away
         // and blocked delivery completion (production, 2026-11-10).
         if ($lat == 0.0 || $lng == 0.0) {
+            app(\App\Services\RideTripEvidenceService::class)->recordGpsAnomaly((int) $riderId, 'invalid_coordinates', ['accuracy_m' => $acc]);
+
             return $this->errorResponse('Your device reported an invalid location. Check the location settings on your phone and try again.', 422);
         }
 
@@ -130,6 +138,12 @@ class RiderMapController extends Controller
         // the destination coordinates) must not trigger an arrival geofence or
         // poison the persisted trail.
         if ($lastLocation && ! $this->movementIsPlausible($lastLocation, $lat, $lng)) {
+            app(\App\Services\RideTripEvidenceService::class)->recordGpsAnomaly((int) $riderId, 'implausible_movement', [
+                'accuracy_m' => $acc,
+                'jump_m' => round(app(\App\Services\PickupSequenceService::class)->distanceMeters((float) $lastLocation->latitude, (float) $lastLocation->longitude, $lat, $lng), 1),
+                'since_last_saved_s' => $lastLocation->recorded_at ? (int) abs(now()->diffInSeconds($lastLocation->recorded_at)) : null,
+            ]);
+
             return $this->successResponse([
                 'moved' => false,
                 'interval' => 30,
@@ -138,7 +152,12 @@ class RiderMapController extends Controller
             ]);
         }
 
-        $activeDelivery = $this->applyProximityAndGetStatus($riderId, $lat, $lng);
+        $activeDelivery = $this->applyProximityAndGetStatus($riderId, $lat, $lng, $acc);
+
+        // My Destination switches itself off on arrival (or once expired).
+        $destinationEnded = ($acc === null || $acc <= 50)
+            ? app(\App\Services\RiderDestinationService::class)->checkArrival($request->user(), $lat, $lng)
+            : null;
 
         if ($lastLocation) {
             $dLat = deg2rad($lat - (float) $lastLocation->latitude);
@@ -153,23 +172,25 @@ class RiderMapController extends Controller
                 // rider can never refresh recorded_at via the heartbeat and silently
                 // ages out of COD/radar dispatch (cod_location_max_age_minutes).
                 if (($acc === null || $acc <= 50) && $this->persistence->shouldSave($riderId, $lat, $lng)) {
-                    RiderLocation::create([
-                        'rider_id' => $riderId,
-                        'latitude' => $lat,
-                        'longitude' => $lng,
-                        'recorded_at' => now(),
-                    ]);
+                    // Standing still: refresh the latest saved point (every
+                    // checkpoint_seconds = 5 s) rather than adding a row each
+                    // time, so the location stays current without the table
+                    // growing by thousands of identical points a day.
+                    $lastLocation->forceFill(['recorded_at' => now(), 'accuracy_m' => $acc])->save();
                 }
 
                 return $this->successResponse([
                     'moved' => false,
                     'interval' => $this->getAdaptiveInterval($riderId, $lat, $lng, $spd),
                     'delivery' => $activeDelivery,
+                    'destination_ended' => $destinationEnded,
                 ]);
             }
         }
 
         if ($acc !== null && $acc > 50) {
+            app(\App\Services\RideTripEvidenceService::class)->recordGpsAnomaly((int) $riderId, 'low_accuracy', ['accuracy_m' => $acc]);
+
             return $this->successResponse([
                 'moved' => false,
                 'interval' => 30,
@@ -185,6 +206,7 @@ class RiderMapController extends Controller
                 'rider_id' => $riderId,
                 'latitude' => $lat,
                 'longitude' => $lng,
+                'accuracy_m' => $acc,
                 'recorded_at' => now(),
             ]);
             $locationId = $loc->id;
@@ -199,6 +221,7 @@ class RiderMapController extends Controller
             'recorded_at' => $recordedAt,
             'interval' => $interval,
             'delivery' => $activeDelivery,
+            'destination_ended' => $destinationEnded,
         ]);
     }
 
@@ -231,13 +254,18 @@ class RiderMapController extends Controller
         $maxSpeedKph = (float) config('tracking.max_speed_kph', 150);
         $windowSeconds = (int) config('tracking.plausibility_window_seconds', 120);
 
-        // Not enough temporal context (same tick or a long offline gap): do not
-        // second-guess the rider.
+        // A long offline gap gives no context: do not second-guess the rider.
         $elapsed = abs(now()->timestamp - (int) $last->recorded_at->timestamp);
 
-        if ($elapsed === 0 || $elapsed > $windowSeconds) {
+        if ($elapsed > $windowSeconds) {
             return true;
         }
+
+        // Same second (e.g. a second tab or phone on the same login posting
+        // right after this one): judge it as one second, never as "no
+        // information" — before 2026-11-10 any jump in the same second was
+        // accepted. GPS jitter of a few tens of metres still passes.
+        $elapsed = max(1, $elapsed);
 
         $distanceKm = $this->dispatchService->calculateDistance(
             (float) $last->latitude,
@@ -251,7 +279,7 @@ class RiderMapController extends Controller
         return $impliedKph <= $maxSpeedKph;
     }
 
-    private function applyProximityAndGetStatus(int $riderId, float $lat, float $lng): ?array
+    private function applyProximityAndGetStatus(int $riderId, float $lat, float $lng, ?float $acc = null): ?array
     {
         // Arrival geofence radius in kilometers (defaults to 100m to tolerate
         // real-world GPS accuracy, configurable via TRACKING_ARRIVAL_RADIUS_METERS).
@@ -296,6 +324,10 @@ class RiderMapController extends Controller
             if ($distance <= $arrivalRadiusKm) {
                 $oldStatus = (string) $delivery->status->value;
                 $delivery->update(['status' => 'arrived_destination', 'arrived_destination_at' => now()]);
+                // Stage 4 evidence: this heartbeat is the device fix.
+                app(\App\Services\RideTripEvidenceService::class)->recordStep($delivery, 'arrived_destination', (int) $riderId, [
+                    'latitude' => $lat, 'longitude' => $lng, 'accuracy' => $acc, 'fix_at' => now()->toIso8601String(),
+                ]);
 
                 if ((string) $delivery->status->value !== $oldStatus) {
                     DeliveryStatusChanged::dispatch($delivery, $oldStatus, 'arrived_destination');

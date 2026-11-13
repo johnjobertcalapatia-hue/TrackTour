@@ -14,7 +14,7 @@ import MapPlacesList, { matchesPlaceSearch, type MapPlace, type PlaceSort } from
 import { requestCompassPermission, useNavigationBearing } from '@/features/tourist/hooks/use-navigation-bearing'
 import { OFF_ROUTE_METERS, routeProgress } from '@/features/tourist/utils/route-progress'
 import { NavigationCamera } from '@/shared/components/map/NavigationCamera'
-import { NAV_PERSPECTIVE_PX, NAV_TILT_DEG, NAV_TILT_SIZE_FACTOR, planePointForScreen } from '@/features/rider/navigation-view'
+import { NAV_TILT_DEG, NAV_TILT_SIZE_FACTOR, navPerspectiveFor, planePointForScreen } from '@/features/rider/navigation-view'
 import { RiderMapCompass } from '@/features/rider/components/RiderMapCompass'
 import { RiderNavPuck } from '@/features/rider/components/RiderNavPuck'
 
@@ -378,7 +378,13 @@ function RouteOverlay({ route, destination, fit = true }: {
   )
 }
 
-export default function TouristExploreMap() {
+/**
+ * mapOnly: the Ride Hailing map (/tourist/transport/map, the Transport page's
+ * Map button): the businesses on the map without the places list panel or the
+ * List view switch, with a way back to Ride Hailing. A clicked business still
+ * opens its details; closing them returns to the bare map.
+ */
+export default function TouristExploreMap({ mapOnly = false }: { mapOnly?: boolean } = {}) {
   const navigate = useNavigate()
   const [addedMenuItemId, setAddedMenuItemId] = useState<number | null>(null)
   const [searchParams] = useSearchParams()
@@ -554,15 +560,19 @@ export default function TouristExploreMap() {
     if (navFree) setFreeBearing(0) // exploring: face north
     else setNorthUp((n) => !n) // following: north-up <-> heading-up
   }
+  /** The tilted plane is larger than the screen so no blank corner shows while it turns and tips back. */
+  const planeSize = Math.ceil(rotatorSize * NAV_TILT_SIZE_FACTOR)
+  // Deepened on large viewports so the near edge stays in front of the camera.
+  const navPerspective = navPerspectiveFor(planeSize)
+  const navPerspectiveRef = useRef(navPerspective)
+  navPerspectiveRef.current = navPerspective
   /** A point on the tilted map (client px) -> its offset on the map plane. */
   const navScreenToPlanePoint = useCallback((pt: { x: number; y: number }) => {
     const rect = mapAreaRef.current?.getBoundingClientRect()
     const cx = rect ? rect.left + rect.width / 2 : 0
     const cy = rect ? rect.top + rect.height / 2 : 0
-    return planePointForScreen(pt.x - cx, pt.y - cy)
+    return planePointForScreen(pt.x - cx, pt.y - cy, NAV_TILT_DEG, navPerspectiveRef.current)
   }, [])
-  /** The tilted plane is larger than the screen so no blank corner shows while it turns and tips back. */
-  const planeSize = Math.ceil(rotatorSize * NAV_TILT_SIZE_FACTOR)
 
   const [navScreenOffset, setNavScreenOffset] = useState({ x: 0, y: 0 })
   useEffect(() => {
@@ -577,9 +587,9 @@ export default function TouristExploreMap() {
   }, [navActive, rotatorSize])
   /** The marker's screen spot as a point on the tilted plane (what the camera places). */
   const navPlaneOffset = useMemo(() => {
-    const pt = planePointForScreen(navScreenOffset.x, navScreenOffset.y)
+    const pt = planePointForScreen(navScreenOffset.x, navScreenOffset.y, NAV_TILT_DEG, navPerspective)
     return { x: Math.round(pt.x), y: Math.round(pt.y) }
-  }, [navScreenOffset])
+  }, [navScreenOffset, navPerspective])
   /**
    * Navigating near the route: show the tourist snapped onto the line (as Google
    * Maps does), so the centred marker sits on the route and the line runs
@@ -874,7 +884,7 @@ export default function TouristExploreMap() {
         {/* Left Panel */}
         {/* Left panel: the places list (search + cards); a card or marker opens
             that place's details in the same panel. Phones: a bottom sheet. */}
-        {(
+        {(!mapOnly || showDetail) && (
           <aside
             aria-label={showDetail ? 'Place details' : 'Places'}
             className={`map-business-sheet absolute inset-x-0 bottom-0 z-[600] transition-[max-height] duration-300 ${(showDetail ? sheetCollapsed : listCollapsed) ? 'max-h-[72px]' : 'max-h-[62dvh]'} sm:max-h-full sm:static sm:inset-auto sm:w-[405px] sm:max-w-[90vw] sm:shrink-0 bg-white rounded-t-2xl sm:rounded-none border-t sm:border-t-0 sm:border-r border-[#E5E9E7] shadow-2xl sm:shadow-none flex flex-col overflow-hidden`}
@@ -920,6 +930,7 @@ export default function TouristExploreMap() {
             )}
             {showDetail && (<>
             <div className="flex items-center gap-2 p-2 shrink-0">
+              {!mapOnly && (
               <button
                 type="button"
                 onClick={handleBackToList}
@@ -930,6 +941,7 @@ export default function TouristExploreMap() {
                 <ChevronLeft className="w-5 h-5" aria-hidden="true" />
                 <span className="hidden sm:inline">All places</span>
               </button>
+              )}
               {/* Phone: grab bar that minimises / expands the sheet */}
               <button
                 type="button"
@@ -1575,11 +1587,23 @@ export default function TouristExploreMap() {
           ref={mapAreaRef}
           data-view-mode={navActive ? 'navigation' : 'overview'}
           className="tourist-map-area relative flex-1 min-w-0 min-h-0 overflow-hidden bg-[#f8faf7]"
-          style={navActive ? { perspective: `${NAV_PERSPECTIVE_PX}px` } : undefined}
+          style={navActive ? { perspective: `${navPerspective}px` } : undefined}
         >
           {/* View switch, top left of the map, beside the places panel and its
               filters (the category chips are now the panel's Category dropdown). */}
-          {!navActive && (
+          {/* Ride Hailing map: back to the Ride Hailing page, top left. */}
+          {!navActive && mapOnly && (
+            <button
+              type="button"
+              onClick={() => navigate('/tourist/transport')}
+              aria-label="Back to Ride Hailing"
+              className="absolute top-3 left-3 z-[640] inline-flex h-11 items-center gap-1.5 rounded-full border border-[#E5E9E7] bg-[#fff] pl-2.5 pr-4 text-sm font-semibold text-[#087F3F] shadow-md transition hover:bg-[#E9F7EF]"
+            >
+              <ChevronLeft className="h-5 w-5" aria-hidden="true" />
+              Ride Hailing
+            </button>
+          )}
+          {!navActive && !mapOnly && (
             <div className="absolute top-3 left-3 z-[640] rounded-full shadow-md">
               <ExploreViewToggle
                 current="map"
@@ -1632,9 +1656,21 @@ export default function TouristExploreMap() {
             )
           })()}
           {/* Map type switcher: picture tile, top right. On phones with an active
-              route the route card covers the top, so the tile drops above the sheet. */}
+              route the route card covers the top, so the tile drops above the sheet.
+              Map only (Ride Hailing map): bottom right, above the map credits; on phones
+              it moves up while a business's details sheet covers the bottom. */}
           <div
-            className={`absolute right-3 z-[640] flex flex-col items-end gap-2 ${routeDistanceKm != null && !navActive ? 'top-3 max-sm:top-auto max-sm:bottom-24' : 'top-3'}`}
+            data-testid="map-controls"
+            data-position={mapOnly ? 'bottom' : 'top'}
+            className={`absolute right-3 z-[640] flex flex-col items-end gap-2 ${
+              mapOnly
+                ? routeDistanceKm != null && !navActive
+                  ? 'bottom-8 max-sm:bottom-24'
+                  : showDetail
+                    ? 'bottom-8 max-sm:bottom-auto max-sm:top-3'
+                    : 'bottom-8'
+                : routeDistanceKm != null && !navActive ? 'top-3 max-sm:top-auto max-sm:bottom-24' : 'top-3'
+            }`}
           >
             <MapLayerTile value={activeMapType} onChange={setMapType} />
             {/* Navigation: where north is; tap to face north (again: travel direction). */}

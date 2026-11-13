@@ -119,11 +119,11 @@ const FALLS = {
 
 const MUNIS = [{ id: 3, name: 'Roxas' }, { id: 1, name: 'Bansud' }, { id: 2, name: 'Gloria' }]
 
-function renderMap() {
+function renderMap(mapOnly = false) {
   return render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <MemoryRouter initialEntries={['/tourist/explore/map']}>
-        <TouristExploreMap />
+      <MemoryRouter initialEntries={[mapOnly ? '/tourist/transport/map' : '/tourist/explore/map']}>
+        <TouristExploreMap mapOnly={mapOnly} />
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -148,6 +148,44 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+})
+
+describe('Ride Hailing map (/tourist/transport/map, the Transport page Map button)', () => {
+  it('shows the businesses on the map with no places panel and no List view', async () => {
+    renderMap(true)
+    await vi.waitFor(() => expect(markers()).toHaveLength(3))
+
+    expect(screen.queryByRole('complementary', { name: 'Places' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('searchbox', { name: 'Search places' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /List view/i })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Back to Ride Hailing' })).toBeInTheDocument()
+    // Satellite + locate buttons sit at the bottom right.
+    const controls = screen.getByTestId('map-controls')
+    expect(controls).toHaveAttribute('data-position', 'bottom')
+    expect(controls.className).toContain('bottom-8')
+    expect(controls.className).not.toMatch(/(^| )top-3( |$)/)
+  })
+
+  it('a clicked business opens its details, and closing returns to the bare map', async () => {
+    renderMap(true)
+    await vi.waitFor(() => expect(markers()).toHaveLength(3))
+
+    fireEvent.click(screen.getAllByTestId('map-marker')[0])
+    const details = await screen.findByRole('complementary', { name: 'Place details' })
+    expect(within(details).queryByRole('button', { name: 'Back to places list' })).not.toBeInTheDocument()
+
+    fireEvent.click(within(details).getByRole('button', { name: 'Close panel' }))
+    expect(screen.queryByRole('complementary')).not.toBeInTheDocument()
+  })
+
+  it('the normal explore map keeps the panel and List view', async () => {
+    renderMap()
+    await screen.findByRole('button', { name: 'Gloria Bay Resort' })
+    expect(panel()).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /List view/i })).toBeInTheDocument()
+    expect(screen.getByTestId('map-controls')).toHaveAttribute('data-position', 'top')
+    expect(screen.queryByRole('button', { name: 'Back to Ride Hailing' })).not.toBeInTheDocument()
+  })
 })
 
 describe('Tourist map — places panel', () => {

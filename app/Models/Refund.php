@@ -13,6 +13,7 @@ class Refund extends Model
         'payment_id',
         'order_id',
         'provider_refund_id',
+        'idempotency_key',
         'payable_type',
         'payable_id',
         'order_item_id',

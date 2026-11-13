@@ -10,7 +10,7 @@ import BusinessSwitcher from '@/features/business-owner/components/BusinessSwitc
 import { useBusinessOwnerStore } from '@/features/business-owner/services/business-owner-store'
 import { useAuthStore } from '@/features/auth/services/auth-store'
 import {
-  LayoutDashboard, MapPin, Users, Building2, Tag, Map, Bike,
+  LayoutDashboard, MapPin, Users, Building2, Tag, Map, Bike, HandCoins,
   UserCheck, Shield, FileBarChart, ScrollText, Bell, Settings, HardDrive,
   Lock, Navigation, Compass, UtensilsCrossed, CalendarCheck, Car,
   Calendar, Heart, Star, Clock, MessageSquare, User, ClipboardList,
@@ -63,6 +63,8 @@ const AdminRiders = lazy_(() => import('@/features/admin/pages/AdminRiders'))
 const AdminRiderShow = lazy_(() => import('@/features/admin/pages/AdminRiderShow'))
 const AdminRiderCashReconciliation = lazy_(() => import('@/features/admin/pages/AdminRiderCashReconciliation'))
 const AdminRiderCash = lazy_(() => import('@/features/admin/pages/AdminRiderCash'))
+const AdminRiderCashouts = lazy_(() => import('@/features/admin/pages/AdminRiderCashouts'))
+const AdminCashoutInvestigation = lazy_(() => import('@/features/admin/pages/AdminCashoutInvestigation'))
 const AdminReports = lazy_(() => import('@/features/admin/pages/AdminReports'))
 const AdminPosSales = lazy_(() => import('@/features/admin/pages/AdminPosSales'))
 const AdminAuditLogs = lazy_(() => import('@/features/admin/pages/AdminAuditLogs'))
@@ -80,7 +82,8 @@ const AdminLiveTours = lazy_(() => import('@/features/admin/pages/AdminLiveTours
 const TouristDashboard = lazy_(() => import('@/features/tourist/pages/TouristDashboard'))
 const TouristExplore = lazy_(() => import('@/features/tourist/pages/TouristExplore'))
 const TouristExploreShow = lazy_(() => import('@/features/tourist/pages/TouristExploreShow'))
-const TouristExploreMap = lazy_(() => import('@/features/tourist/pages/TouristExploreMap'))
+// Plain lazy() (not lazy_) so the page keeps its mapOnly prop type.
+const TouristExploreMap = lazy(() => import('@/features/tourist/pages/TouristExploreMap'))
 const TouristDirectory = lazy_(() => import('@/features/tourist/pages/TouristDirectory'))
 const TouristMunicipality = lazy_(() => import('@/features/tourist/pages/TouristMunicipality'))
 const TouristFood = lazy_(() => import('@/features/tourist/pages/TouristFood'))
@@ -247,6 +250,7 @@ const adminSections = [
     { to: '/admin/business-categories', label: 'Categories', icon: <Tag className="w-5 h-5" /> },
     { to: '/admin/municipalities', label: 'Municipalities', icon: <MapPin className="w-5 h-5" /> },
     { to: '/admin/riders', label: 'Riders', icon: <Bike className="w-5 h-5" /> },
+    { to: '/admin/cashouts', label: 'Cashouts', icon: <HandCoins className="w-5 h-5" /> },
     { to: '/admin/tourists', label: 'Tourists', icon: <UserCheck className="w-5 h-5" /> },
     { to: '/admin/roles', label: 'Roles', icon: <Shield className="w-5 h-5" /> },
   ]},
@@ -647,6 +651,8 @@ export default function App() {
             <Route path="riders/:id" element={<AdminRiderShow />} />
             <Route path="riders/:id/cash-reconciliation" element={<AdminRiderCashReconciliation />} />
             <Route path="rider-cash" element={<AdminRiderCash />} />
+            <Route path="cashouts" element={<AdminRiderCashouts />} />
+            <Route path="cashouts/:id" element={<AdminCashoutInvestigation />} />
             <Route path="reports" element={<AdminReports />} />
             <Route path="pos" element={<AdminPosSales />} />
             <Route path="audit-logs" element={<AdminAuditLogs />} />
@@ -674,6 +680,8 @@ export default function App() {
               <Route path="trips" element={<MyTrips />} />
               <Route path="transport" element={<TouristTransport />} />
               <Route path="transport/tracking/:id" element={<TouristTransportTracking />} />
+              {/* Ride Hailing map (Map button): the business map without the places panel. */}
+              <Route path="transport/map" element={<TouristExploreMap mapOnly />} />
               <Route path="booking" element={<TouristBooking />} />
               <Route path="booking/:id" element={<TouristBookingShow />} />
               <Route path="favorites" element={<TouristFavorites />} />

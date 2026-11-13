@@ -76,6 +76,11 @@ class DeliveryRepository implements DeliveryRepositoryInterface
         $location = $this->latestLocation($riderId);
         $distances = [];
 
+        // Ride Hailing riders see only ride bookings (Available Bookings);
+        // Food Delivery riders only food orders (Available Deliveries).
+        $rides = \App\Models\RiderDetail::where('user_id', $riderId)->value('current_service') === 'transport';
+        $forService = fn (Delivery $d) => ($d->order?->order_type === 'transport') === $rides;
+
         $pinged = $this->model->with(['order.business'])
             ->where('status', TripStatus::WAITING)
             ->whereHas('dispatchLogs', function ($query) use ($riderId) {
@@ -83,7 +88,9 @@ class DeliveryRepository implements DeliveryRepositoryInterface
                     ->where('response', 'pending');
             })
             ->orderBy('created_at')
-            ->get();
+            ->get()
+            ->filter($forService)
+            ->values();
 
         $open = $this->model->with(['order.business'])
             ->where('status', TripStatus::WAITING)
@@ -106,7 +113,8 @@ class DeliveryRepository implements DeliveryRepositoryInterface
             ->filter(fn (Delivery $d) => $distances[$d->id] === null || $distances[$d->id] <= 25.0)
             // Nearest first; unknown distance last (stable: oldest first).
             ->sortBy(fn (Delivery $d) => $distances[$d->id] ?? PHP_FLOAT_MAX)
-            ->reject(fn (Delivery $d) => $pinged->contains('id', $d->id));
+            ->reject(fn (Delivery $d) => $pinged->contains('id', $d->id))
+            ->filter($forService);
 
         return $pinged->concat($open)->take($limit)->values();
     }
@@ -190,11 +198,16 @@ class DeliveryRepository implements DeliveryRepositoryInterface
             ->get();
     }
 
-    public function getCompletedDeliveries(int $riderId, int $perPage = 15): LengthAwarePaginator
+    public function getCompletedDeliveries(int $riderId, int $perPage = 15, ?string $type = null): LengthAwarePaginator
     {
-        return $this->model->with(['order.business'])
+        return $this->model->with(['order.business', 'groupCheckout'])
             ->where('rider_id', $riderId)
             ->where('status', TripStatus::COMPLETED)
+            // A ride booking is a transport order; everything else (including
+            // group food deliveries, which have no direct order) is food.
+            ->when($type === 'ride', fn ($q) => $q->whereHas('order', fn ($o) => $o->where('order_type', 'transport')))
+            ->when($type === 'food', fn ($q) => $q->whereDoesntHave('order', fn ($o) => $o->where('order_type', 'transport')))
+            ->latest('delivered_at')
             ->latest()
             ->paginate($perPage);
     }

@@ -30,6 +30,11 @@ class RiderDetail extends Model
         'current_service',
         'auto_accept',
         'active_order_limit',
+        'destination_label',
+        'destination_latitude',
+        'destination_longitude',
+        'destination_set_at',
+        'destination_expires_at',
     ];
 
     protected $casts = [
@@ -38,6 +43,10 @@ class RiderDetail extends Model
         'rider_status_updated_at' => 'datetime',
         'auto_accept' => 'boolean',
         'active_order_limit' => 'integer',
+        'destination_latitude' => 'decimal:7',
+        'destination_longitude' => 'decimal:7',
+        'destination_set_at' => 'datetime',
+        'destination_expires_at' => 'datetime',
     ];
 
     public function user(): BelongsTo

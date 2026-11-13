@@ -50,4 +50,14 @@ describe('BookRideSheet: starting from a known trip', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     expect(onClose).toHaveBeenCalled()
   })
+
+  it('pickup and drop-off confirmed on the page: opens at the trip summary, with no way back to change them', () => {
+    renderSheet({
+      destination: 'Tambangan Falls', destinationAddress: 'Gloria', destinationCoords: { lat: 12.95, lng: 121.46 },
+      pickupPoint: { name: 'Hotel, Bansud', lat: 12.86, lng: 121.45 },
+    })
+    expect(screen.getByRole('heading', { name: 'Trip summary' })).toBeInTheDocument()
+    expect(screen.getByText('Hotel, Bansud')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Back' })).not.toBeInTheDocument()
+  })
 })

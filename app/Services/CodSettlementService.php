@@ -103,8 +103,11 @@ class CodSettlementService
         $orderSubtotal = max(0.01, (float) $order->subtotal);
         $systemFee = round((float) $order->system_fee, 2);
 
+        // A restaurant whose every line was cancelled has nothing to buy or
+        // settle: it gets no base and no share of the service fee.
         $groups = $order->items()->get()
             ->groupBy(fn ($item) => $item->business_id ?: $order->business_id)
+            ->filter(fn ($items) => $items->sum(fn ($item) => max(0, (int) $item->quantity - (int) $item->cancelled_quantity)) > 0)
             ->sortKeys();
 
         $bases = collect();

@@ -124,7 +124,6 @@ class BusinessOwnerMenuManageController extends Controller
             'new_category' => 'nullable|string|max:255',
             'is_available' => 'boolean',
             'is_featured' => 'boolean',
-            'stock' => 'nullable|integer|min:0',
             'unit' => 'nullable|string|max:50',
         ];
 
@@ -160,7 +159,7 @@ class BusinessOwnerMenuManageController extends Controller
         $validated['status'] = 'available';
         $validated['bestseller'] = $request->boolean('is_featured');
         unset($validated['is_featured']);
-        $offering = Offering::create($validated);
+        $offering = app(\App\Services\MenuAvailabilityService::class)->create(fn () => Offering::create($validated), 'owner_menu_manage.create');
 
         return $this->createdResponse($this->present($offering));
     }
@@ -169,7 +168,7 @@ class BusinessOwnerMenuManageController extends Controller
     {
         $offering = Offering::whereIn('business_id', $request->user()->businesses()->pluck('id'))->findOrFail($id);
 
-        $data = $request->only(['name', 'description', 'price', 'compare_price', 'offering_category_id', 'is_available', 'stock', 'unit']);
+        $data = $request->only(['name', 'description', 'price', 'compare_price', 'offering_category_id', 'is_available', 'unit']);
         $data = array_filter($data, fn ($value) => $value !== null);
 
         if ($request->has('new_category') && ! empty($request->input('new_category'))) {
@@ -197,7 +196,7 @@ class BusinessOwnerMenuManageController extends Controller
         }
 
         if (! empty($data)) {
-            $offering->update($data);
+            app(\App\Services\MenuAvailabilityService::class)->update($offering, $data, 'owner_menu_manage.edit');
         }
 
         return $this->successResponse($this->present($offering->fresh()));

@@ -355,7 +355,10 @@ class CodDeliverySettlementTest extends TestCase
         $earningA = RiderEarning::where('rider_id', $this->riderA->id)->where('order_id', $orderA->id)->first();
         $this->assertNotNull($earningA);
         $this->assertSame('earned', $earningA->status);
-        $this->assertEquals(round(40.00 + (float) $orderA->rider_tip, 2), (float) $earningA->total_earning);
+        // Rule 2026-11-11 (Stage 5): the rider earns the full delivery fee
+        // (previously a flat ₱40 — this test asserted 40.00 until then).
+        $this->assertEquals((float) $orderA->fresh()->delivery_fee, (float) $delivery->fresh()->rider_commission);
+        $this->assertEquals(round((float) $delivery->fresh()->rider_commission + (float) $orderA->rider_tip, 2), (float) $earningA->total_earning);
 
         // ---- Step 9: overpayment on a second COD trip (change returned) ----
         $group2 = $this->groupService->createGroup($this->owner, $this->basePayload([
@@ -478,8 +481,8 @@ class CodDeliverySettlementTest extends TestCase
         $this->assertNotNull($earningB, 'Rider earning recorded at settlement.');
         $this->assertSame('earned', $earningA->status);
         $this->assertSame('earned', $earningB->status);
-        $this->assertEquals(round(40.00 + (float) $orderA->rider_tip, 2), (float) $earningA->total_earning);
-        $this->assertEquals(round(40.00 + (float) $orderB->rider_tip, 2), (float) $earningB->total_earning);
+        $this->assertEquals(round((float) $delivery->fresh()->rider_commission + (float) $orderA->rider_tip, 2), (float) $earningA->total_earning);
+        $this->assertEquals(round((float) $delivery->fresh()->rider_commission + (float) $orderB->rider_tip, 2), (float) $earningB->total_earning);
 
         $this->assertSame('available', $this->riderA->fresh()->riderDetail->rider_status);
 

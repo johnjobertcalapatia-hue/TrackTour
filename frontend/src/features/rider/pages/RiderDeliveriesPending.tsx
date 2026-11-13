@@ -113,7 +113,7 @@ export default function RiderDeliveriesPending() {
                           : 'shrink-0 rounded-full bg-[#F3F4F6] text-[#4B5563] px-2.5 py-0.5 text-xs font-semibold'
                       }
                     >
-                      {d.delivery_speed === 'fast' ? 'Priority' : 'Standard'}
+                      {isBooking ? d.delivery_type_label : d.delivery_speed === 'fast' ? 'Priority' : 'Standard'}
                     </span>
                     )}
                   </div>
@@ -141,17 +141,36 @@ export default function RiderDeliveriesPending() {
 
                   <dl className="mt-4 pt-4 border-t border-[#EEF1EF] grid grid-cols-2 gap-x-4 gap-y-3">
                     <div>
-                      <dt className="text-xs text-[#6B7280]">Distance</dt>
-                      <dd className="text-base font-bold text-[#17201B]">{km(d.distance_km)}</dd>
+                      <dt className="text-xs text-[#6B7280]">{isBooking ? 'Trip distance' : 'Distance'}</dt>
+                      <dd className="text-base font-bold text-[#17201B]">{km(isBooking ? d.ride?.distance_km ?? d.distance_km : d.distance_km)}</dd>
                     </div>
-                    <div>
-                      <dt className="text-xs text-[#6B7280]">Delivery fee</dt>
-                      <dd className="text-base font-bold text-[#17201B]">{peso(d.delivery_fee)}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-xs text-[#6B7280]">Customer tip</dt>
-                      <dd className="text-base font-bold text-[#17201B]">{peso(d.rider_tip)}</dd>
-                    </div>
+                    {isBooking ? (
+                      <>
+                        <div>
+                          <dt className="text-xs text-[#6B7280]">Ride fare</dt>
+                          <dd className="text-base font-bold text-[#17201B]">{peso(d.ride?.fare)}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs text-[#6B7280]">Payment</dt>
+                          <dd className="text-base font-bold text-[#17201B]">{d.is_cod ? 'Cash' : 'Paid online'}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs text-[#6B7280]">Passengers</dt>
+                          <dd className="text-base font-bold text-[#17201B]">{d.ride?.passenger_count ?? 1}</dd>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div>
+                          <dt className="text-xs text-[#6B7280]">Delivery fee</dt>
+                          <dd className="text-base font-bold text-[#17201B]">{peso(d.delivery_fee)}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs text-[#6B7280]">Customer tip</dt>
+                          <dd className="text-base font-bold text-[#17201B]">{peso(d.rider_tip)}</dd>
+                        </div>
+                      </>
+                    )}
                     {!isBooking && (
                       <div>
                         <dt className="text-xs text-[#6B7280]">Food items</dt>

@@ -10,18 +10,25 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 class RiderPayout extends Model
 {
+    /** Waiting for Tourism Office review ("pending review"). */
     public const STATUS_PENDING = 'pending';
+    /** A staff member is investigating; the request is held. */
+    public const STATUS_UNDER_REVIEW = 'under_review';
     public const STATUS_APPROVED = 'approved';
     public const STATUS_REJECTED = 'rejected';
     public const STATUS_PAID = 'paid';
     public const STATUS_CANCELLED = 'cancelled';
+    /** The manual GCash transfer failed; the earnings returned to the rider. */
+    public const STATUS_FAILED = 'failed';
 
     public const STATUSES = [
         self::STATUS_PENDING,
+        self::STATUS_UNDER_REVIEW,
         self::STATUS_APPROVED,
         self::STATUS_REJECTED,
         self::STATUS_PAID,
         self::STATUS_CANCELLED,
+        self::STATUS_FAILED,
     ];
 
     /**
@@ -29,6 +36,7 @@ class RiderPayout extends Model
      */
     public const LOCKING_STATUSES = [
         self::STATUS_PENDING,
+        self::STATUS_UNDER_REVIEW,
         self::STATUS_APPROVED,
         self::STATUS_PAID,
     ];
@@ -41,6 +49,7 @@ class RiderPayout extends Model
      */
     public const LIVE_STATUSES = [
         self::STATUS_PENDING,
+        self::STATUS_UNDER_REVIEW,
         self::STATUS_APPROVED,
     ];
 
@@ -55,14 +64,36 @@ class RiderPayout extends Model
         'reviewed_at',
         'review_note',
         'paid_at',
+        'destination_gcash_number',
+        'destination_account_name',
+        'items_snapshot',
+        'review_started_by',
+        'review_started_at',
+        'approved_by',
+        'approved_at',
+        'rejection_reason',
+        'paid_by',
+        'payment_reference',
+        'paid_amount',
+        'paid_recipient_number',
+        'paid_recipient_name',
+        'payment_proof_path',
+        'failed_by',
+        'failed_at',
+        'failure_reason',
     ];
 
-    protected $hidden = ['active_payout_key'];
+    protected $hidden = ['active_payout_key', 'payment_proof_path'];
 
     protected function casts(): array
     {
         return [
             'amount' => 'decimal:2',
+            'paid_amount' => 'decimal:2',
+            'items_snapshot' => 'array',
+            'review_started_at' => 'datetime',
+            'approved_at' => 'datetime',
+            'failed_at' => 'datetime',
             'requested_at' => 'datetime',
             'reviewed_at' => 'datetime',
             'paid_at' => 'datetime',
@@ -111,6 +142,18 @@ class RiderPayout extends Model
     /**
      * Total earnings currently available for a rider to request.
      */
+    /** Locked once approved (Stage 6): a change would invalidate the approval. */
+    public const LOCKED_AFTER_APPROVAL = ['rider_id', 'amount', 'destination_gcash_number', 'destination_account_name'];
+
+    protected static function booted(): void
+    {
+        static::updating(function (RiderPayout $payout) {
+            if (in_array($payout->getOriginal('status'), [self::STATUS_APPROVED, self::STATUS_PAID], true) && $payout->isDirty(self::LOCKED_AFTER_APPROVAL)) {
+                throw new \LogicException('An approved cashout\'s amount and GCash destination are locked; reject it and request again instead.');
+            }
+        });
+    }
+
     public static function availableEarningsFor(int $riderId): array
     {
         $earnings = RiderEarning::query()

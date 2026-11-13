@@ -54,8 +54,6 @@ class StaffMenuController extends Controller
             'images' => ['nullable', 'array'],
             'images.*' => ['file', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
             'new_category' => ['nullable', 'string', 'max:255'],
-            'stock' => ['nullable', 'integer', 'min:0'],
-            'unlimited_stock' => ['nullable', 'boolean'],
             'variation_groups' => ['nullable', 'array'],
             'variation_groups.*.name' => ['required_with:variation_groups', 'string', 'max:255'],
             'variation_groups.*.required' => ['nullable', 'boolean'],
@@ -80,7 +78,7 @@ class StaffMenuController extends Controller
         DB::beginTransaction();
 
         try {
-            $offering = $business->offerings()->create([
+            $offering = app(\App\Services\MenuAvailabilityService::class)->create(fn () => $business->offerings()->create([
                 'offering_category_id' => $validated['offering_category_id'],
                 'name' => $validated['name'],
                 'description' => $validated['description'] ?? null,
@@ -89,9 +87,8 @@ class StaffMenuController extends Controller
                 'status' => $validated['status'],
                 'is_available' => $validated['status'] === 'available',
                 'has_variations' => $hasVariations,
-                'stock' => ! empty($validated['unlimited_stock']) ? 0 : ($validated['stock'] ?? 0),
                 'type' => 'product',
-            ]);
+            ]), 'staff_menu.create');
 
             if ($request->hasFile('image')) {
                 $path = $request->file('image')->store('offerings', 'public');
@@ -174,8 +171,6 @@ class StaffMenuController extends Controller
             'status' => ['required', 'string', 'in:available,unavailable'],
             'has_variations' => ['nullable', 'boolean'],
             'image' => ['nullable', 'file', 'mimes:jpg,jpeg,png,webp', 'max:2048'],
-            'stock' => ['nullable', 'integer', 'min:0'],
-            'unlimited_stock' => ['nullable', 'boolean'],
             'variation_groups' => ['nullable', 'array'],
             'variation_groups.*.name' => ['required_with:variation_groups', 'string', 'max:255'],
             'variation_groups.*.required' => ['nullable', 'boolean'],
@@ -195,7 +190,7 @@ class StaffMenuController extends Controller
         DB::beginTransaction();
 
         try {
-            $offering->update([
+            app(\App\Services\MenuAvailabilityService::class)->update($offering, [
                 'offering_category_id' => $validated['offering_category_id'],
                 'name' => $validated['name'],
                 'description' => $validated['description'] ?? null,
@@ -204,8 +199,7 @@ class StaffMenuController extends Controller
                 'status' => $validated['status'],
                 'is_available' => $validated['status'] === 'available',
                 'has_variations' => $hasVariations,
-                'stock' => ! empty($validated['unlimited_stock']) ? 0 : ($validated['stock'] ?? 0),
-            ]);
+            ], 'staff_menu.edit');
 
             if ($request->hasFile('image')) {
                 $path = $request->file('image')->store('offerings', 'public');
@@ -273,7 +267,7 @@ class StaffMenuController extends Controller
             abort(403);
         }
 
-        $offering->update(['status' => 'hidden', 'is_available' => false]);
+        app(\App\Services\MenuAvailabilityService::class)->update($offering, ['status' => 'hidden', 'is_available' => false], 'staff_menu.hide');
 
         return redirect()->route('staff.menu.index')
             ->with('success', 'Menu item hidden.');
@@ -287,10 +281,10 @@ class StaffMenuController extends Controller
         }
 
         $newStatus = $offering->status === 'available' ? 'unavailable' : 'available';
-        $offering->update([
+        app(\App\Services\MenuAvailabilityService::class)->update($offering, [
             'status' => $newStatus,
             'is_available' => $newStatus === 'available',
-        ]);
+        ], 'staff_menu.toggle');
 
         return back()->with('success', 'Status updated.');
     }
@@ -306,7 +300,7 @@ class StaffMenuController extends Controller
         $clone->name = $offering->name.' (Copy)';
         $clone->status = 'hidden';
         $clone->is_available = false;
-        $clone->save();
+        app(\App\Services\MenuAvailabilityService::class)->saveNew($clone, 'staff_menu.duplicate');
 
         return redirect()->route('staff.menu.edit', $clone)
             ->with('success', 'Item duplicated. Edit and save when ready.');

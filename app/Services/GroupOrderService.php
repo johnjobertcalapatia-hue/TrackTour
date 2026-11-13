@@ -90,6 +90,11 @@ class GroupOrderService
         $grandTotal = round($subtotalTotal + $deliveryTotal + $systemFeeTotal + $riderTip, 2);
 
         return DB::transaction(function () use ($user, $orderType, $payload, $subtotalTotal, $deliveryTotal, $systemFeeTotal, $riderTip, $grandTotal, $deliveryLat, $deliveryLng, $orderItems, $firstBusiness, $fee, $riderFinancedAmount) {
+            // Stage 3: final availability / price recheck under row locks, in
+            // the same transaction that creates the order (a failure rolls
+            // everything back — no partial group, order or items).
+            app(\App\Services\CheckoutAvailabilityGuard::class)->assertOrderable($orderItems);
+
             $group = GroupCheckout::create([
                 'reference_number' => 'TT-GROUP-'.strtoupper(str_pad((string) random_int(1, 99999), 5, '0', STR_PAD_LEFT)),
                 'user_id' => $user->getAuthIdentifier(),

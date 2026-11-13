@@ -81,7 +81,7 @@ on `deliveries.rider_id IS NULL` under the lock.
 
 | # | Question | Recommendation |
 | --- | --- | --- |
-| D1 | Does the sequential flow apply to **ride-hailing (transport)** too, or only food delivery? | Food delivery only. Transport keeps the current flow until reviewed separately. |
+| D1 | Does the sequential flow apply to **ride-hailing (transport)** too, or only food delivery? | ~~Food delivery only.~~ **Revised 2026-11-11: rides use it too.** A booking is offered to the rider nearest the tourist's pickup, one at a time, and after the 4th unsuccessful offer it moves to Available Bookings. |
 | D2 | On the manual board, may riders who **rejected or timed out** a targeted offer still see and accept it? | Yes. The no-repeat rule applies to targeted offers; the board is open to every eligible rider. |
 | D3 | Keep the **exclusive review hold** (90 s, built 2026-11-07) on the manual board, and the 10-minute **"Already accepted by another rider"** cards? The spec says offers "disappear" once accepted and others get an "unavailable" message. | Keep the review hold (it is compatible with first-accept-wins). Replace the 10-minute taken cards with immediate removal plus an "offer no longer available" message, to match the spec. |
 | D4 | Rider ranking by **road distance**? OSRM is an external network call (about 5 s timeout each). | Rank candidates by straight-line distance, then confirm the top candidates with OSRM road distance when it responds within a short timeout. Fall back to straight-line. Pickup sequence (≤ 4 restaurants) uses OSRM with fallback. |
@@ -211,7 +211,7 @@ Preserved unchanged:
 
 **Sequential targeted dispatch**
 - Implemented in `SequentialDispatchService`, the food branch of
-  `NearestRiderService::dispatchToNearest()`. Transport keeps the wave (D1).
+  `NearestRiderService::dispatchToNearest()`. Transport kept the wave until D1 was revised on 2026-11-11; it is now sequential too.
   Every existing trigger reaches it: checkout, scheduler, decline, the
   timeout worker, and a late accept.
 - Rules, all under the delivery row lock:

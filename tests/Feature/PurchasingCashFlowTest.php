@@ -2347,7 +2347,11 @@ class PurchasingCashFlowTest extends TestCase
             'rider_tip' => (float) $earning->rider_tip,
             'total_earning' => (float) $earning->total_earning,
         ];
-        $earning->update([
+        // Simulates a day whose rider entitlements exceed the cash collected.
+        // Earnings are write-once in the app since Stage 5 (corrections are
+        // ledger adjustments), so the scenario is set on the row directly;
+        // the receipt math under test reads these row amounts.
+        \Illuminate\Support\Facades\DB::table('rider_earnings')->where('id', $earning->id)->update([
             'rider_tip' => round($cashDue + $personalContribution + 50, 2),
             'total_earning' => round((float) $earning->delivery_fee + $cashDue + $personalContribution + 50, 2),
         ]);
@@ -2358,7 +2362,7 @@ class PurchasingCashFlowTest extends TestCase
             0,
             $negativeBalanceReceipt->json('data.totals.additional_rider_payable')
         );
-        $earning->update($originalEarning);
+        \Illuminate\Support\Facades\DB::table('rider_earnings')->where('id', $earning->id)->update($originalEarning);
 
         $previousDate = $deliveryDate->subDay()->toDateString();
         $this->assertEquals(

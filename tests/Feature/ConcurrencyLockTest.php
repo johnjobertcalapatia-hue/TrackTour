@@ -41,6 +41,10 @@ use Tests\TestCase;
 class ConcurrencyLockTest extends TestCase
 {
     use RefreshDatabase;
+    // Reconciled 2026-11-11 (AGENTS.md §12, secure cashout): only earnings that
+    // trace to a provider-confirmed online payment and a completed delivery
+    // by the rider can be cashed out, so fixtures build that chain.
+    use \Tests\Concerns\MakesVerifiedEarnings;
 
     private User $owner;
     private User $tourist;
@@ -165,6 +169,8 @@ class ConcurrencyLockTest extends TestCase
     private function makeEarning(User $rider, float $amount, float $tip = 0.0): RiderEarning
     {
         $order = $this->makeOrder($this->makeBusiness('Payout Eatery ' . Str::random(4)));
+        $order->forceFill(['payment_method' => 'gcash'])->save();
+        $this->verifyEarningSource($order, $rider->id);
 
         return RiderEarning::create([
             'rider_id' => $rider->id,

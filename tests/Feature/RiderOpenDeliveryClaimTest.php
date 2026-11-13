@@ -517,6 +517,66 @@ class RiderOpenDeliveryClaimTest extends TestCase
         $this->assertContains($open->id, $ids, 'The booking page lists open deliveries the rider was never pinged for.');
     }
 
+    public function test_a_cash_ride_booking_is_claimable_and_creates_no_restaurant_purchase(): void
+    {
+        // Bug 2026-11-11: claiming a cash ride tried to create a COD restaurant
+        // purchase with business_id 0; the FK refused it and accept answered 409.
+        $business = $this->makeBusiness();
+        $rider = $this->makeRider('cash-ride@example.com', ['current_service' => 'transport']);
+        $rider->riderDetail()->update(['current_service' => 'transport']);
+        $order = $this->makeOrder($business, [
+            'order_type' => 'transport',
+            'status' => 'pending',
+            'payment_method' => 'cash',
+            'payment_status' => 'pending',
+            'business_id' => null,
+        ]);
+        $order->items()->update(['business_id' => null, 'product_name' => 'Ride: Motorcycle (1 pax)']);
+        $delivery = $this->makeOpenDelivery($order);
+
+        $this->be($rider)
+            ->patchJson('/api/rider/dispatch/accept', ['delivery_id' => $delivery->id])
+            ->assertOk();
+
+        $this->assertSame($rider->id, $delivery->fresh()->rider_id);
+        $this->assertSame(0, \App\Models\CodPurchase::where('delivery_id', $delivery->id)->count());
+    }
+
+    public function test_map_board_shows_a_ride_hailing_rider_only_bookings(): void
+    {
+        $business = $this->makeBusiness();
+        $food = $this->makeOpenDelivery($this->makeOrder($business));
+        $ride = $this->makeOpenDelivery($this->makeOrder($business, ['order_type' => 'transport', 'status' => 'pending']));
+        $rider = $this->makeRider('ride-board@example.com', ['current_service' => 'transport']);
+        $rider->riderDetail()->update(['current_service' => 'transport']);
+
+        $ids = collect($this->be($rider)->getJson('/api/rider/dispatch/board')->assertOk()->json('data.orders'))->pluck('delivery_id');
+
+        $this->assertContains($ride->id, $ids);
+        $this->assertNotContains($food->id, $ids);
+    }
+
+    public function test_ride_hailing_riders_see_only_bookings_and_food_riders_only_deliveries(): void
+    {
+        // Decision 2026-11-11: Available Bookings (Ride Hailing) never lists a
+        // food delivery, and Available Deliveries (Food) never lists a ride.
+        $business = $this->makeBusiness();
+        $food = $this->makeOpenDelivery($this->makeOrder($business));
+        $ride = $this->makeOpenDelivery($this->makeOrder($business, ['order_type' => 'transport', 'status' => 'pending']));
+
+        $rideRider = $this->makeRider('ride-list@example.com', ['current_service' => 'transport']);
+        $rideRider->riderDetail()->update(['current_service' => 'transport']);
+        $foodRider = $this->makeRider('food-list@example.com');
+
+        $rideIds = collect($this->be($rideRider)->getJson('/api/rider/deliveries/pending')->assertOk()->json('data'))->pluck('id');
+        $this->assertContains($ride->id, $rideIds);
+        $this->assertNotContains($food->id, $rideIds, 'No food order on Available Bookings.');
+
+        $foodIds = collect($this->be($foodRider)->getJson('/api/rider/deliveries/pending')->assertOk()->json('data'))->pluck('id');
+        $this->assertContains($food->id, $foodIds);
+        $this->assertNotContains($ride->id, $foodIds, 'No ride booking on Available Deliveries.');
+    }
+
     // ---------- service-level claim guard ----------
 
     public function test_claim_is_first_accept_wins_under_the_delivery_lock(): void

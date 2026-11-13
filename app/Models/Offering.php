@@ -21,7 +21,7 @@ class Offering extends Model
         'preparation_time',
         'compare_price',
         'unit',
-        'stock',
+        // 'stock' is deprecated and unused (no inventory quantities, Stage 3).
         'is_available',
         'status',
         'bestseller',

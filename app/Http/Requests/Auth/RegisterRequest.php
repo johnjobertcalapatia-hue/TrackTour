@@ -112,6 +112,9 @@ class RegisterRequest extends FormRequest
                         'unique:user_profiles,mobile_number',
                     ],
                     'otp_code' => ['required', 'string', 'size:6'],
+                    // The rider's municipality decides which Tourism Office
+                    // issues their COD cash advance and receives remittance.
+                    'municipality_id' => ['required', 'integer', 'exists:municipalities,id'],
                     'referral_code' => ['nullable', 'string', 'max:50'],
                     'confirm_age' => ['required', 'boolean', 'accepted'],
                     'agree_terms' => ['required', 'boolean', 'accepted'],

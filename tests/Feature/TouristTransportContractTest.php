@@ -34,7 +34,9 @@ use Tests\TestCase;
  *   - ride_status derives from the delivery lifecycle (assigned → arriving,
  *     arrived_pickup → driver_arrived), never stuck at order 'pending'
  *   - the server is the fare authority (spec §64): book() re-derives the fare
- *     server-side and ignores any client-supplied fare/distance/duration
+ *     server-side and ignores client distance/duration; a confirmed fare that
+ *     differs from the server fare is refused (409) so the tourist can review
+ *     it (Stage 4 decision 2026-11-11 — previously silently overridden)
  *
  * NearestRiderService is mocked ONLY at the candidate-finder seam so the REAL
  * dispatch/accept code runs unmocked (same pattern as RideHailingAcceptanceTest).
@@ -208,7 +210,6 @@ class TouristTransportContractTest extends TestCase
             'destination_address' => 'Destination St',
             'vehicle_type' => 'motorcycle',
             'passenger_count' => 1,
-            'fare' => 150,
             'distance_km' => 3.5,
             'duration_min' => 12,
             'payment_method' => 'gcash',
@@ -244,10 +245,37 @@ class TouristTransportContractTest extends TestCase
         $this->assertStringContainsString('Ride:', $order->items()->first()->product_name);
     }
 
-    public function test_book_recomputes_authoritative_fare_ignoring_client_value(): void
+    public function test_book_accepts_cash_and_gcash_only(): void
+    {
+        // Rides are paid in cash to the driver or online with GCash (PayMongo), 2026-11-10.
+        foreach (['cash', 'gcash'] as $method) {
+            $this->postJson('/api/tourist/transport/book', $this->bookPayload(['payment_method' => $method]), $this->authHeaders($this->tourist))
+                ->assertStatus(201);
+            $this->assertSame($method, Order::where('order_type', 'transport')->latest('id')->value('payment_method'));
+        }
+        foreach (['maya', 'card'] as $method) {
+            $this->postJson('/api/tourist/transport/book', $this->bookPayload(['payment_method' => $method]), $this->authHeaders($this->tourist))
+                ->assertStatus(422)
+                ->assertJsonValidationErrors('payment_method');
+        }
+    }
+
+    public function test_book_refuses_a_confirmed_fare_that_differs_from_the_server_fare(): void
+    {
+        $expectedFare = $this->expectedMotorcycleFare();
+
+        $this->postJson('/api/tourist/transport/book', $this->bookPayload(['fare' => 1]), $this->authHeaders($this->tourist))
+            ->assertStatus(409)
+            ->assertJsonPath('data.fare', $expectedFare)
+            ->assertJsonPath('data.quoted_fare', 1);
+
+        $this->assertSame(0, Order::where('order_type', 'transport')->count(), 'A refused fare books nothing.');
+    }
+
+    public function test_book_recomputes_authoritative_fare_ignoring_client_distance_and_duration(): void
     {
         $response = $this->postJson('/api/tourist/transport/book', $this->bookPayload([
-            'fare' => 1,
+            'fare' => $this->expectedMotorcycleFare(),
             'distance_km' => 0.5,
             'duration_min' => 1,
         ]), $this->authHeaders($this->tourist));
@@ -346,7 +374,8 @@ class TouristTransportContractTest extends TestCase
         $this->getJson('/api/tourist/transport/trip/'.$order->id.'/status', $this->authHeaders($this->tourist))
             ->assertOk()
             ->assertJsonPath('data.status', 'driver_arrived')
-            ->assertJsonPath('data.ride_pin', fn ($value) => is_string($value));
+            // Decision 2026-11-11: no passenger pickup PIN in TrackTour.
+            ->assertJsonMissingPath('data.ride_pin');
     }
 
     public function test_trip_status_is_visible_only_to_ride_owner(): void
@@ -681,6 +710,8 @@ class TouristTransportContractTest extends TestCase
         ]);
 
         $order = $this->createRideForTourist();
+        // Stage 4 decision: online ride payment opens once the ride is completed.
+        $order->update(['status' => 'completed']);
 
         $this->postJson('/api/payments/create-intent', [
             'payable_type' => 'order',
@@ -797,5 +828,47 @@ class TouristTransportContractTest extends TestCase
             'payment_status' => 'paid',
             'status' => 'cancelled',
         ]);
+    }
+
+    // ---------- Tourism Office ride fares ----------
+
+    public function test_ride_estimate_and_booking_use_tourism_office_ride_fares(): void
+    {
+        app(\App\Services\RideFareSettings::class)->save([
+            'motorcycle' => ['base_fare' => 70, 'per_km' => 10],
+        ]);
+
+        $estimate = app(TransportationService::class)->estimateFare(12.51, 121.31, 12.60, 121.40);
+        $moto = $estimate['fares']['motorcycle'];
+        $this->assertSame(70.0, (float) $moto['base_fare']);
+        $this->assertSame(10.0, (float) $moto['per_km']);
+        $this->assertEqualsWithDelta(70 + $moto['distance_km'] * 10, $moto['fare'], 0.05);
+        // Other vehicles keep their defaults.
+        $this->assertSame(100.0, (float) $estimate['fares']['car']['base_fare']);
+
+        $order = $this->createRideForTourist();
+        $this->assertSame((float) $moto['fare'], (float) $order->total);
+
+        $notes = json_decode($order->delivery->notes, true);
+        $this->assertSame(70.0, (float) $notes['base_fare']);
+        $this->assertSame(10.0, (float) $notes['per_km']);
+    }
+
+    public function test_booked_ride_receipt_keeps_its_booking_base_fare_after_a_fare_change(): void
+    {
+        $order = $this->createRideForTourist();
+        $fare = (float) $order->total;
+
+        app(\App\Services\RideFareSettings::class)->save([
+            'motorcycle' => ['base_fare' => 999, 'per_km' => 99],
+        ]);
+
+        $data = $this->getJson('/api/tourist/transport/trip/'.$order->id.'/status', $this->authHeaders($this->tourist))
+            ->assertOk()
+            ->json('data');
+
+        $this->assertSame($fare, (float) $data['fare']);
+        $this->assertSame(50.0, (float) $data['base_fare'], 'Base fare in force at booking.');
+        $this->assertEqualsWithDelta($fare, $data['base_fare'] + $data['distance_fare'], 0.001);
     }
 }

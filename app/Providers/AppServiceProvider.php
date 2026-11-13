@@ -32,6 +32,7 @@ use App\Services\AdminService;
 use App\Services\BookingService;
 use App\Services\BusinessService;
 use App\Services\DeliveryFareSettings;
+use App\Services\RideFareSettings;
 use App\Services\DeliveryService;
 use App\Services\NotificationService;
 use App\Services\OrderService;
@@ -68,6 +69,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(BookingService::class);
         $this->app->singleton(DeliveryService::class);
         $this->app->singleton(DeliveryFareSettings::class);
+        $this->app->singleton(RideFareSettings::class);
         $this->app->singleton(StaffService::class);
         $this->app->singleton(TouristService::class);
         $this->app->singleton(AdminService::class);
@@ -89,5 +91,25 @@ class AppServiceProvider extends ServiceProvider
         Review::observe(ReviewObserver::class);
         Favorite::observe(FavoriteObserver::class);
         Booking::observe(BookingObserver::class);
+
+        // Secure transaction architecture, Stage 2: every change to these
+        // canonical records is appended to the hash-chained transaction ledger.
+        foreach ([
+            \App\Models\Order::class,
+            \App\Models\OrderItem::class,
+            \App\Models\Payment::class,
+            \App\Models\Refund::class,
+            \App\Models\Delivery::class,
+            \App\Models\DeliveryPickupStop::class,
+            \App\Models\RiderEarning::class,
+            \App\Models\TripLog::class,
+        ] as $model) {
+            $model::observe(\App\Observers\TransactionLedgerObserver::class);
+        }
+
+        // Stage 3: menu availability history. MenuAvailabilityService is the
+        // authoritative writer; this observer only catches bypassing writes.
+        \App\Models\Offering::observe(\App\Observers\MenuAvailabilityObserver::class);
+        \App\Models\OfferingVariation::observe(\App\Observers\MenuAvailabilityObserver::class);
     }
 }

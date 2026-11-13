@@ -132,7 +132,7 @@ effective = max(1, base − reduction)
 ## Cancellation & Timeout Policies
 
 - **No merchant auto-reject**: `AutoRejectWaitingOrder` and its schedule entry were removed — riderless orders wait indefinitely (`never auto-cancel`).
-- **Undelivered Abandonment (`AutoCancelUndeliveredOrder`)**: paid delivery orders exceeding 60 minutes without delivery are auto-cancelled and refunded.
+- **Late accepted orders (`AutoCancelUndeliveredOrder`)**: since 2026-11-11 an accepted, paid order not delivered within 60 minutes is **flagged** for Tourism Office investigation and stays active — never auto-cancelled or refunded (previously it was cancelled and refunded). See "Accepted orders must be fulfilled" below.
 - Customer/system cancellation paths remain (`cancelled_by_tourist`, `rejected`).
 
 ---
@@ -154,3 +154,13 @@ effective = max(1, base − reduction)
 - `tests/Feature/RestaurantPreparationTimerTest.php` — removed endpoints → 404, rider-acceptance start + countdown, MAX-snapshot math without quantity multiplication, menu-edit immutability, reduction off-by-default, tier math + RBAC, auto-ready due/not-due idempotency, pickup start without rider, scheduler promotion of stranded orders, auto-reject command removal, offering `preparation_time` CRUD validation.
 - `tests/Feature/PreparationStartServiceGateTest.php` — service gate: delivery-only rider requirement, idempotent start, scheduler recovery, authorized-payment capture.
 - `tests/Feature/RiderAcceptanceGateTest.php` — reconciled to rider-acceptance-driven preparation (single-trigger `preparing` transition, removed endpoints, COD-stays-pending, prepaid capture).
+
+## Accepted orders must be fulfilled (product-owner decision, 2026-11-11)
+
+Once a rider has accepted the delivery (`Order::hasAcceptedRider()`):
+
+- the restaurant cannot reject or cancel the order or a dish (422); the attempt is escalated to the Tourism Office;
+- `orders:auto-cancel-undelivered` never cancels or refunds it — a late accepted order stays active and is flagged once for investigation (this command previously cancelled and refunded);
+- no refund is issued by any path (refund service, tourist refund endpoint, closed-order payments); each refused refund is escalated.
+
+Before acceptance the existing rejection / refund rules and D5 (no rider within 60 minutes → cancel + refund) are unchanged. Food riders earn the full delivery fee calculated at checkout (before any delivery-fee promotion) — previously a flat ₱40. See docs/secure-transaction-audit.md (Stage 5).

@@ -152,6 +152,82 @@ export function dropoffArrivalConditions(distance: number | null, locationKnown:
   ]
 }
 
+/**
+ * The server judges every location-gated step (I've Arrived, Confirm
+ * Delivered) from the rider's SAVED position. When it refused the latest fix
+ * (a jump too far / GPS not precise), the device distance alone would say ✓
+ * while the server answers "you are 10.6 km away" (2026-11-11). This adds the
+ * missing, honest line; null when the latest fix was saved.
+ */
+export function savedLocationCondition(refusal: string | null | undefined): Condition | null {
+  if (refusal === 'implausible_movement') {
+    return { label: 'Location saved (waiting: it jumped too far from your last saved spot, up to 2 minutes)', met: false }
+  }
+  if (refusal === 'low_accuracy') {
+    return { label: 'Location saved (waiting: GPS is not precise enough, move to an open area)', met: false }
+  }
+  return null
+}
+
+/** The phone's own fix may stand in at the food drop-off up to this precision (server: tracking.dropoff_max_fix_accuracy_m). */
+export const DROPOFF_MAX_FIX_ACCURACY_M = 200
+
+/**
+ * Food drop-off (I've Arrived at the tourist, Confirm Delivered): when the
+ * server refused to SAVE the latest fix for precision, the phone's own fix
+ * sent with the action still counts up to ±200 m (owner decision 2026-11-12;
+ * flagged for review past ±50 m). Other refusals, and coarser fixes, still
+ * block with what to do.
+ */
+export function withDropoffLocation(conditions: Condition[], refusal: string | null | undefined, deviceAccuracy: number | null | undefined): Condition[] {
+  const acc = deviceAccuracy != null && Number.isFinite(deviceAccuracy) ? Math.round(deviceAccuracy) : null
+  const tooCoarse: Condition = {
+    label: acc != null
+      ? `GPS precise enough (now ±${acc} m; needs ±${DROPOFF_MAX_FIX_ACCURACY_M} m or better — turn on Precise location or step outside)`
+      : `GPS precise enough (needs ±${DROPOFF_MAX_FIX_ACCURACY_M} m or better — turn on Precise location or step outside)`,
+    met: false,
+  }
+  // Judged from the phone's own precision, not only from a save refusal: a
+  // rider standing still gets no refusal back, so a ±149 m fix used to show
+  // every line ✓ and the server refused on tap (2026-11-12).
+  if (acc != null && acc > DROPOFF_MAX_FIX_ACCURACY_M) {
+    return [...withSavedLocation(conditions, refusal === 'low_accuracy' ? null : refusal), tooCoarse]
+  }
+  if (refusal !== 'low_accuracy') return withSavedLocation(conditions, refusal)
+  return acc != null
+    ? [...conditions, { label: `Location checked from your phone (±${acc} m)`, met: true }]
+    : [...conditions, tooCoarse]
+}
+
+/** Append the saved-location line when the latest fix was refused. */
+export function withSavedLocation(conditions: Condition[], refusal: string | null | undefined): Condition[] {
+  const saved = savedLocationCondition(refusal)
+  return saved ? [...conditions, saved] : conditions
+}
+
+/** Ride: "I've Arrived" at the pickup point (server arrival geofence, config tracking.arrival_radius_meters). */
+export const RIDE_PICKUP_RADIUS_M = 100
+
+export function ridePickupConditions(distance: number | null, locationKnown: boolean): Condition[] {
+  return [
+    {
+      label: withinLabel(RIDE_PICKUP_RADIUS_M, 'the pickup point', distance, locationKnown),
+      met: locationKnown && distance != null && distance <= RIDE_PICKUP_RADIUS_M,
+    },
+  ]
+}
+
+/** Ride: "I've Arrived" at the drop-off: passenger on board and within 50 m. */
+export function rideDropoffConditions(distance: number | null, locationKnown: boolean): Condition[] {
+  return [
+    { label: 'Passenger on board', met: true },
+    {
+      label: withinLabel(DROPOFF_ARRIVAL_RADIUS_M, 'the drop-off', distance, locationKnown),
+      met: locationKnown && distance != null && distance <= DROPOFF_ARRIVAL_RADIUS_M,
+    },
+  ]
+}
+
 /** "Confirm Delivered": within 50 m of the delivery address and a submitted photo. */
 export function deliveryConditions(distance: number | null, locationKnown: boolean, photoSubmitted: boolean): Condition[] {
   return [

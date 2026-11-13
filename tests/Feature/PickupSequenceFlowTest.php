@@ -771,4 +771,85 @@ class PickupSequenceFlowTest extends TestCase
             ->assertJsonPath('data.pickup_stops.0.status', 'collected')
             ->assertJsonPath('data.pickup_stops.1.status', 'collected');
     }
+
+    // ---------- Stage 3: pickup location evidence (observe-only) ----------
+
+    private function stop(Delivery $delivery, Business $business): DeliveryPickupStop
+    {
+        return DeliveryPickupStop::where('delivery_id', $delivery->id)->where('business_id', $business->id)->sole();
+    }
+
+    public function test_pickup_evidence_keeps_device_and_server_fixes_apart_with_their_own_accuracy_and_age(): void
+    {
+        $order = $this->makeOrder('gcash');
+        $delivery = $this->makeDelivery($order);
+        $this->readyItems($order, $this->restaurantA);
+        RiderLocation::where('rider_id', $this->rider->id)->delete();
+        $saved = RiderLocation::create([
+            'rider_id' => $this->rider->id,
+            'latitude' => $this->latitudeAtPickupDistance(20),
+            'longitude' => $this->restaurantA->longitude,
+            'accuracy_m' => 8,
+            'recorded_at' => now()->subSeconds(4),
+        ]);
+
+        $this->be($this->rider)->postJson($this->arriveUrl($delivery, $this->restaurantA), [
+            'latitude' => $this->latitudeAtPickupDistance(10),
+            'longitude' => $this->restaurantA->longitude,
+            'accuracy' => 12.5,
+            'fix_at' => now()->subSeconds(3)->toIso8601String(),
+        ])->assertOk();
+
+        $arrival = $this->stop($delivery, $this->restaurantA)->arrival_evidence;
+        $this->assertEqualsWithDelta(12.5, $arrival['device']['accuracy_m'], 0.01);
+        $this->assertEqualsWithDelta(3, $arrival['device']['age_s'], 2);
+        $this->assertEqualsWithDelta(10, $arrival['device']['distance_m'], 1);
+        $this->assertEqualsWithDelta(8, $arrival['server']['accuracy_m'], 0.01);
+        $this->assertEqualsWithDelta(4, $arrival['server']['age_s'], 2);
+        $this->assertEqualsWithDelta(20, $arrival['server']['distance_m'], 1);
+        $this->assertSame($saved->id, $arrival['server']['location_id']);
+        $this->assertEqualsWithDelta((float) $this->restaurantA->latitude, $arrival['restaurant']['latitude'], 0.000001);
+
+        // The evidence travels into the immutable transaction ledger event.
+        $event = \App\Models\TransactionEvent::where('event_type', 'pickup_arrived')->sole();
+        $this->assertSame('12.5', $event->payload['evidence']['device']['accuracy_m']);
+        $this->assertEquals(8, $event->payload['evidence']['server']['accuracy_m']);
+    }
+
+    public function test_missing_or_invalid_device_coordinates_never_block_the_pickup(): void
+    {
+        $order = $this->makeOrder('gcash');
+        $delivery = $this->makeDelivery($order);
+        $this->readyItems($order, $this->restaurantA);
+
+        // Invalid device fix: recorded as rejected, arrival still confirmed.
+        $this->be($this->rider)->postJson($this->arriveUrl($delivery, $this->restaurantA), ['latitude' => 'abc', 'longitude' => 121.31])->assertOk();
+        $this->assertSame(['rejected' => 'invalid coordinates'], $this->stop($delivery, $this->restaurantA)->arrival_evidence['device']);
+
+        // No device fix at all: pickup confirmed, device evidence null, server fix kept.
+        $this->be($this->rider)->postJson($this->confirmUrl($delivery, $this->restaurantA))->assertOk();
+        $pickup = $this->stop($delivery, $this->restaurantA)->pickup_evidence;
+        $this->assertNull($pickup['device']);
+        $this->assertNotNull($pickup['server']);
+        $this->assertNotNull($this->stop($delivery, $this->restaurantA)->pickup_confirmed_at);
+    }
+
+    public function test_pickup_evidence_is_written_once(): void
+    {
+        $order = $this->makeOrder('gcash');
+        $delivery = $this->makeDelivery($order);
+
+        $this->be($this->rider)->postJson($this->arriveUrl($delivery, $this->restaurantA), [
+            'latitude' => $this->restaurantA->latitude, 'longitude' => $this->restaurantA->longitude, 'accuracy' => 5,
+        ])->assertOk();
+        $first = $this->stop($delivery, $this->restaurantA)->arrival_evidence;
+
+        $this->travel(30)->seconds();
+        $this->be($this->rider)->postJson($this->arriveUrl($delivery, $this->restaurantA), [
+            'latitude' => $this->restaurantA->latitude, 'longitude' => $this->restaurantA->longitude, 'accuracy' => 40,
+        ])->assertOk()->assertJsonPath('data.arrival_changed', false);
+        $this->travelBack();
+
+        $this->assertSame($first, $this->stop($delivery, $this->restaurantA)->arrival_evidence);
+    }
 }
