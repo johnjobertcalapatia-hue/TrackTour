@@ -1,5 +1,19 @@
 # Project Progress — Tourism Management Portal
 
+## Production — "Scheduled command [] failed with exit code [1]" (2026-11-18)
+
+- **Seen on Railway:** 3 Server error incidents (1:00, 1:21, 1:22 PM), no account. The empty `[]` means a scheduled *closure*; the only one is the System Diagnostics heartbeat.
+- **Cause:** the closure returned `Cache::forever(...)`. Laravel counts a closure returning `false` as a failed task. The `database` cache store returns `false` when its upsert changes no row, which happens when two schedulers write the same to-the-second timestamp: during a deploy the old and new containers both run `schedule:work` and fire at second 0. It was a false alarm; the heartbeat was saved.
+- **Fix:** `routes/console.php` — the heartbeat closure no longer returns the result. A real cache failure throws and is still reported with its own message.
+- **Test:** `SystemDiagnosticsTest::test_heartbeat_task_does_not_fail_when_the_cache_row_is_unchanged` (fails on the old closure with exit code 1). Laravel **1290 passed, 2 skipped**.
+- **After deploying:** mark the 3 incidents (and the related "Application errors" diagnostics entry) as fixed.
+
+## Tourist — View Trip opens that ride's details (2026-11-18)
+
+- **Bug:** in My Activities › Travels › Transport, the eye button on a past ride opened `/tourist/transport` (the booking page).
+- **Fix:** it now opens `/tourist/transport/tracking/{id}`, the ride's own page: receipt when completed, cancellation info (and fee card) when cancelled. The history `trips` id is the order id that page loads.
+- **Test:** `frontend/tests/ui/tourist-history-trip-link.test.tsx`. Frontend **128 files / 887 tests passed**; build clean.
+
 ## Rider app — the board lists only available offers for the current service (2026-11-18)
 
 **Bug:** a Food Delivery rider's "Available orders" listed cancelled ride bookings. Another rider's trips (read-only) and cancelled offers were added to the board without the service filter the actionable offers use.

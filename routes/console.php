@@ -72,7 +72,14 @@ Schedule::command(\App\Console\Commands\VerifyTransactionIntegrity::class, ['--h
 
 // System Diagnostics (admin): proves the scheduler process is alive. Only the
 // real scheduler writes this; manual "run now" fixes never do.
-Schedule::call(fn () => \Illuminate\Support\Facades\Cache::forever(\App\Services\SystemDiagnosticsService::HEARTBEAT_KEY, now()->toIso8601String()))
+// The closure must not return Cache::forever()'s result: a closure returning
+// false counts as a failed task ("Scheduled command [] failed with exit code
+// [1]"), and the database cache returns false when the row is unchanged, which
+// happens when two schedulers (old + new container during a deploy) write the
+// same second. A real cache failure throws and is still reported.
+Schedule::call(function (): void {
+    \Illuminate\Support\Facades\Cache::forever(\App\Services\SystemDiagnosticsService::HEARTBEAT_KEY, now()->toIso8601String());
+})
     ->everyMinute()
     ->name('system-diagnostics-heartbeat')
     ->description('Record that the scheduler is running (System Diagnostics)');

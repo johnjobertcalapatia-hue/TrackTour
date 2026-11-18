@@ -78,6 +78,25 @@ class SystemDiagnosticsTest extends TestCase
         $this->assertSame('error', $this->find($this->diagnostics()->json('data'), 'scheduler')['status']);
     }
 
+    public function test_heartbeat_task_does_not_fail_when_the_cache_row_is_unchanged(): void
+    {
+        // Production 2026-11-18: "Scheduled command [] failed with exit code [1]".
+        // The database cache returns false when the row is unchanged (two
+        // schedulers writing the same second during a deploy); a closure
+        // returning false counts as a failed task, so it must not return it.
+        $event = collect(app(\Illuminate\Console\Scheduling\Schedule::class)->events())
+            ->first(fn ($e) => $e->description === 'Record that the scheduler is running (System Diagnostics)');
+        $this->assertNotNull($event, 'The heartbeat task is scheduled.');
+
+        Cache::shouldReceive('forever')->once()
+            ->with(SystemDiagnosticsService::HEARTBEAT_KEY, \Mockery::type('string'))
+            ->andReturnFalse();
+
+        $event->run($this->app);
+
+        $this->assertSame(0, $event->exitCode);
+    }
+
     public function test_stale_busy_rider_is_detected_and_released_through_rider_diagnostics(): void
     {
         $stuck = $this->user('rider', 'Stuck Rider');
