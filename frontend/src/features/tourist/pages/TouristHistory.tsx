@@ -247,9 +247,11 @@ export default function TouristHistory({ embedded = false, only }: { embedded?: 
                       <StatusBadge status={trip.status} />
                     </div>
                     <button
-                      onClick={() => navigate('/tourist/transport')}
+                      // That ride's own details (receipt, or cancellation info), not the booking page.
+                      onClick={() => navigate(`/tourist/transport/tracking/${trip.id}`)}
                       className="p-2 rounded-lg text-[#6B7280] hover:text-blue-500 hover:bg-blue-500/10 transition"
                       title="View Trip"
+                      aria-label={`View trip ${trip.order_number}`}
                     >
                       <Eye className="w-4 h-4" />
                     </button>
