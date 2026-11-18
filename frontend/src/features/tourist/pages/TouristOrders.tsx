@@ -64,7 +64,7 @@ export default function TouristOrders({ embedded = false }: { embedded?: boolean
   const counts = data?.counts
 
   return (
-    <div className="mx-auto w-full max-w-4xl">
+    <div className="mx-auto lg:mx-0 w-full max-w-4xl">
       {!embedded && (
         <div className="mb-4">
           <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">My Orders</h1>
@@ -181,11 +181,10 @@ function OrderSectionCard({ section, viewTab }: { section: OrderSection; viewTab
 }
 
 function SectionActions({ section }: { section: OrderSection }) {
-  const progressUrl = `/tourist/orders/${section.primary_order_id}/progress`
-
-
+  const trackUrl = `/tourist/orders/${section.primary_order_id}/track`
   const button = 'inline-flex items-center justify-center gap-2 h-10 px-5 rounded-full text-sm font-semibold transition'
-
+  // The rider is on the road: tracking is the main thing to do.
+  const onTheRoad = section.tab === 'in_transit' || section.tab === 'to_receive'
 
   return (
     <div className="px-4 sm:px-5 py-3 border-t border-[#EEF2EF] flex flex-wrap items-center justify-end gap-2">
@@ -195,31 +194,28 @@ function SectionActions({ section }: { section: OrderSection }) {
         </p>
       )}
 
+      {section.tab === 'to_receive' && (
+        // The rider completes the delivery with a photo at your address
+        // (decision 2026-11-08); no tourist confirmation is needed.
+        <span className="mr-auto inline-flex items-center gap-1.5 text-sm text-[#3B4540]">
+          <PackageCheck className="w-4 h-4 text-[#087F3F]" aria-hidden="true" /> Your rider will confirm delivery on arrival
+        </span>
+      )}
+
       {section.tab === 'to_pay' && <CompletePaymentButton section={section} className={button} />}
-      {section.tab === 'to_review' && (
+      {/* Every order (but a cancelled one) can be tracked: progress, rider, map, timeline. */}
+      {section.tab !== 'cancelled' && (
+        <Link
+          to={trackUrl}
+          className={cn(button, onTheRoad ? 'bg-[#087F3F] text-white hover:bg-[#056B35]' : 'border border-[#087F3F] text-[#087F3F] hover:bg-[#E9F7EF]')}
+        >
+          <MapPin className="w-4 h-4" aria-hidden="true" /> Track order
+        </Link>
+      )}
+      {(section.tab === 'to_review' || section.tab === 'completed') && (
         <Link to={`/tourist/orders/${section.primary_order_id}/details`} className={cn(button, 'border border-[#087F3F] text-[#087F3F] hover:bg-[#E9F7EF]')}>
           View order details
         </Link>
-      )}
-      {section.tab === 'preparing' && (
-        <Link to={progressUrl} className={cn(button, 'border border-[#087F3F] text-[#087F3F] hover:bg-[#E9F7EF]')}>View progress</Link>
-      )}
-      {section.tab === 'in_transit' && (
-        <Link to={progressUrl} className={cn(button, 'bg-[#087F3F] text-white hover:bg-[#056B35]')}>
-          <MapPin className="w-4 h-4" aria-hidden="true" /> Track rider on map
-        </Link>
-      )}
-      {section.tab === 'to_receive' && (
-        <>
-          <Link to={progressUrl} className={cn(button, 'border border-[#087F3F] text-[#087F3F] hover:bg-[#E9F7EF]')}>
-            <MapPin className="w-4 h-4" aria-hidden="true" /> View on map
-          </Link>
-          {/* The rider completes the delivery with a photo at your address
-              (decision 2026-11-08); no tourist confirmation is needed. */}
-          <span className="inline-flex items-center gap-1.5 text-sm text-[#3B4540]">
-            <PackageCheck className="w-4 h-4 text-[#087F3F]" aria-hidden="true" /> Your rider will confirm delivery on arrival
-          </span>
-        </>
       )}
       {section.tab === 'completed' && (
         <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-[#047332]">

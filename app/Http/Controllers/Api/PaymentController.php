@@ -59,25 +59,34 @@ class PaymentController extends Controller
             $referenceNumber = $order->order_number;
 
             if ($order->order_type === 'transport') {
-                // A ride has a single fare component: subtotal === total === fare.
-                $lineItems = [
-                    [
-                        'name' => 'Ride Fare',
-                        'amount' => $amount,
-                        'currency' => 'PHP',
-                        'quantity' => 1,
-                    ],
-                ];
+                // A ride: the fare, plus one line per itemised additional charge
+                // (pickup waiting, 2026-11-18). The lines always sum to the total.
+                $chargeLines = \App\Models\RideAdditionalCharge::where('order_id', $order->id)
+                    ->where('status', 'approved')->where('amount', '>', 0)->orderBy('id')->get()
+                    ->map(fn ($c) => ['name' => $c->present()['label'], 'amount' => (int) round((float) $c->amount * 100), 'currency' => 'PHP', 'quantity' => 1])
+                    ->values()->all();
+                $fareAmount = $amount - array_sum(array_column($chargeLines, 'amount'));
+                $lineItems = array_merge([[
+                    'name' => 'Ride Fare',
+                    'amount' => $fareAmount,
+                    'currency' => 'PHP',
+                    'quantity' => 1,
+                ]], $chargeLines);
 
                 // A cancelled ride owes nothing: never open a new checkout.
                 if ($order->status === 'cancelled') {
                     return $this->errorResponse('This ride was cancelled and can no longer be paid.', 422);
                 }
 
-                // Stage 4 decision: rides are paid online after the trip, once
-                // it is completed (the app's Pay button rule, now enforced here).
-                if ($order->status !== 'completed') {
-                    return $this->errorResponse('You can pay for this ride once it is completed.', 422);
+                // Rides are paid online at the drop-off (owner decision
+                // 2026-11-18): from arrival at the destination — where the
+                // fare is final — so the rider can confirm the payment
+                // before completing the ride. Before that, never.
+                if (! app(\App\Services\RidePaymentService::class)->canPayOnline($order)) {
+                    return $this->errorResponse('You can pay for this ride once you reach your destination.', 422);
+                }
+                if (strtolower((string) $order->payment_method) === 'cash') {
+                    return $this->errorResponse('This ride is paid in cash to your driver.', 422);
                 }
             } else {
                 $lineItems = [
@@ -186,6 +195,8 @@ class PaymentController extends Controller
 
         $paymentNumber = 'PAY-'.Str::upper(Str::random(12));
         $frontendUrl = rtrim(config('app.frontend_url', 'http://localhost:3000'), '/');
+        // A ride's payment page returns to the ride, not to a food order (2026-11-18).
+        $returnKind = $payableType === 'order' && isset($order) && $order instanceof Order && $order->order_type === 'transport' ? '&kind=ride' : '';
         $backendUrl = rtrim(config('app.url', 'http://localhost'), '/');
 
         $session = $this->paymongo->createCheckoutSession([
@@ -195,8 +206,8 @@ class PaymentController extends Controller
             'reference_number' => $referenceNumber,
             'line_items' => in_array($payableType, ['order', 'group_order']) ? $lineItems : null,
             'payment_method_types' => $validated['method'] === 'gcash' ? ['gcash'] : ['card'],
-            'success_url' => $frontendUrl.'/payment/callback?payment_number='.$paymentNumber.'&status=success&payable_type='.$payableType.'&payable_id='.$payableId,
-            'cancel_url' => $frontendUrl.'/payment/callback?payment_number='.$paymentNumber.'&status=cancelled&payable_type='.$payableType.'&payable_id='.$payableId,
+            'success_url' => $frontendUrl.'/payment/callback?payment_number='.$paymentNumber.'&status=success&payable_type='.$payableType.'&payable_id='.$payableId.$returnKind,
+            'cancel_url' => $frontendUrl.'/payment/callback?payment_number='.$paymentNumber.'&status=cancelled&payable_type='.$payableType.'&payable_id='.$payableId.$returnKind,
             'metadata' => [
                 'payable_type' => $payableType,
                 'payable_id' => (string) $payableId,
@@ -753,6 +764,8 @@ class PaymentController extends Controller
             'payable_type' => $payment->payable_type === Order::class ? 'order' : ($payment->payable_type === GroupCheckout::class ? 'group_order' : 'booking'),
             'order_id' => $payment->payable_type === Order::class ? $payment->payable_id : null,
             'group_order_id' => $payment->payable_type === GroupCheckout::class ? $payment->payable_id : null,
+            // 'transport' = a ride: the return page goes back to the ride.
+            'order_type' => $payment->payable_type === Order::class ? Order::whereKey($payment->payable_id)->value('order_type') : null,
         ];
     }
 
@@ -947,11 +960,21 @@ class PaymentController extends Controller
         // waiting_restaurant, never start preparation/dispatch fan-out, and
         // never resurrect a cancelled ride into an active food flow.
         if ($payable instanceof Order && $payable->order_type === 'transport') {
+            // The rider switched this ride to cash at the drop-off and
+            // collected it: a GCash payment landing afterwards never turns
+            // the ride back to GCash — it is recorded and escalated for a
+            // manual refund (2026-11-18).
+            if (app(\App\Services\RidePaymentService::class)->handleLatePaymentAfterCashSwitch($payable, $payment)) {
+                return;
+            }
+
             $payable->update([
                 'paid_amount' => $payment->amount,
                 'payment_method' => $payment->method,
                 'payment_status' => 'paid',
             ]);
+            // The rider is waiting at the drop-off to confirm it.
+            DB::afterCommit(fn () => app(\App\Services\RidePaymentService::class)->notifyPaid($payable));
 
             // Stage 4: money that lands on a ride cancelled meanwhile (e.g. a
             // checkout opened before the cancellation) is refunded through the

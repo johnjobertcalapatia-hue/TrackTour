@@ -79,6 +79,7 @@ export const API_ENDPOINTS = {
     CATEGORIES: '/admin/business-categories',
     MODULES: '/admin/business-modules',
     MUNICIPALITIES: '/admin/municipalities',
+    MUNICIPALITY_ACCOUNTS: '/admin/municipality-accounts',
     TOURISTS: '/admin/tourists',
     ROLES: '/admin/roles',
     RIDERS: '/admin/riders',
@@ -115,5 +116,8 @@ export const API_ENDPOINTS = {
   },
   TOURISM_OFFICE: {
     DASHBOARD: '/tourism-office/dashboard',
+  },
+  MUNICIPAL: {
+    DASHBOARD: '/municipal/dashboard',
   },
 } as const

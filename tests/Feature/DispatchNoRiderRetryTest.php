@@ -166,6 +166,8 @@ class DispatchNoRiderRetryTest extends TestCase
             'user_id' => $rider->id,
             'rider_status' => 'available',
             'current_service' => $service,
+            // Reconciled 2026-11-16: every rider has a registered vehicle; ride-hailing needs a motor vehicle.
+            'vehicle_type' => 'motorcycle',
         ]);
 
         RiderLocation::create([

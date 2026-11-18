@@ -160,3 +160,44 @@ describe('offer popup formatting', () => {
     expect(offerMinutesLine({})).toBeNull()
   })
 })
+
+describe('RiderDeliveryRequestAlert — ride requests (2026-11-18)', () => {
+  const RIDE: RiderDeliveryRequestData = {
+    id: 7, delivery_id: 18, order_id: 18, order_number: 'TRP-6AFC8473C52CE',
+    business_name: 'Gloria, Oriental Mindoro', business_address: 'Gloria, Oriental Mindoro',
+    pickup_address: 'Gloria, Oriental Mindoro', delivery_address: 'Pag-asa, Bansud, Oriental Mindoro',
+    rider_payout: 33.76, distance_km: 0, items: [{ name: 'Ride: Motorcycle (1 pax)', quantity: 1, price: 84.41, subtotal: 84.41 }],
+    items_count: 1, initial_timeout: 30, pickup_minutes: 1, is_cod: false,
+    is_ride: true, order_type: 'transport', passenger_name: 'Jayvie De Torres', passenger_count: 1, vehicle_type: 'motorcycle', fare: 84.41,
+  }
+
+  it('says ride request, shows the passenger and trip, never a restaurant or food items', () => {
+    const onAccept = vi.fn()
+    render(<RiderDeliveryRequestAlert orderData={RIDE} onAccept={onAccept} onDecline={vi.fn()} />)
+
+    expect(screen.getByText('New Ride Request')).toBeInTheDocument()
+    expect(screen.queryByText('New Delivery Offer')).toBeNull()
+    expect(screen.getByRole('heading', { name: 'Jayvie De Torres' })).toBeInTheDocument()
+    const facts = within(screen.getByRole('list', { name: 'Ride facts' }))
+    expect(facts.getByText('1 passenger')).toBeInTheDocument()
+    expect(facts.getByText('Motorcycle')).toBeInTheDocument()
+    expect(facts.getByText('GCash at drop-off')).toBeInTheDocument()
+    expect(screen.queryByText(/item/)).toBeNull()
+    expect(screen.queryByText(/Restaurant/)).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /Pickup: 1 min/ }))
+    const details = within(screen.getByTestId('offer-details'))
+    expect(details.getByText('Ride TRP-6AFC8473C52CE')).toBeInTheDocument()
+    expect(details.getByText(/Fare ₱84\.41/)).toBeInTheDocument()
+    expect(details.queryByText(/Ride: Motorcycle/)).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept ride request' }))
+    expect(onAccept).toHaveBeenCalled()
+  })
+
+  it('a cash ride says "Cash fare"', () => {
+    render(<RiderDeliveryRequestAlert orderData={{ ...RIDE, is_cod: true }} onAccept={vi.fn()} onDecline={vi.fn()} />)
+    expect(screen.getByText('Cash fare')).toBeInTheDocument()
+  })
+})
+

@@ -7,6 +7,7 @@ use App\Models\BusinessDocument;
 use App\Models\RiderDetail;
 use App\Models\User;
 use App\Models\UserKyc;
+use App\Services\MunicipalScopeService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
@@ -14,12 +15,15 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class VerificationDocumentController extends Controller
 {
+    public function __construct(private MunicipalScopeService $scope) {}
+
     public function business(Request $request, BusinessDocument $businessDocument): JsonResponse|StreamedResponse
     {
         $user = $request->user();
         $isOwner = $businessDocument->business?->owner_id === $user->id;
 
-        if (! $isOwner && ! $this->isTourismStaff($user)) {
+        $business = $businessDocument->business;
+        if (! $isOwner && ! ($business && $this->canReview($user, fn () => $this->scope->coversBusiness($user, $business)))) {
             return $this->notFoundResponse('Document not found.');
         }
 
@@ -40,7 +44,7 @@ class VerificationDocumentController extends Controller
         }
 
         $user = $request->user();
-        if ($kyc->user_id !== $user->id && ! $this->isTourismStaff($user)) {
+        if ($kyc->user_id !== $user->id && ! $this->canReview($user, fn () => $kyc->user && $this->scope->coversUser($user, $kyc->user))) {
             return $this->notFoundResponse('Document not found.');
         }
 
@@ -62,7 +66,7 @@ class VerificationDocumentController extends Controller
         }
 
         $user = $request->user();
-        if ($riderDetail->user_id !== $user->id && ! $this->isTourismStaff($user)) {
+        if ($riderDetail->user_id !== $user->id && ! $this->canReview($user, fn () => $this->scope->coversRiderDetail($user, $riderDetail))) {
             return $this->notFoundResponse('Document not found.');
         }
 
@@ -82,11 +86,16 @@ class VerificationDocumentController extends Controller
         ], 'inline');
     }
 
-    private function isTourismStaff(User $user): bool
+    /**
+     * The District Super Admin reviews every municipality's documents; a
+     * Municipality Tourism Admin only those inside its own municipality.
+     */
+    private function canReview(User $user, \Closure $coveredByMunicipality): bool
     {
-        return in_array($user->role, [
-            User::ROLE_TOURISM_OFFICE,
-            User::ROLE_BANSUD_TOURISM_OFFICE,
-        ], true);
+        if ($user->role === User::ROLE_BANSUD_TOURISM_OFFICE) {
+            return true;
+        }
+
+        return $user->role === User::ROLE_TOURISM_OFFICE && (bool) $coveredByMunicipality();
     }
 }

@@ -99,17 +99,20 @@ interface CartRow {
 
 const CART_KEY = 'food_cart'
 
-function readCart(): CartRow[] {
+/** Guest cart on the public site; carried into the tourist cart at login (preferences.ts). */
+const GUEST_CART_KEY = 'tracktour_landing_cart'
+
+function readCart(guest = false): CartRow[] {
   try {
-    return JSON.parse(localStorage.getItem(CART_KEY) || '[]')
+    return JSON.parse(localStorage.getItem(guest ? GUEST_CART_KEY : CART_KEY) || '[]')
   } catch {
     return []
   }
 }
 
-function writeCart(cart: CartRow[]) {
-  localStorage.setItem(CART_KEY, JSON.stringify(cart))
-  window.dispatchEvent(new Event('cart-updated'))
+function writeCart(cart: CartRow[], guest = false) {
+  localStorage.setItem(guest ? GUEST_CART_KEY : CART_KEY, JSON.stringify(cart))
+  window.dispatchEvent(new Event(guest ? 'landing-cart-updated' : 'cart-updated'))
 }
 
 /**
@@ -118,8 +121,8 @@ function writeCart(cart: CartRow[]) {
  * row and rows written by other pages (which also embed the variation in the
  * name) merge into the same line instead of duplicating it.
  */
-function addItemToCart(item: FoodItemDetail, quantity: number, variation: FoodDetailVariation | null): void {
-  const cart = readCart()
+function addItemToCart(item: FoodItemDetail, quantity: number, variation: FoodDetailVariation | null, guest = false): void {
+  const cart = readCart(guest)
   const name = variation ? `${item.name} (${variation.name})` : item.name
   const price = variation ? Number(variation.price) : Number(item.price)
   const isSameLine = (row: CartRow) => row.id === item.id && row.name === name
@@ -142,7 +145,7 @@ function addItemToCart(item: FoodItemDetail, quantity: number, variation: FoodDe
         },
       ]
 
-  writeCart(updated)
+  writeCart(updated, guest)
 }
 
 /** "13:30:00" → "1:30 PM"; null when missing. */
@@ -172,10 +175,11 @@ function Stars({ value, className }: { value: number; className?: string }) {
 
 function BackToMenuButton() {
   const navigate = useNavigate()
+  const isPublic = useLocation().pathname.startsWith('/explore')
   return (
     <button
       type="button"
-      onClick={() => navigate('/tourist/food')}
+      onClick={() => navigate(isPublic ? '/explore?tab=food' : '/tourist/food')}
       className="inline-flex items-center gap-2 text-sm font-semibold text-[#087F3F] hover:text-[#056B35]"
     >
       <ArrowLeft className="w-4 h-4" aria-hidden="true" />
@@ -196,6 +200,11 @@ function BackToMenuButton() {
 export default function TouristFoodItemDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  // The same page serves the tourist app (/tourist/food/item/:id) and the
+  // public site (/explore/food/item/:id): guests use the guest cart, links go
+  // to the public restaurant page, and checkout asks them to sign in.
+  const isPublic = useLocation().pathname.startsWith('/explore')
+  const restaurantPath = (businessId: number | string) => (isPublic ? `/explore/food/${businessId}` : `/tourist/food/${businessId}`)
   // "Back" returns to wherever the tourist came from (food list, restaurant,
   // My Orders, search…). Opened directly (no in-app history): the restaurant.
   const location = useLocation()
@@ -232,7 +241,7 @@ export default function TouristFoodItemDetail() {
       logo: null,
       municipality: item.business_name,
       rating: null,
-      url: `/tourist/food/item/${item.id}`,
+      url: isPublic ? `/explore/food/item/${item.id}` : `/tourist/food/item/${item.id}`,
     })
   }, [item?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -273,7 +282,7 @@ export default function TouristFoodItemDetail() {
 
   const handleAddToCart = () => {
     if (!item || !orderable) return
-    addItemToCart(item, quantity, selectedVariation)
+    addItemToCart(item, quantity, selectedVariation, isPublic)
     setAdded(true)
     if (addedTimer.current) clearTimeout(addedTimer.current)
     addedTimer.current = setTimeout(() => setAdded(false), 2000)
@@ -281,8 +290,9 @@ export default function TouristFoodItemDetail() {
 
   const handleBuyNow = () => {
     if (!item || !orderable) return
-    addItemToCart(item, quantity, selectedVariation)
-    navigate('/tourist/food/cart')
+    addItemToCart(item, quantity, selectedVariation, isPublic)
+    // Guests sign in to check out; their cart carries over at login.
+    navigate(isPublic ? '/login' : '/tourist/food/cart')
   }
 
   if (isLoading) {
@@ -327,7 +337,7 @@ export default function TouristFoodItemDetail() {
       <div className="mb-5">
         <button
           type="button"
-          onClick={() => (hasHistory ? navigate(-1) : navigate(`/tourist/food/${item.business_id}`))}
+          onClick={() => (hasHistory ? navigate(-1) : navigate(restaurantPath(item.business_id)))}
           className="inline-flex items-center gap-2 text-sm font-semibold text-[#087F3F] hover:text-[#056B35]"
         >
           <ArrowLeft className="w-4 h-4" aria-hidden="true" /> Back
@@ -497,7 +507,7 @@ export default function TouristFoodItemDetail() {
                 {/* Left half: three icon buttons (Add to Cart only on lg) */}
                 <div className="food-order-icons grid grid-cols-3 lg:grid-cols-1">
                   <Link
-                    to={`/tourist/food/${item.business_id}`}
+                    to={restaurantPath(item.business_id)}
                     aria-label={`Restaurant: ${item.business_name}`}
                     className="food-icon-action lg:hidden flex flex-col items-center justify-center gap-1 h-12 rounded-xl text-[#17201B] hover:bg-[#F3F8F4]"
                   >
@@ -570,7 +580,7 @@ export default function TouristFoodItemDetail() {
             <section id="food-reviews" className="scroll-mt-28">
               <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
                 <h2 className="text-2xl font-extrabold text-[#17201B]">Restaurant reviews</h2>
-                <Link to={`/tourist/food/${item.business_id}`} className="inline-flex items-center gap-1 text-sm font-semibold text-[#087F3F] hover:underline">
+                <Link to={restaurantPath(item.business_id)} className="inline-flex items-center gap-1 text-sm font-semibold text-[#087F3F] hover:underline">
                   See all on the restaurant page <ArrowRight className="w-4 h-4" aria-hidden="true" />
                 </Link>
               </div>
@@ -667,7 +677,7 @@ export default function TouristFoodItemDetail() {
                 </div>
               )}
               <Link
-                to={`/tourist/food/${item.business_id}`}
+                to={restaurantPath(item.business_id)}
                 className="inline-flex items-center gap-1.5 h-11 px-5 rounded-full border-2 border-[#087F3F] bg-white text-sm font-bold text-[#087F3F] hover:bg-[#087F3F] hover:text-white transition"
               >
                 View restaurant

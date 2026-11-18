@@ -93,7 +93,6 @@ class RiderDispatchController extends Controller
             ->first();
 
         $radiusKm = (float) config('delivery.board_radius_km', 5);
-        $claimedLimit = (int) config('delivery.board_claimed_limit', 8);
         $eligibility = $this->buildBoardEligibility($rider, $location);
 
         // My Destination: the board still lists every nearby job; while the
@@ -101,8 +100,10 @@ class RiderDispatchController extends Controller
         // Ride Hailing riders get bookings only, Food Delivery riders orders only
         // (the same rule as Available Bookings / Available Deliveries).
         $rides = $rider->riderDetail?->current_service === 'transport';
+        $myVehicle = $rider->riderDetail?->vehicle_type;
         $forService = fn (?Delivery $delivery): bool => $delivery !== null
-            && (($delivery->primaryOrder()?->order_type === 'transport') === $rides);
+            && (($delivery->primaryOrder()?->order_type === 'transport') === $rides)
+            && \App\Services\RideVehicles::riderMatches($myVehicle, $delivery);
 
         $destinations = app(\App\Services\RiderDestinationService::class);
         $destination = $destinations->active($rider->riderDetail);
@@ -145,58 +146,17 @@ class RiderDispatchController extends Controller
                 'accept_blocked_reason' => $blocked,
                 'cod' => $isCod,
                 'distance_km' => $distance !== null ? round($distance, 2) : $payload['distance_km'],
-                'restaurants' => $this->buildStopDetails($delivery),
+                'restaurants' => $delivery->primaryOrder()?->order_type === 'transport' ? [] : $this->buildStopDetails($delivery),
                 'on_your_way' => $onYourWay($delivery),
             ]);
             $seen[$delivery->id] = true;
         }
 
-        // 2. Read-only: deliveries accepted by another rider, within the board
-        //    radius. No item detail is exposed for someone else's trip.
-        $claimed = Delivery::query()
-            ->whereNotNull('rider_id')
-            ->where('rider_id', '!=', $rider->id)
-            ->whereIn('status', NearestRiderService::COD_ACTIVE_STATUSES)
-            ->whereNotNull('pickup_latitude')
-            ->whereNotNull('pickup_longitude')
-            ->where('updated_at', '>=', now()->subHours(6))
-            ->latest('updated_at')
-            ->limit(50)
-            ->get();
+        // Only offers the rider can still take are listed (2026-11-18): another
+        // rider's trip, a cancelled or a completed one is never shown, and only
+        // for the rider's current service (food orders or ride bookings).
 
-        $claimedAdded = 0;
-        foreach ($claimed as $delivery) {
-            if (isset($seen[$delivery->id]) || $claimedAdded >= $claimedLimit) {
-                continue;
-            }
-            $distance = $this->deliveryDistance($delivery, $location);
-            if ($distance === null || $distance > $radiusKm) {
-                continue;
-            }
-            $orders[] = $this->buildReadOnlyItem($delivery, $distance, 'accepted_by_other');
-            $seen[$delivery->id] = true;
-            $claimedAdded++;
-        }
-
-        // 3. Read-only: recent deliveries this rider was offered that were
-        //    cancelled by the tourist/system.
-        $cancelled = $rider->dispatchLogs()
-            ->whereHas('delivery', fn ($q) => $q->where('status', 'cancelled'))
-            ->with('delivery')
-            ->latest('updated_at')
-            ->limit(5)
-            ->get();
-
-        foreach ($cancelled as $log) {
-            $delivery = $log->delivery;
-            if (! $delivery || isset($seen[$delivery->id])) {
-                continue;
-            }
-            $orders[] = $this->buildReadOnlyItem($delivery, null, 'cancelled');
-            $seen[$delivery->id] = true;
-        }
-
-        // 4. Actionable: OPEN deliveries that no rider has claimed yet. An
+        // 2. Actionable: OPEN deliveries that no rider has claimed yet. An
         //    order whose ping wave expired or parked at no_rider_available
         //    must stay visible AND claimable for every eligible rider until
         //    someone accepts it (first accept wins, backend-atomic in
@@ -234,7 +194,7 @@ class RiderDispatchController extends Controller
                 'can_accept' => $blocked === null,
                 'accept_blocked_reason' => $blocked,
                 'cod' => $isCod,
-                'restaurants' => $this->buildStopDetails($delivery),
+                'restaurants' => $delivery->primaryOrder()?->order_type === 'transport' ? [] : $this->buildStopDetails($delivery),
                 'on_your_way' => $onYourWay($delivery),
             ]);
             $seen[$delivery->id] = true;
@@ -313,7 +273,9 @@ class RiderDispatchController extends Controller
         $speed = max(5.0, (float) config('delivery.sequential.offer_eta_speed_kmh', 25));
         $dropoff = (int) ($delivery?->estimated_duration_minutes ?? $order?->delivery_duration_minutes ?? 0);
 
-        return [
+        // Ride hailing (2026-11-18): the card speaks of a passenger and a trip,
+        // never a restaurant or food items.
+        return $this->rideFacts($order, $delivery) + [
             'image' => $photo ?: ($business?->logo ?: null),
             'items_count' => (int) $items->sum(fn ($it) => $it->activeQuantity()),
             'payment_method' => $order?->payment_method,
@@ -368,6 +330,25 @@ class RiderDispatchController extends Controller
             ])->values()->all(),
             'dispatched_at' => null,
             'expires_in' => null,
+        ] + $this->rideFacts($order, $delivery);
+    }
+
+    /**
+     * Ride hailing (2026-11-18): what a ride's card shows instead of a
+     * restaurant and food items — the passenger, vehicle, passengers, fare.
+     */
+    private function rideFacts(?Order $order, ?Delivery $delivery): array
+    {
+        $isRide = $order?->order_type === 'transport';
+        $notes = $isRide ? (json_decode((string) $delivery?->notes, true) ?: []) : [];
+
+        return [
+            'is_ride' => $isRide,
+            'order_type' => $order?->order_type,
+            'passenger_name' => $isRide ? $order?->customer_name : null,
+            'passenger_count' => $isRide ? (int) ($notes['passenger_count'] ?? 1) : null,
+            'vehicle_type' => $isRide ? (string) ($notes['vehicle_type'] ?? 'motorcycle') : null,
+            'fare' => $isRide ? round((float) ($order?->total ?? 0), 2) : null,
         ];
     }
 
@@ -493,35 +474,6 @@ class RiderDispatchController extends Controller
             ->all();
     }
 
-    private function buildReadOnlyItem(Delivery $delivery, ?float $distanceKm, string $status): array
-    {
-        $order = $delivery->primaryOrder();
-        $business = $order?->business;
-        $restaurantCount = max(1, (int) $delivery->childOrders()
-            ->pluck('business_id')
-            ->filter()
-            ->unique()
-            ->count());
-
-        // Deliberately minimal: someone else's (or a cancelled) trip must not
-        // leak tourist details, addresses, or financials to a non-assigned rider.
-        return [
-            'id' => null,
-            'delivery_id' => $delivery->id,
-            'order_id' => $delivery->order_id,
-            'order_number' => $order?->order_number ?? ('TT-' . str_pad((string) ($delivery->order_id ?? 0), 5, '0', STR_PAD_LEFT)),
-            'business_name' => $business?->business_name ?? $business?->name ?? 'Restaurant',
-            'restaurant_count' => $restaurantCount,
-            'stops' => $restaurantCount,
-            'distance_km' => $distanceKm !== null ? round($distanceKm, 2) : null,
-            'duration_minutes' => (int) ($delivery->estimated_duration_minutes ?? 0),
-            'rider_status' => $status,
-            'can_accept' => false,
-            'accept_blocked_reason' => $status,
-            'items' => [],
-            'restaurants' => [],
-        ];
-    }
 
     private function deliveryDistance(Delivery $delivery, ?RiderLocation $location): ?float
     {

@@ -406,7 +406,7 @@ export default function TouristOrderStatus() {
 
   return (
     <div>
-      <div className="max-w-4xl mx-auto py-4">
+      <div className="max-w-4xl mx-auto lg:mx-0">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
@@ -417,7 +417,7 @@ export default function TouristOrderStatus() {
               <ArrowLeft className="w-4 h-4" />
               Back
             </button>
-            <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">Order Status</h1>
+            <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">Track Order</h1>
             <p className="text-[#6B7280] text-sm mt-1">Order #{order.order_number}</p>
           </div>
           <div className={`px-4 py-2 rounded-xl text-sm font-semibold ${
@@ -531,7 +531,7 @@ export default function TouristOrderStatus() {
           </div>
         )}
 
-        {/* 5-Step Progress Track (Sub-Status Message Matrix) */}
+        {/* 4-Step Progress Track (Sub-Status Message Matrix) */}
         <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6 mb-6">
           <OrderProgressTrack resolution={resolution} />
         </div>

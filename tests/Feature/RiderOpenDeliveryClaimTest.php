@@ -78,6 +78,8 @@ class RiderOpenDeliveryClaimTest extends TestCase
         RiderDetail::firstOrCreate(['user_id' => $rider->id], [
             'rider_status' => $overrides['rider_status'] ?? 'available',
             'current_service' => $overrides['current_service'] ?? 'food',
+            // Every rider has a registered vehicle; ride-hailing needs a motor vehicle (RideVehicles).
+            'vehicle_type' => $overrides['vehicle_type'] ?? 'motorcycle',
         ]);
 
         RiderLocation::create([

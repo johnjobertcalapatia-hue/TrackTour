@@ -35,7 +35,7 @@ import { useOsrmRoute } from '@/features/rider/hooks/useOsrmRoute'
 import { useAboveRiderStatus } from '@/features/rider/hooks/useAboveRiderStatus'
 import { resolvePickupRoute } from '@/features/rider/pickup-route'
 import { riderNavigationMarkerIcon, destinationMarkerIcon } from '@/shared/utils/map-markers'
-import { businessLogoIcon, pinIcon } from '@/shared/utils/pin-icon'
+import { businessLogoIcon, passengerPickupIcon, pinIcon } from '@/shared/utils/pin-icon'
 import { toAssetUrl } from '@/shared/utils'
 import { RiderHeadingController } from '@/shared/utils/rider-heading'
 import {
@@ -88,6 +88,8 @@ interface Delivery {
   business_name?: string | null
   business_logo?: string | null
   customer_name?: string | null
+  /** 'transport' = a ride booking: its pickup is the passenger, not a restaurant. */
+  order_type?: string | null
   created_at: string
 }
 
@@ -815,8 +817,13 @@ export default function RiderMap() {
                   key={`delivery-${d.id}-pickup`}
                   latitude={d.pickup_lat}
                   longitude={d.pickup_lng}
-                  icon={restaurantIcon(d.business_logo, d.business_name || 'Restaurant')}
-                  title={d.business_name || `Pickup - Order #${d.order_id}`}
+                  icon={d.order_type === 'transport'
+                    // Ride hailing: pick up the passenger — never a restaurant pin.
+                    ? passengerPickupIcon(`Pickup · ${d.customer_name || 'Passenger'}`)
+                    : restaurantIcon(d.business_logo, d.business_name || 'Restaurant')}
+                  title={d.order_type === 'transport'
+                    ? `Pick up ${d.customer_name || 'the passenger'}`
+                    : d.business_name || `Pickup - Order #${d.order_id}`}
                   address={d.pickup_address}
                   tone="pickup"
                 />

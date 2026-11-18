@@ -27,7 +27,8 @@ export default function TripReceipt({
   paymentMethod,
   paymentStatus,
   paidAmount,
-}: TripReceiptProps) {
+  additionalCharges = [],
+}: TripReceiptProps & { additionalCharges?: { id: number; label: string; amount: number; duration_seconds: number }[] }) {
   const estimateDiffers = Math.abs(estimateFare - total) > 0.01
 
   return (
@@ -54,6 +55,13 @@ export default function TripReceipt({
             <span>{formatCurrency(serviceFee)}</span>
           </div>
         )}
+        {/* Itemised additional charges (pickup waiting, 2026-11-18). */}
+        {additionalCharges.filter((c) => c.amount > 0).map((c) => (
+          <div key={c.id} className="flex justify-between text-[#68736D]">
+            <span>{c.label} ({Math.floor(c.duration_seconds / 60)} min {c.duration_seconds % 60} s)</span>
+            <span>{formatCurrency(c.amount)}</span>
+          </div>
+        ))}
         <div className="h-px bg-[#E5E9E7]" />
         <div className="flex justify-between font-semibold text-[#17201B]">
           <span>Total</span>

@@ -254,6 +254,38 @@ class RiderDeliveryController extends Controller
         return $proof['ok'] ? null : $proof['message'];
     }
 
+    /**
+     * POST /rider/deliveries/{delivery}/destination-change/acknowledge — the
+     * rider confirms they saw the passenger's new destination (kept apart
+     * from the tourist's confirmation and the push notification).
+     */
+    public function acknowledgeDestinationChange(Request $request, Delivery $delivery): JsonResponse
+    {
+        if ((int) $delivery->rider_id !== (int) $request->user()?->id) {
+            return $this->forbiddenResponse('You are not assigned to this trip.');
+        }
+        $change = app(\App\Services\RideDestinationChangeService::class)->acknowledge($delivery, $request->user());
+        if ($change === null) {
+            return $this->errorResponse('This trip has no destination change.', 404);
+        }
+
+        return $this->successResponse(['destination_change' => $change->present()], 'New destination received.');
+    }
+
+    /**
+     * POST /rider/deliveries/{delivery}/ride-payment/cash — at the drop-off,
+     * switch an unpaid GCash ride to cash (the passenger cannot pay online).
+     */
+    public function switchRideToCash(Request $request, Delivery $delivery): JsonResponse
+    {
+        $result = app(\App\Services\RidePaymentService::class)->switchToCash($delivery, $request->user());
+        if (! $result['ok']) {
+            return $this->errorResponse($result['message'], $result['status']);
+        }
+
+        return $this->successResponse(null, $result['message']);
+    }
+
     public function updateStatus(Request $request, Delivery $delivery): JsonResponse
     {
         if ((int) $delivery->rider_id !== (int) $request->user()?->id) {
@@ -308,6 +340,16 @@ class RiderDeliveryController extends Controller
             }
 
             if ($newStatus === 'arrived_pickup') {
+                // Rides (2026-11-18): the rider confirms the arrival from the
+                // pickup point (location checked); waiting starts at that
+                // server time. A repeated confirmation keeps the first time.
+                if (\App\Services\RideTripEvidenceService::isRide($locked)) {
+                    $refusal = app(\App\Services\RideTimeChargeService::class)
+                        ->confirmPickupArrival($locked, $request->user(), \App\Services\PickupEvidenceService::deviceFixFrom($request));
+                    if ($refusal !== null) {
+                        return ['error' => 'arrival_unconfirmed', 'message' => $refusal];
+                    }
+                }
                 $transition = $this->pickupTransitions->arriveAtPickup($locked);
 
                 return [
@@ -338,6 +380,11 @@ class RiderDeliveryController extends Controller
                 app(\App\Services\RideTripEvidenceService::class)->recordStep(
                     $locked->fresh() ?? $locked, 'picked_up', (int) $request->user()->id, \App\Services\PickupEvidenceService::deviceFixFrom($request)
                 );
+                // Rides: the trip starts — waiting ends and its fee is recorded once.
+                if (\App\Services\RideTripEvidenceService::isRide($locked)) {
+                    app(\App\Services\RideTimeChargeService::class)
+                        ->startTrip($locked->fresh() ?? $locked, $request->user(), \App\Services\PickupEvidenceService::deviceFixFrom($request));
+                }
 
                 return [
                     'error' => null,
@@ -366,7 +413,29 @@ class RiderDeliveryController extends Controller
                 return ['error' => 'tourist_confirmation_required'];
             }
 
+            // Rides (owner decision 2026-11-18): the rider confirms the
+            // payment before completing — GCash must be verified paid; cash
+            // confirmed received (the settlement still checks the amount).
+            // Checked BEFORE the status write: a refusal changes nothing.
+            if ($newStatus === 'delivered' && \App\Services\RideTripEvidenceService::isRide($locked)) {
+                $refusal = app(\App\Services\RidePaymentService::class)
+                    ->confirmForCompletion($locked, $request->boolean('payment_confirmed'), (int) $request->user()->id);
+                if ($refusal !== null) {
+                    return ['error' => 'payment_unconfirmed', 'message' => $refusal];
+                }
+            }
+
             $locked->update($updateData);
+
+            // One-time destination change (2026-11-17): a changed ride's final
+            // fare (verified GPS distance, capped at 115% of the confirmed
+            // estimate) is set on reaching the destination — before a cash
+            // amount is frozen below. No-op for every other trip.
+            if (in_array($newStatus, ['arrived_destination', 'delivered'], true)) {
+                app(\App\Services\RideDestinationChangeService::class)->finalizeIfChanged($locked);
+                // Additional charges (pickup waiting) stay on top of the final fare.
+                app(\App\Services\RideTimeChargeService::class)->applyCharges($locked);
+            }
 
             // Stage 4: ride location evidence for this step (observe-only,
             // written once; never allows or blocks the transition).
@@ -410,6 +479,14 @@ class RiderDeliveryController extends Controller
                 ', so it cannot move to ' . strtoupper(str_replace('_', ' ', $newStatus)) . ' yet.',
                 409
             );
+        }
+
+        if ($outcome['error'] === 'arrival_unconfirmed') {
+            return $this->errorResponse($outcome['message'], 422);
+        }
+
+        if ($outcome['error'] === 'payment_unconfirmed') {
+            return $this->errorResponse($outcome['message'], 422);
         }
 
         if ($outcome['error'] === 'not_all_collected') {

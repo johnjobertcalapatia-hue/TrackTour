@@ -17,6 +17,12 @@ const overview = (mutationsEnabled: boolean) => ({
     {
       rider_id: 8, name: 'Juan Rider', rider_status: 'available', advance_today: 2000, cash_with_rider: 1500, returned_to_date: 500, cod_deliveries_today: 3,
       advances: [{ id: 1, reference_number: 'RCFT-ADVANCE-1', amount: 2000, occurred_at: `${today}T00:30:00Z`, note: 'Morning' }],
+      topups_today: 500, issued_today: 2500,
+      day: {
+        available: true, cod_deliveries: 3, cod_purchases: 1200, office_cash_used_for_purchases: 1000, cod_collections: 3900,
+        unused_cash_returned: 500, cod_remitted: 0, cod_remittance_expected: 3600, cod_remittance_outstanding: 3600,
+        outstanding_office_cash: 1500, reconciliation_status: 'calculated_preview', remittance_submitted: false, has_discrepancy: false, needs_reconciliation: true,
+      },
     },
     { rider_id: 9, name: 'Maria Rider', rider_status: 'offline', advance_today: 0, cash_with_rider: 0, returned_to_date: 0, cod_deliveries_today: 0, advances: [] },
   ],
@@ -41,13 +47,13 @@ describe('Tourism Office Rider Cash board', () => {
   it('lists each rider with the advance, cash still with the rider and a link to the daily receipt', async () => {
     renderPage()
     const juan = within(await screen.findByRole('listitem', { name: 'Juan Rider' }))
-    expect(juan.getByText('₱2,000.00', { selector: 'dd' })).toBeInTheDocument()
+    expect(juan.getByText('₱2,500.00', { selector: 'dd' })).toBeInTheDocument() // advance ₱2,000 + top-up ₱500
     expect(juan.getByText('₱1,500.00')).toBeInTheDocument()
     expect(juan.getByText(/RCFT-ADVANCE-1/)).toBeInTheDocument()
     expect(juan.getByRole('link', { name: /Daily receipt & remittance/ }))
       .toHaveAttribute('href', `/admin/riders/8/cash-reconciliation?date=${today}`)
 
-    expect(screen.getByText('1 of 2')).toBeInTheDocument()
+    expect(screen.getByText('1 of 2 advanced on this date')).toBeInTheDocument()
     expect(api.get).toHaveBeenCalledWith('/admin/cash-advances', { params: { date: today } })
   })
 
@@ -65,6 +71,8 @@ describe('Tourism Office Rider Cash board', () => {
   it('records an advance once with an idempotency key, then refreshes', async () => {
     renderPage()
     const maria = within(await screen.findByRole('listitem', { name: 'Maria Rider' }))
+    // The advance form opens from Issue cash (only for today).
+    fireEvent.click(maria.getByRole('button', { name: /Issue cash/ }))
     const button = maria.getByRole('button', { name: 'Record advance' })
     expect(button).toBeDisabled()
 
@@ -78,5 +86,47 @@ describe('Tourism Office Rider Cash board', () => {
     expect(body).toMatchObject({ amount: 1500, note: 'Morning float' })
     expect(body.idempotency_key).toMatch(/^[0-9a-f-]{36}$/)
     expect(await screen.findByText('Recorded a ₱1,500.00 advance for Maria Rider.')).toBeInTheDocument()
+  })
+
+  it('keeps each cash purpose as its own figure and sums the daily overview', async () => {
+    renderPage()
+    const juan = within(await screen.findByRole('listitem', { name: 'Juan Rider' }))
+    const figure = (label: string) => juan.getByText(label).parentElement!
+    expect(figure('Cash issued')).toHaveTextContent('₱2,500.00')
+    expect(figure('Cash issued')).toHaveTextContent('incl. ₱500.00 top-up')
+    expect(figure('COD purchases')).toHaveTextContent('₱1,200.00')
+    expect(figure('COD collected')).toHaveTextContent('₱3,900.00') // not reduced by purchases
+    expect(figure('Unused cash returned')).toHaveTextContent('₱500.00')
+    expect(figure('COD remitted')).toHaveTextContent('₱3,600.00 still due')
+    expect(figure('Outstanding cash')).toHaveTextContent('₱1,500.00')
+    expect(juan.getByText('Not yet submitted')).toBeInTheDocument()
+
+    const tiles = within(screen.getByLabelText('Daily overview'))
+    expect(tiles.getByText('Advanced today').parentElement).toHaveTextContent('₱2,500.00')
+    expect(tiles.getByText('Outstanding cash').parentElement).toHaveTextContent('₱1,500.00')
+    expect(tiles.getByText('Active advances').parentElement).toHaveTextContent('1 rider')
+    expect(tiles.getByText('Pending reconciliation').parentElement).toHaveTextContent('1 rider')
+  })
+
+  it('explains exactly what is unavailable while the policy is inactive', async () => {
+    renderPage()
+    const available = await screen.findByRole('list', { name: 'Available now' })
+    expect(available).toHaveTextContent('Issue cash advances and top-ups')
+    expect(screen.getByRole('list', { name: 'Not available yet' })).toHaveTextContent('Record COD remittances')
+    expect(screen.getByText('The daily COD cash policy does not have an approved effective date yet.')).toBeInTheDocument()
+  })
+
+  it('opens the historical record for an earlier date, read-only', async () => {
+    renderPage()
+    await screen.findByRole('listitem', { name: 'Juan Rider' })
+    fireEvent.click(screen.getByRole('button', { name: 'Previous day' }))
+
+    const yesterday = new Date(`${today}T00:00:00Z`)
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1)
+    const y = yesterday.toISOString().slice(0, 10)
+    expect(api.get).toHaveBeenLastCalledWith('/admin/cash-advances', { params: { date: y } })
+    await screen.findByText(/Viewing the record for/)
+    expect(screen.queryByRole('button', { name: /Issue cash/ })).toBeNull()
+    expect(within(screen.getByRole('listitem', { name: 'Juan Rider' })).getByRole('link', { name: /Daily receipt/ })).toHaveAttribute('href', `/admin/riders/8/cash-reconciliation?date=${y}`)
   })
 })

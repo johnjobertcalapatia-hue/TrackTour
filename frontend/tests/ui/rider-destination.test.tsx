@@ -138,3 +138,76 @@ describe('Rider board marks offers on the way while My Destination is on', () =>
     expect(screen.getAllByText('Off your route')).toHaveLength(1)
   })
 })
+
+describe('Rider board shows ride requests as rides (2026-11-18)', () => {
+  it('Ride #…, the passenger and vehicle, no restaurant or items, Accept ride', async () => {
+    const { default: RiderOrderBoard } = await import('@/features/rider/components/RiderOrderBoard')
+    const { useAuthStore } = await import('@/features/auth/services/auth-store')
+    // A ride-hailing rider: the section speaks of bookings.
+    useAuthStore.setState({ user: { id: 8, name: 'Rider', role: 'rider', current_service: 'transport' } as never, loading: false })
+    for (const fn of Object.values(api)) fn.mockReset()
+    api.get.mockResolvedValue({
+      eligibility: { online: true, available: true, account_approved: true, location_ok: true, has_active_delivery: false },
+      destination: null,
+      orders: [{
+        delivery_id: 18, order_number: 'TRP-6AFC8473C52CE', rider_status: 'looking_for_riders', can_accept: true, on_your_way: null,
+        business_name: 'Gloria, Oriental Mindoro', pickup_address: 'Gloria, Oriental Mindoro', delivery_address: 'Pag-asa, Bansud, Oriental Mindoro',
+        rider_payout: 84.41, distance_km: 0, restaurants: [], cod: true, cod_amount: 84.41,
+        is_ride: true, order_type: 'transport', passenger_name: 'Jayvie De Torres', passenger_count: 1, vehicle_type: 'motorcycle', fare: 84.41,
+      }, {
+        // A cancelled ride: minimal row (no passenger details), still labelled a ride.
+        delivery_id: 17, order_number: 'TRP-6AFC750CD603A', rider_status: 'cancelled', can_accept: false,
+        business_name: 'Restaurant', restaurants: [], items: [], is_ride: true, order_type: 'transport', vehicle_type: 'motorcycle',
+      }],
+    })
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <RiderOrderBoard />
+      </QueryClientProvider>,
+    )
+    expect(await screen.findByText('Ride #TRP-6AFC8473C52CE')).toBeInTheDocument()
+    expect(screen.getByText('Available bookings')).toBeInTheDocument()
+    expect(screen.queryByText('Available orders')).toBeNull()
+    expect(screen.getByText('Jayvie De Torres · Motorcycle')).toBeInTheDocument()
+    // A cancelled ride is never listed (2026-11-18: only offers that can be taken).
+    expect(screen.queryByText('Ride #TRP-6AFC750CD603A')).toBeNull()
+    fireEvent.click(screen.getByText('Ride #TRP-6AFC8473C52CE'))
+
+    expect(screen.getByTestId('ride-summary')).toHaveTextContent('1 passenger · Motorcycle')
+    expect(screen.queryByText('Restaurant')).toBeNull()
+    expect(screen.queryByText(/item/)).toBeNull()
+    expect(screen.getByText('Collect the ₱84.41 fare in cash')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Accept ride' })).toBeEnabled()
+  })
+})
+
+describe('Rider board lists only available offers for the current service (2026-11-18)', () => {
+  it('a food rider sees food offers only — no ride bookings, no cancelled or completed rows', async () => {
+    const { default: RiderOrderBoard } = await import('@/features/rider/components/RiderOrderBoard')
+    const { useAuthStore } = await import('@/features/auth/services/auth-store')
+    useAuthStore.setState({ user: { id: 8, name: 'Rider', role: 'rider', current_service: 'food' } as never, loading: false })
+    for (const fn of Object.values(api)) fn.mockReset()
+    api.get.mockResolvedValue({
+      eligibility: { online: true, available: true, account_approved: true, location_ok: true, has_active_delivery: false },
+      destination: null,
+      orders: [
+        { delivery_id: 1, order_number: 'TT-FOOD', rider_status: 'looking_for_riders', can_accept: true, business_name: 'Ekslusibo Grill', restaurants: [] },
+        { delivery_id: 2, order_number: 'TRP-RIDE', rider_status: 'looking_for_riders', can_accept: true, is_ride: true, order_type: 'transport', vehicle_type: 'motorcycle', restaurants: [] },
+        { delivery_id: 3, order_number: 'TRP-OLD', rider_status: 'cancelled', can_accept: false, is_ride: true, order_type: 'transport', restaurants: [] },
+        { delivery_id: 4, order_number: 'TT-TAKEN', rider_status: 'accepted_by_other', can_accept: false, restaurants: [] },
+      ],
+    })
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <RiderOrderBoard />
+      </QueryClientProvider>,
+    )
+    expect(await screen.findByText('Order #TT-FOOD')).toBeInTheDocument()
+    expect(screen.getByText('Available orders')).toBeInTheDocument()
+    expect(screen.queryByText(/TRP-RIDE/)).toBeNull()
+    expect(screen.queryByText(/TRP-OLD/)).toBeNull()
+    expect(screen.queryByText(/TT-TAKEN/)).toBeNull()
+    expect(screen.queryByText('Cancelled')).toBeNull()
+  })
+})
+

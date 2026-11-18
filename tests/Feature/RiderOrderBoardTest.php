@@ -195,8 +195,9 @@ class RiderOrderBoardTest extends TestCase
         $this->assertNotNull($active->id);
     }
 
-    public function test_board_marks_another_riders_active_delivery_as_read_only(): void
+    public function test_board_never_lists_another_riders_delivery(): void
     {
+        // 2026-11-18: only offers the rider can still take are listed.
         $business = $this->makeBusiness();
         $rider = $this->makeRider('board-free@example.com');
         $this->placeRiderNear($rider, $business);
@@ -204,17 +205,9 @@ class RiderOrderBoardTest extends TestCase
         $otherRider = $this->makeRider('board-other@example.com');
         $otherDelivery = $this->makeDelivery($this->makeOrder($business, 'TT-BOARD-003'), $otherRider, 'in_transit');
 
-        $response = $this->actingAs($rider, 'sanctum')->getJson('/api/rider/dispatch/board');
-
-        $response->assertOk()
-            ->assertJsonPath('data.orders.0.rider_status', 'accepted_by_other')
-            ->assertJsonPath('data.orders.0.can_accept', false)
-            ->assertJsonPath('data.orders.0.accept_blocked_reason', 'accepted_by_other');
-
-        // Someone else's trip never leaks the item breakdown.
-        $this->assertSame([], $response->json('data.orders.0.restaurants'));
-        $this->assertSame([], $response->json('data.orders.0.items'));
-        $this->assertNotNull($otherDelivery->id);
+        $response = $this->actingAs($rider, 'sanctum')->getJson('/api/rider/dispatch/board')->assertOk();
+        $this->assertNotContains($otherDelivery->id, array_column($response->json('data.orders'), 'delivery_id'));
+        $this->assertNotContains('accepted_by_other', array_column($response->json('data.orders'), 'rider_status'));
     }
 
     public function test_board_blocks_accept_without_a_fresh_location(): void
@@ -246,7 +239,7 @@ class RiderOrderBoardTest extends TestCase
         $this->getJson('/api/rider/dispatch/board')->assertForbidden();
     }
 
-    public function test_cancelled_offer_is_surfaced_as_read_only(): void
+    public function test_a_cancelled_offer_is_not_listed(): void
     {
         $business = $this->makeBusiness();
         $rider = $this->makeRider('board-cancel@example.com');
@@ -258,7 +251,8 @@ class RiderOrderBoardTest extends TestCase
         $response = $this->actingAs($rider, 'sanctum')->getJson('/api/rider/dispatch/board');
 
         $response->assertOk();
-        $statuses = array_column($response->json('data.orders'), 'rider_status');
-        $this->assertContains('cancelled', $statuses, 'A cancelled delivery the rider was offered is shown read-only.');
+        // 2026-11-18: cancelled (and completed) offers disappear from the board.
+        $this->assertNotContains($delivery->id, array_column($response->json('data.orders'), 'delivery_id'));
+        $this->assertNotContains('cancelled', array_column($response->json('data.orders'), 'rider_status'));
     }
 }

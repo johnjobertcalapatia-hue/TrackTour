@@ -207,6 +207,13 @@ describe('RiderOrderInfoSheet — pickup stops inside the Order details panel', 
     expect(screen.getByText(/pickup confirmed ✓/i)).toBeInTheDocument()
   })
 
+  it('speaks of the active trip: food keeps "Order details" even for a rider set to ride hailing (2026-11-18)', async () => {
+    useAuthStore.setState({ user: { ...USER, current_service: 'transport' }, loading: false })
+    renderSheet()
+    // The active trip here is a food delivery: its own wording wins.
+    await waitFor(() => expect(screen.getByRole('button', { name: /show order details/i })).toBeInTheDocument())
+  })
+
   it('preserves manual pickup confirmation in the Active Delivery sheet', async () => {
     renderSheet()
 

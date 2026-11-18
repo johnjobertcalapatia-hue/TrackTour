@@ -74,6 +74,10 @@ describe('Ride screens after booking', () => {
     expect(within(screenEl).getByText(/nearby car driver/)).toBeInTheDocument()
     expect(within(screenEl).getByLabelText(/^Searching for \d\d:\d\d$/)).toBeInTheDocument()
     expect(screen.queryByTestId('map')).not.toBeInTheDocument()
+    // Fills exactly the space under the header (.tourist-map-page): nothing around it
+    // is a full screen tall, so the page never scrolls.
+    expect(screenEl).toHaveClass('tourist-map-page')
+    expect(document.body.querySelector('[class*="min-h-[100dvh]"], .min-h-screen')).toBeNull()
 
     fireEvent.click(within(screenEl).getByRole('button', { name: 'Cancel Request' }))
     expect(screen.getByRole('dialog', { name: 'Cancel Ride' })).toBeInTheDocument()

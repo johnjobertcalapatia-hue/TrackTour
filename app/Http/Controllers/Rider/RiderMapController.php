@@ -91,6 +91,17 @@ class RiderMapController extends Controller
                 // Ride: the fare to collect when the passenger pays cash.
                 'order_total' => $delivery->primaryOrder()?->total !== null ? (float) $delivery->primaryOrder()->total : null,
                 'is_cod' => app(\App\Services\NearestRiderService::class)->isCodDelivery($delivery),
+                // Ride: pickup waiting (timer + fee) and itemised charges (2026-11-18).
+                'pickup_waiting' => $delivery->primaryOrder()?->order_type === 'transport'
+                    ? app(\App\Services\RideTimeChargeService::class)->waitingState($delivery) : null,
+                'additional_charges' => $delivery->primaryOrder()?->order_type === 'transport'
+                    ? app(\App\Services\RideTimeChargeService::class)->charges($delivery->id) : [],
+                // Ride: payment state for the confirmation before Complete Ride (2026-11-18).
+                'payment_method' => $delivery->primaryOrder()?->payment_method,
+                'payment_status' => $delivery->primaryOrder()?->payment_status,
+                'paid_amount' => $delivery->primaryOrder()?->paid_amount !== null ? (float) $delivery->primaryOrder()->paid_amount : null,
+                // Ride: the passenger's one destination change (new destination, fare, acknowledged?).
+                'destination_change' => $delivery->destinationChange?->present(),
                 'created_at' => $delivery->created_at,
             ]);
 
@@ -294,6 +305,15 @@ class RiderMapController extends Controller
         }
 
         $status = $delivery->status->value;
+
+        // Rides (2026-11-18): the rider CONFIRMS arrival — at the pickup
+        // (starts the passenger's waiting time, location checked) and at the
+        // drop-off (where a changed destination's final fare and any charges
+        // are applied before payment opens). Food deliveries keep the
+        // automatic geofence arrival.
+        if (\App\Services\RideTripEvidenceService::isRide($delivery)) {
+            return ['delivery_id' => $delivery->id, 'status' => $status];
+        }
 
         if ($status === 'assigned' && is_numeric($delivery->pickup_latitude) && is_numeric($delivery->pickup_longitude)) {
             $distance = $this->dispatchService->calculateDistance(

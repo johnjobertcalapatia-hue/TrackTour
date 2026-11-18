@@ -14,7 +14,10 @@ class StoreUserRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name' => ['required', 'string', 'max:255'],
+            'name' => ['required_without:first_name', 'nullable', 'string', 'max:255'],
+            'first_name' => ['nullable', 'string', 'max:100'],
+            'last_name' => ['nullable', 'string', 'max:100'],
+            'municipality_id' => ['required_if:role,tourism_office', 'nullable', 'integer', \Illuminate\Validation\Rule::exists('municipalities', 'id')->whereNull('deleted_at')],
             'email' => ['required', 'email', 'unique:users,email'],
             'role' => ['required', 'in:tourist,business_owner,rider,tourism_office,bansud_tourism_office'],
             'password' => ['required', 'string', 'min:8', 'confirmed'],

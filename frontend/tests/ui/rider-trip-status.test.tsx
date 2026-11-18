@@ -333,11 +333,15 @@ describe('ride booking trip page', () => {
     expect(screen.getByText(/Within 100 m of the pickup point/)).toBeInTheDocument()
   })
 
-  it('at the drop-off a cash ride collects the fare and completes', async () => {
+  it('at the drop-off a cash ride collects the fare and completes once the rider confirms the cash', async () => {
     setRide('arrived_destination')
     renderPage()
     expect(await screen.findByText('Collect ₱211.36 in cash from the passenger.')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /Fare Collected · Complete Ride/ }))
+    const complete = screen.getByRole('button', { name: /Fare Collected · Complete Ride/ })
+    // The rider must confirm the cash first (2026-11-18).
+    expect(complete).toBeDisabled()
+    fireEvent.click(screen.getByLabelText('I received ₱211.36 in cash from the passenger'))
+    fireEvent.click(complete)
     expect(trip.value.onCompleteRide).toHaveBeenCalledWith(211.36)
   })
 
@@ -348,12 +352,36 @@ describe('ride booking trip page', () => {
     expect(trip.value.settleCod).toHaveBeenCalledWith(211.36)
   })
 
-  it('an online-paid ride completes with nothing to collect', async () => {
+  it('a GCash ride completes only after the payment is verified and the rider confirms it', async () => {
     api.get.mockResolvedValue({ ...RIDE, status: 'arrived_destination', is_cod: false, payment_method: 'gcash' })
-    setTrip('arrived_destination', [], { onCompleteRide: vi.fn(), settleCod: vi.fn(), settleBusy: false, settleError: null, pendingSettlement: null })
+    setTrip('arrived_destination', [], {
+      onCompleteRide: vi.fn(), settleCod: vi.fn(), settleBusy: false, settleError: null, pendingSettlement: null,
+      switchRideToCash: vi.fn(), switchToCashBusy: false, switchToCashError: null,
+      activeDelivery: { id: 6, status: 'arrived_destination', payment_method: 'gcash', payment_status: 'paid' },
+    })
     renderPage()
-    expect(await screen.findByText('Paid online. Nothing to collect.')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /^Complete Ride$/ }))
+    expect(await screen.findByText('GCash payment of ₱211.36 received.')).toBeInTheDocument()
+    const complete = screen.getByRole('button', { name: /^Complete Ride$/ })
+    expect(complete).toBeDisabled()
+    fireEvent.click(screen.getByLabelText("I confirm the passenger's GCash payment of ₱211.36 was received"))
+    fireEvent.click(complete)
     expect(trip.value.onCompleteRide).toHaveBeenCalledWith(null)
+  })
+
+  it('an unpaid GCash ride waits for the payment, or switches to cash', async () => {
+    api.get.mockResolvedValue({ ...RIDE, status: 'arrived_destination', is_cod: false, payment_method: 'gcash' })
+    setTrip('arrived_destination', [], {
+      onCompleteRide: vi.fn(), settleCod: vi.fn(), settleBusy: false, settleError: null, pendingSettlement: null,
+      switchRideToCash: vi.fn(), switchToCashBusy: false, switchToCashError: null,
+      activeDelivery: { id: 6, status: 'arrived_destination', payment_method: 'gcash', payment_status: 'pending' },
+    })
+    renderPage()
+    expect(await screen.findByText(/Waiting for the passenger's GCash payment of ₱211\.36/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Complete Ride$/ })).toBeDisabled()
+    expect(screen.queryByRole('checkbox')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /Switch to cash/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, switch to cash' }))
+    expect(trip.value.switchRideToCash).toHaveBeenCalledTimes(1)
   })
 })

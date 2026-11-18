@@ -153,6 +153,9 @@ class FoodController extends Controller
             abort(404);
         }
 
+        // Real, de-duplicated offering view for popularity analytics.
+        app(\App\Services\BusinessEngagementRecorder::class)->offeringView($business, $offering->id, $request);
+
         $images = array_values(array_filter(array_merge(
             [$offering->image],
             is_array($offering->images) ? $offering->images : [],

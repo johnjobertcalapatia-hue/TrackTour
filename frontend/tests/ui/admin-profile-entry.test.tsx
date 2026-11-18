@@ -124,20 +124,20 @@ describe('Admin sidebar office identity', () => {
     expect(await screen.findByText('Office profile page')).toBeInTheDocument()
   })
 
-  it('shows the uploaded office logo and name in the sidebar brand', async () => {
+  it('keeps the TrackTour logo in the sidebar header even when an office logo is uploaded', async () => {
     renderAdmin()
 
-    const logo = await screen.findByAltText('Bansud Tourism Office logo')
-    expect(logo.getAttribute('src')).toContain('/storage/office/logo/bansud-seal.png')
-    expect(screen.queryByAltText('TrackTour Logo')).toBeNull()
+    const logo = await screen.findByAltText('TrackTour Logo')
+    expect(logo.getAttribute('src')).toBe('/assets/logo/tracktour.png')
+    expect(screen.queryByAltText('Bansud Tourism Office logo')).toBeNull()
   })
 
-  it('falls back to the TrackTour brand while no logo is configured', async () => {
+  it('shows the TrackTour brand while no office logo is configured', async () => {
     api.office.logo_url = null
     renderAdmin()
 
     expect(await screen.findByAltText('TrackTour Logo')).toBeInTheDocument()
-    await waitFor(() => expect(screen.queryByAltText('Bansud Tourism Office logo')).toBeNull())
+    expect(screen.queryByAltText('Bansud Tourism Office logo')).toBeNull()
   })
 
   it('does not link the identity card when the role has no profile page', async () => {

@@ -46,7 +46,9 @@ class AdminSystemController extends Controller
     public function security(): JsonResponse
     {
         return $this->successResponse([
-            'failed_logins_today' => 0,
+            // Real count from the incident history (was a hard-coded 0).
+            'failed_logins_today' => \App\Models\SystemIncident::where('code', 'login_failed')
+                ->where('occurred_at', '>=', now('Asia/Manila')->startOfDay()->utc())->count(),
             'active_sessions' => DB::table('sessions')->count(),
             'two_factor_enabled' => false,
         ]);

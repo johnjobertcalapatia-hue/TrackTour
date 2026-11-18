@@ -2818,6 +2818,18 @@ class PurchasingCashFlowTest extends TestCase
         $this->assertEquals(2500, $riders[$this->riderA->id]['cash_with_rider']);
         $this->assertEquals(0, $riders[$this->riderB->id]['advance_today']);
 
+        // Rider Cash day figures (2026-11-17): separate records from the daily receipt.
+        $dayA = $riders[$this->riderA->id]['day'];
+        $this->assertEquals(2500, $riders[$this->riderA->id]['issued_today']);
+        $this->assertEquals(0, $riders[$this->riderA->id]['topups_today']);
+        $this->assertTrue($dayA['available']);
+        $this->assertEquals(2500, $dayA['outstanding_office_cash']);
+        $this->assertEquals(0, $dayA['cod_collections']);
+        $this->assertEquals(0, $dayA['cod_purchases']);
+        $this->assertEquals(0, $dayA['unused_cash_returned']);
+        $this->assertTrue($dayA['needs_reconciliation']);
+        $this->assertFalse($riders[$this->riderB->id]['day']['needs_reconciliation']); // no cash, no COD
+
         // The existing cash-fund return brings the unused cash back (it is
         // part of the daily COD cash policy, active from its effective date).
         $this->enableDailyCashPolicy(now('Asia/Manila')->toDateString());
@@ -2832,6 +2844,9 @@ class PurchasingCashFlowTest extends TestCase
         $after = collect($this->getJson('/api/admin/cash-advances')->assertOk()->json('data.riders'))->keyBy('rider_id');
         $this->assertEquals(0, $after[$this->riderA->id]['cash_with_rider']);
         $this->assertEquals(2500, $after[$this->riderA->id]['returned_to_date']);
+        $this->assertEquals(2500, $after[$this->riderA->id]['day']['unused_cash_returned']);
+        $this->assertEquals(0, $after[$this->riderA->id]['day']['outstanding_office_cash']);
+        $this->assertFalse($after[$this->riderA->id]['day']['needs_reconciliation']);
     }
 
     public function test_only_the_tourism_office_of_the_riders_municipality_can_record_advances(): void

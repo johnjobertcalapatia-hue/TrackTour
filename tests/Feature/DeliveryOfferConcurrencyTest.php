@@ -145,6 +145,8 @@ class DeliveryOfferConcurrencyTest extends TestCase
             'user_id' => $rider->id,
             'rider_status' => $overrides['rider_status'] ?? 'available',
             'current_service' => $overrides['current_service'] ?? 'food',
+            // Every rider has a registered vehicle; ride-hailing needs a motor vehicle (RideVehicles).
+            'vehicle_type' => $overrides['vehicle_type'] ?? 'motorcycle',
         ]);
 
         RiderLocation::create([
@@ -542,13 +544,12 @@ class DeliveryOfferConcurrencyTest extends TestCase
             ->assertStatus(409)->assertJsonPath('success', false);
         $this->assertSame($riderA->id, $delivery->fresh()->rider_id);
 
-        // Visibility ≠ eligibility: the loser's board no longer offers it as
-        // actionable — it degrades to a read-only "accepted by another rider".
+        // The loser's board no longer lists it at all (2026-11-18: only offers
+        // the rider can still take are shown).
         $loserOrders = collect($this->getJson('/api/rider/dispatch/board', $this->authHeaders($riderB))
             ->assertOk()
             ->json('data.orders'));
-        $this->assertTrue($loserOrders->every(fn ($o) => $o['rider_status'] !== 'looking_for_riders'));
-        $this->assertTrue($loserOrders->contains(fn ($o) => $o['rider_status'] === 'accepted_by_other'));
+        $this->assertFalse($loserOrders->contains(fn ($o) => (int) ($o['delivery_id'] ?? 0) === (int) $delivery->id));
     }
 
     public function test_accept_after_offer_expiry_times_out_and_reoffers(): void

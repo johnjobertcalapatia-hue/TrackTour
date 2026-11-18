@@ -640,6 +640,12 @@ class RiderCashFundService
                     ->where('occurred_at', '<', $end->utc())
                     ->orderBy('occurred_at')
                     ->get();
+                $topups = RiderCashFundTransaction::query()
+                    ->whereHas('fund', fn ($q) => $q->where('rider_id', $rider->id))
+                    ->where('type', RiderCashFundTransaction::TYPE_ADDITIONAL_CASH_ISSUED)
+                    ->where('occurred_at', '>=', $start->utc())
+                    ->where('occurred_at', '<', $end->utc())
+                    ->sum('amount');
                 $balance = $this->officeCashBalance($rider, $date);
                 $codDeliveries = Delivery::query()
                     ->where('rider_id', $rider->id)
@@ -663,10 +669,65 @@ class RiderCashFundService
                     'cash_with_rider' => $balance['unreturned'],
                     'returned_to_date' => $balance['returned'],
                     'cod_deliveries_today' => $codDeliveries,
+                    // Top-ups (additional cash issued) are recorded separately from the day's advance.
+                    'topups_today' => round((float) $topups, 2),
+                    'issued_today' => round((float) $advances->sum('amount') + (float) $topups, 2),
+                    'day' => $this->daySummary($rider, $date),
                 ];
             })
             ->values()
             ->all();
+    }
+
+    /**
+     * Read-only day figures for the Rider Cash overview, taken from the rider's
+     * authoritative daily receipt so each purpose stays a separate record:
+     * office cash issued, verified COD purchases, COD collected from customers,
+     * unused cash returned, COD remitted, and what is still outstanding. Nothing
+     * is netted here (COD collections are never reduced by purchases).
+     */
+    private function daySummary(User $rider, string $date): array
+    {
+        try {
+            $receipt = $this->buildDailyReceipt($rider, $date);
+        } catch (\Throwable $e) {
+            return ['available' => false, 'error' => $e->getMessage()];
+        }
+
+        $totals = $receipt['totals'];
+        $purchases = 0.0;
+        $officeCashUsed = 0.0;
+        foreach ($receipt['deliveries'] as $delivery) {
+            foreach ($delivery['verified_purchase_expenses'] ?? [] as $expense) {
+                $purchases += (float) ($expense['actual_purchase_amount'] ?? 0);
+                $officeCashUsed += (float) ($expense['tourism_office_cash_used'] ?? 0);
+            }
+        }
+        $remitted = (float) ($receipt['cash_received_by_tourism_office'] ?? 0);
+        $expected = $totals['net_cod_remittance_expected'];
+        $reconciliation = $receipt['reconciliation'];
+        $status = $reconciliation['status'] ?? $receipt['receipt_status'];
+        $discrepancy = collect($reconciliation['discrepancies'] ?? [])->filter(fn ($v) => $v !== null && abs((float) $v) >= 0.01)->isNotEmpty();
+        $outstandingCash = (float) $totals['unreturned_tourism_office_cash_balance'];
+        $codOutstanding = $expected === null ? null : round(max(0.0, (float) $expected - $remitted), 2);
+        $active = $totals['eligible_delivery_count'] > 0 || $outstandingCash > 0;
+
+        return [
+            'available' => true,
+            'cod_deliveries' => $totals['eligible_delivery_count'],
+            'cod_purchases' => round($purchases, 2),
+            'office_cash_used_for_purchases' => round($officeCashUsed, 2),
+            'cod_collections' => round((float) $totals['cash_collected'], 2),
+            'unused_cash_returned' => round((float) ($receipt['cash_returned_to_tourism_office'] ?? 0), 2),
+            'cod_remitted' => round($remitted, 2),
+            'cod_remittance_expected' => $expected === null ? null : round((float) $expected, 2),
+            'cod_remittance_outstanding' => $codOutstanding,
+            'outstanding_office_cash' => round($outstandingCash, 2),
+            'reconciliation_status' => $status,
+            'remittance_submitted' => (bool) $receipt['remittance_submitted'],
+            'has_discrepancy' => $discrepancy,
+            'needs_reconciliation' => $active && ! in_array($status, ['verified', 'closed'], true),
+        ];
     }
 
     /** The rider's open cash fund, opened on first use (one open fund per rider). */

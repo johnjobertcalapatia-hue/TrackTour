@@ -18,6 +18,7 @@ export type UserStatusEventName =
   | 'delivery.pickup.stop.changed'
   | 'trip_cancelled'
   | 'dispatch_status_update'
+  | 'ride.destination.changed'
 
 export interface UserSocketPayload {
   order_id?: number
@@ -85,6 +86,8 @@ export function useUserSocketNotifier({
           'delivery.pickup.stop.changed',
           'trip_cancelled',
           'dispatch_status_update',
+          // Ride: the passenger changed the destination (rider + tourist refetch).
+          'ride.destination.changed',
         ]
 
         for (const name of EVENTS) {

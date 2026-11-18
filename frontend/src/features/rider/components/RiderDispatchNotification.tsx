@@ -21,6 +21,10 @@ export default function RiderDispatchNotification() {
   const [offers, setOffers] = useState<RiderDeliveryRequestData[]>([])
   const [request, setRequest] = useState<RiderDeliveryRequestData | null>(null)
   const [showAccepted, setShowAccepted] = useState(false)
+  // What was just accepted (2026-11-18): the confirmation and messages
+  // follow the request — a ride (passenger) or a food order (restaurant).
+  const [acceptedKind, setAcceptedKind] = useState<{ ride: boolean; passenger: string | null }>({ ride: false, passenger: null })
+  const rideService = user?.current_service === 'transport'
   const [phase, setPhase] = useState<Phase>('idle')
   const [choosing, setChoosing] = useState(false)
   const [acceptingId, setAcceptingId] = useState<number | null>(null)
@@ -99,7 +103,9 @@ export default function RiderDispatchNotification() {
       const hadIt = offersRef.current.some((o) => o.delivery_id === delivery_id)
       syncOffers()
       if (delivery_id && hadIt) {
-        showToast('Another rider claimed this delivery — the offer is no longer available.', 'error')
+        showToast(kindOf(delivery_id).ride
+          ? 'Another rider took this booking — the request is no longer available.'
+          : 'Another rider claimed this delivery — the offer is no longer available.', 'error')
       }
     },
     // Reconnect recovery: Socket.IO is not authoritative — after any
@@ -134,8 +140,16 @@ export default function RiderDispatchNotification() {
     shownDeliveryId.current = null
   }, [])
 
+  /** Is this request a ride? Falls back to the rider's service when the offer is gone. */
+  const kindOf = (deliveryId: number | null | undefined) => {
+    const offer = offersRef.current.find((o) => o.delivery_id === deliveryId) ?? (request?.delivery_id === deliveryId ? request : null)
+    const ride = offer ? Boolean(offer.is_ride ?? offer.order_type === 'transport') : rideService
+    return { ride, passenger: offer?.passenger_name ?? null }
+  }
+
   const acceptMutation = useMutation({
     mutationFn: (deliveryId: number) => patch('/rider/dispatch/accept', { delivery_id: deliveryId }),
+    onMutate: (deliveryId: number) => setAcceptedKind(kindOf(deliveryId)),
     onSuccess: async () => {
       // The backend sets rider_status='busy' atomically with the assignment,
       // and the accept payload carries no rider_status — so reconcile the user
@@ -159,17 +173,19 @@ export default function RiderDispatchNotification() {
       setAcceptingId(null)
       if (status === 409) {
         // Conflict: expired, already claimed, or rider already on a trip.
-        showToast(message || 'This offer is no longer available — it may have been claimed already.', 'error')
+        showToast(message || (acceptedKind.ride
+          ? 'This ride request is no longer available — another rider may have taken it.'
+          : 'This offer is no longer available — it may have been claimed already.'), 'error')
         syncOffers()
         return
       }
       if (status === 422) {
         // Ineligibility (e.g. COD limit): the offer itself may still be fine,
         // so keep it listed and just surface the backend's reason.
-        showToast(message || 'You are not eligible for this delivery.', 'error')
+        showToast(message || (acceptedKind.ride ? 'You are not eligible for this ride.' : 'You are not eligible for this delivery.'), 'error')
         return
       }
-      showToast(message || 'Failed to accept the delivery. Please try again.', 'error')
+      showToast(message || (acceptedKind.ride ? 'Failed to accept the ride. Please try again.' : 'Failed to accept the delivery. Please try again.'), 'error')
     },
   })
 
@@ -256,8 +272,12 @@ export default function RiderDispatchNotification() {
             <div className="w-16 h-16 bg-[#DCFCE7] border border-[#16803C]/30 rounded-full flex items-center justify-center mx-auto mb-4">
               <CheckCircleIcon />
             </div>
-            <h2 className="text-xl font-bold text-[#17201B] mb-2">Order Accepted</h2>
-            <p className="text-sm text-[#56615B]">Starting navigation to the pickup location.</p>
+            <h2 className="text-xl font-bold text-[#17201B] mb-2">{acceptedKind.ride ? 'Ride Accepted' : 'Order Accepted'}</h2>
+            <p className="text-sm text-[#56615B]">
+              {acceptedKind.ride
+                ? `Starting navigation to ${acceptedKind.passenger ? `${acceptedKind.passenger}'s` : "the passenger's"} pickup point.`
+                : 'Starting navigation to the restaurant.'}
+            </p>
           </div>
         </div>
       ) : choosing && offers.length >= 2 ? (

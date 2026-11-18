@@ -14,8 +14,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('react-leaflet', () => ({
   MapContainer: ({ children }: { children?: ReactNode }) => <div data-testid="leaflet-map">{children}</div>,
   TileLayer: () => null,
-  Marker: ({ children, icon }: { children?: ReactNode; icon?: { options?: { className?: string } } }) => (
-    <div data-testid="marker" data-icon={icon?.options?.className ?? ''}>{children}</div>
+  Marker: ({ children, icon }: { children?: ReactNode; icon?: { options?: { className?: string; html?: string } } }) => (
+    <div data-testid="marker" data-icon={icon?.options?.className ?? ''} data-icon-html={icon?.options?.html ?? ''}>{children}</div>
   ),
   Popup: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
   Polyline: ({ positions }: { positions: unknown[] }) => <div data-testid="route-line" data-points={positions.length} />,
@@ -54,9 +54,10 @@ const trip = vi.hoisted(() => ({
 }))
 vi.mock('@/features/rider/context/RiderActiveTripContext', () => ({ useRiderActiveTrip: () => trip.value }))
 
+const mapDeliveries = vi.hoisted(() => ({ value: [] as unknown[] }))
 const api = vi.hoisted(() => ({
   get: vi.fn(async (url: string) => {
-    if (url === '/rider/map/location') return { rider: { latitude: 12.51, longitude: 121.31 }, deliveries: [] }
+    if (url === '/rider/map/location') return { rider: { latitude: 12.51, longitude: 121.31 }, deliveries: mapDeliveries.value }
     return null
   }),
   post: vi.fn(async () => ({})),
@@ -82,6 +83,7 @@ function renderMap() {
 
 beforeEach(() => {
   localStorage.clear()
+  mapDeliveries.value = []
   useAuthStore.setState({ user: { id: 8, name: 'Rider', role: 'rider', current_service: 'food' } as never, loading: false })
   trip.value = {
     setRiderPosition: vi.fn(),
@@ -97,6 +99,33 @@ beforeEach(() => {
       clearWatch: () => {},
     },
   }))
+})
+
+describe('Rider map: ride-hailing pickup', () => {
+  it('a ride pickup is the passenger (person pin, their name), never a restaurant marker', async () => {
+    useAuthStore.setState({ user: { id: 8, name: 'Rider', role: 'rider', current_service: 'transport' } as never, loading: false })
+    const ride = {
+      id: 18, order_id: 18, status: 'arrived_pickup', order_type: 'transport',
+      pickup_address: 'Bansud Municipal Hall', pickup_lat: 12.52, pickup_lng: 121.32,
+      delivery_address: 'Tambangan Falls', delivery_lat: 12.6, delivery_lng: 121.4,
+      business_name: null, business_logo: null, customer_name: 'Jayvie', created_at: '2026-11-17T03:00:00Z',
+    }
+    mapDeliveries.value = [ride]
+    trip.value = {
+      ...trip.value,
+      activeDelivery: { ...ride, business_name: null },
+      tripState: 'ARRIVED_AT_PICKUP',
+      pickupStopsData: { stops: [], fully_collected: false, dropoff: { latitude: 12.6, longitude: 121.4 }, pickup_origin: null, is_cod: true },
+    }
+    renderMap()
+
+    const pickup = await screen.findByText('Pick up Jayvie')
+    const marker = pickup.closest('[data-testid="marker"]') as HTMLElement
+    expect(marker.dataset.iconHtml).toContain('data-marker="passenger-pickup"')
+    expect(marker.dataset.iconHtml).toContain('Pickup · Jayvie')
+    // No restaurant pin or "Restaurant" label anywhere on a ride.
+    for (const m of screen.getAllByTestId('marker')) expect(m.dataset.iconHtml ?? '').not.toContain('Restaurant')
+  })
 })
 
 describe('Rider map: Overview and Navigation views', () => {

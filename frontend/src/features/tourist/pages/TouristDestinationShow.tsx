@@ -24,7 +24,7 @@ import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { businessLogoIcon } from '@/shared/utils/pin-icon'
 import { cn, formatCurrency, toAssetUrl } from '@/shared/utils'
-import BookRideSheet from '../components/BookRideSheet'
+import { BOOK_RIDE_PATH, type BookRideSeed } from './TouristBookRide'
 
 interface Destination {
   id: number
@@ -74,7 +74,6 @@ export default function TouristDestinationShow() {
   const [saving, setSaving] = useState(false)
   const [distance, setDistance] = useState<number | null>(null)
   const [showMap, setShowMap] = useState(false)
-  const [showRideSheet, setShowRideSheet] = useState(false)
 
   const openTouristMap = () => {
     if (!hasCoords) {
@@ -373,7 +372,12 @@ export default function TouristDestinationShow() {
       {/* Book a Ride */}
       <div className="px-4 mt-6 pb-8">
         <button
-          onClick={() => setShowRideSheet(true)}
+          onClick={() => navigate(BOOK_RIDE_PATH, {
+            state: {
+              destination: destination.name,
+              destinationCoords: hasCoords ? { lat: Number(destination.latitude), lng: Number(destination.longitude) } : undefined,
+            } satisfies BookRideSeed,
+          })}
           className="w-full py-3 bg-white border border-[#E5E9E7] text-[#17201B] font-semibold rounded-xl text-sm hover:border-[#087F3F]/50 hover:text-[#087F3F] transition flex items-center justify-center gap-2"
         >
           <Car className="w-4 h-4" /> Book a Ride
@@ -424,13 +428,6 @@ export default function TouristDestinationShow() {
         </div>
       )}
 
-      {/* Ride sheet */}
-      <BookRideSheet
-        isOpen={showRideSheet}
-        onClose={() => setShowRideSheet(false)}
-        destination={destination.name}
-        destinationCoords={hasCoords ? { lat: Number(destination.latitude), lng: Number(destination.longitude) } : undefined}
-      />
     </div>
   )
 }

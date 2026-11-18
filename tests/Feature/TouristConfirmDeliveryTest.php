@@ -325,9 +325,11 @@ class TouristConfirmDeliveryTest extends TestCase
     {
         $order = $this->makeOrder('gcash', 'TT-TRANSPORT', 'transport');
         $delivery = $this->makeDelivery($order);
+        // A GCash ride is completed once paid and confirmed by the rider (2026-11-18).
+        $order->update(['payment_status' => 'paid', 'paid_amount' => $order->total]);
 
         $this->withHeader('Authorization', 'Bearer '.$this->riderToken())
-            ->patchJson('/api/rider/deliveries/'.$delivery->id.'/status', ['status' => 'delivered'])
+            ->patchJson('/api/rider/deliveries/'.$delivery->id.'/status', ['status' => 'delivered', 'payment_confirmed' => true])
             ->assertOk()
             ->assertJson(['success' => true]);
 

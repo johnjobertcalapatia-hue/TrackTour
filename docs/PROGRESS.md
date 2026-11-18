@@ -1,5 +1,1204 @@
 # Project Progress — Tourism Management Portal
 
+## Rider app — the board lists only available offers for the current service (2026-11-18)
+
+**Bug:** a Food Delivery rider's "Available orders" listed cancelled ride bookings. Another rider's trips (read-only) and cancelled offers were added to the board without the service filter the actionable offers use.
+
+**Server (`RiderDispatchController::board`)**
+- The read-only sections are removed: "accepted by another rider" and "recently cancelled".
+- Only offers the rider can still take are returned: their own live offers, plus open unclaimed deliveries.
+- Both are filtered to the rider's current service (food orders or ride bookings) and vehicle.
+- `buildReadOnlyItem()` and `delivery.board_claimed_limit` are removed (unused).
+
+**Rider app**
+- `RiderOrderBoard` lists only `looking_for_riders` offers of the current service, via `availableOffers()`. The board hides when there are none.
+- The panel's count uses the same rule.
+- The read-only card is gone.
+
+**Tests**
+- `RiderOrderBoardTest`: another rider's trip and a cancelled offer are not listed.
+- `DeliveryOfferConcurrencyTest`: the loser's board no longer lists the claimed delivery.
+- `rider-destination`: no cancelled ride row; a food rider sees food offers only, with no rides, cancelled or taken rows.
+- **Totals:** Laravel **1289 passed, 2 skipped**; frontend **127 files / 886 tests passed**; build clean.
+
+## Ride Hailing — Stage B: cancellation penalty assessment (2026-11-18)
+
+The full rules are in `docs/secure-transaction-audit.md` §L.
+
+**Rule:** a tourist who cancels more than 300 s after the rider accepted owes **₱50 to that rider**. Cancelling before acceptance, or within 300 s (inclusive), is free. Rider, admin and safety cancellations and dispatch failures are never penalised. There is one penalty per cancelled ride.
+
+**Status**
+- **Owed** only with a server-confirmed pickup arrival and recent GPS (latest saved fix within 3 minutes before the cancel).
+- Anything weaker is **under review**: never collected, never blocks booking.
+- No movement threshold was invented: the dev GPS data had no accuracy values and no real pickup approaches.
+
+**Tourist**
+- The cancel dialog says "Free cancellation for m:ss more…", or after 5 minutes that ₱50 may apply, paid to the driver, and is reviewed first if the driver wasn't on the way.
+- A cancelled ride shows a **Cancellation fee** card: amount, which driver gets it, status, and **Dispute this fee**.
+
+**Also:** the rider app's arrival "nudge" location posts now include GPS accuracy, so a coarse fix is no longer saved as if it were precise.
+
+**New**
+- Migration `2026_11_18_000002_create_ride_cancellation_penalties_table` (applied to dev by path).
+- `RideCancellationPenalty`, `RideCancellationPenaltyService`, `RidePenaltyException`.
+- Endpoints `GET /tourist/transport/penalties` and `POST /tourist/transport/trip/{id}/penalty/dispute`.
+- Status fields `cancellation_penalty_preview` and `cancellation_penalty`.
+- `CancellationPenaltyCard`.
+
+**Tests**
+- Laravel `RideCancellationPenaltyTest` (10):
+  - before acceptance free; exactly 300 s free;
+  - 420 s with a confirmed arrival and recent GPS → owed ₱50 to the accepting rider (ledger, activity log, no waiting fee, amounts untouched, tourist sees it);
+  - no confirmed arrival → under review; stale or missing GPS → under review;
+  - a rider cancellation → none; one per ride;
+  - the free-until preview;
+  - dispute (own only, idempotent, not outstanding);
+  - booking another ride still works.
+- Frontend `ride-cancellation-penalty.test.tsx` (3).
+- **Totals:** Laravel **1289 passed, 2 skipped**; frontend **127 files / 885 tests passed**; build clean; no new TypeScript errors.
+
+## Ride Hailing — Stage A: rider confirms pickup arrival; pickup waiting fee; fare integrity (2026-11-18)
+
+The full rules are in `docs/secure-transaction-audit.md` §K.
+
+**Rider**
+- Near the pickup, the pop-up asks the rider to confirm **I've Arrived**: "the passenger is told you're here and their waiting time starts. First 3 minutes free, then ₱2 per full 3 minutes."
+- The server checks the rider is at the pickup: within 100 m, by a saved GPS fix or the phone's fix up to ±200 m.
+- Then the pop-up shows **Waiting mm:ss · Free / ₱X so far** and **Passenger On Board**.
+- The timer runs from the server's arrival time, so a wrong phone clock does not change it.
+- The arrival request sends a fresh GPS fix.
+
+**Tourist**
+- "*Driver* has arrived and is waiting", the rule, a live timer and "Free for mm:ss" or "₱X so far".
+- After the trip starts it shows the waiting time and fee charged.
+- The receipt itemises "Pickup waiting (N min S s)".
+
+**Fee:** `floor(max(0, waiting_seconds − 180) / 180) × ₱2`, from server timestamps. It is recorded once at trip start and added on top of the ride fare. Commission is max(₱20, 40% × total).
+
+**Fare integrity fix:** rides no longer arrive automatically from the GPS heartbeat, at pickup or drop-off. A changed destination's final fare can no longer be skipped before GCash opens; payment opens only after the rider confirms arrival, which applies the final fare and the charges.
+
+**New**
+- Migration `2026_11_18_000001_create_ride_time_events_and_charges` (applied to dev by path).
+- Models `RideTimeEvent` and `RideAdditionalCharge`.
+- `RideTimeChargeService`.
+- `RideWaitingStep` (rider) and `PickupWaitingCard` (tourist).
+
+**Changed**
+- `DropoffLocationProof` (target and radius).
+- `RiderDeliveryController` (arrival, trip start, charges after the final fare).
+- `RiderMapController` (no automatic ride arrival; waiting in the payload).
+- `TransportController` (status payload).
+- `PaymentController` (itemised ride checkout).
+- `TransactionIntegrityService` (`ride_charges`; commission follows charges).
+- The rider context and alert, the tourist tracking page and the receipt.
+
+Food delivery and cash-on-delivery settlement are unchanged.
+
+**Tests**
+- Laravel `RidePickupWaitingTest` (11):
+  - the rule at 0/179/180/359/360/539/540/900 s;
+  - arrival only at the pickup (too far is refused, nothing recorded); a repeated confirmation keeps the first time;
+  - the phone fix up to ±200 m; only the assigned rider;
+  - no heartbeat arrival at pickup or destination (payment stays closed);
+  - a 359 s wait is free but recorded;
+  - a 540 s wait = ₱4: total, commission, a retry never charges twice, cash due, earning and integrity all reconcile;
+  - GCash itemised and the tourist sees the fee;
+  - no arrival confirmation = no fee;
+  - a cancel while waiting = no charge;
+  - a changed destination keeps its cap with the fee on top.
+- Frontend:
+  - `ride-pickup-waiting.test.tsx` (7);
+  - `global-rider-alert-gate` +2 (I've Arrived first; timer and Passenger On Board).
+- **Totals:** Laravel **1279 passed, 2 skipped**; frontend **126 files / 882 tests passed**; build clean; no new TypeScript errors.
+
+## Rider app — panel and accept message follow the service type (2026-11-18)
+
+**Rider panel (`RiderOrderInfoSheet`, `RiderOrderBoard`)**
+- For a ride-hailing rider, the headings say **Booking details**, **Available bookings**, and **Recent / Other bookings**.
+- With an active trip, the wording follows that trip; with none, it follows the rider's `current_service`.
+- Messages say bookings and trip instead of orders and delivery.
+- Cancelled or someone else's rides (the minimal board row) now carry `is_ride` and `vehicle_type`, still with no passenger details. They read "Ride #TRP-… · Motorcycle ride" instead of "Order #… · Restaurant".
+
+**Accept confirmation (`RiderDispatchNotification`)**
+- A ride shows **Ride Accepted** — "Starting navigation to <passenger>'s pickup point."
+- A food order shows **Order Accepted** — "Starting navigation to the restaurant."
+- Also for auto-accept.
+- The claimed / no-longer-available / not-eligible / failed messages follow the request type too.
+
+**Tests:** `rider-destination` (headings, cancelled ride row), `rider-order-info-sheet-pickup` +1, `rider-dispatch-notification` +1.
+
+## Rider app — ride requests shown as rides, not food deliveries (2026-11-18)
+
+**Bug:** a ride-hailing request was shown to the rider as food:
+- the offer pop-up said "New Delivery Offer", with a restaurant icon, "1 item" and "Paid online";
+- the "Available orders" list showed "Order #TRP-…", "Restaurant —", "1 item" and "Accept order".
+
+**Server**
+- `RiderDispatchController::rideFacts()` adds `is_ride`, `order_type`, `passenger_name`, `passenger_count`, `vehicle_type` and `fare` to both the offer payload and the open-delivery payload.
+- On the board a ride has no `restaurants` (stops).
+
+**Offer pop-up (`RiderDeliveryRequestAlert`)**
+- **New Ride Request**, the vehicle icon of the booked vehicle, and the passenger's name.
+- Pickup → drop-off, plus "N passenger(s) · Motorcycle · Cash fare / GCash at drop-off".
+- Details show "Ride TRP-…" and "Fare ₱…".
+- The accept button reads **Accept ride request**.
+
+**Available orders (`RiderOrderBoard`)**
+- **Ride #TRP-…**, with "Passenger · Motorcycle" underneath.
+- Opening it shows a ride card (passenger, passengers, vehicle, fare) instead of a restaurant with items.
+- "Pick up: / Drop-off:" labels, "Collect the ₱… fare in cash", and **Accept ride**.
+
+**Several offers at once (`RiderOffersPanel`)** shows the passenger and "Ride · N passenger(s) · pickup".
+
+Food offers are unchanged.
+
+**Tests**
+- `rider-delivery-request-alert` +2 and `rider-destination` +1 (frontend).
+- `RideVehicleRulesTest` +1 (the board payload).
+- **Totals:** Laravel **1268 passed, 2 skipped**; frontend **125 files / 871 tests passed**; build clean; no new TypeScript errors.
+
+## Ride Hailing — rider confirms the payment before completing; GCash return pages (2026-11-18)
+
+The full rules are in `docs/secure-transaction-audit.md` §J.
+
+**Rider**
+- At the drop-off, the pop-up and the trip page run in two steps:
+  1. **I've Arrived** records the arrival. The fare is final there, and the passenger can pay.
+  2. The payment step:
+     - **Cash:** "I received ₱X in cash from the passenger" checkbox → **Fare Collected · Complete Ride**.
+     - **GCash, unpaid:** "Waiting for the passenger's GCash payment of ₱X" (updates by itself) and **Switch to cash** (with a confirmation).
+     - **GCash, paid:** "I confirm the passenger's GCash payment of ₱X was received" → **Complete Ride**.
+- The server refuses completion without the confirmation, and refuses a GCash ride that isn't paid.
+
+**Tourist**
+- GCash can be paid as soon as the ride reaches the destination (it used to be only after completion).
+- The arrived screen shows "You've arrived!" and what to do: Pay now / payment received, the driver will confirm / pay the driver in cash (also after a switch). Rating opens once the ride is completed.
+- The page keeps refreshing at the drop-off until the ride is completed.
+- **Payment return page** (PayMongo success, "Return to merchant", failure):
+  - ride wording ("Your GCash payment for the ride has been received…", "Your ride has not been paid yet, and you were not charged…");
+  - goes back to the ride tracking page, not to the food order tracking page or Browse Food.
+  - Food and group orders are unchanged.
+
+**Backend**
+- New `RidePaymentService`.
+- New endpoint `POST /api/rider/deliveries/{delivery}/ride-payment/cash`.
+- `PaymentController`: create-intent rule for rides; `kind=ride` on the return URLs; `order_type` in the payment status; the webhook keeps a switched ride on cash and escalates a late GCash payment for a manual refund; the rider is pushed when the payment is verified.
+- The rider map payload adds `payment_method`, `payment_status` and `paid_amount`.
+- The ride status payload adds `at_drop_off`, `ride_completed` and `payment_switched_to_cash`.
+
+**Tests**
+- Laravel `RidePaymentConfirmationTest` (7):
+  - GCash opens at the drop-off for the final fare;
+  - no completion before GCash is verified;
+  - a paid ride still needs the rider's confirmation (and the rider is pushed);
+  - a cash ride needs the confirmation, and the settlement still checks the amount;
+  - switch to cash: allowed at the drop-off and unpaid only; not by another rider; not once paid;
+  - a late GCash payment keeps cash and is escalated.
+- Existing ride tests now complete with the confirmation (and the GCash payment). The "payment opens only after completion" test became "only at the drop-off".
+- Frontend:
+  - `ride-payment-return.test.tsx` (7): success / auto-redirect / Return to merchant go back to the ride; food still goes to the food order; the arrived screen states.
+  - Rider alert and trip page tests: the confirmation checkbox, waiting for GCash, switch to cash, and I've Arrived first.
+- **Totals:** Laravel **1267 passed, 2 skipped**; frontend **125 files / 868 tests passed**; build clean; no new TypeScript errors.
+
+## Ride Hailing — one-time destination change (2026-11-17)
+
+The full rules are in `docs/secure-transaction-audit.md` §I.
+
+**Rules**
+- A tourist can change a ride's destination **once**: after pickup, and before arrival, completion or cancellation.
+- Previews and refused or expired confirms don't use the change.
+- The same trip is updated in place, so there is no second booking.
+
+**Fare**
+- Revised estimate = verified distance so far + the road route to the new place, at the ride's booked rates. Maximum = estimate × 1.15.
+- At the drop-off: final = verified GPS distance × booked rates, capped at the maximum. The capped-off amount is recorded.
+- Commission = max(₱20, 40%) of the final fare.
+- The booked fare and commission are preserved.
+- Jitter, impossible jumps, gaps and an early end are never charged. Insufficient evidence means the fare is flagged `needs_review` (verified distance only).
+
+**Backend**
+- New:
+  - migration `2026_11_17_000004_create_ride_destination_changes_table` (applied to dev by path);
+  - `RideDestinationChange` model;
+  - `RideDestinationChangeService` (preview with a signed 3-minute quote; locked, idempotent confirm; best-effort push; acknowledgement; final fare; GPS verification);
+  - `RideDestinationChangeException`.
+- Endpoints:
+  - `POST /api/tourist/transport/trip/{id}/destination-change/preview`;
+  - `POST /api/tourist/transport/trip/{id}/destination-change`;
+  - `POST /api/rider/deliveries/{delivery}/destination-change/acknowledge`.
+- `GET …/trip/{id}/status` adds `destination_change`, `destination_change_allowed` and `destination_changes_left`. Its `fare` becomes the final fare once set.
+- `RiderDeliveryController::updateStatus` sets the final fare on `arrived_destination` / `delivered`, before a cash amount is frozen.
+- The rider map payload and `AdminLiveController` rows carry `destination_change`. `Delivery::destinationChange()` is a new relation.
+- `TransactionIntegrityService` gains `ride_final_fare` and `ride_fare_gps`, and its commission check follows the final commission.
+
+**Frontend**
+- Tourist:
+  - a **Change destination · 1 change left** card on the trip sheet;
+  - the new page `/tourist/transport/tracking/:id/change-destination`: pick a place → revised route map, travelled and remaining km, booked fare, estimated new fare, maximum → confirm dialog ("only once");
+  - after the change: original → new destination, when, driver status, estimate and maximum, then the final fare (and the cap) at the end.
+- Rider:
+  - a "The passenger changed the destination" alert until **Got it**, which records the acknowledgement;
+  - a changed cash ride shows **Get Final Fare** at the drop-off before "Collect ₱final · Complete Ride".
+- Admin:
+  - Live Deliveries shows the original destination struck through, plus the change time, booked / estimate / maximum / final fare with the adjustment, verified km, the cap, review status and driver acknowledgement.
+- The socket event `ride.destination.changed` makes both apps refetch.
+
+**Tests**
+- Laravel `RideDestinationChangeTest` (17):
+  - not before pickup, not after completion or cancellation, not by another tourist;
+  - the preview stores nothing; the road route is used;
+  - a successful change, with the original kept and the rider pushed;
+  - a second change is refused;
+  - simultaneous requests: once only, replay is idempotent, and the database UNIQUE holds;
+  - rejected, forged or expired requests don't use the change;
+  - a failed push keeps the change;
+  - rider sees it and acknowledges it;
+  - final fare = verified distance, and order, commission, earning, ledger and integrity all reconcile;
+  - a lower fare for a closer place;
+  - the 115% cap;
+  - jitter, jumps and gaps are not charged and are flagged;
+  - a cash ride collects the final fare;
+  - an unchanged ride keeps its booked fare.
+- Frontend:
+  - `ride-destination-change.test.tsx` (6);
+  - `global-rider-alert-gate` +3 (Get Final Fare, collect the final fare, rider alert and acknowledgement).
+- **Totals:** Laravel **1260 passed, 2 skipped**; frontend **124 files / 859 tests passed**; build clean; no new TypeScript errors.
+
+## Rider app — ride pickup pin; ride drop-off accepts the phone's GPS (2026-11-17)
+
+**Bug 1: a restaurant marker on a ride.**
+- On the rider map, every active delivery's pickup used the restaurant pin (fork and knife, labelled "Restaurant" when there is no business). A ride-hailing pickup showed up as a restaurant.
+- `/rider/map/location` already sent `order_type`; the map now reads it.
+- A `transport` pickup uses the new `passengerPickupIcon`:
+  - the same pin shape, amber, with a person;
+  - labelled "Pickup · <passenger>";
+  - popup "Pick up <passenger>".
+- Food pickups are unchanged.
+
+**Bug 2: "Location saved (waiting: GPS is not precise enough, move to an open area)" at the destination.**
+- The ride drop-off checks (the arrival pop-up's Complete Ride and the trip page) used the strict saved-location rule. The server saves a moving fix only at ±50 m or better, so a rider at the destination with a ±60–200 m fix (roof, buildings) could never complete.
+- The server never blocks a ride on location; it only records the fix as trip evidence.
+- Ride drop-offs now use the food drop-off rule (`withDropoffLocation`, owner decision 2026-11-12):
+  - when the server could not save the fix for precision, the phone's own fix counts up to ±200 m ("Location checked from your phone (±N m)");
+  - coarser fixes still wait, with "turn on Precise location or step outside";
+  - a refused jump ("jumped too far") still waits.
+- The ride **pickup** keeps the saved-location rule.
+
+**Tests**
+- `rider-map-view-modes` +1: a ride pickup is the passenger pin, and no marker says Restaurant.
+- `global-rider-alert-gate` +2: at the destination, ±80 m (not saved) completes the ride; ±350 m stays disabled with what to do.
+- Frontend **123 files / 850 tests passed**; build clean; no new TypeScript errors.
+- Laravel full suite: **1243 passed, 2 skipped** (after the one-ride rule).
+
+## Ride Hailing — one ride at a time (2026-11-17)
+
+**Rule.** A tourist cannot book another ride-hailing ride until their current one is **completed or cancelled**.
+
+A ride counts as unfinished (`TransportationService::activeRideFor`) when:
+- it is the tourist's own `transport` order (`user_id`);
+- its order status is not in `FINISHED_RIDE_ORDER_STATUSES`: completed, cancelled, cancelled_by_tourist, rejected, refunded, failed, delivered;
+- its delivery status is not in `FINISHED_RIDE_DELIVERY_STATUSES`: arrived_destination, delivered, completed, cancelled, failed.
+
+These are the points where the tracking page shows the ride as completed or cancelled. A cash ride that is "delivered" while the rider settles the cash is over for the tourist.
+
+**Server (authoritative)**
+- `createRide()` checks for an unfinished ride first. It then checks again inside the booking transaction, after locking the tourist's `users` row, so two taps or two tabs cannot both book.
+- A refused booking creates nothing. It returns **409**:
+  - message "You already have a ride in progress. Finish or cancel it before booking another ride.";
+  - `data.code = 'active_ride'`, `order_id`, `order_number`;
+  - `redirect` to that ride's tracking page.
+- The 409 is told apart from the fare-changed 409 by `data.code`.
+- New endpoint `GET /api/tourist/transport/active` returns the unfinished ride (`id`, `order_number`, ride `status`, `delivery_address`, `redirect`) or `null`.
+
+**Pages**
+- **Ride Hailing page:** now reads the active ride from that endpoint. Before, it looked for ride statuses in `/tourist/transport`, but that list carries raw order statuses (`pending` while searching). A ride still finding a driver went unnoticed, and a second one could be booked.
+- **Book a Ride page:** while a ride is unfinished it shows "You already have a ride in progress — you can book another ride once this one is completed or cancelled" with **View your ride**, instead of the booking steps.
+- **Refused booking:** if the server refuses on the booking page (for example a ride booked from another tab), the page shows the message with **View your ride** and keeps Book off. There is no re-quote.
+- **Freshness:** booking and cancelling refresh the active-ride check.
+- **Shared code:** helpers are in `features/tourist/services/active-ride.ts`.
+
+**Dev data.** Tourist #9 already has two rides still searching for a driver (#17 and #18), booked before this rule. Neither expires on its own. The tourist must cancel them (or a rider must take them) before booking again. They were left untouched.
+
+**Tests**
+- Laravel `TouristTransportContractTest` +4:
+  - a second ride is refused while the first is searching, assigned, at pickup or in transit, and nothing is created;
+  - booking works again after a cancel;
+  - booking works after delivered and after completed;
+  - another tourist's ride does not block.
+- Two existing tests that booked twice now cancel between bookings.
+- Frontend:
+  - `tourist-transport-page` +2: a searching ride locks the page; Book a Ride shows "ride in progress" with the link.
+  - `book-ride-sheet-payment` +1: a refused booking shows the message, gives no re-quote and keeps Book off.
+  - Frontend **123 files / 847 tests passed**; build clean; no new TypeScript errors.
+
+## Ride Hailing — Book a Ride is a page; tourist pages share one sidebar gap (2026-11-17)
+
+**Book a Ride**
+- Booking a ride now opens its own page, `/tourist/transport/book` (`TouristBookRide`), instead of a pop-up panel.
+  - Before, the panel was fixed over the screen and the bottom navigation bar covered "Book Ride Now".
+  - The page scrolls with the layout, whose bottom padding clears the bar.
+- It has a Back arrow, the heading "Book a Ride", and the same three steps (destination → pickup → trip) in a card.
+- How it starts:
+  - The Ride Hailing page's **Continue** and a destination's **Book a Ride** open it with the trip details in router state (`BookRideSeed`).
+  - From Ride Hailing it opens at the trip summary with the pickup and drop-off locked, as before.
+- On booking:
+  - The Ride Hailing draft is marked booked (`draftKey`).
+  - The tracking page **replaces** the booking page, so Back from tracking cannot book the same trip twice.
+
+**Consistent spacing beside the sidebar**
+- Before, each tourist page centred itself at its own width (`max-w-xl` … `max-w-5xl`), so the gap next to the desktop sidebar varied from 24 px to several hundred.
+- Now, from 1024 px (`lg:mx-0`), every page starts right after the layout's 24 px padding. Pages: Ride Hailing, Book a Ride, My Activities and its Orders, Order details, Track Order, Group order, Write review, Profile, Stay/booking details.
+- Removed padding that doubled the layout's: My Trips (`px-4 pt-4`), Profile (`px-4 pt-6`), Track Order (`py-4`), Group order (`py-6` / `p-6`).
+- Public pages outside the tourist layout (Explore, explore detail, events) are unchanged.
+
+**Finding your driver: no vertical scroll**
+- `TouristTransportTracking`'s outer wrapper was `min-h-[100dvh]` under the 84 px header, so every phase overflowed by the header's height.
+- The wrapper has no minimum height now. The search and map phases already fill exactly the space between the header and the bottom bar (`.tourist-map-page`).
+- The loading and "Trip not found" states lost `min-h-screen` too.
+- `tourist-ride-phases` checks that nothing on the search screen is a full screen tall.
+
+**Tests**
+- `book-ride-sheet-seed`: the page has a heading, no overlay, nothing fixed, and is left-aligned on desktop.
+- `tourist-transport-page`: Continue goes to `/tourist/transport/book` (the Ride Hailing cards are gone) and marks the draft booked.
+- Frontend **123 files / 844 tests passed**; build clean; no new TypeScript errors.
+
+## Ride Hailing — icon follows the booked vehicle (2026-11-17)
+
+- The ride screens now show the vehicle type the tourist chose instead of always a car:
+  - **Finding your driver**: the circle in the middle;
+  - **arrival / in-trip banner** on the map;
+  - **Book a ride** sheet: the vehicle choices and the sheet header, which follows the selected vehicle.
+- Icons: motorcycle → `Motorbike`, car → `Car`, van → `Van` (Lucide), tricycle → a new `TricycleIcon` (a covered-cab tricycle in Lucide's 24×24 / 2px style, since Lucide has none). Unknown → Car.
+- The helper is `rideVehicleIcon(type)` in `features/tourist/components/ride/vehicleIcon.tsx`. `EtaBanner` takes `vehicleType`.
+- The driver's map marker stays the heading arrow.
+- Data: the three existing dev riders' `rider_details.vehicle_type` set to `motorcycle` (two were empty). This was a dev database update, not a migration.
+- **Tests:** `ride-vehicle-icon.test.tsx` (6): the mapping, the search screen per vehicle, the banner. Frontend **123 files / 843 tests passed**; build clean; no new TypeScript errors.
+
+## Tourist My Orders — Track Order on every order (2026-11-17)
+
+- Every order card in My Orders (My Activities → Orders) now has a **Track order** button. The only exception is a cancelled order.
+  - The button opens `/tourist/orders/:id/track`: the order page retitled **Track Order**. It shows the four-step progress, the rider and the live map while on the way, the items, the delivery details and the timeline.
+  - The button is filled green while the rider is on the road (In Transit / To Receive) and outlined otherwise.
+- The button replaces the earlier per-tab links "View progress", "Track rider on map" and "View on map".
+- Delivered orders (To Review / Completed) keep **View order details** beside it.
+- After payment, PayMongo now returns the tourist to `/track`. The old `/tourist/orders/:id/progress` URL still works.
+- **Tests:** `tourist-orders-tabs.test.tsx` gains a check that every tab has Track order with the right link, a cancelled order has none, and delivered orders keep View order details. Frontend: **122 files / 837 tests passed**; build clean.
+
+## Tourist Order Progress — Four Steps (2026-11-17)
+
+- The tourist's order progress bar (`subOrderStatusEngine.ts` → `OrderProgressTrack`, used on the order status page and each restaurant group of a group order) changed from five steps to four: **Order Placed → Preparing → On The Way → Delivered**.
+- The former "Ready" step is folded into **Preparing**: food that is ready and waiting for the rider is the end of preparation. Its messages are kept ("Your order is packed! Waiting for rider pickup." / "Your order is packed! Rider … is at the store picking it up.").
+- `stepIndex` is now 1–4; the constant was renamed `ORDER_STAGE_LABELS`. Display only: no backend status or order lifecycle change (AGENTS §10).
+- **Tests:** new `order-progress-four-steps.test.tsx` (13): labels, status → step mapping, ready messages inside Preparing, all done when delivered, cancelled. Frontend **122 files / 836 tests passed**; build clean.
+
+## Bansud Admin — One Settings Entry; Incident History Organised; Incident Detail View (2026-11-17)
+
+**Sidebar:**
+- System now has two entries: **Office Profile** and **Settings**.
+- Security, Backup, Diagnostics and Incident History were removed from the sidebar. They remain as Settings tabs; nothing was deleted.
+- Settings links to `/admin/settings`, which opens Platform Configuration. So the entry is highlighted **and** marked `aria-current` on every Settings tab; before, the highlight used a path match while `aria-current` only appeared on Configuration.
+
+**Settings tabs** (`SETTINGS_TABS`, seven modules) now carry a one-line description shown under the tab bar (`AdminSectionTabs` `description`). This keeps the three concepts distinct:
+- Security: preventing unauthorised access;
+- System Diagnostics: finding technical problems;
+- Incident History: tracking problems and how they were fixed.
+
+**Incident History page:**
+- Summary cards.
+- Filters in labelled rows:
+  - **Date**: All time / Today / 7 days / 30 days / Custom range; the date fields appear only for a custom range.
+  - **Type**: chips with counts.
+  - **Status**: All / Needs fixing / History only / Fixed / Dismissed.
+  - **Severity**: Any / Low / Medium / High / Critical.
+  - Search and Clear filters.
+- An empty state that explains what will appear automatically.
+
+**Incident detail view:**
+- **Timestamps**: happened, fixed or dismissed, repeated N times with first and last.
+- **Affected module**: area, page, related record, who and IP.
+- **Description**.
+- **Responsible action**: a plain recommended step per kind of incident, plus "Handled by …".
+- **Resolution history**: a timeline from "Recorded automatically" through every Marked as fixed / Dismissed / Reopened step (who, when, note) to "Now: <status>".
+- **Same problem, earlier**: with each occurrence's fix note.
+- Technical details folded away.
+- **Backend:** `GET /admin/system/incidents/{id}` adds `history`, taken from the audit log (`activity_logs` `system_incident.*` for the incident, oldest first), so a reopen never erases an earlier fix. `similar.recent` adds `resolved_at`, `resolved_by` and `resolution`.
+
+**Tests:**
+- Laravel: `SystemIncidentHistoryTest`: resolution history (dismissed → reopened, by whom) and earlier occurrences' fix notes.
+- Frontend:
+  - `admin-incident-history.test.tsx` (6): date / type / status / severity rows, custom range, URL, clear; the empty state; the detail sections and the resolution history.
+  - `admin-navigation.test.tsx` +3: a single Settings entry stays current on Security, Diagnostics and Incident History, and shows the tab description; the sidebar's System group is Office Profile + Settings.
+  - `admin-layout.test.tsx` checks Settings instead of the removed Security link.
+- **Totals:** frontend **121 files / 823 tests passed**; build clean. Laravel **1,239 passed / 8,081 assertions / 0 failures / 2 skipped**.
+
+## Bansud Admin — Incident History (every failure recorded, filterable, with fix records) (2026-11-17)
+
+**Where:** Settings → **Incident History** (`/admin/settings/incidents`; also System → Incident History in the sidebar, and "See the full history" on System Diagnostics). Bansud Tourism Office only.
+
+**Storage:** new table `system_incidents`.
+
+| Column(s) | Purpose |
+|---|---|
+| `category`, `code`, `severity` | what kind of failure and how serious |
+| `status` | `open` (needs fixing) / `recorded` (history only) / `resolved` (fixed) / `dismissed` |
+| `title`, `message` | plain description |
+| `context` (JSON) | sanitised details |
+| user, IP, method, path | who and where |
+| subject (morph) | the related record |
+| `fingerprint` | groups the same problem |
+| `occurred_at` | when it happened |
+| `resolved_at` / `resolved_by` / `resolution` | the fix record |
+
+- **Indexes:** occurred_at; (category, occurred_at); (status, occurred_at); (fingerprint, status).
+- **Pruning:** history-only and dismissed rows are pruned after 180 days (`model:prune`, daily). Open and fixed problems are kept.
+
+**What is recorded** (`SystemIncidentRecorder`). Recording is best-effort: guarded, never re-entrant, and it never changes the original response or record.
+
+| Failure | Hook | Status |
+|---|---|---|
+| Failed logins (unknown email, wrong password) | `LoginRequest` | recorded; email kept, password never |
+| Login on a locked account; rate-limited logins | `LoginRequest` | recorded |
+| Account locked after 5 failures | `LoginRequest` | **open**, high seriousness |
+| Access denied (403, including the role middleware) | exception render hook | recorded |
+| Rejected uploads (validation failed on a file field) | exception render hook | recorded; file name, size, type, never contents |
+| Uploads that crash | exception report hook | open |
+| Server errors (every reportable exception: class, file:line, message) | exception report hook | open |
+| Failed payments | Payment model hook | recorded, with the customer |
+| Failed refunds | Refund model hook | **open** |
+| Failed background jobs | `Queue::failing` | open |
+| Dispatch that ended with no rider, or with an invalid pickup location | one call next to the existing log line in `NearestRiderService::failDispatch()`; no dispatch behaviour change | open |
+| System Diagnostics problems | diagnostics run | **one** open incident per failing check (not per page view), closed automatically when the check passes: "Fixed with “Release riders” by Office" after a fix from the page, otherwise "Recovered" |
+
+- **Secrets:** keys matching password / token / secret / pin / otp / card / cookie / signature / api key are stored as `[hidden]`. Matching is whole-word, so `shipping_fee` is kept.
+
+**API:**
+- `GET /api/admin/system/incidents` with filters:
+  - `category` (comma list), `status`, `severity`, `q`, `from` / `to` (Philippine dates);
+  - paginated, newest first;
+  - meta: per-category counts (following the other filters) and stats (open, today, failed logins today, fixed this week).
+- `GET /api/admin/system/incidents/{id}`: detail plus how many times the same problem happened, first and last time, and recent occurrences.
+- `POST …/{id}/resolve {note (required), include_similar}`, `…/dismiss {note?, include_similar}`, `…/reopen`. All are audited in `activity_logs`.
+- The Security page's `failed_logins_today` was a hard-coded `0`; it now comes from the history.
+
+**Frontend:** `AdminIncidentHistory.tsx`:
+- summary cards (needs fixing, recorded today, failed logins today, fixed this week); each applies a filter;
+- **filters**, all kept in the URL so a filtered view can be shared or bookmarked:
+  - search (title, person, email, IP, page);
+  - date range with Today / 7 days / 30 days;
+  - type chips with counts (Logins, Access denied, Uploads, Payments, Refunds, Deliveries, Background tasks, Server errors, Diagnostics; several can be combined);
+  - status (All / Needs fixing / History only / Fixed / Dismissed);
+  - seriousness (Low / Medium / High / Critical);
+  - Clear filters;
+- the list (when, type, seriousness, who, IP, status) with paging;
+- a details window: what happened, who and where, how many times, technical details, the fix record. Actions: **Mark as fixed** with a required note (optionally closing every earlier occurrence), Dismiss, Reopen.
+
+**Database verification (§11, development MySQL/MariaDB):**
+- Migration `2026_11_17_000003_create_system_incidents_table` applied **by path**. The pending `2026_11_10_000001` was not touched.
+- `SHOW CREATE TABLE` revealed that MariaDB had silently added `ON UPDATE current_timestamp()` to `occurred_at`. Marking an incident fixed would have **overwritten when it happened**.
+- Fix: `occurred_at` now uses an explicit `useCurrent()` default. The empty table was rolled back and re-applied by path; `SHOW CREATE TABLE` now shows `DEFAULT current_timestamp()` with no ON UPDATE.
+- A live write and update probe confirmed `occurred_at` is unchanged after an update, and that secrets are hidden. The probe rows were deleted, leaving 0 rows. A regression assertion was added to the tests.
+
+**Tests:**
+- Laravel: new `SystemIncidentHistoryTest` (8):
+  - failed logins without the password, lockout opens a problem, real Security count;
+  - rejected / crashed uploads and server errors;
+  - access denied, payments, refunds, jobs, dispatch;
+  - diagnostics open one incident and close it with the fix or recovery;
+  - every filter and the counts;
+  - fix / dismiss / reopen with similar ones, the note required, and `occurred_at` preserved;
+  - admin-only access;
+  - secrets hidden, and the recorder never throws.
+- Frontend: new `admin-incident-history.test.tsx` (5); `admin-navigation.test.tsx` gains the new entry and tab.
+- **Totals:** frontend **121 files / 819 tests passed**; build clean. Laravel **1,239 passed / 8,078 assertions / 0 failures / 2 skipped**.
+
+## System Diagnostics — Health Measures and Plain-Language Redesign (2026-11-17)
+
+**Health measures** (`SystemDiagnosticsService::health()`, returned as `health` by `GET /admin/system/diagnostics`). Each is a real figure compared with a target: ok / warning / error, or idle when there is no data.
+
+| Group | Measure | Target (warning) |
+|---|---|---|
+| Live performance | database response | ≤ 100 ms (≤ 500) |
+| | realtime server response | ≤ 300 ms (≤ 1,500); unreachable = error |
+| | scheduler last tick | ≤ 2 min (≤ 5) |
+| | queue backlog over 5 min | 0 (≤ 20) |
+| | failed jobs, 24 h | 0 (≤ 5) |
+| | free disk | ≥ 15 % or 20 GB (≥ 5 % or 5 GB) |
+| | logged errors, 24 h | 0 (≤ 10) |
+| Service quality, last 7 days | dispatch success: `dispatch_end_reason` rider_accepted vs no_rider_accepted / invalid_pickup_coordinates; cancelled orders excluded | ≥ 90 % (≥ 70) |
+| | median time to a rider: from the order, or the scheduled time for a booked-ahead delivery, to `assigned_at`; true median | ≤ 5 min (≤ 15) |
+| | delivered within 60 minutes of assignment | ≥ 90 % (≥ 75) |
+| | order completion (completed vs cancelled / rejected) | ≥ 90 % (≥ 75) |
+| | payment success (pending excluded) | ≥ 95 % (≥ 85) |
+| | online riders with a GPS fix in the last 2 minutes | ≥ 90 % (≥ 60) |
+
+- **Score** = average over measured items (ok 100, warning 60, error 0; idle not counted), graded Excellent ≥ 90, Good ≥ 75, Fair ≥ 50, Poor.
+- The realtime server is probed once per run and shared with the realtime check.
+- **On the development data:** score 48, Poor. Real causes: scheduler not running, queue backlog, 57 % dispatch success. Two test deliveries really waited 4–6 days for a rider.
+
+**Plain-language page** (`AdminSystemDiagnostics.tsx`, wording in `diagnosticsCopy.ts`), written for office staff:
+- **Status sentence:** "Your system needs attention: N things to fix", with how many are urgent, and the health score with what the grade means.
+- **Things to fix**, numbered, urgent first. Each card has:
+  - a plain title (e.g. "Automatic tasks have stopped") and an **Urgent / Fix soon** tag;
+  - **who can fix it** (you here / your technical person / a staff decision);
+  - **What this means** for tourists, riders and restaurants;
+  - **How to fix it**: a plain button such as "Run them once now" or "Free these riders", and/or "Ask your technical person" with the exact server step and a Copy button, and/or the staff decision to make;
+  - **Technical details** folded away (the server text).
+- **Health measures** with everyday names ("Orders that found a rider", "Riders sharing location"), a one-line meaning, a target, and Good / Needs attention / Not working / No data yet labels.
+- **Everything that is working (N)** is collapsed, then recent fixes.
+- The fix dialog explains each action in plain words ("Yes, fix it"; permanent actions need "I understand"). Command output is under Technical details.
+
+**Tests:**
+- Laravel `SystemDiagnosticsTest` +2: measures against targets (dispatch 75 % warning, median 3.5 min with the scheduled-time start, idle measures, score formula); GPS freshness and payment success rates.
+- Frontend `admin-system-diagnostics.test.tsx` rewritten (6): status sentence and score meaning; problems urgent-first with meaning, how-to-fix and who; plain fix flow; permanent action confirmation; working list folded and everyday measure names; the all-clear state.
+- **Totals:** Laravel **1,231 passed / 7,994 assertions / 0 failures / 2 skipped**; frontend **120 files / 814 tests passed**; build clean.
+
+## Bansud Admin — System Diagnostics (detect failures, allow-listed fixes) (2026-11-17)
+
+**Where:** Settings → **System Diagnostics** (`/admin/settings/diagnostics`; also System → Diagnostics in the sidebar, and "Diagnostics" on the dashboard's System Health panel). Bansud Tourism Office only (`role:bansud_tourism_office`).
+
+**Backend**
+- `SystemDiagnosticsService` and `AdminSystemDiagnosticsController`.
+- `GET /api/admin/system/diagnostics` (throttle 30/min); `POST /api/admin/system/diagnostics/fix {action, confirm?}` (throttle 20/min).
+
+**Checks** (18, all from real signals):
+
+| Area | Checks |
+|---|---|
+| Platform | database latency; background jobs (failed, or waiting over 5 min with no worker); realtime server (`/healthz` on the socket bridge); file storage (storage link, which accepts a Windows junction, and free disk); configuration (PayMongo keys; debug in production); pending database updates (reported, never applied from the page) |
+| Automation | scheduler heartbeat; overdue rider offers; deliveries due for dispatch; rider-accepted orders not yet preparing; overdue preparation timers |
+| Riders & trips | riders stuck "busy" with no open delivery; a rider with two open deliveries; active food trips whose derived state disagrees with the record, or that skipped a pickup confirmation; READY orders whose items are not ready |
+| Payments | refunds waiting on PayMongo for more than 45 min |
+| Integrity | latest transaction-integrity verification flagged or blocked |
+| Errors | application log errors in the last 24 h, grouped and counted, for the app's own environment only (test runs that write `testing.*` to the same log are ignored) |
+
+- **Backlogs use the scheduler heartbeat:** a backlog is "ok, being handled" while the scheduler ticks (within 180 s) and an **error** when it has stopped.
+- **Heartbeat:** a new every-minute `Schedule::call` in `routes/console.php` writes it. Manual fixes never write it.
+
+**Fixes:** a fixed server-side allow-list. Each runs existing canonical code; no new business logic and no rule bypass. Each is written to `activity_logs` as `system_diagnostics.fix`, then the diagnostics run again.
+
+| Action | Runs |
+|---|---|
+| `run_automation` | the three every-minute commands once |
+| `process_offer_timeouts` | `dispatch:process-offer-timeouts` |
+| `dispatch_scheduled` | `schedule:dispatch` |
+| `advance_preparation` | `orders:advance-preparation` (acceptance gate still applies) |
+| `reconcile_refunds` | `payments:reconcile-refunds` (provider-authoritative; never a duplicate refund) |
+| `repair_ready_items` | `orders:repair-ready-items --apply` |
+| `release_stale_riders` | `RiderDiagnosticsService` repair |
+| `resync_trips` | `TripPathDiagnostics` fixes only, never resets |
+| `retry_failed_jobs` | `queue:retry all` |
+| `clear_failed_jobs` | `queue:flush` (**must be confirmed**) |
+| `process_queue` | `queue:work --stop-when-empty`, at most 50 jobs / 20 s |
+| `verify_integrity` | `integrity:verify --hours=48` (read-only) |
+| `storage_link` | `storage:link` |
+| `clear_caches` | `optimize:clear` |
+| `acknowledge_errors` | marks the log reviewed |
+
+- `schedule:run` is deliberately not used: sub-minute tasks would hold the web request for up to 60 s.
+- **Never auto-fixed** (shown with what a person must do):
+  - a rider with two open deliveries (one-active-delivery rule, §4.3);
+  - failed transaction integrity (never "fixed" by re-signing);
+  - pending migrations (apply by path on the server);
+  - missing configuration;
+  - a stopped scheduler, socket server or queue worker (the page explains the server command).
+
+**Canonical code touched (visibility / extraction only, no logic change):**
+- `ScheduledDispatchProcessor::dueDeliveryIds()` is now public.
+- `PreparationStartService::eligibleWaitingOrderIds()` was extracted from `startEligibleWaitingOrders()` (same query).
+- Diagnostics count exactly what those commands would pick up.
+
+**Frontend:** `AdminSystemDiagnostics.tsx`:
+- overall summary (failures / warnings / healthy, check time, "Problems only" filter, Run diagnostics);
+- six area panels, problems first, each check with a status icon, count, expandable details, fix buttons and an Open link;
+- a fix dialog that explains exactly what will run (destructive fixes need "I understand");
+- a result banner with command output, and recent fixes.
+
+**Verified on the development database** (read-only run; no fixes applied), real findings:
+- scheduler not running;
+- 90 queued jobs with no worker;
+- 1 delivery due for dispatch but stuck;
+- pending update `2026_11_10_000001`, reported only and deliberately not applied;
+- 2 MySQL connection errors from earlier today.
+
+While building, two false positives were found and fixed: the storage link is a Windows junction, and test-run log entries were being counted.
+
+**Tests:**
+- Laravel: new `SystemDiagnosticsTest` (10), covering:
+  - every check present and summarised;
+  - heartbeat decides whether backlogs are stuck;
+  - stale busy rider released through rider diagnostics, with audit;
+  - two open deliveries is an error with no fix;
+  - READY items repaired by the canonical command;
+  - refunds offer reconciliation;
+  - failed integrity offers only verify;
+  - realtime down;
+  - acknowledge, unknown action 422, destructive fix needs confirm;
+  - access: 401, and 403 for other roles.
+- Frontend: new `admin-system-diagnostics.test.tsx` (4); `admin-navigation.test.tsx` gains the new sidebar entry and Settings tab.
+- **Totals:** Laravel **1,229 passed / 7,977 assertions / 0 failures / 2 skipped** (known environment skips); frontend **120 files / 812 tests passed**; build clean.
+
+## Dashboard Header — Readable Colours, Shared by Bansud and Municipal Dashboards (2026-11-17)
+
+- **Problem:** the header text was hard to read. The cover photo showed through an overlay that faded to about 20–40 % on the right, so over a bright photo the white title and the 70–75 %-white secondary text, filters and date line washed out.
+- **Fix** (`DashboardHeader.tsx`, used by both `AdminDashboard` and `MunicipalDashboard`):
+  - an even forest-green layer (`#0B2416` at 80 %) over the whole header, plus a darker left gradient behind the title. The photo is decoration only.
+  - Secondary text is now at least 85 % white, and the live pill and refresh button are solid white text.
+  - Worst case, a pure-white photo at the right edge: white text **8.7:1** (AAA), 85 % white **6.8:1** and gold **6.2:1** (AA).
+- **Invisible title (follow-up):** the title "Bansud Tourism Dashboard" rendered dark on the dark band. `index.css` gives every `h1`–`h6` the colour `#17201b`, which overrides the white inherited from the header. The `<h1>` now sets `text-white` itself (regression-tested). No other heading in the dashboard sections relies on an inherited colour.
+- **Logo fallback:** `DashboardHeader` takes `fallbackLogo`. The Bansud dashboard passes the TrackTour mark (as in the sidebar), so it no longer shows a plain "B" while the office has no uploaded logo.
+- **Layout tidy-up in the same component:**
+  - identity row: logo, greeting, title, tagline; on the right, a "Live · Updated {time}" pill and refresh;
+  - one toolbar: labelled white filter fields (Municipality on Bansud only, Period, custom from/to);
+  - the compared periods in readable dates ("Nov 1 – 17, 2026 compared with Oct 1 – 17, 2026"), replacing the raw `2026-11-01 – …` strip.
+- **Tests:** `admin-dashboard.test.tsx` and `municipal-portal.test.tsx` now check the new header (title, labelled filters, readable ranges, live pill); new `dashboard-header.test.ts` (range wording). Frontend **119 files / 808 tests passed**; build clean.
+
+## Municipal Portal — Dashboard in the Bansud Dashboard Design, Scoped to One Municipality (2026-11-17)
+
+`/municipal/dashboard` now uses the Bansud Tourism Dashboard's design and figures for the officer's own municipality. It replaces the interim card redesign from earlier the same day.
+
+- **Backend:** new `GET /api/municipal/dashboard/analytics` (`MunicipalDashboardController@analytics`, `role:tourism_office` + `municipal.scope`).
+  - Validation matches the admin endpoint: `period`; `custom` needs from/to; at most one year.
+  - The municipality always comes from the account; a `municipality_id` in the request is ignored.
+  - It calls the new `AdminAnalyticsService::buildForMunicipalOffice()`, which reuses the same sections and the same municipality scoping. A small `periodPayload()` refactor is shared with `build()`.
+- **Returned** (municipality-scoped):
+  - `overview` (without rider cashouts), `live`, `operations`;
+  - `economy`: transaction value, business-owner earnings, rider earnings, provider-confirmed refunds, COD collected, GCash/PayMongo, pending settlements;
+  - `trend` (transaction value and transactions only), `popularity` (summary / top / needs help);
+  - `opportunities`, with links rewritten to `/municipal/businesses/{id}`.
+- **Never returned** (platform-only): TrackTour platform revenue, Bansud operating expenses, net income, platform earnings today/month, rider cashouts and liability, COD remitted, rider cash advances, the all-municipality comparison, system health, Bansud alerts, and the platform-wide activity feed.
+- **Frontend:** the page mirrors `AdminDashboard`:
+  - header band: municipality logo, "{Name} Tourism Dashboard", period selector, custom range and refresh. There is no municipality picker. The footer line gives the period and the comparison period.
+  - Tier 1: a hero card for **tourism transaction value** (business earnings, rider earnings, refunds), six KPI tiles with previous-period change, the attention bar and the indicator line.
+  - Tier 2: business popularity & growth, recommendations, and a **Local tourism economy** panel (four headline figures, a one-series transaction-value chart with a table view, a payments/settlements ledger).
+  - Tier 3: live operations, applications to review, recently registered businesses, office activity.
+  - Queue counts and activity come from the existing `/municipal/dashboard`, so they match the municipal list pages, and the activity feed is municipality-scoped.
+- **Shared sections:** `DashboardSections` gained `DashboardLinkContext`, a link mapper; the default leaves admin paths unchanged. The municipal page supplies `toMunicipalPath`, so every shared section opens a municipal page and no `/admin` link appears.
+- **Tests:**
+  - Laravel: new `MunicipalDashboardAnalyticsTest` (5): own-municipality scoping with previous period; the municipality comes from the account; platform-only keys absent; recommendation links; 401/403 and period validation. `AdminAnalyticsTest` passes unchanged.
+  - Frontend: `municipal-portal.test.tsx` dashboard tests rewritten (3): design and scoping with no platform figures; review queues with no `/admin` links; period switch and link mapping.
+- **Totals:** Laravel **1,219 passed / 7,913 assertions / 0 failures / 2 skipped** (known environment skips); frontend **118 files / 807 tests passed**; build clean.
+
+## Landing Map — Filter Bar Redesign (2026-11-17)
+
+- The map view's loose pills (All / Tourist Spots / Restaurants / Resorts) and the separate Content button were replaced by one toolbar (`LandingMapFilters`):
+  - a **segmented filter** in a white rounded bar: each option has an icon (layers, mountain, utensils, hotel), its label and a **live count** of places in that category;
+  - the active option is heritage green with a white count badge;
+  - on small screens the bar scrolls sideways instead of wrapping;
+  - **Content** (grid icon) on the right switches back to the content view; on phones only the icon shows.
+- Filtering logic is unchanged (same discovery groups); `categoryFilter` is now typed (`LandingMapCategory`).
+- **Tests:** `landing-map-current-location.test.tsx` +2 (counts, pressed state and filtering; back to content).
+- **Totals:** frontend **118 files / 805 tests passed**; build clean.
+
+## Landing Map — One Earth, Town View Centred on the Tourist, Hover Card Flicker Fix (2026-11-17)
+
+- **No repeated / infinite map:**
+  - Tiles use `noWrap` inside the world bounds (±85.05°, ±180°), and `worldCopyJump` is off.
+  - `maxBounds` = the world with viscosity 1, so panning stops at the edges.
+  - The farthest zoom-out is the level that shows **one whole Earth**. It reuses `MapZoomOutLimit`, which gained a `panMargin` prop (default unchanged at 0.15; the landing page passes 0).
+  - The old fixed `minZoom={7}` was removed.
+- **Default view:** the map opens framing the **whole town of Bansud** (`BANSUD_CITY_BOUNDS` 12.79–12.93 N, 121.36–121.51 E; `fitBounds`, no animation).
+  - When the tourist's location arrives, the map centres on their marker at that town-wide zoom, unless they've already dragged the map.
+  - This happens once per map. It replaces the module-level "once per session" flag, so it also works after leaving and returning to the page.
+  - Without a location, the view stays on the town.
+- **Hover card flicker:**
+  - Cause: the card was placed 10 px right of the marker point, but a marker's name label starts 18 px right, so the card covered the name. Hovering the name made the card appear under the cursor, which left the card, hid it at once, uncovered the name, and showed it again.
+  - Fix: the card is now placed past the marker's full width including its label (`markerSpan`), or to the left of the pin when there's no room. Leaving the card uses the same 150 ms delay as the marker, so moving back onto the marker keeps the card open.
+- **Tests:** `landing-map-current-location.test.tsx` +5:
+  - no wrap or world copies, world limits and minimum zoom;
+  - opens on the town, then centres on the tourist;
+  - stays on the town without a location;
+  - the card starts after the name label (270 px, not 134 px);
+  - card → marker keeps it open.
+  - `tourist-explore-food-navigation.test.tsx`: its fake map gained the new map methods (test setup only).
+- **Totals:** frontend **118 files / 803 tests passed**; build clean.
+
+## Landing Map — Current Location Focus, "You are here" Pop-up, Map Type Menu (2026-11-17)
+
+- **Focus button:** a round location button in the map's bottom-right corner (`FocusCurrentLocation` in `LandingPage.tsx`).
+  - Flies the map to the visitor's location (zoom at least 15) and then opens the marker's pop-up.
+  - If the location isn't known yet, it asks the browser first.
+  - If access is denied, it shows "Location unavailable. Allow location access and try again." for 3 seconds.
+  - Clicks on the corner controls don't pan or zoom the map.
+- **Current-location marker:** clicking it shows a pop-up saying **"You are here"**. The marker sits above business markers.
+- **Map type:** the always-visible Street / Satellite list (top-right) was replaced by a picture tile with a layers icon, placed **above the focus button** (`LandingMapLayerMenu`).
+  - The tile opens a small menu (Street / Satellite, with thumbnails and a check on the current one).
+  - The menu closes on choice, outside click or Escape.
+  - The thumbnails are shared with the tourist map's `MapLayerTile` (`MAP_LAYER_PREVIEW` export).
+- **Tests:**
+  - New `landing-map-current-location.test.tsx` (4): pop-up text; focus flies and opens the pop-up; denied-location message; tile above the focus button, menu switches tiles and closes.
+  - `tourist-explore-food-navigation.test.tsx`: its Leaflet test stand-in gained `DomEvent` and `Popup`, which the new controls use. Test-setup change only.
+- **Totals:** frontend **118 files / 798 tests passed**; build clean.
+
+## Landing Navigation — Search Icon Removed (2026-11-17)
+
+- The round search icon button beside **Login / Sign Up** in the public navigation (`LandingNav`) was removed, together with its `onSearchClick` prop (the hero no longer passes it). The hero search box and the Explore page search are unchanged.
+- **Test:** new `landing-nav.test.tsx` (1).
+
+## Public Restaurant Menu — Full Food Item Page on Card Click — IMPLEMENTED (2026-11-17)
+
+- `/explore/food/:id`: a menu card's photo or name now links to **`/explore/food/item/:id`**, a full page. It is the **same food item page tourists see** (`TouristFoodItemDetail`), shown in the public navigation and footer (`LandingFoodItemPage`).
+  - The first version used a pop-up window (`LandingFoodItemModal`). It was replaced at the user's request and deleted, along with its test.
+- **Public mode:** the page detects the `/explore` path.
+  - Restaurant links go to `/explore/food/{business}`; Back goes to `/explore?tab=food`.
+  - Add to Cart writes the **guest cart** (`tracktour_landing_cart`, `landing-cart-updated` event), never the tourist cart.
+  - **Buy Now** adds the item, then sends the guest to `/login`; the cart carries over at sign-in.
+  - The tourist route `/tourist/food/item/:id` is unchanged.
+- **Variation lines:**
+  - Item page: a variation is saved as its own line ("Tapsilog (Large)", variation price, `variation` field).
+  - Guest-cart merge at login (`preferences.ts`): now matches lines on item id **and** name, and keeps `variation` and the restaurant coordinates. Before, a Large line was folded into the plain line at the wrong price.
+  - Restaurant page: the card's +/− controls change only the plain line.
+- **Data:** the existing public `GET /tourist/food/{offering}`. It also records a de-duplicated offering view for the dashboard's popularity analytics.
+- **Tests:** new `landing-food-item-page.test.tsx` (4):
+  - the card links to the page, with no dialog;
+  - the public links point to the restaurant page and the item goes to the guest cart with its variation;
+  - Buy Now sends the guest to sign in;
+  - the login merge keeps variation lines separate.
+- **Totals:** frontend **117 files / 793 tests passed** before the nav change (+1 nav test after); build clean.
+
+## Explore All Categories — Map View Button and Municipality Filter — IMPLEMENTED (2026-11-17)
+
+- `/explore/categories`: after the category chips, a **municipality filter** (All municipalities + every municipality) and a gold **Map view** button (`/?view=map`, opens the landing map).
+- **Filter:**
+  - Tourist spots, food, resorts and their counts are filtered by the explore API's existing `municipality_id`.
+  - Businesses (from `/map/businesses`) are filtered by municipality name.
+  - The choice is kept in the URL (`?municipality=`), and the subtitle names the chosen municipality.
+- **Test:** `landing-pages.test.tsx` adds 1 (Map view link, options, URL, API parameter, business filtering). Frontend **115 files / 789 tests passed**; build clean.
+
+## Sign-up Simplified — Role Selection Removed; Business Owner Link in Footer — IMPLEMENTED (2026-11-17)
+
+- **Role selection removed:** `RoleSelectionPage` deleted. The login page's **Create an account** goes straight to tourist registration (`/register?role=tourist`). The old `/role-selection` URL redirects there.
+- **Landing footer:** a "Join TrackTour" group stacks **Become a Rider** (`/become-a-rider`, two-phase rider registration) and directly below it **Become a Business Owner** (`/register?role=business_owner`).
+- The "Become a Rider" back link goes to the home page.
+- **Tests:** new `landing-footer.test.tsx` (1); `login-page.test.tsx` updated for the new link; the role-selection test was removed with the page. Frontend **115 files / 788 tests passed**; build clean.
+
+## Rider Registration in Two Phases; Walk-in Registration Removed — IMPLEMENTED & VERIFIED (2026-11-17)
+
+- **Phase 1 — account and requirements (online):** the rider registers online and submits the application (services, vehicle, license, documents). Status `requirements_review` ("Requirements under review").
+  - The Tourism Office **verifies and validates** the requirements (`POST /api/onboarding-office/applicants/{rider}/requirements/verify`, refused while required documents are missing) or **returns them for correction** (`.../requirements/return`, reason required → `requirements_returned`). The rider updates and resubmits.
+  - Verified requirements can no longer be changed by the rider.
+- **Phase 2 — interview and training:** only after verification is training **scheduled automatically** (earliest open seat, or Pending Schedule), then visit, interview, training, assessment and final approval → eligible.
+  - Rider booking, office scheduling and automatic scheduling all refuse an applicant whose requirements are not verified.
+- **Removed:** walk-in registration (the office does not register riders). This covers `POST /onboarding-office/walk-ins`, `RiderOnboardingService::registerWalkIn` and the Walk-in tab. The public page offers online registration only; its second card is now **Training locations**, and the offices page explains that interview and training happen there after verification.
+- **Tracker:** a new **Requirements verified** stage (shows Under review / Needs correction: reason). Phase headings: "Phase 1 · Application & requirements", "Phase 2 · Interview & training". "Appointment confirmed" is renamed "Training scheduled".
+- **Office console:** **Requirements review** filter first (with count); a "Verify requirements (phase 1)" step in the applicant panel (documents and vehicle shown below, Verify / Return for correction); no scheduling before verification.
+- **Rider page:** "Requirements under review" banner; returned → office note + **Update and resubmit**; booking only after verification; edit only before verification.
+- **Records and notifications:** `rider_approval_records` gets `requirements_verified` / `requirements_returned` decisions; riders are notified on receipt, verification and return; audit-logged.
+- **Database:** migration `2026_11_17_000002_add_rider_requirements_verification` adds `rider_details.requirements_verified_at`, `requirements_verified_by` (foreign key to users, set null on delete) and `requirements_remarks`.
+  - Applicants who submitted under the earlier flow are backfilled as verified, so existing appointments stay valid.
+  - Applied to local MySQL by path (pending `2026_11_10_000001` still not run); verified with `SHOW CREATE TABLE`.
+  - Backfill checked: rider 11 verified at submission; riders 5 and 8 (approved before onboarding) are unaffected.
+- **Tests:**
+  - `RiderOnboardingTest`: 23 tests / 249 assertions. The helper now submits, then the rider's own office verifies. The walk-in test was replaced by the phase 1 flow (review → return with reason → resubmit → verify → training scheduled; nothing schedulable before verification; no change after verification) and by own-office-only verification with the walk-in route gone.
+  - The retraining decision history now starts with `requirements_verified`.
+  - `rider-onboarding.test.tsx`: 17 tests (entry page reconciled; office verify/return; applicant review and returned states).
+  - Regression: Laravel **1,214 passed / 7,870 assertions / 0 failures / 2 skipped** (existing environment skips); frontend **114 files / 787 tests passed**; build clean.
+
+## Admin Rider Profile Page — Clean Layout — IMPLEMENTED (2026-11-17)
+
+- Frontend only (`AdminRiderShow.tsx`, `RiderRecords.tsx`, `RiderVehicleCard.tsx`); same APIs.
+- **Hierarchy:**
+  1. **Identity header:** photo, name, status badge, summary chips (municipality, current service, vehicle or "No vehicle registered", joined date), with the actions inline — View daily cash receipt plus status actions. This replaces the separate Actions and Quick Info side panels.
+  2. **Rider records:** day picker; Status, Deliveries and Earnings cards; COD cash (two-thirds width, figures in four columns) beside Cash out; Recent deliveries.
+  3. **Profile & verification:** Personal information (with the municipality picker), Registered vehicle, and License & registration, side by side.
+  4. **Documents:** uploaded files in a grid beside the checklist, in one card; then review history in two columns.
+- **Fixed:**
+  - The action panel checked for `active`, but approved riders have `approved`, so approved riders were offered Approve. Actions now follow the status: pending → Approve/Reject; approved → Suspend; suspended → Reactivate; rejected → Approve.
+  - A decorative SVG was absolutely positioned without a positioned parent; removed.
+  - Action errors now show in the dialog.
+- **Tests:** new `admin-rider-show.test.tsx` (5: header summary and order, actions per status); the records and municipality tests are unchanged and pass. Frontend **114 files / 784 tests passed**; build clean.
+
+## Rider Cash as the Financial Accountability Module; Riders without Cash Controls — IMPLEMENTED (2026-11-17)
+
+- **Riders** (`/admin/riders`, tabs): **Rider accounts** | **Fare configuration** (`/admin/riders/fares`: food delivery fee and ride-hailing fares, one Save).
+  - The duplicate **COD Cash Advance** card (`RiderCashAdvanceCard`, a second place to issue cash) was removed with its test.
+  - Riders links to Rider Cash and to Applications & onboarding.
+- **Rider Cash** (`/admin/rider-cash`):
+  - **Date history:** ◀ date ▶, Today. Past dates are read-only; cash can be issued only today.
+  - **Policy panel:** says exactly why remittance recording is off (no approved effective date / legacy-policy date / invalid date). It lists what is **available now** (issue advances and top-ups, view receipts and COD collections, verify COD purchase expenses) and **not available yet** (record unused cash returned, record COD remittances, verify and close reconciliations). The restriction itself is unchanged.
+  - **Overview tiles:** Advanced (advances + top-ups), Outstanding cash, Active advances, Pending reconciliation.
+  - **Rider Cash Records:** per rider, separate figures — Cash issued (incl. top-ups), verified COD purchases, COD collected, unused cash returned, COD remitted (and still due), outstanding office cash — plus reconciliation status (Not yet submitted / Submitted — verify / Reconciled / Disputed / Discrepancy).
+  - **Daily operations:** Issue cash (the existing once-only advance form with an idempotency key) and Daily receipt & remittance (returns, remittances and purchase verification live there).
+  - **Legend:** "What these figures mean" explains the six records and that COD purchases are never subtracted from customer collections.
+- **API (read-only, additive):** `GET /api/admin/cash-advances` rows add `topups_today`, `issued_today` and `day`, from `RiderCashFundService::daySummary()`, which reads the rider's authoritative daily receipt (`buildDailyReceipt`) for the date.
+  - `day` fields: cod_deliveries, cod_purchases (verified expenses only), office_cash_used_for_purchases, cod_collections, unused_cash_returned, cod_remitted, cod_remittance_expected/outstanding, outstanding_office_cash, reconciliation_status, remittance_submitted, has_discrepancy, needs_reconciliation.
+  - If a receipt cannot be built (ledger conflict), that row reports the error instead of failing the page.
+  - No money is moved or recalculated; COD settlement (80/20), the advance flow and the policy gate are unchanged.
+- **Tests:**
+  - `PurchasingCashFlowTest` overview test extended (now 23 assertions: day figures before and after a full return).
+  - `admin-rider-cash.test.tsx`: 6 tests. Reconciled — the form opens from Issue cash and the count reads "1 of 2 advanced on this date". New: separate figures and tile sums, policy available/unavailable lists, read-only history with a dated receipt link.
+  - `admin-riders-fares.test.tsx` now renders the Fare configuration tab.
+- **Regression (covers this and the ride-vehicle change):** Laravel **1,213 passed / 7,827 assertions / 0 failures / 2 skipped** (existing environment skips); frontend **113 files / 779 tests passed**; build clean.
+- **Ride-vehicle follow-up:** four more suites (`DispatchNoRiderRetryTest`, `RiderStayOnlineForTripTest`, `TouristTransportRouteContractTest`, `TransportRideNotificationsTest`) had riders with no vehicle or `'Motorcycle'` capitalised. They were reconciled the same way (registered lowercase vehicle; the route contract registers one offline rider per ride vehicle).
+
+## Ride-Hailing Vehicle Types from Registered Rider Vehicles — IMPLEMENTED (2026-11-16)
+
+- **Rule source:** `App\Services\RideVehicles`.
+  - Rider vehicles: motorcycle, tricycle, car, van, **bicycle** (new).
+  - Ride-hailing vehicles: motorcycle, tricycle, car, van. **A bicycle is food delivery only.**
+- **Bookable types:**
+  - A tourist can book a type only while at least one approved, ride-hailing-eligible rider has it registered (`RideVehicles::bookable()`).
+  - `POST /tourist/transport/estimate` now returns `vehicle_types` (available, riders registered, riders online), with `fares` only for bookable types.
+  - New `GET /tourist/transport/vehicle-types`.
+  - `BookTransportRequest` refuses an unbookable type (422 "No registered ride-hailing rider uses this vehicle type yet").
+- **Dispatch (defect fixed: the booked vehicle was never matched):** a ride is offered to, listed for, and accepted by only a rider whose registered vehicle is the booked type.
+  - Targeted candidates and `dispatchToNearest` (new `nearestForDelivery`, a widened pool for rides, signature of `findNearestAvailableRiders` unchanged).
+  - Radar fallback (`wrong_vehicle` exclusion).
+  - Rider board `forService`.
+  - The authoritative acceptance gate `validateRiderAcceptance`.
+  - `SmartDispatchService` is unchanged.
+- **Eligibility:** `User::scopeEligibleForService('transport')` / `isEligibleForService('transport')` also require a registered ride vehicle. This affects going online, switching service and dispatch. Riders now get a specific message ("A bicycle can be used for food delivery only…" / "…ask the Tourism Office to record your vehicle").
+- **Onboarding:**
+  - The application and walk-in forms accept a bicycle, refuse a bicycle with ride-hailing (422) and need no plate, driver's license or OR/CR for a bicycle (`missingDocuments`, document `required` flags).
+  - `eligibleServices`, the final decision and quick approve never approve ride-hailing for a vehicle that can't carry passengers. Quick approve's default excludes it.
+  - Fixed: a bicycle application without a plate crashed (undefined key).
+- **Tourism Office:** new `PUT /api/admin/riders/{rider}/vehicle` (type, plate (not for bicycles), make, model, year; refused while the rider is on a trip; audit-logged). Changing a ride-hailing rider to a bicycle moves them to food delivery and offline.
+  - `UserResource` now exposes `vehicle_type`, `vehicle_plate`, make, model, year, `can_ride_hail`, `license_number`, `license_expiry`. The admin rider page's vehicle and license fields had always shown "—".
+  - New `RiderVehicleCard` (Registered vehicle: view, edit, ride-hailing capability).
+- **Frontend:**
+  - Booking sheet lists only bookable types with "N online", re-selects an available type, and shows a message and disables booking when none exist.
+  - Onboarding form: Bicycle option, Ride-Hailing disabled for a bicycle, plate/license/documents optional.
+  - Walk-in form: same guard.
+- **Live data note:** approved riders 5 and 8 are on ride-hailing but have **no registered vehicle**, so no type is bookable until the Tourism Office records their vehicles (Riders → rider → Registered vehicle). Rider 11 has a motorcycle but is food-only.
+- **Tests:**
+  - New `RideVehicleRulesTest` (5 tests / 44 assertions) and `ride-vehicles.test.tsx` (5).
+  - Reconciled (AGENTS §12): fixture riders in 6 transport suites now have a registered motorcycle; the contract suite adds one offline registered rider (never dispatched); two onboarding assertions now expect no ride-hailing without a vehicle.
+  - Frontend **114 files / 779 tests passed**; build clean. Full Laravel regression is recorded under the 2026-11-17 Rider Cash entry (1,213 passed / 0 failures).
+
+## Bansud Admin — Tourism-Focused Navigation (Merge, Relocate, Remove) — IMPLEMENTED (2026-11-16)
+
+- **Sidebar** (`AdminLayout`):
+  - Overview: Dashboard.
+  - Live operations: Live Map, Deliveries, Rider Cash, SOS Alerts.
+  - Tourism management: Businesses, Users, Riders, Rider Onboarding, Cashouts.
+  - Municipality management: Municipalities.
+  - Records & analytics: Reports, Audit Logs, Notifications.
+  - System: Office Profile, Settings, Security, Backup.
+- **Merged as tabs** (new `AdminSectionTabs` with nested routes; definitions in `features/admin/sectionTabs.ts`):
+  - Users → All users | **Tourists** (`/admin/users/tourists`).
+  - Businesses → Businesses | **Categories** (`/admin/businesses/categories`).
+  - Municipalities → Municipalities | **Accounts** (`/admin/municipalities/accounts`).
+  - **Settings** (`/admin/settings`): Platform Configuration (was Configuration), Access Control (was Roles), Document Verification (was OCR Settings), Security, Data Backup.
+  - The sidebar's Security and Backup items open the matching Settings tabs. The Settings item is highlighted only for the first three tabs.
+- **Removed:** POS & Sales. The sidebar item, route and `AdminPosSales.tsx` page are gone; municipality-wide transaction figures live on the Dashboard and in Reports. The read-only `/api/admin/pos/sales*` endpoints and their tests (`AdminPosSalesApiTest`) were kept and are unused by the UI.
+- **No functionality removed:** each moved page is unchanged inside its tab. The old URLs (`/admin/tourists`, `/business-categories`, `/municipality-accounts`, `/roles`, `/system/config|ocr-settings|security|backup`, `/pos` → Reports) redirect. Dashboard links and the analytics alert link now point at the new locations.
+- **Roles:**
+  - Bansud lead admin: all of the above.
+  - Municipal accounts: unchanged; their own portal has no municipality-administration controls.
+  - A separate system-wide Super Admin role does not exist yet. The Bansud admin currently holds the system settings.
+- **Tests:** new `admin-navigation.test.tsx` (13 tests: sidebar groups and order, removed items absent, tabs and active state, Settings default tab, 9 old-URL redirects); `admin-layout.test.tsx` updated. Frontend **113 files / 774 tests passed**; build clean. Backend analytics and POS suites pass (15 tests / 122 assertions).
+
+## Bansud Admin — Live Tours Removed (2026-11-16)
+
+- Removed the **Live Tours** feature from the Bansud admin:
+  - sidebar item (`AdminLayout`);
+  - `/admin/live/tours` route and `AdminLiveTours.tsx` page;
+  - `GET /api/admin/live/tours`, which was a stub that always returned an empty list (`AdminLiveController::tours`).
+- No data, tables or tests depended on it. Admin route suites pass (36 tests / 124 assertions); the frontend admin tests pass and the build is clean.
+
+## Bansud Admin Deliveries — Bansud Delivery Record — IMPLEMENTED (2026-11-16)
+
+- **`GET /api/admin/live/deliveries`** (`AdminLiveController::deliveries`, read-only, Bansud admin only) is now the **delivery record of Bansud**:
+  - **Food:** the order's restaurant, or any restaurant of a multi-restaurant order, is in Bansud.
+  - **Ride-hailing:** the trip has no restaurant, so it belongs to its rider's municipality.
+  - Other municipalities' deliveries are excluded.
+- **Previously** it listed only in-progress deliveries of every municipality. It also returned raw `Delivery` models, so the page's order number, customer and rider columns were blank (fixed).
+- **Record:**
+  - `bucket` = active (default; anything not delivered/completed/cancelled, including deliveries still waiting for a rider) | completed | cancelled | all, with counts per bucket.
+  - Filters: `search` (order no., customer, rider, address), `type` (delivery | transport), `from`/`to` (Philippine dates), pagination.
+  - Rows include order, customer, restaurants, rider and phone (from the profile), route, distance, fee, total, purchasing cash and COD purchases, timestamps.
+- **Page:** "Bansud Deliveries" with Active / Completed / Cancelled / All tabs (counts), filters and pagination. Only the Active tab auto-refreshes (10 s). Issue Cash and Diagnose are kept.
+- **Unchanged:** `issue-purchasing-cash` and trip diagnostics endpoints.
+- **Tests:** `AdminDeliveryRecordTest` (3 tests / 20 assertions: Bansud-only scope including multi-restaurant and ride-hailing, buckets and counts, search/type/date filters, admin-only) and `admin-deliveries.test.tsx` (2 tests). Regression: Laravel **1,208 passed / 7,766 assertions / 0 failures / 2 skipped** (existing environment skips); frontend **112 files / 762 tests passed**; build clean.
+
+## Bansud Tourism Dashboard — Visual Hierarchy & Horizontal Layout — IMPLEMENTED (2026-11-16)
+
+- Frontend only; same `/admin/dashboard/analytics` data.
+- **Tier 1 (what matters now):**
+  - One high-emphasis hero card: platform revenue for the period, its change vs the previous period, net income, gross transactions and today's earnings.
+  - Six calm white KPI tiles beside it: businesses, users, deliveries, ride-hailing, bookings, and a gold-tinted cashouts tile.
+  - A "Needs attention today" bar listing only the open items, with the clear checks summarised.
+  - A quiet one-line indicator row.
+- **Tier 2 (decisions):** numbered section headings ("Business popularity & growth", "Finances") introduce the popularity table, growth opportunities and the financial overview. Panel titles are now h3, one level below.
+- **Tier 3 (supporting detail):** "Operations & records" uses compact panels (smaller titles, tighter padding, muted icons). The four bright operations tiles became quiet white cells.
+- **No long vertical panels:**
+  - Growth opportunities: a 4-column card grid.
+  - Finances: full-width chart, with earnings and cashouts in a horizontal strip.
+  - Live activity: a horizontal tile strip.
+  - Municipalities: a 4–5-column grid.
+  - Recent activity: a 3-column grid.
+  - System health: a single row of four.
+  - The separate alerts panel was replaced by the attention bar.
+- Tests: `admin-dashboard.test.tsx` now has 7 tests (new: hierarchy — single hero, attention-only-open, h2 sections in order, panels at h3, zone order). Frontend **111 files / 760 tests passed**; build clean.
+
+## Bansud Tourism Dashboard — Municipality Management & Business Intelligence Center — IMPLEMENTED (2026-11-16)
+
+- **Purpose:** the Bansud admin dashboard answers three questions: how the municipality is doing financially and operationally, which businesses are popular or need help, and what needs attention today. Every figure comes from database records; there are no sample numbers.
+- **API:** `GET /api/admin/dashboard/analytics` (`AdminAnalyticsService`, read-only; Bansud admin only).
+  - Parameters: `period` = today | yesterday | this_week | this_month | this_year | custom (`from`/`to`, at most one year), plus an optional `municipality_id`.
+  - Periods are Philippine calendar periods, each compared with the previous equivalent period (e.g. Nov 1–18 vs Oct 1–18). Real-time figures are separate and refresh every minute.
+  - Local-day grouping is done in PHP, so results are identical on MySQL and SQLite.
+- **Sections:** overview (businesses active/pending/suspended, users and online now, deliveries, ride-hailing, bookings, cashouts, riders, owners, pending approvals), live activity, daily operations, financial overview, trend, popularity, Tourism Growth Opportunities, municipality statistics, alerts & approvals, system health, recent activity.
+- **Money is kept in separate buckets.** Order totals are never reported as TrackTour income:
+  - gross transaction value = completed orders + completed bookings;
+  - platform revenue = `order_settlements.platform_amount` (the single settlement ledger, so COD's 80/20 split is not counted twice);
+  - business-owner earnings = `restaurant_amount`; rider earnings = `rider_earnings`;
+  - refunds = provider-confirmed (`succeeded`) only;
+  - operating expenses = new `platform_expenses`; net income = platform revenue − operating expenses;
+  - cashouts: requested / approved / completed, plus open liability;
+  - pending settlements: completed orders with no settlement row;
+  - COD collected and COD remitted (verified reconciliations only);
+  - rider cash advances; PayMongo gateway transactions.
+- **Popularity uses real engagement, not bookings alone.**
+  - New `business_engagement_events`, recorded by `BusinessEngagementRecorder` on the public business profile (`/tourist/explore/{business}`) and offering (`/tourist/food/{offering}`) endpoints.
+  - A unique `(business, type, viewer, Philippine day)` index plus `insertOrIgnore` means reloads don't inflate counts. Owners, offices, admins and riders are not counted, and a recording failure never breaks the page.
+  - Signals: profile/offering views, favorites, inquiries (`chat_rooms`), bookings, completed transactions (multi-restaurant aware), reviews and rating.
+  - Classes: high popularity / growing / average / low visibility / declining (−25% vs the previous period).
+  - Recommendations: campaign for declining businesses; review pricing and information when there are many views but conversion is under 2%; feature low-view businesses; feature businesses rated 4.5+; ask owners with no updates in 90 days to refresh content; promote upcoming `tourism_events`.
+- **Operating expenses:**
+  - `GET/POST /api/admin/platform-expenses` and `DELETE /api/admin/platform-expenses/{id}`, admin only; amounts must be positive and dates can't be in the future.
+  - Every record and delete is audit-logged.
+  - Recorded from a "Record expense" dialog on the dashboard.
+- **System health:** database round-trip time; PayMongo configured and when the last payment was paid; age of the latest rider GPS fix; failed jobs in the last 24 h.
+- **Frontend:** `AdminDashboard.tsx` plus `features/admin/components/dashboard/{types.ts,DashboardSections.tsx}`.
+  - Scenic header with period and municipality filters (including a custom range), the previous-period comparison and refresh.
+  - KPI cards (gold cashout card) and a 7-indicator strip.
+  - Popularity table (most popular / needs support) with Growth Opportunities.
+  - Financial overview with the revenue-vs-expenses chart, a cashout panel and the full financial category list.
+  - Daily operations, live activity, municipality share, alerts, activity, system health. Every metric links to its management page.
+- **Chart:** platform revenue vs operating expenses in the same peso unit on one axis. Colours #257347 / #D99A00 were validated with the dataviz checker (all checks pass). The gold's surface-contrast warning is relieved by the legend, tooltips and a visible Chart/Table toggle. Gross value and transaction counts appear in the tooltip.
+- **Database:**
+  - Migration `2026_11_17_000001_create_business_engagement_and_platform_expenses` was applied to local MySQL by path (pending `2026_11_10_000001` still not run).
+  - Verified with `SHOW CREATE TABLE` (unique `bee_unique_daily_view`, foreign keys).
+  - A rolled-back live probe inserted 1, then 0 for the same viewer and day, then 1 for the next day; no rows were left.
+- **Tests:**
+  - `AdminAnalyticsTest`: 6 tests covering previous-period ranges and custom/invalid periods; money buckets (GTV vs platform revenue vs net income, provider-confirmed refunds, cashout states, settlement backlog); deduplicated views that exclude staff; popularity classes and recommendations; municipality filter and share; expense CRUD, validation, audit and role checks.
+  - `admin-dashboard.test.tsx` was rewritten (6 tests).
+- **Regression:** Laravel **1,205 passed / 7,746 assertions / 0 failures / 2 skipped** (existing environment skips); frontend **111 files / 759 tests passed**; build clean.
+- **Deferred:** no product-level analytics page yet (per-offering views are stored); no business-side cashouts (only rider payouts exist); scheduler heartbeat not monitored; drill-down filters depend on what each management page already supports.
+
+## Bansud Tourism Office Dashboard — Oversight Redesign — IMPLEMENTED (2026-11-16)
+
+- **API (read-only, additive)** on `GET /api/admin/dashboard` (`AdminDashboardController::overview()`):
+  - `today` and `trend`: orders and provider-confirmed revenue (`payments.status = paid`, dated by `paid_at`, else `updated_at`) for the last 7 Philippine days. Grouping by local date is done in PHP, so it is identical on MySQL and SQLite.
+  - `municipalities`: businesses, riders, pending (businesses + rider applicants) and whether an active municipal office account exists. Bansud comes first.
+  - `onboarding`: Bansud's own rider applicants, for-final-approval and pending-schedule.
+  - `recentActivity`: the latest 6 audit-log entries.
+  - `stats.riders_active` = online + available + busy. The existing `riders_online` is unchanged.
+  - No money or state is written; the existing keys are unchanged.
+- **Dashboard (municipal portal identity):**
+  - Office banner (cover and logo) with an all-time totals strip.
+  - Today tiles: orders, revenue, active deliveries, riders on duty.
+  - **Orders, last 7 days** bar chart: one series in heritage green, validated with the dataviz palette checker (all checks pass on the light surface). Revenue sits in the tooltip and the header, never on a second axis, with a screen-reader table copy.
+  - **Needs attention:** verifications, owner reviews, Bansud riders for final approval, applicants waiting for a schedule, municipalities without an office account.
+  - **Municipalities at a glance** table and **Recent activity** timeline.
+  - Recent registrations and businesses (5 each).
+- **Tests:**
+  - New `AdminDashboardOverviewTest`: 3 tests / 27 assertions (Manila-day grouping at the UTC boundary, paid-only revenue, municipality rows, Bansud-only onboarding, riders on duty, activity, admin-only access).
+  - `admin-dashboard.test.tsx` was rewritten (5 tests).
+  - Regression: Laravel **1,199 passed / 7,692 assertions / 0 failures / 2 skipped** (existing environment skips); frontend **111 files / 758 tests passed**; build clean.
+
+## Bansud Admin Portal — Same Design as the Municipal Portal — IMPLEMENTED (2026-11-16)
+
+- **Shell:** new `features/admin/components/AdminLayout.tsx` replaces `DashboardLayout theme="admin"` for `/admin/*`. It has the Municipal portal identity:
+  - dark forest-green sidebar (#0F2E1D) with Banana Gold active bar and badges;
+  - warm white workspace (#FAF7F0), Poppins type;
+  - sticky header with the office name and date, and an account menu (Office Profile, Logout);
+  - a mobile drawer.
+- **Sidebar header:** keeps the TrackTour mark ("TrackTour · Tourism Admin", Bansud).
+- **Navigation:** regrouped into Live operations, Management, Municipalities, Records and System. Users shows a gold badge for accounts awaiting verification. The footer reads "overseeing N municipalities".
+- **Content:** lazy admin pages still load inside a `Suspense` skeleton; content max width is 1440 px so maps and POS keep their room.
+- **`DashboardLayout`** is unchanged for the other roles. The `adminSections` list and the now-unused icon imports were removed from `App.tsx`.
+- **Dashboard:** municipal-style office banner (office cover photo, or the forest gradient, plus the office logo or the TrackTour mark), a "N to review" gold pill and a Rider onboarding action. The municipal palette is applied to the cards and the highlighted revenue tile.
+- **Tests:** new `admin-layout.test.tsx` (3); `admin-dashboard.test.tsx` updated (4). Frontend **111 files / 757 tests passed**; build clean.
+
+## Bansud Admin Dashboard — Clean Redesign — IMPLEMENTED (2026-11-16)
+
+- Frontend only (`AdminDashboard.tsx`); same `/admin/dashboard` API and data.
+- Layout:
+  - Greeting header (date, "Good morning, Bansud Tourism Office") with quick links to Rider onboarding and Reports.
+  - Four key-figure tiles: gross revenue highlighted, orders, active deliveries, riders online of registered.
+  - A **Needs attention** card that sums pending verifications and owner reviews and links to Bansud rider applicants.
+  - Users by role, sorted largest first, drawn in a single hue (magnitude, not identity) instead of six colours.
+  - A compact overview strip (users, businesses, owners, approved owners, municipalities).
+  - Recent registrations and businesses as clean lists (initials, status, date, "View all") replacing the wide tables.
+- The eleven equal stat cards and the decorative backdrop were removed.
+- Tests: new `tests/ui/admin-dashboard.test.tsx` (3 tests). Frontend **110 files / 753 tests passed**; build clean.
+
+## Rider Onboarding — Quick Approve for Presentation — IMPLEMENTED (2026-11-16)
+
+- **Purpose:** approve a test rider during the capstone presentation without recording the interview, training and assessment.
+- **Switch:** `config('rider_onboarding.quick_approve')`, env `RIDER_ONBOARDING_QUICK_APPROVE`, **default `true`**. Set it to `false` for real operations; the endpoint then returns 403 and the button is hidden.
+- **Endpoint:** `POST /api/onboarding-office/applicants/{rider}/quick-approve` with optional `services[]` (defaults to the requested services; services the rider did not apply for → 422).
+  - It goes through the same `approveServices()` path as the final decision, now shared with `decide()`: per-service `rider_service_eligibilities`, active appointment completed, `application_status` `approved`/`partially_approved`, a `rider_approval_records` row with remarks "Quick approval (presentation/demo) …", activation via `AccountModerationService` (rider review, audit log) and the rider notification.
+  - It still respects the per-municipality rule (another municipality's applicant → 404) and office roles only.
+  - It creates a `rider_details` row for test accounts that lack one.
+- **UI:** a yellow "Quick approve (presentation)" box in the applicant panel for pending applicants, with service checkboxes and an **Approve rider now** button.
+- **Tests:** `RiderOnboardingTest` is now 22 tests / 201 assertions (3 new: chosen services and partial approval, default all services without an application, switched off / other municipality / non-office roles). Frontend `rider-onboarding.test.tsx` has 14 tests (2 new).
+- **Regression** (including the per-municipality change below): Laravel **1,196 passed / 7,665 assertions / 0 failures / 2 skipped**; frontend **109 files / 750 tests passed**; build clean.
+
+## Rider Onboarding — Strictly Per Municipality — IMPLEMENTED (2026-11-16)
+
+Rule: a rider trains with the Tourism Office of the municipality they registered in. Only that office can see or decide them. A rider cannot register in Bansud and train in Bongabong.
+
+- **Decision:** this supersedes the phase-1 "Bansud admin passes `municipality_id`" behaviour for onboarding. The Bansud office runs Bansud's onboarding only, like every municipal office.
+- **Backend:**
+  - `OnboardingOfficeController::office()` always resolves the home municipality (Bansud) for `bansud_tourism_office`. Any other `municipality_id` returns 403 on all office endpoints, reads and writes.
+  - Applicants from other municipalities return 404 (unchanged `assertCovered`).
+  - `AdminRiderController::approve|reject` now return 403 for a *pending* rider of another municipality, so the admin rider directory can't bypass that office's onboarding. Approved-rider governance (suspend/activate) is unchanged.
+  - `updateMunicipality` returns 422 while a rider has a submitted application and is still pending, so a rider can't be moved mid-onboarding.
+  - Existing guards verified by tests: a rider (or their office) can't book or reschedule into another municipality's session (422). Riders can't change their own municipality (the profile update keeps the registered municipality).
+- **Frontend:** the municipality picker was removed from `/admin/rider-onboarding`; the page shows "Bansud riders only". `RiderOnboardingOffice` no longer takes a `municipalityId`; the server resolves the office from the signed-in account.
+- **Tests:**
+  - `RiderOnboardingTest` is now 19 tests / 178 assertions. New tests cover: the Bansud office can't see, list, act on or change availability for another municipality's applicants (including the admin approve/reject bypass); and an applicant can't train outside the registered municipality (rider booking, office reschedule, admin municipality move).
+  - The old assertion that the Bansud admin could read Gloria's availability was reconciled; it encoded the superseded behaviour.
+  - Frontend `rider-onboarding.test.tsx`: 12 tests.
+
+## Rider Onboarding Phase 2 — Automatic Scheduling, Availability, Final Evaluation, Per-Service Eligibility — IMPLEMENTED & VERIFIED (2026-11-16)
+
+Supersedes the "office posts sessions" and "activate" parts of the phase-1 entry below.
+
+- **No second email verification for riders.** Rider registration already verifies the email with the OTP. The OTP is now bound to the email it was sent to (`OtpService`). Registration rejects a code used with a different email. A rider whose code matches gets `email_verified_at` at registration and goes straight to `/rider/onboarding`.
+- **Automatic scheduling.** The office no longer posts sessions.
+  - `RiderOnboardingService::ensureSessions` generates sessions from `config/rider_onboarding.php`: slot times 08:00–15:00, capacity `RIDER_ONBOARDING_CAPACITY` (default 5), Mon–Fri, lead 1 day, horizon 21 days. It skips unavailable dates and is idempotent (`insertOrIgnore` on unique `(municipality_id, starts_at)`).
+  - Submitting the application auto-books the earliest open seat (`booked_by = NULL`, shown as "scheduled automatically").
+  - If no seat exists, the application becomes `pending_schedule` and the rider is notified once. Waiting riders are booked automatically when a date becomes available.
+  - Riders may still choose another open time.
+- **Availability calendar (office).** `rider_training_availability` stores one row per municipality and date: `trainer_available`, `interviewer_available`, notes. A date is schedulable only when both are available; dates without a row are available on work days.
+  - `PUT /onboarding-office/availability/{date}` closes or reopens that date's sessions. It **never moves confirmed appointments**: it returns the affected applicants, and the UI shows a warning.
+  - The office then confirms `POST /onboarding-office/affected/reschedule`, which moves affected appointments to the next open seats and notifies each rider. Riders who can't be placed become `pending_schedule`.
+  - Past dates are refused (422).
+- **Final evaluation.**
+  - The interview records a four-item requirements checklist; it can pass only when every item is verified.
+  - The training assessment records items: orientation, safety, navigation/GPS and practical, plus delivery procedures for food and passenger procedures for ride-hailing (only the requested services' items are required).
+  - The assessment never activates the rider; it sets `for_final_approval` or `needs_retraining`.
+  - `POST /onboarding-office/applicants/{rider}/decision` takes `approve` (with `services[]`, restricted to services whose items passed), `reject` (reason required, seat released) or `return` (reason required → `needs_retraining`).
+  - Every decision writes `rider_approval_records` (decision, services, remarks, decided_by, decided_at), notifies the rider and is audit-logged.
+  - Approval goes through `AccountModerationService`.
+- **Application status** (`rider_details.application_status`) is separate from `account_status`: `pending_review`, `appointment_scheduled`, `pending_schedule`, `under_verification`, `interview_completed`, `training_completed`, `for_final_approval`, `approved`, `partially_approved`, `rejected`, `needs_retraining`.
+- **Per-service eligibility is enforced on the backend.** `rider_service_eligibilities` is unique on `(rider_id, service)`, with status `approved | not_eligible`.
+  - `User::scopeEligibleForService` / `isEligibleForService` are applied in `NearestRiderService` (nearest and COD candidate queries, and the authoritative acceptance gate), in `RiderController::toggleAvailability` (going online in a service you're not approved for → 403) and in `switchService` (403).
+  - Riders with no eligibility rows (approved before onboarding existed) keep access to all services, so existing dispatch behaviour is unchanged. `SmartDispatchService` was not modified.
+- **Removed endpoints:** `POST/DELETE /onboarding-office/schedules`, `days/{date}/close|reopen`, `applicants/{rider}/activate|reject` (replaced by availability and decision). `PATCH /schedules/{id}` stays for capacity only.
+- **Notifications** use the app's own `notifications` table (`type = rider_onboarding`). Notices appear on the rider tracker.
+- **Frontend:**
+  - Office console tabs: Appointments, Training availability, Applicants, Walk-in.
+    - Training availability has a month calendar, summary cards, trainer/interviewer toggles with notes, an affected-appointments warning and "Reschedule all".
+    - Applicants has filters for final approval, pending schedule and needs retraining.
+    - The applicant panel has the checklist interview, attendance, an itemised assessment, and a final evaluation with per-service approve checkboxes (disabled for services that did not qualify), Approve / Return / Reject.
+  - The rider tracker shows the application-status chip, the pending-schedule banner, the needs-reschedule banner, the "scheduled automatically" note and notices.
+- **Database:** migration `2026_11_16_000001_add_rider_onboarding_availability_and_evaluation` was applied to local MySQL by path (pending `2026_11_10_000001` still not run) and verified with `SHOW CREATE TABLE`.
+- **Tests:**
+  - `RiderOnboardingTest` was rewritten: 17 tests / 157 assertions, covering auto-booking, pending schedule, availability that never moves bookings, office-confirmed reschedule, capacity, the checklist and itemised assessment, per-service approval, reject/return reasons, dispatch/online/switch eligibility and municipality scope.
+  - `RiderRegistrationOtpTest` gained 2 tests (email bound to OTP).
+  - Frontend `rider-onboarding.test.tsx` has 12 tests (was 7).
+  - Also fixed a pre-existing unhandled rejection in `tourist-checkout-401-keeps-session.test.tsx`: its api mock lacked `API_BASE_URL`, which `logout()` reads.
+- **Regression:** full Laravel suite **1,191 passed / 7,621 assertions / 0 failures / 2 skipped** (existing environment skips). Frontend **109 files / 748 tests passed, 0 errors**; production build clean (only the existing chunk-size warning).
+- **Deferred:** no SMS/email reminders; holidays must be marked unavailable manually; capacity per session is a single config default plus a per-session `PATCH`; no UI to revoke an individual service eligibility after approval.
+
+## Rider Onboarding (Grab-style) — IMPLEMENTED (2026-11-16)
+
+- **Policy change:** new rider registrations are now `pending_review` (previously auto-approved), in both `Api\AuthController::register` and the legacy web `RegisteredUserController`. A rider becomes `approved` only through onboarding activation, or the existing direct approve in the admin/municipal rider pages. Existing riders are unchanged. Pending riders get 403 on `POST /rider/availability/toggle` when going online. Dispatch already required `approved`.
+- **Flow:** register (step 1 of 4) → application: services (food and/or transport), vehicle, license, documents (steps 2–3) → book a Tourism Office slot (step 4) → tracker with seven stages: submitted, appointment, visit (check-in), interview & document verification, training attendance, assessment, activation.
+- **Schema** (migration `2026_11_15_000001_create_rider_onboarding_tables`):
+  - `rider_details` gains `requested_services` (json), `application_reference` (unique, `TT-RIDER-{year}-{id5}`) and `application_submitted_at`.
+  - New `rider_training_schedules`, unique `(municipality_id, starts_at)`.
+  - New `rider_appointments`, where `active_rider_id` is unique: it equals `rider_id` while the appointment is booked or checked in and is NULL otherwise, so the database allows one active appointment per rider.
+  - New `rider_interviews`, `rider_training_attendance` and `rider_training_assessments` (append-only history).
+- **Real capacity:** a seat is claimed with a conditional atomic `UPDATE … SET booked_count = booked_count + 1 WHERE booked_count < capacity AND status = 'open' AND starts_at >= …`; zero rows means 409 "slot full". Rebooking claims the new seat, then releases the old one in the same transaction. Cancel and reject release the seat. A no-show keeps it (the session has passed). Capacity can't be set below `booked_count`, and a session with bookings can't be deleted (close it instead).
+- **Order is enforced** in `RiderOnboardingService`: interview needs check-in, and passing it needs documents verified; attendance needs a passed interview; assessment needs attendance; activation needs a passed assessment. Activation and rejection go through `AccountModerationService` (rider reviews, notifications, audit log). Every office action is audit-logged with the municipality prefix.
+- **Scope:** applicants book only at their own municipality's office. Office endpoints live at `/api/onboarding-office/*` (`role:tourism_office,bansud_tourism_office`). A municipal office works on its own municipality; the Bansud admin passes `municipality_id` (default Bansud). Applicants from other municipalities return 404.
+- **Endpoints:**
+  - Rider: `GET /rider/onboarding`, `POST /rider/onboarding/application` (multipart, private `local` disk), `GET /rider/onboarding/slots`, `POST|DELETE /rider/onboarding/appointment`.
+  - Public: `GET /rider-registration/offices`.
+  - Office: schedules CRUD, appointments by date, applicants list/detail, check-in, no-show, interview, attendance, assessment, activate, reject, reschedule, walk-ins (staff create the rider account and can fill a same-day session).
+- **Frontend:**
+  - Public `/become-a-rider` (Register Online / Walk-in) and `/become-a-rider/offices`. Role selection's Rider option and the landing footer link to it.
+  - `/rider/onboarding` handles application, booking (date chips, slot grid with "N slots left" / Full, summary, Confirm) and the tracker (reference, appointment, reschedule/cancel).
+  - `RiderOnboardingGate` sends pending or rejected riders from `/rider/*` to onboarding.
+  - Staff `RiderOnboardingOffice` (appointments by day, session calendar, applicants, walk-in, applicant panel) at `/municipal/onboarding` and `/admin/rider-onboarding` (with a municipality picker).
+- **Database:** migration applied to local MySQL by path, so the unrelated pending `2026_11_10_000001` was not run. Verified with `SHOW CREATE TABLE` (unique `active_rider_id`, unique `(municipality_id, starts_at)`). A live probe in a rolled-back transaction confirmed the capacity claim returns 1 then 0, and a second active appointment is rejected by the unique index. No rows were left.
+- **Tests:** `RiderOnboardingTest` (12 tests / 97 assertions) and frontend `rider-onboarding.test.tsx` (7 tests).
+- **Regression:** full Laravel suite **1,184 passed / 7,552 assertions / 0 failures / 2 skipped** (existing environment-dependent skips). Frontend **109 files / 743 tests passed**; production build clean.
+- **Not built / deferred:** applicants cannot choose another municipality's office; no reminders (SMS or email) before appointments; failed interview or assessment is retried by recording again (no automatic re-booking); the "illustrative availability" disclaimer from the mockup is unnecessary because slots are live inventory.
+
+## Login Page Redesign — IMPLEMENTED (2026-11-15)
+
+- `/login` is now a split screen in the landing style. The left brand panel plays the landing background video (admin Landing Content, falling back to `/assets/tracktour-web.mp4`) under a forest-green overlay, with the TrackTour brand, a "Welcome back to *Oriental Mindoro*" gold headline, four service highlights and the script tagline. The right side has the sign-in card. On phones the brand panel becomes a short banner above the form.
+- **Form:** email and password fields with icons, a show/hide password button with an accessible label, Remember me, Forgot password, a green Sign In button with a spinner, and a gold "Create an account" button (`/role-selection`).
+- **Unchanged logic:** sign-in, field and server errors, the lockout countdown, guest-preference sync and the post-login redirect are the same as before.
+- **Tests:** new `login-page.test.tsx` (4 tests: brand panel and links, successful sign-in redirect, lockout countdown, password toggle). Frontend suite and build pass; headless screenshots checked at desktop and narrow widths.
+- The "Remember me" checkbox is still not wired to anything (pre-existing).
+
+## Landing Sub-pages Redesign — IMPLEMENTED (2026-11-15)
+
+- The public pages linked from the landing page now share the new landing look: Explore (`/explore`), All Categories (`/explore/categories`), Municipality (`/explore/municipality/:id`) and the public Restaurant page (`/explore/food/:id`).
+- **Shared building blocks** (`frontend/src/pages/components/`):
+  - `LandingNav` is the one public nav, used by the home hero and every sub-page. Live Map opens `/?view=map` and About opens `/#about`; the home page handles both.
+  - `LandingShell` is a forest-green title band (eyebrow, title, subtitle, back link, optional photo backdrop, extra filters), then warm-white content and the green footer.
+  - `LandingItemCard`, `LandingEmpty` and `LandingSpinner` are shared too. Nav, footer and content are aligned at 1400 px.
+- **Explore:** search box and municipality filter in the band; segmented tabs. Tab and search are kept in the URL (`?tab=`, `?q=`), with a result count. Cards link to the public detail pages.
+- **All Categories:** category chips with counts that jump to each section; up to 8 cards per category with "See all" to the filtered Explore page.
+- **Municipality:** the municipality's own photo behind the title, a place count, section chips, and Restaurants / Resorts & Stays / Tourist Spots / More sections.
+- **Restaurant page:** moved onto the shell (back link only; it keeps its own cover, logo and name) with brand accents. Its menu, cart and checkout logic is unchanged.
+- **Tests:** new `landing-pages.test.tsx` (4 tests). Frontend 107 files / 732 tests passed; build clean. Headless-Chrome screenshots of all four pages checked.
+
+## Landing Page Redesign — IMPLEMENTED (2026-11-15)
+
+- **New top section, built to the provided mockup:** a transparent nav over a full-bleed hero carousel. The nav has the TrackTour logo, Home pill, Explore and Services dropdowns, About, Contact, a search button, and a gold Login / Sign Up button that becomes My Dashboard when signed in. The hero has the headline with a Banana Gold underlined highlight, "Explore. Discover. Enjoy.", the place search, slide dots and arrows, and an "Explore Bansud!" script accent. Five service cards (Tourism & Travel, Food Delivery, Stays & Deals, Ride-Hailing, Live Map) overlap the hero.
+- **Popular in Bansud strip** (Restaurants & Food Hub, Resorts & Stays, Attractions & Tours, Ride Anywhere) and a dark-green **footer** with brand, links, office address and the "Let's Explore Bansud Together!" script line.
+- **Content stays live:** hero text and the hero background video come from the admin Landing Content (`/landing-content`). The hero uses the background video only; the image carousel, arrows and dots were removed at the user's request. Tile images come from the configured categories. Only "Ride Anywhere" uses a stock photo.
+- **Where to Next? / Places to Discover redesign:** new `LandingDestinations` (eyebrow, heading, scroll arrows, snap-scrolling cards) and a restyled `LandingMunicipalityCard`. The card has brand-tone gradient fallbacks with an initial watermark, a "Home of TrackTour" badge on Bansud, "N Place(s) to Explore" or "Coming soon", and an arrow. New `LandingPlaces` has segmented filter tabs and white-body cards with category and rating chips. The cards now link to a page: restaurants open `/explore/food/{id}`, other businesses `/tourist/explore/{id}`, spots `/tourist/destinations/{id}`. New `landing-places.test.tsx` (3 tests).
+- Hero search opens `/explore?q=…`. `LandingExplorePage` now filters by name, category or municipality. Live Map opens the existing map view and scrolls to it.
+- The "Explore by Categories" card row was removed (Popular in Bansud covers it). Its **Map** and **View all** buttons now sit above the Popular tiles; Map still opens the landing map, View all goes to `/explore/categories`. The map, Where to Next? and place-card sections are unchanged apart from a centered 1400px width.
+- **Fixes:** restored `PLACEHOLDER_COLORS`, which a pending edit had removed while the place cards still used it (a card without a photo would have crashed the page). Removed now-unused imports. Added Poppins italic and Kaushan Script to the font link.
+- Footer omits Help Center / Terms / Privacy because those pages do not exist yet. The mockup's social icons are also left out.
+- **Checked:** headless-Chrome screenshots at desktop (1586 px) and narrow widths. On small screens the login button moves into the mobile menu. New `landing-hero.test.tsx` (7 tests). Frontend 105 files / 725 tests passed; build clean.
+- **Known, pre-existing:** the landing map's gated actions read a `token` field the auth store does not have, so a signed-in tourist pressing "Order Food" / "Book" on the landing map is sent to login.
+
+## Admin Sidebar Header — TrackTour Logo Restored (2026-11-15)
+
+- The Bansud admin sidebar header shows the TrackTour logo and name again, even when an office logo is uploaded. The Bansud office logo still appears on the Office Profile page (`/admin/profile`). `DashboardLayout` no longer reads the office profile.
+- `admin-profile-entry.test.tsx` now pins the TrackTour logo in the header with and without an uploaded office logo.
+
+## Bansud Admin — Municipality Accounts — IMPLEMENTED (2026-11-15)
+
+- New admin page **Management → Municipality Accounts** (`/admin/municipality-accounts`): every municipal Tourism Office account in one list, with filters (municipality / not assigned / status / search) and counts (accounts, active, suspended, not assigned, municipalities without an active account; Bansud excluded as the home office).
+- **Create municipality account:** pick the municipality, then name, office email, mobile and a temporary password. `POST /api/admin/municipality-accounts` reuses the existing per-municipality creation (`storeAdmin`), so the account is `tourism_office`, approved, and bound to `users.municipality_id`. Deleted municipalities are rejected.
+- **Remove / Assign & reactivate:** remove uses the existing per-municipality endpoint (scope cleared, suspended, tokens revoked). New `POST /api/admin/municipality-accounts/{user}/assign` gives a removed account a municipality and reactivates it (tourism_office accounts only).
+- The municipality detail page and the new page share one `CreateMunicipalAccountModal`.
+- **Create User fix:** `StoreUserRequest` required `name`, which the Create User form never sends, so admin user creation failed validation. It now accepts first/last name. Choosing role *tourism office* shows a municipality picker. The backend requires `municipality_id` for that role and stores it on the account and profile, so the account can use the Municipal Portal.
+- **Tests:** `AdminMunicipalityAccountsTest` (7 tests / 45 assertions) and one more frontend test in `municipal-portal.test.tsx` (10 total).
+- **Regression (covers this and the municipal-portal entry below):** full Laravel suite **1,172 passed / 7,455 assertions / 0 failures / 2 skipped** (existing environment-dependent skips). Frontend **104 files / 718 tests passed**; production build clean.
+
+## Municipal Portal — Own Identity, Documents, Reports, Activity Logs, Profile — IMPLEMENTED (2026-11-15)
+
+- **Direction:** the Municipal Tourism Office portal is now its own local-government experience, not a reduced copy of the Bansud console. New `MunicipalLayout` (dark forest-green sidebar `#0F2E1D`, Heritage Green `#2E8B57`, Banana Gold `#FFD700` accents and pending badges, warm white `#FAF7F0` workspace, Poppins; Poppins 400/500 weights added to the font link). The Bansud admin keeps its existing look.
+- **Sidebar (matches the spec):** Dashboard · Business Owners · Businesses · Riders · Tourists · Documents · Reports · Activity Logs · Profile & Settings. Tourism-content links were removed from the municipal sidebar, and the legacy `/tourism-office/*` UI is now Bansud-only.
+- **Dashboard:** total business owners, registered businesses, pending business approvals, active riders (online now), pending rider applications, registered tourists, recently registered businesses, pending document verification, applications to review, recent administrative activity. All from `GET /api/municipal/dashboard`, scoped to the account's municipality.
+- **New municipal endpoints** (same `role:tourism_office` + `municipal.scope` group): `GET documents` (business document queue by status + rider requirements), `GET reports` (Philippine-local range, ≤ 1 year), `GET activity-logs`, `GET|POST profile` (multipart).
+- **Reports math:** item sales = `order_items.subtotal` of completed (`delivered`/`completed`) orders, excluding cancelled/rejected items. The item's business is `COALESCE(order_items.business_id, orders.business_id)`, because single-restaurant orders leave the item column empty. A group checkout spanning municipalities is split, never counted in full. Verified on MySQL: Bansud = ₱5,692 across 4 completed orders (hand-summed match). CSV export is client-side; the daily-orders chart has a table view.
+- **Activity logs:** `MunicipalScopeService::activityLogs()` = entries by the municipality's current office accounts plus entries carrying its `[<Municipality> Tourism Office]` audit prefix (history survives an account removal). Bansud can monitor one municipality with `GET /api/admin/audit-logs?municipality_id=`, shown on the municipality detail page.
+- **Profile & Settings:** contact details in `tourism_settings` with the municipality's id; logo/cover are the municipality's own `logo`/`cover_photo` (public disk `municipalities/{id}`, old file deleted on replace). Name/district/province stay Bansud-managed. Updates are audit-logged.
+- **Platform-settings boundary (spec: municipal = No):** `PUT /tourism-office/landing-content`, tourism category create/delete, required-document CRUD and category-document assignment writes are now `role:bansud_tourism_office` only.
+- **Tests added:** `MunicipalPortalSectionsTest` (6 tests / 52 assertions: document queue scoping, activity-log scoping + removed-account history, Bansud per-municipality audit filter, report split of a cross-municipality group checkout + single-restaurant fallback + range limit, profile update isolation + image storage, platform-settings 403). Frontend `municipal-portal.test.tsx` now 9 tests (layout sections + badges, dashboard panels, documents verify, reports table/export, profile multipart).
+- **Not verified visually:** a headless screenshot pass was not done (creating a sign-in token for a real dev account was not permitted). Layout correctness rests on the component tests and the production build.
+- **Deferred:** scoped tourism content (destinations/events/announcements) for municipal offices — their API still accepts `tourism_office` writes without municipality scoping, but the municipal UI no longer exposes them; municipality active/suspended flag.
+
+## Municipality Portal & Bansud Municipality Management — IMPLEMENTED & VERIFIED (2026-11-15)
+
+- **Model:** Bansud Tourism Office (`bansud_tourism_office`) is the District Super Admin over every municipality. Each other municipality gets its own Municipal Tourism Office account(s) (`tourism_office`) that manage only that municipality's business owners, businesses, riders and tourists. No new role strings, tables or migrations.
+- **Scope authority (resolves PHASE2 F-7):** `users.municipality_id`. `MunicipalScopeService` is the single place that defines what a municipality covers (see `docs/PHASE2-ROLES-PERMISSIONS.md`). Tourists have no home municipality; they appear for a municipality once they order from or book with one of its businesses.
+- **Municipal API** `/api/municipal/*` behind `role:tourism_office` + new `municipal.scope` middleware (`EnsureMunicipalScope`): `GET dashboard`; business owners list/detail + `approve|reject|suspend|reactivate`; businesses list/detail + `approve|reject|suspend` + document review; riders list/detail + `approve|reject|suspend|reactivate`; tourists list/detail (read-only — tourist accounts stay district-wide). Reject/suspend require remarks. Out-of-scope records return 404 and are left unchanged.
+- **One implementation:** approve/reject/suspend logic moved from `AdminBusinessController` / `AdminRiderController` into `BusinessModerationService` and `AccountModerationService`; the admin controllers and the municipal controllers both call them (same status logs, rider reviews, approval requests, notifications, module sync). Municipal actions write the same `ActivityLog` entries prefixed `[<Municipality> Tourism Office]`, so the district audit log shows who acted.
+- **Bansud admin:** municipality create/update/delete are now routed (the controller methods existed but were unrouted, and the create request required a nonexistent `region` column while omitting the required `district`). Delete is blocked for Bansud and for any municipality that still has businesses, riders or Tourism Office accounts. New `POST /api/admin/municipalities/{m}/admins` creates a ready-to-use `tourism_office` account bound to the municipality; `DELETE …/admins/{user}` removes its scope, suspends it and revokes all tokens. Index adds search plus businesses/pending/riders/admins counts.
+- **Leaks closed:** a `tourism_office` user can no longer open another municipality's private business, KYC or rider documents, nor list/view/change accounts outside its municipality through the legacy `/tourism-office/business-owners` endpoints.
+- **Frontend:** new `features/municipal` portal at `/municipal/*` (dashboard with municipality header, KPI cards and review queues; business owners; businesses with document verify/flag; riders; read-only tourists). `tourism_office` now lands on `/municipal/dashboard`; the shared tourism-content pages keep the municipal sidebar for them. Admin Municipalities page gains Add municipality, per-municipality counts, a "no Tourism Office account yet" flag and working pagination (it referenced an undefined page setter). Municipality detail gains a management panel (stats, Tourism Office accounts add/remove, edit, delete).
+- **Tests added:** `MunicipalAdminTest` (19 tests: RBAC incl. unassigned/suspended/deleted-municipality officers, dashboard accuracy, owner/business/rider scoping and moderation, document-gated approval, tourist read-only, document and legacy-endpoint leaks), `AdminMunicipalityManagementTest` (7 tests: create/validation/duplicate, update, search + counts, delete guards, admin create → portal access, admin removal revokes access, role guard). Frontend `tests/ui/municipal-portal.test.tsx` (5 tests).
+- **Test reconciled:** `VerificationDocumentPrivacyTest` — the two "tourism staff can view" tests now give the office the same municipality as the document. They encoded the pre-scoping behavior the Phase 2 matrix marked as a target gap (F-3).
+- **Regression:** full Laravel suite **1,159 passed / 7,358 assertions / 0 failures / 2 skipped** (existing environment-dependent skips; none in the new suites). Frontend **104 files / 713 tests passed**; production build clean.
+- **Database:** no schema change. New scope queries were run read-only against the local MySQL `track_tour_db` (7 municipalities; Bansud 1 owner / 1 business / 2 riders / 1 tourist / 8 orders) and returned correct results.
+- **Deferred:** scoping of `/tourism-office/*` tourism content and its legacy dashboard/report aggregates; a municipality active/suspended flag (deleting is the only off switch today); per-municipality tourism content ownership.
+
 ## Bansud Tourism Office Profile — IMPLEMENTED & VERIFIED (2026-11-13)
 
 - The Admin sidebar's **"Signed in as"** card is now a link. Clicking it opens `/admin/profile` (also reachable from the new **System → Office Profile** nav item), where the Bansud Tourism Office sets its own logo, cover photo, office name, about text, contact email, contact number and office address.

@@ -74,7 +74,7 @@ export default function TouristActivities() {
   const selectView = (key: View) => setSearchParams(key === 'explored' ? {} : { view: key }, { replace: true })
 
   return (
-    <div className="mx-auto w-full max-w-5xl">
+    <div className="mx-auto lg:mx-0 w-full max-w-5xl">
       <div className="mb-4">
         <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">My Activities</h1>
         <p className="mt-1 text-sm text-[#56615B]">Places you explored, your orders, travels and favourites.</p>

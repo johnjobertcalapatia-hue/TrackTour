@@ -359,8 +359,40 @@ class TransportationService
         ];
     }
 
+    /** A ride's order is over once it reaches one of these statuses. */
+    public const FINISHED_RIDE_ORDER_STATUSES = ['completed', 'cancelled', 'cancelled_by_tourist', 'rejected', 'refunded', 'failed', 'delivered'];
+
+    /**
+     * Delivery statuses that end a ride for the tourist (the tracking page
+     * shows them as completed / cancelled; a COD ride is 'delivered' while the
+     * rider settles the cash).
+     */
+    public const FINISHED_RIDE_DELIVERY_STATUSES = ['arrived_destination', 'delivered', 'completed', 'cancelled', 'failed'];
+
+    /**
+     * The tourist's ride that is not finished yet — searching for a driver,
+     * driver on the way, or in progress — or null. A tourist has one ride at a
+     * time: createRide() refuses another while this returns a ride.
+     */
+    public function activeRideFor(int $userId, bool $lock = false): ?Order
+    {
+        $query = Order::query()
+            ->where('order_type', 'transport')
+            ->where('user_id', $userId)
+            ->whereNotIn('status', self::FINISHED_RIDE_ORDER_STATUSES)
+            ->whereDoesntHave('delivery', fn ($d) => $d->whereIn('status', self::FINISHED_RIDE_DELIVERY_STATUSES))
+            ->latest('id');
+
+        return ($lock ? $query->lockForUpdate() : $query)->first();
+    }
+
     public function createRide(array $data): Order
     {
+        // One ride at a time (fails fast here; re-checked under a lock below).
+        if (Auth::id() !== null && ($active = $this->activeRideFor((int) Auth::id())) !== null) {
+            throw new \App\Exceptions\ActiveRideExistsException($active);
+        }
+
         $vehicleType = $data['vehicle_type'] ?? 'motorcycle';
         $passengerCount = (int) ($data['passenger_count'] ?? 1);
 
@@ -425,6 +457,13 @@ class TransportationService
         // delivery row are both required for the ride to reach dispatch, and a
         // partial failure previously left an orphaned order behind.
         [$order, $delivery] = DB::transaction(function () use ($data, $fare, $baseFare, $perKm, $vehicleType, $passengerCount, $riderCommission, $distanceKm, $durationMin, $quote) {
+            // Two taps / two tabs booking at once: the tourist's row lock makes
+            // the second booking wait for the first and then see its ride.
+            User::whereKey(Auth::id())->lockForUpdate()->first();
+            if (($active = $this->activeRideFor((int) Auth::id(), lock: true)) !== null) {
+                throw new \App\Exceptions\ActiveRideExistsException($active);
+            }
+
             $order = Order::create([
                 'order_number' => 'TRP-'.strtoupper(uniqid()),
                 // Rides have no owning restaurant: a NULL business_id keeps ride
@@ -640,6 +679,10 @@ class TransportationService
             ]);
 
             $riderId = $delivery?->rider_id ? (int) $delivery->rider_id : null;
+            // Stage B (2026-11-18): a tourist cancellation more than 300 s after
+            // the rider accepted may owe that rider ₱50 (assessed before the
+            // delivery row changes, on the locked rows; one per ride).
+            app(\App\Services\RideCancellationPenaltyService::class)->assess($locked->fresh() ?? $locked, $delivery, Auth::id());
             if ($delivery) {
                 $delivery->update(['status' => 'cancelled', 'dispatch_status' => null]);
             }

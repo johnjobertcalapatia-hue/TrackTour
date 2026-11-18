@@ -170,7 +170,7 @@ export default function TouristGroupOrder() {
 
   if (isError || !group) {
     return (
-      <div className="max-w-3xl mx-auto p-6">
+      <div className="max-w-3xl mx-auto lg:mx-0">
         <div className="bg-red-50 border border-red-200 rounded-2xl p-8 text-center">
           <AlertCircle className="w-10 h-10 text-red-500 mx-auto mb-3" />
           <h2 className="text-lg font-bold text-[#17201B] mb-2">Group order not found</h2>
@@ -184,7 +184,7 @@ export default function TouristGroupOrder() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto py-6">
+    <div className="max-w-4xl mx-auto lg:mx-0">
       <button onClick={goBack} className="inline-flex items-center gap-2 text-sm text-[#6B7280] hover:text-[#17201B] mb-6 transition">
         <ArrowLeft className="w-4 h-4" /> Back
       </button>

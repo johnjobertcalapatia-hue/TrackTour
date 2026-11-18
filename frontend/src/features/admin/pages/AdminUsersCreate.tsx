@@ -1,10 +1,11 @@
 ﻿import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { post } from '@/shared/services/api'
+import { useQuery } from '@tanstack/react-query'
+import { get, post } from '@/shared/services/api'
 import { useFormDraft } from '@/shared/hooks/use-form-draft'
 import { API_ENDPOINTS } from '@/shared/constants'
 
-interface AdminUserForm {
+type AdminUserForm = {
   first_name: string
   last_name: string
   email: string
@@ -12,13 +13,14 @@ interface AdminUserForm {
   password_confirmation: string
   role: string
   account_status: string
+  municipality_id: string
 }
 
 const ROLES: string[] = [
   'tourist', 'business_owner', 'staff', 'rider', 'bansud_tourism_office', 'tourism_office'
 ]
 
-const defaultForm: AdminUserForm = { first_name: '', last_name: '', email: '', password: '', password_confirmation: '', role: 'tourist', account_status: 'pending_review' }
+const defaultForm: AdminUserForm = { first_name: '', last_name: '', email: '', password: '', password_confirmation: '', role: 'tourist', account_status: 'pending_review', municipality_id: '' }
 
 export default function AdminUsersCreate() {
   const navigate = useNavigate()
@@ -32,6 +34,13 @@ export default function AdminUsersCreate() {
   })
 
   const form = fields as unknown as AdminUserForm
+  const isMunicipalOffice = form.role === 'tourism_office'
+
+  const { data: municipalities } = useQuery({
+    queryKey: ['admin-municipalities', 'options'],
+    queryFn: () => get<{ data: { id: number; name: string }[] }>(API_ENDPOINTS.ADMIN.MUNICIPALITIES, { params: { per_page: 100 } }),
+    enabled: isMunicipalOffice,
+  })
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target
@@ -43,7 +52,8 @@ export default function AdminUsersCreate() {
     setSaving(true)
     setErrors({})
     try {
-      await post(`${API_ENDPOINTS.ADMIN.USERS}`, fields)
+      const { municipality_id, ...rest } = form
+      await post(`${API_ENDPOINTS.ADMIN.USERS}`, isMunicipalOffice ? { ...rest, municipality_id: Number(municipality_id) || municipality_id } : rest)
       clear()
       navigate('/admin/users')
     } catch (err: any) {
@@ -125,6 +135,18 @@ export default function AdminUsersCreate() {
               </select>
             </div>
           </div>
+
+          {isMunicipalOffice && (
+            <div className="rounded-xl border border-[#D7E8DB] bg-[#F6F8F4] p-4">
+              <label htmlFor="create-user-municipality" className="block text-sm font-medium text-[#17201A] mb-1">Municipality</label>
+              <select id="create-user-municipality" name="municipality_id" required value={form.municipality_id ?? ''} onChange={handleChange} className="w-full rounded-xl border border-[#E2E8E3] bg-white text-sm px-3 py-2 focus:ring-2 focus:ring-[#16803C]/50 focus:border-[#16803C]/50 outline-none transition-all">
+                <option value="">Select the municipality this office manages…</option>
+                {(municipalities?.data ?? []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+              <p className="text-xs text-[#6B7280] mt-1">Municipal Tourism Office accounts only see their own municipality.</p>
+              {errors.municipality_id && <p className="text-xs text-red-500 mt-1">{errors.municipality_id[0]}</p>}
+            </div>
+          )}
 
           <div className="flex items-center gap-3 pt-2">
             <button type="submit" disabled={saving} className="px-5 py-2.5 bg-[#16803C] hover:bg-[#126B32] text-white rounded-xl transition-colors">{saving ? 'Creating...' : 'Create User'}</button>

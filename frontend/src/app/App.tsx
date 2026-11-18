@@ -6,30 +6,34 @@ import { AppProviders } from '@/app/providers'
 import ProtectedRoute from '@/shared/components/ProtectedRoute'
 import DashboardLayout from '@/shared/layouts/DashboardLayout'
 import TouristLayout from '@/shared/layouts/TouristLayout'
+import MunicipalLayout from '@/features/municipal/components/MunicipalLayout'
+import AdminLayout from '@/features/admin/components/AdminLayout'
+import AdminSectionTabs from '@/features/admin/components/AdminSectionTabs'
+import { ADMIN_REDIRECTS, BUSINESSES_TABS, MUNICIPALITIES_TABS, RIDERS_TABS, SETTINGS_TABS, USERS_TABS } from '@/features/admin/sectionTabs'
+import { RiderOnboardingGate } from '@/features/onboarding/components/RiderOnboardingGate'
 import BusinessSwitcher from '@/features/business-owner/components/BusinessSwitcher'
 import { useBusinessOwnerStore } from '@/features/business-owner/services/business-owner-store'
 import { useAuthStore } from '@/features/auth/services/auth-store'
 import {
-  LayoutDashboard, MapPin, Users, Building2, Tag, Map, Bike, HandCoins,
-  UserCheck, Shield, FileBarChart, ScrollText, Bell, Settings, HardDrive,
-  Lock, Navigation, Compass, UtensilsCrossed, CalendarCheck, Car,
+  LayoutDashboard, MapPin, Building2, Tag, Map, Shield, FileBarChart, Bell,
+  Settings, Navigation, Compass, UtensilsCrossed, CalendarCheck, Car,
   Calendar, Heart, Star, Clock, MessageSquare, User, ClipboardList,
   Package, BookOpen, Percent, BarChart3, Activity, ShoppingCart, UserPlus,
-  CircleAlert, Megaphone, FileText, Scan, Wallet, CreditCard,
-  ChefHat, CalendarDays, BedDouble, Image, Home,
-  ClipboardCheck, DollarSign, Archive, Eye, Settings2, Store, IdCard
+  Megaphone, FileText, Wallet, CreditCard, ChefHat, CalendarDays,
+  BedDouble, Image, Home, ClipboardCheck, DollarSign, Archive, Eye,
+  Settings2
 } from 'lucide-react'
 
 // Auth pages (not lazy — small, needed immediately)
 import LoginPage from '@/features/auth/pages/LoginPage'
 import RegisterPage from '@/features/auth/pages/RegisterPage'
 import RiderRegisterPage from '@/features/auth/pages/RiderRegisterPage'
-import RoleSelectionPage from '@/features/auth/pages/RoleSelectionPage'
 
 // Non-dashboard public pages
 import LandingPage from '@/pages/LandingPage'
 import LandingExplorePage from '@/pages/LandingExplorePage'
 import LandingRestaurantPage from '@/pages/LandingRestaurantPage'
+import LandingFoodItemPage from '@/pages/LandingFoodItemPage'
 import LandingAllCategoriesPage from '@/pages/LandingAllCategoriesPage'
 import LandingMunicipalityPage from '@/pages/LandingMunicipalityPage'
 import UnauthorizedPage from '@/pages/UnauthorizedPage'
@@ -57,27 +61,29 @@ const AdminBusinessShow = lazy_(() => import('@/features/admin/pages/AdminBusine
 const AdminBusinessCategories = lazy_(() => import('@/features/admin/pages/AdminBusinessCategories'))
 const AdminMunicipalities = lazy_(() => import('@/features/admin/pages/AdminMunicipalities'))
 const AdminMunicipalityShow = lazy_(() => import('@/features/admin/pages/AdminMunicipalityShow'))
+const AdminMunicipalityAccounts = lazy_(() => import('@/features/admin/pages/AdminMunicipalityAccounts'))
 const AdminTourists = lazy_(() => import('@/features/admin/pages/AdminTourists'))
 const AdminRoles = lazy_(() => import('@/features/admin/pages/AdminRoles'))
 const AdminRiders = lazy_(() => import('@/features/admin/pages/AdminRiders'))
+const AdminRiderFares = lazy_(() => import('@/features/admin/pages/AdminRiders').then((m) => ({ default: m.AdminRiderFares })))
 const AdminRiderShow = lazy_(() => import('@/features/admin/pages/AdminRiderShow'))
 const AdminRiderCashReconciliation = lazy_(() => import('@/features/admin/pages/AdminRiderCashReconciliation'))
 const AdminRiderCash = lazy_(() => import('@/features/admin/pages/AdminRiderCash'))
 const AdminRiderCashouts = lazy_(() => import('@/features/admin/pages/AdminRiderCashouts'))
 const AdminCashoutInvestigation = lazy_(() => import('@/features/admin/pages/AdminCashoutInvestigation'))
 const AdminReports = lazy_(() => import('@/features/admin/pages/AdminReports'))
-const AdminPosSales = lazy_(() => import('@/features/admin/pages/AdminPosSales'))
 const AdminAuditLogs = lazy_(() => import('@/features/admin/pages/AdminAuditLogs'))
 const AdminNotifications = lazy_(() => import('@/features/admin/pages/AdminNotifications'))
 const AdminOfficeProfile = lazy_(() => import('@/features/admin/pages/AdminOfficeProfile'))
 const AdminSystemConfig = lazy_(() => import('@/features/admin/pages/AdminSystemConfig'))
 const AdminSystemBackup = lazy_(() => import('@/features/admin/pages/AdminSystemBackup'))
+const AdminSystemDiagnostics = lazy_(() => import('@/features/admin/pages/AdminSystemDiagnostics'))
+const AdminIncidentHistory = lazy_(() => import('@/features/admin/pages/AdminIncidentHistory'))
 const AdminSystemSecurity = lazy_(() => import('@/features/admin/pages/AdminSystemSecurity'))
 const AdminSystemOcrSettings = lazy_(() => import('@/features/admin/pages/AdminSystemOcrSettings'))
 const AdminLiveMap = lazy_(() => import('@/features/admin/pages/AdminLiveMap'))
 const AdminLiveDeliveries = lazy_(() => import('@/features/admin/pages/AdminLiveDeliveries'))
 const AdminLiveSOS = lazy_(() => import('@/features/admin/pages/AdminLiveSOS'))
-const AdminLiveTours = lazy_(() => import('@/features/admin/pages/AdminLiveTours'))
 
 // --- Tourist ---
 const TouristDashboard = lazy_(() => import('@/features/tourist/pages/TouristDashboard'))
@@ -100,6 +106,8 @@ const TouristWriteReview = lazy_(() => import('@/features/tourist/pages/TouristW
 const TouristBooking = lazy_(() => import('@/features/tourist/pages/TouristBooking'))
 const TouristBookingShow = lazy_(() => import('@/features/tourist/pages/TouristBookingShow'))
 const TouristTransport = lazy_(() => import('@/features/tourist/pages/TouristTransport'))
+const TouristBookRide = lazy_(() => import('@/features/tourist/pages/TouristBookRide'))
+const TouristChangeDestination = lazy_(() => import('@/features/tourist/pages/TouristChangeDestination'))
 const TouristTransportTracking = lazy_(() => import('@/features/tourist/pages/TouristTransportTracking'))
 const TouristEvents = lazy_(() => import('@/features/tourist/pages/TouristEvents'))
 const TouristEventsShow = lazy_(() => import('@/features/tourist/pages/TouristEventsShow'))
@@ -207,6 +215,7 @@ const RiderHistory = lazy_(() => import('@/features/rider/pages/RiderHistory'))
 const RiderMap = lazy_(() => import('@/features/rider/pages/RiderMap'))
 import RiderDispatchNotification from '@/features/rider/components/RiderDispatchNotification'
 import GlobalRiderAlert from '@/features/rider/components/GlobalRiderAlert'
+import RiderDestinationChangeBanner from '@/features/rider/components/RiderDestinationChangeBanner'
 import { RiderActiveTripProvider } from '@/features/rider/context/RiderActiveTripContext'
 
 // --- Tourism Office ---
@@ -219,6 +228,26 @@ const TourismOfficeEvents = lazy_(() => import('@/features/tourism-office/pages/
 const TourismOfficeAnnouncements = lazy_(() => import('@/features/tourism-office/pages/TourismOfficeAnnouncements'))
 const TourismOfficeCategoryDocuments = lazy_(() => import('@/features/tourism-office/pages/TourismOfficeCategoryDocuments'))
 const TourismOfficeLandingContent = lazy_(() => import('@/features/tourism-office/pages/TourismOfficeLandingContent'))
+
+// --- Municipal Tourism Office (role tourism_office, scoped to one municipality) ---
+const MunicipalDashboard = lazy_(() => import('@/features/municipal/pages/MunicipalDashboard'))
+const MunicipalBusinessOwners = lazy_(() => import('@/features/municipal/pages/MunicipalBusinessOwners'))
+const MunicipalBusinessOwnerShow = lazy_(() => import('@/features/municipal/pages/MunicipalBusinessOwnerShow'))
+const MunicipalBusinesses = lazy_(() => import('@/features/municipal/pages/MunicipalBusinesses'))
+const MunicipalBusinessShow = lazy_(() => import('@/features/municipal/pages/MunicipalBusinessShow'))
+const MunicipalRiders = lazy_(() => import('@/features/municipal/pages/MunicipalRiders'))
+const MunicipalRiderShow = lazy_(() => import('@/features/municipal/pages/MunicipalRiderShow'))
+const MunicipalTourists = lazy_(() => import('@/features/municipal/pages/MunicipalTourists'))
+const MunicipalTouristShow = lazy_(() => import('@/features/municipal/pages/MunicipalTouristShow'))
+const MunicipalDocuments = lazy_(() => import('@/features/municipal/pages/MunicipalDocuments'))
+const MunicipalReports = lazy_(() => import('@/features/municipal/pages/MunicipalReports'))
+const MunicipalActivityLogs = lazy_(() => import('@/features/municipal/pages/MunicipalActivityLogs'))
+const MunicipalProfile = lazy_(() => import('@/features/municipal/pages/MunicipalProfile'))
+const MunicipalRiderOnboarding = lazy_(() => import('@/features/onboarding/pages/OnboardingOfficePages').then((m) => ({ default: m.MunicipalRiderOnboardingPage })))
+const AdminRiderOnboarding = lazy_(() => import('@/features/onboarding/pages/OnboardingOfficePages').then((m) => ({ default: m.AdminRiderOnboardingPage })))
+const BecomeRiderPage = lazy_(() => import('@/features/onboarding/pages/BecomeRiderPage'))
+const RiderOfficesPage = lazy_(() => import('@/features/onboarding/pages/RiderOfficesPage'))
+const RiderOnboardingPage = lazy_(() => import('@/features/onboarding/pages/RiderOnboardingPage'))
 
 function PageLoader() {
   return (
@@ -233,40 +262,6 @@ function SuspenseWrapper({ children }: { children: React.ReactNode }) {
 }
 
 // Navigation section definitions
-const adminSections = [
-  { items: [{ to: '/admin/dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" /> }] },
-  { label: 'Sales & POS', items: [
-    { to: '/admin/pos', label: 'POS & Sales', icon: <Store className="w-5 h-5" /> },
-  ]},
-  { label: 'Live Operations', items: [
-    { to: '/admin/live/map', label: 'Live Map', icon: <Map className="w-5 h-5" /> },
-    { to: '/admin/live/deliveries', label: 'Deliveries', icon: <Package className="w-5 h-5" /> },
-    { to: '/admin/rider-cash', label: 'Rider Cash', icon: <Wallet className="w-5 h-5" /> },
-    { to: '/admin/live/sos', label: 'SOS Alerts', icon: <CircleAlert className="w-5 h-5" /> },
-    { to: '/admin/live/tours', label: 'Live Tours', icon: <Navigation className="w-5 h-5" /> },
-  ]},
-  { label: 'Management', items: [
-    { to: '/admin/users', label: 'Users', icon: <Users className="w-5 h-5" /> },
-    { to: '/admin/businesses', label: 'Businesses', icon: <Building2 className="w-5 h-5" /> },
-    { to: '/admin/business-categories', label: 'Categories', icon: <Tag className="w-5 h-5" /> },
-    { to: '/admin/municipalities', label: 'Municipalities', icon: <MapPin className="w-5 h-5" /> },
-    { to: '/admin/riders', label: 'Riders', icon: <Bike className="w-5 h-5" /> },
-    { to: '/admin/cashouts', label: 'Cashouts', icon: <HandCoins className="w-5 h-5" /> },
-    { to: '/admin/tourists', label: 'Tourists', icon: <UserCheck className="w-5 h-5" /> },
-    { to: '/admin/roles', label: 'Roles', icon: <Shield className="w-5 h-5" /> },
-  ]},
-  { label: 'System', items: [
-    { to: '/admin/profile', label: 'Office Profile', icon: <IdCard className="w-5 h-5" /> },
-    { to: '/admin/reports', label: 'Reports', icon: <FileBarChart className="w-5 h-5" /> },
-    { to: '/admin/audit-logs', label: 'Audit Logs', icon: <ScrollText className="w-5 h-5" /> },
-    { to: '/admin/notifications', label: 'Notifications', icon: <Bell className="w-5 h-5" /> },
-    { to: '/admin/system/config', label: 'Configuration', icon: <Settings className="w-5 h-5" /> },
-    { to: '/admin/system/ocr-settings', label: 'OCR Settings', icon: <Scan className="w-5 h-5" /> },
-    { to: '/admin/system/backup', label: 'Backup', icon: <HardDrive className="w-5 h-5" /> },
-    { to: '/admin/system/security', label: 'Security', icon: <Lock className="w-5 h-5" /> },
-  ]},
-]
-
 const touristSections = [
   { items: [{ to: '/tourist/dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" /> }] },
   { items: [
@@ -616,12 +611,25 @@ export default function App() {
           <Route path="/" element={<LandingPage />} />
           <Route path="/explore" element={<LandingExplorePage />} />
           <Route path="/explore/food/:id" element={<LandingRestaurantPage />} />
+          {/* Food item page (same as the tourist one) for guests on the public site. */}
+          <Route path="/explore/food/item/:id" element={<SuspenseWrapper><LandingFoodItemPage /></SuspenseWrapper>} />
           <Route path="/explore/categories" element={<LandingAllCategoriesPage />} />
           <Route path="/explore/municipality/:id" element={<LandingMunicipalityPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/register/rider" element={<RiderRegisterPage />} />
-          <Route path="/role-selection" element={<RoleSelectionPage />} />
+          {/* Role selection removed: sign-up goes straight to tourist registration. */}
+          <Route path="/role-selection" element={<Navigate to="/register?role=tourist" replace />} />
+          <Route path="/become-a-rider" element={<BecomeRiderPage />} />
+          <Route path="/become-a-rider/offices" element={<RiderOfficesPage />} />
+          <Route
+            path="/rider/onboarding"
+            element={
+              <ProtectedRoute roles={['rider']}>
+                <RiderOnboardingPage />
+              </ProtectedRoute>
+            }
+          />
           <Route path="/unauthorized" element={<UnauthorizedPage />} />
           <Route path="/forgot-password" element={<SuspenseWrapper><ForgotPasswordPage /></SuspenseWrapper>} />
           <Route path="/reset-password" element={<SuspenseWrapper><ResetPasswordPage /></SuspenseWrapper>} />
@@ -634,40 +642,63 @@ export default function App() {
             path="/admin"
             element={
               <ProtectedRoute roles={['bansud_tourism_office']}>
-                <DashboardLayout sections={adminSections} roleLabel="Admin" theme="admin" profilePath="/admin/profile" />
+                <AdminLayout />
               </ProtectedRoute>
             }
           >
             <Route path="dashboard" element={<AdminDashboard />} />
             <Route path="profile" element={<AdminOfficeProfile />} />
-            <Route path="users" element={<AdminUsers />} />
+            {/* Users → All users | Tourists */}
+            <Route path="users" element={<AdminSectionTabs label="Users sections" tabs={USERS_TABS} />}>
+              <Route index element={<AdminUsers />} />
+              <Route path="tourists" element={<AdminTourists />} />
+            </Route>
             <Route path="users/create" element={<AdminUsersCreate />} />
             <Route path="users/:id/edit" element={<AdminUsersEdit />} />
-            <Route path="businesses" element={<AdminBusinesses />} />
+            {/* Businesses → Businesses | Categories */}
+            <Route path="businesses" element={<AdminSectionTabs label="Businesses sections" tabs={BUSINESSES_TABS} />}>
+              <Route index element={<AdminBusinesses />} />
+              <Route path="categories" element={<AdminBusinessCategories />} />
+            </Route>
             <Route path="businesses/:id" element={<AdminBusinessShow />} />
-            <Route path="business-categories" element={<AdminBusinessCategories />} />
-            <Route path="municipalities" element={<AdminMunicipalities />} />
+            {/* Municipalities → Municipalities | Accounts */}
+            <Route path="municipalities" element={<AdminSectionTabs label="Municipalities sections" tabs={MUNICIPALITIES_TABS} />}>
+              <Route index element={<AdminMunicipalities />} />
+              <Route path="accounts" element={<AdminMunicipalityAccounts />} />
+            </Route>
             <Route path="municipalities/:id" element={<AdminMunicipalityShow />} />
-            <Route path="tourists" element={<AdminTourists />} />
-            <Route path="roles" element={<AdminRoles />} />
-            <Route path="riders" element={<AdminRiders />} />
+            <Route path="rider-onboarding" element={<AdminRiderOnboarding />} />
+            {/* Riders → Rider accounts | Fare configuration (cash lives in Rider Cash) */}
+            <Route path="riders" element={<AdminSectionTabs label="Riders sections" tabs={RIDERS_TABS} />}>
+              <Route index element={<AdminRiders />} />
+              <Route path="fares" element={<AdminRiderFares />} />
+            </Route>
             <Route path="riders/:id" element={<AdminRiderShow />} />
             <Route path="riders/:id/cash-reconciliation" element={<AdminRiderCashReconciliation />} />
             <Route path="rider-cash" element={<AdminRiderCash />} />
             <Route path="cashouts" element={<AdminRiderCashouts />} />
             <Route path="cashouts/:id" element={<AdminCashoutInvestigation />} />
             <Route path="reports" element={<AdminReports />} />
-            <Route path="pos" element={<AdminPosSales />} />
             <Route path="audit-logs" element={<AdminAuditLogs />} />
             <Route path="notifications" element={<AdminNotifications />} />
-            <Route path="system/config" element={<AdminSystemConfig />} />
-            <Route path="system/backup" element={<AdminSystemBackup />} />
-            <Route path="system/security" element={<AdminSystemSecurity />} />
-            <Route path="system/ocr-settings" element={<AdminSystemOcrSettings />} />
+            {/* Settings → Configuration | Access Control | Document Verification | Security | Backup | Diagnostics | Incident History */}
+            <Route path="settings" element={<AdminSectionTabs label="Settings sections" title="Settings" description="Platform configuration, access control and system administration." tabs={SETTINGS_TABS} />}>
+              <Route index element={<Navigate to="configuration" replace />} />
+              <Route path="configuration" element={<AdminSystemConfig />} />
+              <Route path="access-control" element={<AdminRoles />} />
+              <Route path="document-verification" element={<AdminSystemOcrSettings />} />
+              <Route path="security" element={<AdminSystemSecurity />} />
+              <Route path="backup" element={<AdminSystemBackup />} />
+              <Route path="diagnostics" element={<AdminSystemDiagnostics />} />
+              <Route path="incidents" element={<AdminIncidentHistory />} />
+            </Route>
+            {/* Old URLs keep working. */}
+            {Object.entries(ADMIN_REDIRECTS).map(([from, to]) => (
+              <Route key={from} path={from} element={<Navigate to={to} replace />} />
+            ))}
             <Route path="live/map" element={<AdminLiveMap />} />
             <Route path="live/deliveries" element={<AdminLiveDeliveries />} />
             <Route path="live/sos" element={<AdminLiveSOS />} />
-            <Route path="live/tours" element={<AdminLiveTours />} />
           </Route>
 
           {/* Tourist */}
@@ -678,11 +709,14 @@ export default function App() {
               <Route path="food/cart" element={<TouristFoodCart />} />
               <Route path="food/group-order/:id" element={<TouristGroupOrder />} />
               <Route path="food/order/:id/status" element={<TouristOrderStatus />} />
+              <Route path="orders/:id/track" element={<TouristOrderStatus />} />
               <Route path="orders/:id/progress" element={<TouristOrderStatus />} />
               <Route path="stays/:id" element={<TouristBookingShow />} />
               <Route path="trips" element={<MyTrips />} />
               <Route path="transport" element={<TouristTransport />} />
+              <Route path="transport/book" element={<TouristBookRide />} />
               <Route path="transport/tracking/:id" element={<TouristTransportTracking />} />
+              <Route path="transport/tracking/:id/change-destination" element={<TouristChangeDestination />} />
               {/* Ride Hailing map (Map button): the business map without the places panel. */}
               <Route path="transport/map" element={<TouristExploreMap mapOnly />} />
               <Route path="booking" element={<TouristBooking />} />
@@ -819,11 +853,14 @@ export default function App() {
             path="/rider"
             element={
               <ProtectedRoute roles={['rider']}>
-                <RiderActiveTripProvider>
-                  <RiderDispatchNotification />
-                  <DashboardLayout sections={riderSections} roleLabel="Rider" theme="tourism" profilePath="/rider/profile" bottomNavigation />
-                  <GlobalRiderAlert />
-                </RiderActiveTripProvider>
+                <RiderOnboardingGate>
+                  <RiderActiveTripProvider>
+                    <RiderDispatchNotification />
+                    <DashboardLayout sections={riderSections} roleLabel="Rider" theme="tourism" profilePath="/rider/profile" bottomNavigation />
+                    <GlobalRiderAlert />
+                    <RiderDestinationChangeBanner />
+                  </RiderActiveTripProvider>
+                </RiderOnboardingGate>
               </ProtectedRoute>
             }
           >
@@ -847,7 +884,7 @@ export default function App() {
           <Route
             path="/tourism-office"
             element={
-              <ProtectedRoute roles={['tourism_office', 'bansud_tourism_office']}>
+              <ProtectedRoute roles={['bansud_tourism_office']}>
                 <DashboardLayout sections={tourismOfficeSections} roleLabel="Tourism Office" theme="tourism-office" />
               </ProtectedRoute>
             }
@@ -861,6 +898,32 @@ export default function App() {
             <Route path="business-owners/:id" element={<TourismOfficeBusinessOwnerShow />} />
             <Route path="reports" element={<TourismOfficeReports />} />
             <Route path="landing-content" element={<TourismOfficeLandingContent />} />
+          </Route>
+
+          {/* Municipal Tourism Office */}
+          <Route
+            path="/municipal"
+            element={
+              <ProtectedRoute roles={['tourism_office']}>
+                <MunicipalLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<Navigate to="dashboard" replace />} />
+            <Route path="dashboard" element={<MunicipalDashboard />} />
+            <Route path="business-owners" element={<MunicipalBusinessOwners />} />
+            <Route path="business-owners/:id" element={<MunicipalBusinessOwnerShow />} />
+            <Route path="businesses" element={<MunicipalBusinesses />} />
+            <Route path="businesses/:id" element={<MunicipalBusinessShow />} />
+            <Route path="riders" element={<MunicipalRiders />} />
+            <Route path="riders/:id" element={<MunicipalRiderShow />} />
+            <Route path="tourists" element={<MunicipalTourists />} />
+            <Route path="tourists/:id" element={<MunicipalTouristShow />} />
+            <Route path="documents" element={<MunicipalDocuments />} />
+            <Route path="reports" element={<MunicipalReports />} />
+            <Route path="activity-logs" element={<MunicipalActivityLogs />} />
+            <Route path="profile" element={<MunicipalProfile />} />
+            <Route path="onboarding" element={<MunicipalRiderOnboarding />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />

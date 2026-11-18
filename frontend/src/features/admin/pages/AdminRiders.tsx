@@ -8,9 +8,8 @@ import { StatusBadge } from '@/shared/components/StatusBadge'
 import { formatDate } from '@/shared/utils'
 import { API_ENDPOINTS } from '@/shared/constants'
 import type { User, PaginatedResponse } from '@/shared/types'
-import { Search, ChevronLeft, ChevronRight, Bike, Banknote, Save, Loader2, Car, Motorbike, Van, type LucideIcon } from 'lucide-react'
+import { Search, ChevronLeft, ChevronRight, Bike, Banknote, Save, Loader2, Car, Motorbike, Van, Wallet, ClipboardCheck, type LucideIcon } from 'lucide-react'
 import { TricycleIcon } from '@/features/admin/components/TricycleIcon'
-import { RiderCashAdvanceCard } from '@/features/admin/components/RiderCashAdvanceCard'
 
 interface DeliveryFareSettings {
   base_fare: number
@@ -146,8 +145,12 @@ function RideFareCard({
   )
 }
 
+/**
+ * Riders — rider accounts. Fares live under Fare configuration; daily cash
+ * advances, COD purchases, returns and remittances live in Rider Cash (one
+ * financial module, no duplicate cash controls here).
+ */
 export default function AdminRiders() {
-  const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
@@ -168,172 +171,34 @@ export default function AdminRiders() {
       }),
   })
 
-  const { data: fares } = useQuery({
-    queryKey: ['admin-riders-fares'],
-    queryFn: () => get<DeliveryFareSettings>(API_ENDPOINTS.ADMIN.RIDERS_FARES),
-  })
-
-  const [form, setForm] = useState<DeliveryFareSettings>(DEFAULT_FARES)
-  const [formLoaded, setFormLoaded] = useState(false)
-  const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
-
-  useEffect(() => {
-    if (fares && !formLoaded) {
-      setForm(fares)
-      setFormLoaded(true)
-    }
-  }, [fares, formLoaded])
-
-  const { data: rideFares } = useQuery({
-    queryKey: ['admin-riders-ride-fares'],
-    queryFn: () => get<RideFareSettings>(API_ENDPOINTS.ADMIN.RIDERS_RIDE_FARES),
-  })
-  const [rideForm, setRideForm] = useState<RideFareSettings>(DEFAULT_RIDE_FARES)
-  const [rideFormLoaded, setRideFormLoaded] = useState(false)
-
-  useEffect(() => {
-    if (rideFares && !rideFormLoaded) {
-      setRideForm(rideFares)
-      setRideFormLoaded(true)
-    }
-  }, [rideFares, rideFormLoaded])
-
-  // One Save for both cards: food delivery fee and ride hailing fares.
-  const saveMutation = useMutation({
-    mutationFn: async (payload: { food: DeliveryFareSettings; ride: RideFareSettings }) => {
-      const [food, ride] = await Promise.all([
-        put<DeliveryFareSettings>(API_ENDPOINTS.ADMIN.RIDERS_FARES, payload.food),
-        put<RideFareSettings>(API_ENDPOINTS.ADMIN.RIDERS_RIDE_FARES, payload.ride),
-      ])
-      return { food, ride }
-    },
-    onSuccess: ({ food, ride }) => {
-      setForm(food)
-      setRideForm(ride)
-      setNotice({ type: 'success', message: 'Fares saved. New fees apply to new delivery quotes and ride bookings.' })
-    },
-    onError: (error) => {
-      setNotice({ type: 'error', message: apiErrorMessage(error, 'Failed to save fares. Please try again.') })
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin-riders-fares'] })
-      queryClient.invalidateQueries({ queryKey: ['admin-riders-ride-fares'] })
-    },
-  })
-
-  const setRideField = (vehicle: RideVehicle, field: 'base_fare' | 'per_km', value: string) => {
-    setNotice(null)
-    setRideForm((prev) => ({ ...prev, [vehicle]: { ...prev[vehicle], [field]: value === '' ? 0 : Number(value) } }))
-  }
-
-  const setFareField = (key: keyof DeliveryFareSettings, value: string) => {
-    setNotice(null)
-    setForm((prev) => ({ ...prev, [key]: value === '' ? 0 : Number(value) }))
-  }
-
-  const handleSaveFares = () => {
-    saveMutation.mutate({ food: { ...form }, ride: { ...rideForm } })
-  }
-
-  // Anything typed but not yet saved on either fare card.
-  const hasUnsavedFares =
-    (fares !== undefined && JSON.stringify(form) !== JSON.stringify(fares)) ||
-    (rideFares !== undefined && JSON.stringify(rideForm) !== JSON.stringify(rideFares))
-
   const riders = data?.data ?? []
   const meta = data?.meta
 
   return (
     <div>
-      <div className="mb-8">
+      <div className="mb-6">
         <h1 className="text-2xl lg:text-3xl font-bold text-[#17201A]">Riders</h1>
-        <p className="mt-1 text-sm lg:text-base text-[#6B7280]">Manage rider accounts, fares and COD cash advances</p>
+        <p className="mt-1 text-sm lg:text-base text-[#6B7280]">Rider accounts and fare configuration</p>
       </div>
 
-      {/* Fares: food delivery fee and ride hailing fares, one Save.
-          The Save bar stays on screen while scrolling through the fare cards. */}
-      <div>
-      <div
-        data-testid="fares-save-bar"
-        className="sticky top-0 z-20 -mx-2 mb-3 rounded-xl bg-[#F4F7F2]/95 px-2 py-2 backdrop-blur"
-      >
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold text-[#17201A]">Fares</h2>
-          <div className="flex items-center gap-3">
-            {hasUnsavedFares && !saveMutation.isPending && (
-              <span className="text-xs font-medium text-[#B45309]">Unsaved changes</span>
-            )}
-            <button
-              onClick={handleSaveFares}
-              disabled={saveMutation.isPending}
-              className={`inline-flex items-center gap-1.5 px-4 py-2 bg-[#16803C] hover:bg-[#126B32] disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition ${
-                hasUnsavedFares ? 'ring-2 ring-[#16803C]/30 ring-offset-1' : ''
-              }`}
-            >
-              {saveMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              Save Fares
-            </button>
-          </div>
-        </div>
-        {notice && (
-          <div className="mt-2">
-            <Alert type={notice.type} message={notice.message} onDismiss={() => setNotice(null)} />
-          </div>
-        )}
+      <div className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2" aria-label="Related modules">
+        <Link to="/admin/rider-cash" className="group flex items-center gap-3 rounded-2xl border border-[#E2E8E3] bg-white px-4 py-3 hover:border-[#16803C]/40">
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#FFF7D6]"><Wallet className="h-4 w-4 text-[#B45309]" /></span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-[#17201A]">Rider Cash</span>
+            <span className="block text-xs text-[#6B7280]">Cash advances, COD purchases, returns and remittances</span>
+          </span>
+          <ChevronRight className="h-4 w-4 text-[#9AA39D] group-hover:text-[#16803C]" />
+        </Link>
+        <Link to="/admin/rider-onboarding" className="group flex items-center gap-3 rounded-2xl border border-[#E2E8E3] bg-white px-4 py-3 hover:border-[#16803C]/40">
+          <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#EAF6ED]"><ClipboardCheck className="h-4 w-4 text-[#16803C]" /></span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold text-[#17201A]">Applications &amp; onboarding</span>
+            <span className="block text-xs text-[#6B7280]">Training, interviews and rider approval</span>
+          </span>
+          <ChevronRight className="h-4 w-4 text-[#9AA39D] group-hover:text-[#16803C]" />
+        </Link>
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-8">
-      <section aria-label="Food Delivery Fee" className="flex flex-col bg-white border border-[#E2E8E3] rounded-2xl shadow-tourism">
-        <div className="px-4 py-3 border-b border-[#E2E8E3] flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 shrink-0 bg-[#EAF6ED] rounded-lg flex items-center justify-center">
-              <Banknote className="w-4 h-4 text-[#16803C]" />
-            </div>
-            <div className="min-w-0">
-              <h2 className="text-base font-semibold text-[#17201A]">Food Delivery Fee</h2>
-              <p className="text-xs text-[#6B7280] truncate">Base fare and fees for food orders</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex-1 flex flex-col p-4">
-
-          <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
-            {FARE_FIELDS.map((field) => (
-              <div key={field.key} title={field.hint}>
-                <label className="block text-xs font-medium text-[#17201A] mb-1">{field.label}</label>
-                <div className="relative">
-                  {field.prefix && (
-                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-[#6B7280]">{field.prefix}</span>
-                  )}
-                  <input
-                    type="number"
-                    min={0}
-                    step={field.step}
-                    value={form[field.key]}
-                    onChange={(e) => setFareField(field.key, e.target.value)}
-                    aria-label={field.label}
-                    className={`${fareInputClass} ${field.prefix ? 'pl-6' : 'pl-2.5'} ${field.suffix ? 'pr-9' : 'pr-2'}`}
-                  />
-                  {field.suffix && (
-                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-[#6B7280]">{field.suffix}</span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <p className="mt-auto pt-3 text-xs text-[#6B7280]">
-            Fee = (base fare + (distance − included km) × per-km rate + adjustment) × surge, at least the minimum
-            fee. Applies to new quotes; existing orders keep their fee.
-          </p>
-        </div>
-      </section>
-
-      <RideFareCard form={rideForm} onChange={setRideField} />
-      </div>
-      </div>
-
-      <RiderCashAdvanceCard />
 
       {isLoading ? (
         <TableSkeleton rows={8} cols={5} />
@@ -446,6 +311,174 @@ export default function AdminRiders() {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+/** Riders → Fare configuration: food delivery fee and ride-hailing fares (one Save). */
+export function AdminRiderFares() {
+  const queryClient = useQueryClient()
+  const { data: fares } = useQuery({
+    queryKey: ['admin-riders-fares'],
+    queryFn: () => get<DeliveryFareSettings>(API_ENDPOINTS.ADMIN.RIDERS_FARES),
+  })
+
+  const [form, setForm] = useState<DeliveryFareSettings>(DEFAULT_FARES)
+  const [formLoaded, setFormLoaded] = useState(false)
+  const [notice, setNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+
+  useEffect(() => {
+    if (fares && !formLoaded) {
+      setForm(fares)
+      setFormLoaded(true)
+    }
+  }, [fares, formLoaded])
+
+  const { data: rideFares } = useQuery({
+    queryKey: ['admin-riders-ride-fares'],
+    queryFn: () => get<RideFareSettings>(API_ENDPOINTS.ADMIN.RIDERS_RIDE_FARES),
+  })
+  const [rideForm, setRideForm] = useState<RideFareSettings>(DEFAULT_RIDE_FARES)
+  const [rideFormLoaded, setRideFormLoaded] = useState(false)
+
+  useEffect(() => {
+    if (rideFares && !rideFormLoaded) {
+      setRideForm(rideFares)
+      setRideFormLoaded(true)
+    }
+  }, [rideFares, rideFormLoaded])
+
+  // One Save for both cards: food delivery fee and ride hailing fares.
+  const saveMutation = useMutation({
+    mutationFn: async (payload: { food: DeliveryFareSettings; ride: RideFareSettings }) => {
+      const [food, ride] = await Promise.all([
+        put<DeliveryFareSettings>(API_ENDPOINTS.ADMIN.RIDERS_FARES, payload.food),
+        put<RideFareSettings>(API_ENDPOINTS.ADMIN.RIDERS_RIDE_FARES, payload.ride),
+      ])
+      return { food, ride }
+    },
+    onSuccess: ({ food, ride }) => {
+      setForm(food)
+      setRideForm(ride)
+      setNotice({ type: 'success', message: 'Fares saved. New fees apply to new delivery quotes and ride bookings.' })
+    },
+    onError: (error) => {
+      setNotice({ type: 'error', message: apiErrorMessage(error, 'Failed to save fares. Please try again.') })
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-riders-fares'] })
+      queryClient.invalidateQueries({ queryKey: ['admin-riders-ride-fares'] })
+    },
+  })
+
+  const setRideField = (vehicle: RideVehicle, field: 'base_fare' | 'per_km', value: string) => {
+    setNotice(null)
+    setRideForm((prev) => ({ ...prev, [vehicle]: { ...prev[vehicle], [field]: value === '' ? 0 : Number(value) } }))
+  }
+
+  const setFareField = (key: keyof DeliveryFareSettings, value: string) => {
+    setNotice(null)
+    setForm((prev) => ({ ...prev, [key]: value === '' ? 0 : Number(value) }))
+  }
+
+  const handleSaveFares = () => {
+    saveMutation.mutate({ food: { ...form }, ride: { ...rideForm } })
+  }
+
+  // Anything typed but not yet saved on either fare card.
+  const hasUnsavedFares =
+    (fares !== undefined && JSON.stringify(form) !== JSON.stringify(fares)) ||
+    (rideFares !== undefined && JSON.stringify(rideForm) !== JSON.stringify(rideFares))
+
+  return (
+    <div>
+      <div className="mb-6">
+        <h1 className="text-2xl lg:text-3xl font-bold text-[#17201A]">Fare configuration</h1>
+        <p className="mt-1 text-sm lg:text-base text-[#6B7280]">Food delivery fees and ride-hailing fares for new quotes and bookings</p>
+      </div>
+      {/* Fares: food delivery fee and ride hailing fares, one Save.
+          The Save bar stays on screen while scrolling through the fare cards. */}
+      <div>
+      <div
+        data-testid="fares-save-bar"
+        className="sticky top-0 z-20 -mx-2 mb-3 rounded-xl bg-[#F4F7F2]/95 px-2 py-2 backdrop-blur"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold text-[#17201A]">Fares</h2>
+          <div className="flex items-center gap-3">
+            {hasUnsavedFares && !saveMutation.isPending && (
+              <span className="text-xs font-medium text-[#B45309]">Unsaved changes</span>
+            )}
+            <button
+              onClick={handleSaveFares}
+              disabled={saveMutation.isPending}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 bg-[#16803C] hover:bg-[#126B32] disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-xl transition ${
+                hasUnsavedFares ? 'ring-2 ring-[#16803C]/30 ring-offset-1' : ''
+              }`}
+            >
+              {saveMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+              Save Fares
+            </button>
+          </div>
+        </div>
+        {notice && (
+          <div className="mt-2">
+            <Alert type={notice.type} message={notice.message} onDismiss={() => setNotice(null)} />
+          </div>
+        )}
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-8">
+      <section aria-label="Food Delivery Fee" className="flex flex-col bg-white border border-[#E2E8E3] rounded-2xl shadow-tourism">
+        <div className="px-4 py-3 border-b border-[#E2E8E3] flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 shrink-0 bg-[#EAF6ED] rounded-lg flex items-center justify-center">
+              <Banknote className="w-4 h-4 text-[#16803C]" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-[#17201A]">Food Delivery Fee</h2>
+              <p className="text-xs text-[#6B7280] truncate">Base fare and fees for food orders</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 flex flex-col p-4">
+
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
+            {FARE_FIELDS.map((field) => (
+              <div key={field.key} title={field.hint}>
+                <label className="block text-xs font-medium text-[#17201A] mb-1">{field.label}</label>
+                <div className="relative">
+                  {field.prefix && (
+                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-[#6B7280]">{field.prefix}</span>
+                  )}
+                  <input
+                    type="number"
+                    min={0}
+                    step={field.step}
+                    value={form[field.key]}
+                    onChange={(e) => setFareField(field.key, e.target.value)}
+                    aria-label={field.label}
+                    className={`${fareInputClass} ${field.prefix ? 'pl-6' : 'pl-2.5'} ${field.suffix ? 'pr-9' : 'pr-2'}`}
+                  />
+                  {field.suffix && (
+                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-[#6B7280]">{field.suffix}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <p className="mt-auto pt-3 text-xs text-[#6B7280]">
+            Fee = (base fare + (distance − included km) × per-km rate + adjustment) × surge, at least the minimum
+            fee. Applies to new quotes; existing orders keep their fee.
+          </p>
+        </div>
+      </section>
+
+      <RideFareCard form={rideForm} onChange={setRideField} />
+      </div>
+      </div>
+
     </div>
   )
 }

@@ -428,3 +428,337 @@ PayMongo ignores `Idempotency-Key` on refunds (above), so a create whose outcome
 `PaymongoRefundCheckTest` gains the refusal-without-flag test (6 in total).
 
 **Full suite after the uncertain-outcome fix:** 1,094 passed / 7,035 assertions / 0 failures / 2 skipped (known environment skips). Refund-related classes: 251 passed / 2,373 assertions. No frontend files changed. Nothing committed.
+
+# Stage 7 — GCash group settlement: audit and policy (2026-11-17)
+
+Read-only audit of how a GCash payment for a multi-restaurant group checkout reaches restaurant wallets. No code, migration or data was changed. Architecture confirmed and preserved: **one canonical order, one delivery, one rider, one delivery fee, several restaurant pickup stops**. `order_items.business_id` owns each item; `orders.business_id` is only the first restaurant.
+
+## A. Current payment-to-wallet flow
+
+1. `GroupOrderService::createGroup()` creates one `group_checkouts` row and one `orders` row; each item carries its restaurant.
+2. `PaymentController::createIntent()` charges `group_checkouts.grand_total`; the `payments` row is `payable = GroupCheckout`.
+3. The webhook verifies the signature, dedupes on `payment_webhook_events.provider_event_id` (UNIQUE, same transaction as the handler), checks `Payment::canApplyProviderVerdict()`, and `markPayablePaid()` marks the group and the order paid once. **Settlement is not triggered here.**
+4. The rider completes the delivery. After commit, `DeliveryStatusChanged` fires and `SyncOrderStatusFromDelivery::handle()` sets the order `completed`, then calls `OrderSettlementService::recordGcashSettlement()`.
+5. `recordGcashSettlement()` locks the order, returns any existing settlement for the order, checks `subtotal + delivery_fee + rider_tip + system_fee = total`, then `postSettlement()` writes one `order_settlements` row and one `ORDER_EARNING` wallet transaction for `orders.business_id`.
+6. Delivery fee and tip reach the rider through the separate rider earning ledger.
+
+## B. Confirmed findings
+
+| # | Finding | Evidence | Severity |
+|---|---|---|---|
+| F1 | GCash settlement credits the **whole food subtotal** to the first restaurant; other restaurants get nothing. The `order_id` existence check then blocks them for ever. | `OrderSettlementService.php:83-134` (`recordGcashSettlement`), `:245-297` (`postSettlement` uses `$order->business_id`) | Critical |
+| F2 | A paid order is not repriced when an item is cancelled before acceptance, so settlement pays the restaurant for food already refunded. | `OrderRefundService::refundCancelledItem()` reprices only unpaid orders (`:170`); `recordRefundDeduction()` skips orders with no settlement yet (`:34-36`) | High |
+| F3 | A settlement failure (missing wallet `firstOrFail`, or the reconcile `LogicException`) leaves the order `completed` with no settlement. The listener skips orders already in the target status, there is no retry command and no integrity check, and the exception escapes the rider's request after commit. | `SyncOrderStatusFromDelivery.php:47-64`; no settlement code in `app/Console` or `app/Services/Integrity` | High |
+| F4 | Refunds after settlement (possible for pickup orders; deliveries are blocked by `AcceptedOrderPolicy` once a rider accepts): a group payment's refund has `order_id = null` when no `forOrder` is passed (the staff refund endpoint passes none), so no wallet is reversed. When an order is known, the reversal hits `orders.business_id` and an arbitrary settlement row. | `PaymentRefundProcessor.php:141, :583`; `PaymentController::refund()` `:866`; `OrderSettlementService::recordRefundDeduction()` | Medium |
+| F5 | No provider amount or currency check: every paid path marks the payment paid without comparing the provider amount to `payments.amount`. | `PaymentController::handlePaymentPaid()` `:568-590`, `handleCheckoutSessionCompleted()`, `handleCheckoutSessionPaymentPaid()`, `verifyAndConfirmPayment()` | Medium |
+| F6 | GCash and COD use different commission formulas (section C). | `OrderSettlementService.php:124-131` vs `CodSettlementService::split()` | Policy |
+| F7 | A GCash settlement row does not balance: `restaurant_amount + platform_amount ≠ settlement_base`, because the base includes the delivery fee and tip. COD enforces equality. | `recordGcashSettlement()` | Low |
+| F8 | The schema already supports one row per restaurant: `2026_09_22_000002` replaced UNIQUE(`order_id`) with UNIQUE(`order_id`, `business_id`) on `order_settlements` and `cod_settlements`. | migration | Info |
+
+Correctly protected, verified: duplicate webhooks (unique event id plus no-downgrade verdicts), repeated `recordGcashSettlement()` calls (order row lock, unique `settlement_number`, unique `(order_id, business_id)`), concurrent settlement (serialised by the order lock), and wallets auto-created on restaurant approval (`Business.php:571` → `RestaurantWalletService::ensureForBusiness`). No restaurant withdrawal path exists yet (`TYPE_WITHDRAWAL` is defined but unused), so wallets are ledger balances only.
+
+## C. Exact commission formulas
+
+Notation: `fee(x) = round(x × system_fee_percentage / 100, 2)` with `system_fee_percentage = 10`; `P = cod_platform_fee_percent = 20`. Restaurants are ordered by `business_id` ascending; the last absorbs rounding remainders.
+
+**COD (existing; unchanged by this stage).** `CodSettlementService::businessBases()` and `split()`, for each restaurant `b` with active items:
+- `F_b = Σ unit_price × (quantity − cancelled_quantity)` over `b`'s items
+- `S = orders.system_fee` (unpaid COD orders are repriced on cancellation, so `S = fee(active subtotal)`)
+- `share_b = round(S × F_b / orders.subtotal, 2)`; the last restaurant gets `S − Σ other shares`
+- `base_b = F_b + share_b`  (Σ `base_b` = `orders.rider_financed_amount`)
+- `platform_b = round(base_b × P / 100, 2)`, `restaurant_b = base_b − platform_b`
+
+The 80/20 split therefore applies to **food plus the system fee**: the restaurant receives 80% of its food and 80% of its system-fee share; the platform receives 20% of each. At a 10% fee, the restaurant receives 88% of the menu price. In COD, the restaurant is also paid at the counter from Tourism Office purchasing cash (issued = Σ `base_b`, paid per receipt, unused cash returned), and its wallet records `restaurant_b`.
+
+**GCash (current).** Restaurant (first only) = `orders.subtotal`; platform = `orders.system_fee`; base = `orders.total`. The restaurant receives no cash at pickup (`PickupSequenceService::paymentConfirmation()` is `null` for non-COD), so the wallet credit is its only payment.
+
+**GCash (approved direction: consistent 80/20; base to be confirmed).** Same per-restaurant allocation as COD, but computed on active quantities because paid orders are not repriced: `S = fee(Σ F_b)` (the system fee retained after refunds) and the proration denominator is `Σ F_b`. Two candidate bases:
+- **Option 1, identical to COD:** `base_b = F_b + share_b`; 80/20 on `base_b`.
+- **Option 2, 80/20 on food only:** `restaurant_b = F_b − round(0.2 × F_b)`; `platform_b = round(0.2 × F_b) + share_b`.
+
+Example: A ₱300, B ₱200, system fee ₱50, delivery fee ₱60, tip ₱0, captured ₱610.
+
+| | A | B | Platform | Rider | Σ |
+|---|---|---|---|---|---|
+| Current code | 500 | 0 | 50 | 60 | 610 |
+| Current GCash rule, correctly split | 300 | 200 | 50 | 60 | 610 |
+| Option 1 (as COD) | 264 | 176 | 110 | 60 | 610 |
+| Option 2 | 240 | 160 | 150 | 60 | 610 |
+
+**Status: awaiting product-owner confirmation of Option 1 or Option 2, and that the new formula applies only to orders settled after deployment.**
+
+## D. Policy decisions (product owner, 2026-11-17)
+
+1. **Commission:** one consistent policy for GCash and COD, preferred 80/20; the base must be confirmed (section C), never assumed.
+2. **Cancelled items:** refund the system fee belonging to cancelled items, subject to the approved refund calculation (section E).
+3. **Historical mis-credits:** report first. No automatic debit of restaurant wallets, and no edits of historical financial rows. A correction needs Tourism Office approval and new, auditable adjustment entries (section G).
+4. **Missing restaurant wallet:** all-or-nothing group settlement. Delivery completion must still succeed; the failure is recorded and safely retryable.
+5. **Payment amount mismatch:** hold for review. A payment is not marked paid until the provider amount, currency and expected amount are verified.
+6. **Refund deductions:** stay separately classified (`refunds.refund_deduction`); never recognised as platform revenue without an approved accounting policy.
+
+Mandatory requirements: delivery completion is separate from settlement completion; failed attempts never block retries; retries create only missing allocations; adjustment and reversal entries are append-only; item refunds reverse against the right restaurant; whole-order refunds resolve the canonical group order; integrity checks cover missing and mismatched settlements; every allocation reconciles to the captured amount and refunds; architecture and COD behaviour are preserved.
+
+## E. Refund calculation rules
+
+Unchanged: no refund once a rider has accepted (`AcceptedOrderPolicy`); provider dedupe and the uncertain-outcome rules (Stage 5 and 6 sections above).
+
+**Item cancellation before acceptance** (paid or unpaid), `q` units of an item at `unit_price`:
+- `food_refund = round(unit_price × q, 2)`
+- `deduction = round(food_refund × refunds.deduction_rate, 2)` (default 0), stored in `refunds.refund_deduction` and classified separately (D6)
+- `fee_refund = fee(active subtotal before) − fee(active subtotal after)` (new, D2). Recomputing the fee telescopes, so cumulative fee refunds can never exceed the fee charged, and the retained fee always equals `fee(active subtotal)`.
+- `refund = food_refund − deduction + fee_refund`
+- The existing delivery-fee rule when the last active item is cancelled is unchanged.
+- Proposed: the deduction applies to the food portion only, not to `fee_refund` (to be confirmed).
+
+**Reversal after settlement** (pickup orders, or a refund made in the PayMongo dashboard and received by webhook):
+- Resolve the order: `refunds.order_id`, else the payment's `GroupCheckout` → its canonical order.
+- **Item refund** (`refunds.order_item_id` set): reverse only against `order_items.business_id`. The amount reversed is the allocation of the refunded food plus its fee share under the same split; the restaurant part is debited from that restaurant's wallet and the platform part is recorded as a platform reversal.
+- **Amount or whole refund:** fraction `f = min(1, refund.amount / captured amount)`, applied to every restaurant and platform allocation (the last absorbs rounding). A full refund reverses everything.
+- Each reversal is an append-only entry, idempotent per (refund, settlement row), never more than what remains of that allocation. Rider earnings reversal stays in the rider ledger (out of scope).
+
+**Reconciliation identity per GCash order:** `verified captured amount − Σ succeeded refunds = Σ restaurant + Σ platform − Σ reversals + delivery_fee + rider_tip + Σ retained deductions`. A mismatch puts the settlement on hold.
+
+## F. Settlement state transitions (GCash)
+
+Delivery completion and settlement are separate. The order reaches `completed` regardless; settlement runs after commit and records its own state.
+
+| From | Event | To |
+|---|---|---|
+| (none) | Order completed and GCash payment verified | `pending` |
+| `pending` | Every restaurant allocation written and the identity holds (one transaction) | `settled` |
+| `pending` | Retryable failure (missing wallet, lock timeout); nothing written | `failed`, attempts +1, error recorded, escalated once |
+| `failed` | Scheduled or manual retry | `pending` |
+| `pending` | Identity mismatch, an existing row that differs from the expected allocation (legacy), or payment held for review | `held`, escalated to the Tourism Office |
+| `held` | Tourism Office resolves the cause (approved adjustment, or payment verified) | `pending` |
+| `settled` | Refund reversal | stays `settled`; reversal entries appended |
+
+A retry writes only the restaurants with no row. If any existing row differs from the expected allocation, nothing is written (`held`). COD keeps its existing atomic in-transaction settlement.
+
+## G. Historical correction procedure
+
+1. A **read-only report** lists every completed GCash order whose existing rows differ from the allocation under the policy in force when it was settled (legacy rule: each restaurant 100% of its own food). Columns: order, group, restaurants, expected per restaurant, recorded per restaurant, wallet effect, and the difference.
+2. Report rows go to the Tourism Office as escalations. Nothing is debited or edited.
+3. For an approved correction, the Tourism Office records approval (approver, reason, reference). Only then does a correction command write **new** adjustment entries: a debit for the over-credited restaurant, a credit for the under-credited one, linked to the original settlement row and the approval. Originals stay untouched.
+4. Corrections are idempotent per (order, restaurant, approval), and the report re-runs clean afterwards.
+5. If a debit would make a wallet negative, the correction is refused and escalated (a policy decision about negative balances is still open).
+
+## H. Required regression tests
+
+- Single restaurant GCash: unchanged, except the base chosen in C.
+- Two restaurants: two rows, each wallet credited only its own items, and the identity holds.
+- Three or more restaurants: fee rounding, with the remainder on the last restaurant.
+- Repeated settlement adds no rows or transactions; concurrent attempts produce one set.
+- Partly settled group: a retry writes only the missing restaurant.
+- Legacy mismatched rows: a retry writes nothing, the order goes to `held`, and it appears in the report.
+- Missing wallet: the delivery still completes, nothing is written, `failed` is set and escalated once, and a retry succeeds once the wallet exists.
+- Paid item cancelled before acceptance: refund includes `fee_refund`, settlement excludes the cancelled food and fee, and the identity holds.
+- Deduction rate above 0: the deduction is stored separately, not in `platform_amount`, and is counted in the identity.
+- Pickup group refunded after settlement: an item refund reverses only its restaurant; a whole refund reverses every allocation proportionally; repeats are idempotent.
+- Group refund through the staff endpoint (no `forOrder`) resolves the canonical order.
+- Webhook amount or currency mismatch: the payment stays unpaid, an escalation is recorded, nothing is dispatched; the matching amount still marks it paid; the `checkAndConfirm` poll path behaves the same.
+- Duplicate webhook remains a no-op (existing tests).
+- Integrity check flags an unsettled completed order, a mismatched allocation, and an identity break.
+- COD regression: the full COD and purchasing-cash suites stay green and unchanged.
+
+
+## I. Ride hailing — one-time destination change (owner decisions 2026-11-17)
+
+**Scope.**
+- A tourist may change a ride's destination **once**: after pickup (delivery `picked_up` / `in_transit` / `en_route_destination`) and before arrival. Never after completion or cancellation.
+- Only a **confirmed** change uses the allowance. Previews are not stored, and a refused or expired confirm stores nothing.
+- No second booking or trip: the ride's `deliveries` row is updated in place to the new destination.
+
+**Records.**
+- `ride_destination_changes` (migration `2026_11_17_000004`) has one row per confirmed change; **UNIQUE `order_id`** means at most one per trip.
+- The row keeps:
+  - the original and new destination (address and coordinates), who requested the change, and when it was confirmed;
+  - the booked fare and commission;
+  - the fare configuration used: the ride's **booked** `base_fare` / `per_km` and the settings fingerprint;
+  - the estimate, `max_fare`, the remaining-route source, the rider notification status and time, and the rider acknowledgement (kept separately);
+  - the verified and unverified km, a track summary, and the computed, final, cap-adjusted fare;
+  - the final commission and the review status with its reasons.
+- Ledger events:
+  - `ride_destination_changed`;
+  - `ride_destination_acknowledged`;
+  - `ride_fare_finalized`;
+  - `order_amounts_changed`, which the observer records automatically.
+- `ride_quoted` (the booking) is never modified.
+
+**Revised estimate (preview, shown before confirming).**
+```
+travelled_km = verified GPS distance from the pickup to now (rules below)
+remaining_km = road route (OSRM) from the rider's latest saved fix (≤120 s old) to the new destination;
+               straight line only if the router is unavailable (labelled as such)
+estimated    = round(max(base + round((travelled_km + remaining_km) × per_km, 2), base), 2)
+max_fare     = round(estimated × 1.15, 2)
+```
+- The preview returns a signed (app-key encrypted) quote valid for 3 minutes.
+- Confirming stores exactly the numbers the tourist saw. Changing them requires the app key.
+- No fresh rider fix means no estimate (refused, and nothing is stored).
+
+**Confirm.**
+- One transaction:
+  - lock the trip's `deliveries` row, then the order;
+  - re-check that the change is allowed and that none exists;
+  - create the row, update the delivery's destination, and write the ledger event.
+- The `idempotency_key` is UNIQUE, so the same key returns the same change (`replayed`).
+- A different second request gets **409**. A race that slips past the lock still hits the UNIQUE `order_id` and gets 409.
+- After commit, the rider is pushed `ride.destination.changed` (rooms `user:{rider}`, `user:{tourist}`, `trip:{delivery}`).
+- A failed push is recorded (`rider_notification_status = failed`) and never undoes the change. The rider app shows the change on its next poll until the rider taps **Got it**, which records the acknowledgement.
+
+**Final fare.**
+- It is computed in the rider's status transaction when the trip reaches `arrived_destination` (or `delivered` if arrival was skipped), **before** a cash amount is frozen. It is idempotent.
+```
+computed       = round(max(base + round(verified_km × per_km, 2), base), 2)
+final          = min(computed, max_fare)
+cap_adjustment = computed − final
+commission     = round(max(20, final × 0.4), 2)          (booking rule, on the final fare)
+```
+- Order `subtotal`/`total`, the ride item and the delivery's `rider_commission` become the final values. So the following all use the final fare automatically, with no code change in those flows:
+  - GCash payment (still after completion);
+  - the cash due and cash settlement;
+  - the rider earning;
+  - platform revenue and reports.
+- A closer destination can end below the booked fare. The only floor is the base fare.
+- Rides without a change keep their booked fare: no final-fare step runs.
+
+**GPS verification (verified distance).**
+- Only the rider's **saved** fixes count (`rider_locations`). The server saves a fix only at ±50 m or better and refuses teleports. Fixes run in time order, starting from the pickup point at `picked_up_at`.
+
+| Situation | Rule | Charged? |
+|---|---|---|
+| Jitter | Fix closer to the last counted point than max(10 m, the two fixes' mean accuracy). The anchor stays put. | No |
+| Impossible jump | Segment faster than `tracking.max_speed_kph` (150). | No: counted as unverified, `jumps_excluded` |
+| Gap | More than 60 s without a fix. | No: unverified, recorded with length and duration |
+| Early end | Last fix more than 200 m short of the destination. | No: unverified |
+| Normal segment | — | Yes |
+
+- **Insufficient evidence policy.** Only verified distance is ever charged. The fare is marked `needs_review` when:
+  - unverified distance exceeds 0.5 km or 15 % of the trip;
+  - there are fewer than 2 fixes;
+  - or a jump was excluded.
+
+  A `needs_review` fare also writes an `escalation.ride_fare_review` activity log and flags the integrity check `ride_fare_gps`. There is no automatic fallback charge.
+- The accuracy (best / worst / mean), first and last fix times, gaps, jumps and jitter counts are kept in `track_summary` and in the ledger.
+
+**Integrity checks (FLAG).**
+- `ride_fare`: still recomputes the booking quote. For a changed ride it no longer compares the quote with the order total.
+- `ride_final_fare`: recomputes the final fare from the recorded verified km, rates and cap, and checks it against the order and the commission.
+- `ride_commission`: follows the `ride_fare_finalized` commission.
+- `ride_fare_gps`: flags a `needs_review` fare.
+
+**Known limitations.**
+- Distance is only as good as the saved GPS track. Indoors or under weak signal, real distance can go uncharged; such fares are flagged for review.
+- There is no admin tool yet to adjust a reviewed fare.
+- Changed rides are measured on the road track; unchanged rides keep their straight-line booking fare.
+
+
+## J. Ride hailing — payment confirmed before completion (owner decision 2026-11-18)
+
+**Rule.** The rider confirms the payment before completing a ride. The server enforces this in `RiderDeliveryController::updateStatus` → `RidePaymentService::confirmForCompletion`, before the status write, so a refusal changes nothing:
+- **GCash:** `delivered` is refused until the order is `payment_status = paid` (PayMongo-verified, by webhook or the verify fallback) **and** the request carries `payment_confirmed: true`.
+- **Cash:** `delivered` needs `payment_confirmed: true`. The cash settlement that follows still refuses less than `cash_due`.
+- **Ledger:** each confirmation records `ride_payment_confirmed` (method, fare, payment status, rider).
+
+**When GCash can be paid.**
+- From the moment the ride reaches the destination (delivery `arrived_destination` / `delivered`, or the order completed). Before that, create-intent answers 422 "You can pay for this ride once you reach your destination."
+- At that point the fare is final, including a changed destination's final fare (§I).
+- A ride on cash cannot open a GCash checkout.
+- A verified ride payment pushes `order.status.changed` to the rider and the tourist.
+
+**Switch to cash.** `POST /api/rider/deliveries/{delivery}/ride-payment/cash`:
+- Allowed only by the assigned rider, only at the drop-off, and only while the GCash ride is unpaid (no paid or authorized payment).
+- Order `payment_method` becomes `cash`, and `deliveries.notes.payment_switched_to_cash` records when, who and from what.
+- Records `ride_payment_switched_to_cash` in the ledger and the financial activity log.
+- **A GCash payment that lands after the switch** keeps the ride on cash. It is recorded (`ride_payment_after_cash_switch`) and escalated (`escalation.ride_payment_after_cash_switch`, financial) for a **manual refund**: refunds after a rider accepted stay blocked by the accepted-order policy.
+
+**Return pages.**
+- PayMongo's success and cancel ("Return to merchant") URLs carry `kind=ride` for rides, and the payment status includes `order_type`.
+- The return page then goes back to the ride (`/tourist/transport/tracking/{id}`) with ride wording, instead of the food order page.
+- The ride status payload adds `at_drop_off`, `ride_completed` and `payment_switched_to_cash`. The tourist's screen shows "You've arrived!" with the next payment step until the rider completes the ride, and rating opens only after completion.
+
+
+## K. Ride hailing — Stage A: confirmed pickup arrival and the pickup waiting fee (owner decisions 2026-11-18)
+
+**Arrival**
+- Rides no longer arrive automatically from the GPS heartbeat (`RiderMapController::applyProximityAndGetStatus` skips rides). Food keeps the geofence arrival.
+- The rider confirms **I've arrived** (`PATCH /rider/deliveries/{d}/status` `arrived_pickup`). `RideTimeChargeService::confirmPickupArrival` checks the location with `DropoffLocationProof` (now accepting a target point and radius):
+  - within `tracking.arrival_radius_meters` (100 m) of the pickup;
+  - by the rider's fresh saved fix (≤120 s), or by the phone's own fix (≤30 s old, at most ±200 m, plausible).
+- On success it records `ride_time_events` `pickup_arrival_confirmed` at the server time, with who, the location source and accuracy, and the reason. It is also written to the ledger (`ride_time_event`).
+- `event_key` `pickup_arrival:{delivery}` is unique, so a repeated confirmation keeps the first time.
+- A refused confirmation changes nothing.
+
+**Drop-off.** A ride's arrival at the destination is the rider's **I've Arrived**, not the heartbeat. This fixes the gap where a changed destination's final fare was skipped by the automatic heartbeat arrival while GCash had already opened at the old fare. Payment opens only after the rider's arrival, which applies the final fare and the charges.
+
+**Waiting fee**
+- When the trip starts (`picked_up`, "Passenger on board"), `startTrip` records `trip_started` and, if arrival was confirmed, the charge:
+```
+waiting_seconds = trip_started.occurred_at − pickup_arrival_confirmed.occurred_at      (integer seconds, ≥ 0)
+fee             = floor(max(0, waiting_seconds − 180) / 180) × ₱2
+```
+- Stored as `ride_additional_charges` `pickup_waiting`, with:
+  - its start and end events, duration, free seconds, unit and rate;
+  - the method, the amount, and status `approved`;
+  - unique `charge_key` `pickup_waiting:{delivery}`.
+- A free wait is still recorded (amount 0).
+- No confirmed arrival (for example a ride already at the pickup before this change) means no fee.
+- A tourist cancelling while the rider waits pays nothing.
+
+**Total and commission**
+- `orders.subtotal` stays the ride fare: the booked quote, or a changed destination's final fare (the 115% cap applies to that fare only).
+- `orders.total = subtotal + approved charges`.
+- Commission is `max(₱20, 40% × total)` (the existing rule, on the total).
+- `applyCharges` runs when a charge is recorded and again after a destination change's final fare is applied. It is idempotent and does nothing when the charged amount is 0.
+- It records `ride_charges_applied` (subtotal, charges, total, commission).
+
+**Downstream**
+- The GCash checkout lists "Ride Fare" plus one line per charge, summing to the total.
+- The cash due is the total, so the settlement and rider earning follow the commission.
+- The tourist status adds `ride_fare`, `additional_charges`, `charges_total` and `pickup_waiting`; `fare` is the total payable. The rider map adds `pickup_waiting` and `additional_charges`.
+
+**Integrity**
+- `ride_charges` (FLAG): total = subtotal + recorded charges = live approved charges, and the commission recomputes.
+- `ride_commission` follows `ride_charges_applied`.
+- `ride_fare` and `ride_final_fare` still check the fare against the subtotal.
+
+**Not in this stage:** tourist-requested stops; excess travel time (not built: it cannot be told apart from traffic).
+
+
+## L. Ride hailing — Stage B: cancellation penalty assessment (owner decisions 2026-11-18)
+
+**Rule**
+- Only a **tourist** cancellation (`TransportationService::cancelRide`, both tourist endpoints) of a ride a rider had accepted creates a penalty.
+- `seconds = cancelled_at − deliveries.assigned_at` (integer). `≤ 300` is free; `> 300` means ₱50 owed to `compensated_rider_id` = the rider who accepted, never anyone else.
+- Rider cancellations (`cancelRideByDriver`), admin and safety cancellations, and dispatch failures never reach the assessment.
+- One row per cancelled ride: `ride_cancellation_penalties.cancelled_order_id` is unique, and the row is created with `firstOrCreate`. Each is written to the ledger (`ride_cancellation_penalty_assessed`) and the financial activity log.
+- It is assessed inside the cancel transaction, on the locked rows.
+- The penalty never touches any order amount.
+
+**GPS findings before choosing a rule (dev data, 2026-11-18)**
+- `rider_locations` had 282 rows and **none with `accuracy_m`**: the arrival "nudge" posts were sent without accuracy, and are now fixed to send it.
+- Gaps between saved rows while active: median 70 s, p90 326 s. A standing-still rider refreshes the latest row instead of adding one.
+- 5 accepted rides, each "arriving" 0–13 s after acceptance (desk tests).
+- With no accuracy values and no real approaches, no movement threshold can be calibrated, so none is invented.
+
+**Evidence hierarchy → status**
+1. *Recent GPS*: at least one saved fix since acceptance, and the latest within 180 s before the cancel.
+2. *Arrival*: a server-confirmed pickup arrival (Stage A event).
+
+**owed** only when both hold. Otherwise **under_review**, with reasons and the evidence recorded:
+- fix count and how many fixes carry accuracy;
+- first and latest fix time and distance to the pickup;
+- the latest fix's age and accuracy;
+- the arrival time.
+
+Movement toward the pickup is recorded but not judged automatically until real accuracy and frequency data support a threshold.
+
+**Dispute**
+- `POST /tourist/transport/trip/{id}/penalty/dispute` (own ride only; reason 5–500 characters) moves `owed` or `under_review` to `disputed`.
+- Locked and idempotent. Ledger `ride_cancellation_penalty_disputed` plus an activity log entry.
+- Under-review and disputed penalties are not outstanding: they are never collected and never block a booking.
+- `GET /tourist/transport/penalties` lists them, with `outstanding_total` (owed only).
+
+**Waiting overlap:** cancelling while the rider waits owes no waiting fee (Stage A), but this penalty may still apply. The two charges are separate.
+
+**Not yet:** collection (Stage C), rider compensation and cashout (Stage D), Tourism Office review, waiver and dashboard (Stage E). Until Stage C, an owed penalty is shown but not collected, and booking is not blocked.

@@ -7,7 +7,7 @@ export type MapLayerKind = 'street' | 'satellite'
  * Preview thumbnails: one map tile over Bansud (z12) from the same providers
  * the maps use, so the tile shows what the other view really looks like.
  */
-const PREVIEW: Record<MapLayerKind, string> = {
+export const MAP_LAYER_PREVIEW: Record<MapLayerKind, string> = {
   street: 'https://tile.openstreetmap.org/12/3429/1900.png',
   satellite: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/12/1900/3429',
 }
@@ -45,7 +45,7 @@ export default function MapLayerTile({ value, onChange, className }: Props) {
       )}
     >
       <img
-        src={PREVIEW[next]}
+        src={MAP_LAYER_PREVIEW[next]}
         alt=""
         loading="lazy"
         draggable={false}

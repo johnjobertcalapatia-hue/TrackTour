@@ -5,9 +5,8 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\UserResource;
 use App\Models\ActivityLog;
-use App\Models\RiderReview;
 use App\Models\User;
-use App\Notifications\RiderAccountStatusChanged;
+use App\Services\AccountModerationService;
 use App\Services\DeliveryFareSettings;
 use App\Services\RideFareSettings;
 use App\Services\RiderRecordsService;
@@ -21,7 +20,8 @@ class AdminRiderController extends Controller
     public function __construct(
         private UserService $userService,
         private DeliveryFareSettings $fareSettings,
-        private RideFareSettings $rideFareSettings
+        private RideFareSettings $rideFareSettings,
+        private AccountModerationService $moderation
     ) {}
 
     /** Ride-hailing fares per vehicle type (separate from the food delivery fee). */
@@ -202,6 +202,14 @@ class AdminRiderController extends Controller
             'municipality_id' => ['required', 'integer', 'exists:municipalities,id'],
         ]);
 
+        // An applicant trains where they registered; moving them mid-onboarding
+        // would leave a training appointment in another municipality.
+        if ((int) $validated['municipality_id'] !== (int) $rider->municipality_id
+            && $rider->account_status === User::ACCOUNT_STATUS_PENDING
+            && $rider->riderDetail?->application_submitted_at !== null) {
+            return $this->errorResponse('This rider is in onboarding with their registered municipality. Their municipality cannot be changed until onboarding ends.', 422);
+        }
+
         $before = $rider->municipality?->name;
         $rider->update(['municipality_id' => (int) $validated['municipality_id']]);
         $rider->profile?->update(['municipality_id' => (int) $validated['municipality_id']]);
@@ -218,31 +226,74 @@ class AdminRiderController extends Controller
         return $this->successResponse(UserResource::make($rider), 'Rider municipality updated.');
     }
 
-    public function approve(Request $request, User $rider): JsonResponse
+    /**
+     * Record the rider's registered vehicle (verified by the Tourism Office).
+     * The vehicle decides ride-hailing: only motor vehicles carry passengers,
+     * so a rider moved to a bicycle leaves the ride-hailing service.
+     */
+    public function updateVehicle(Request $request, User $rider): JsonResponse
     {
         if ($rider->role !== User::ROLE_RIDER) {
             return $this->notFoundResponse('Rider not found.');
         }
 
-        $rider->update(['account_status' => User::ACCOUNT_STATUS_APPROVED]);
-
-        RiderReview::create([
-            'rider_id' => $rider->id,
-            'admin_id' => Auth::id(),
-            'decision' => 'approved',
-            'remarks' => $request->remarks,
+        $bicycle = $request->input('vehicle_type') === 'bicycle';
+        $v = $request->validate([
+            'vehicle_type' => ['required', \Illuminate\Validation\Rule::in(\App\Services\RideVehicles::RIDER_VEHICLES)],
+            'vehicle_plate_number' => [$bicycle ? 'nullable' : 'required', 'string', 'max:20', 'regex:/^[A-Za-z0-9\- ]+$/'],
+            'vehicle_make' => ['nullable', 'string', 'max:50'],
+            'vehicle_model' => ['nullable', 'string', 'max:50'],
+            'vehicle_year' => ['nullable', 'integer', 'between:1980,'.(now()->year + 1)],
         ]);
 
-        ActivityLog::record('rider.approved', sprintf('Approved rider account (%s).', $rider->email), $rider);
-
-        try {
-            $rider->notify(new RiderAccountStatusChanged('approved'));
-        } catch (\Exception $e) {
-            // Queue failure is non-blocking
+        $detail = $rider->riderDetail ?? $rider->riderDetail()->create([]);
+        if ($detail->rider_status === User::RIDER_STATUS_BUSY) {
+            return $this->errorResponse('This rider is on a trip. Change the vehicle after the trip ends.', 422);
         }
 
+        $before = $detail->vehicle_type;
+        $updates = [
+            'vehicle_type' => $v['vehicle_type'],
+            'vehicle_plate_number' => isset($v['vehicle_plate_number']) ? strtoupper(trim($v['vehicle_plate_number'])) : null,
+            'vehicle_make' => $v['vehicle_make'] ?? null,
+            'vehicle_model' => $v['vehicle_model'] ?? null,
+            'vehicle_year' => $v['vehicle_year'] ?? null,
+        ];
+        $leftRideHailing = false;
+        if (! \App\Services\RideVehicles::canRideHail($v['vehicle_type']) && $detail->current_service === User::SERVICE_TRANSPORT) {
+            $updates['current_service'] = User::SERVICE_FOOD;
+            $updates['rider_status'] = User::RIDER_STATUS_OFFLINE;
+            $leftRideHailing = true;
+        }
+        $detail->update($updates);
+
+        ActivityLog::record(
+            'rider.vehicle_updated',
+            sprintf('Rider vehicle updated (%s): %s → %s%s.', $rider->email, $before ?? 'none', $v['vehicle_type'], $leftRideHailing ? '; moved to food delivery' : ''),
+            $rider
+        );
+
+        $rider->load('profile.municipality', 'profile.barangay', 'riderDetail', 'riderReviews.admin');
+
         return $this->successResponse(
-            UserResource::make($rider->fresh()),
+            UserResource::make($rider),
+            $leftRideHailing ? 'Vehicle updated. A bicycle cannot do ride-hailing, so the rider was moved to food delivery.' : 'Vehicle updated.'
+        );
+    }
+
+    public function approve(Request $request, User $rider): JsonResponse
+    {
+        if ($rider->role !== User::ROLE_RIDER) {
+            return $this->notFoundResponse('Rider not found.');
+        }
+        if ($denied = $this->otherMunicipalityApplicant($rider)) {
+            return $denied;
+        }
+
+        $rider = $this->moderation->moderateRider($rider, $request->user(), 'approved', $request->remarks);
+
+        return $this->successResponse(
+            UserResource::make($rider),
             'Rider application has been approved successfully.'
         );
     }
@@ -252,32 +303,34 @@ class AdminRiderController extends Controller
         if ($rider->role !== User::ROLE_RIDER) {
             return $this->notFoundResponse('Rider not found.');
         }
+        if ($denied = $this->otherMunicipalityApplicant($rider)) {
+            return $denied;
+        }
 
         $request->validate([
             'remarks' => ['required', 'string', 'max:1000'],
         ]);
 
-        $rider->update(['account_status' => User::ACCOUNT_STATUS_REJECTED]);
-
-        RiderReview::create([
-            'rider_id' => $rider->id,
-            'admin_id' => Auth::id(),
-            'decision' => 'rejected',
-            'remarks' => $request->remarks,
-        ]);
-
-        ActivityLog::record('rider.rejected', sprintf('Rejected rider account (%s). Remarks: %s', $rider->email, $request->remarks), $rider);
-
-        try {
-            $rider->notify(new RiderAccountStatusChanged('rejected', $request->remarks));
-        } catch (\Exception $e) {
-            // Queue failure is non-blocking
-        }
+        $rider = $this->moderation->moderateRider($rider, $request->user(), 'rejected', $request->remarks);
 
         return $this->successResponse(
-            UserResource::make($rider->fresh()),
+            UserResource::make($rider),
             'Rider application has been rejected.'
         );
+    }
+
+    /**
+     * Applicants (pending riders) are decided only by their own municipality's
+     * Tourism Office through onboarding. The Bansud admin decides Bansud's.
+     */
+    private function otherMunicipalityApplicant(User $rider): ?JsonResponse
+    {
+        $municipality = $rider->municipality;
+        if ($rider->account_status === User::ACCOUNT_STATUS_PENDING && $municipality && ! $municipality->isHome()) {
+            return $this->errorResponse("This applicant is onboarding with the {$municipality->name} Tourism Office. Only that office can approve or reject them.", 403);
+        }
+
+        return null;
     }
 
     public function suspend(Request $request, User $rider): JsonResponse
@@ -290,25 +343,10 @@ class AdminRiderController extends Controller
             'remarks' => ['required', 'string', 'max:1000'],
         ]);
 
-        $rider->update(['account_status' => User::ACCOUNT_STATUS_SUSPENDED]);
-
-        RiderReview::create([
-            'rider_id' => $rider->id,
-            'admin_id' => Auth::id(),
-            'decision' => 'suspended',
-            'remarks' => $request->remarks,
-        ]);
-
-        ActivityLog::record('rider.suspended', sprintf('Suspended rider account (%s). Remarks: %s', $rider->email, $request->remarks), $rider);
-
-        try {
-            $rider->notify(new RiderAccountStatusChanged('suspended', $request->remarks));
-        } catch (\Exception $e) {
-            // Queue failure is non-blocking
-        }
+        $rider = $this->moderation->moderateRider($rider, $request->user(), 'suspended', $request->remarks);
 
         return $this->successResponse(
-            UserResource::make($rider->fresh()),
+            UserResource::make($rider),
             'Rider has been suspended.'
         );
     }
@@ -319,25 +357,10 @@ class AdminRiderController extends Controller
             return $this->notFoundResponse('Rider not found.');
         }
 
-        $rider->update(['account_status' => User::ACCOUNT_STATUS_APPROVED]);
-
-        RiderReview::create([
-            'rider_id' => $rider->id,
-            'admin_id' => Auth::id(),
-            'decision' => 'reactivated',
-            'remarks' => $request->remarks,
-        ]);
-
-        ActivityLog::record('rider.reactivated', sprintf('Reactivated rider account (%s).', $rider->email), $rider);
-
-        try {
-            $rider->notify(new RiderAccountStatusChanged('reactivated'));
-        } catch (\Exception $e) {
-            // Queue failure is non-blocking
-        }
+        $rider = $this->moderation->moderateRider($rider, $request->user(), 'reactivated', $request->remarks);
 
         return $this->successResponse(
-            UserResource::make($rider->fresh()),
+            UserResource::make($rider),
             'Rider has been reactivated.'
         );
     }

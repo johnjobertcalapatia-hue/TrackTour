@@ -27,7 +27,8 @@ const pendingActionMock = vi.hoisted(() => ({
   savePendingAction: vi.fn(),
 }))
 
-vi.mock('@/shared/services/api', () => apiMock)
+// logout() posts to the absolute API base; export it so the mock does not throw an unhandled rejection.
+vi.mock('@/shared/services/api', () => ({ ...apiMock, API_BASE_URL: 'http://localhost/api' }))
 vi.mock('@/shared/services/payment', () => paymentMock)
 vi.mock('@/shared/services/pending-action', () => pendingActionMock)
 // The map/Leaflet surface is only used in the delivery branch; stub it so jsdom

@@ -101,6 +101,39 @@ Comparison method: matrix above vs actual enforcement (`routes/api.php` gates,
 | F-6 | `roles`/`user_roles` tables + `RoleSeeder` create a false impression of a permission system; `AdminRoleController` looks DB-backed but is a hard-coded array. | Low | Documented (dead schema; do not build on it) |
 | F-7 | `Municipality::tourismOfficers()` reads `user_profiles.municipality_id` while registration/auth elsewhere use `users.municipality_id` — undefined which is authoritative for scope enforcement (depends on F-3 resolution). | Medium (blocks F-3) | Open decision recorded |
 
+### Municipality scoping — F-3 / F-7 resolved for the account & business surfaces (2026-11-15)
+
+- **F-7 decision:** the authoritative scope column is `users.municipality_id`
+  (already used by rider registration, dispatch and the rider cash-fund
+  scoping). `user_profiles.municipality_id` is only a fallback for business
+  owners, whose registration writes the profile column.
+  `Municipality::tourismOfficers()` now reads `users.municipality_id`.
+- **F-3 (accounts, businesses, documents):** new `MunicipalScopeService`
+  defines membership — businesses by `businesses.municipality_id`; owners by
+  account, profile or any business in the municipality; riders by
+  `users.municipality_id`; tourists by orders / order items / bookings with the
+  municipality's businesses.
+- New Municipality Tourism Admin surface `/api/municipal/*`
+  (`role:tourism_office` + `municipal.scope`): dashboard, business owners,
+  businesses (incl. document review), riders, read-only tourists. The
+  municipality always comes from the account, never from the request.
+  Unassigned, suspended, or deleted-municipality officers get 403.
+- Shared endpoints closed for cross-municipality access by `tourism_office`:
+  private business / KYC / rider document downloads, and the legacy
+  `/tourism-office/business-owners` list, detail and status change.
+- District Super Admin keeps the district-wide `/admin/*` view and now manages
+  municipalities (create / edit / guarded delete) and each municipality's
+  `tourism_office` accounts (`/admin/municipalities/{m}/admins`).
+- **Platform settings (2026-11-15):** landing content, tourism categories,
+  required documents and category-document assignments are now writable by
+  the District Super Admin only; the `/tourism-office` UI is Bansud-only and
+  municipal officers use the dedicated `/municipal` portal.
+- **Still unscoped (deferred):** `/tourism-office/*` tourism content
+  (destinations, events, announcements, categories, landing content, category
+  documents), and the legacy `/tourism-office/dashboard` and `/reports`
+  aggregates. A municipal officer can still edit another municipality's
+  destinations there.
+
 ### Gates verified as correct today
 
 - `/admin/*` → `role:bansud_tourism_office` only (`routes/api.php:517`) — MTA is

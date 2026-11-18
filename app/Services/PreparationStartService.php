@@ -185,6 +185,25 @@ class PreparationStartService
     }
 
     /**
+     * Waiting orders that look preparation-eligible (pickup, or a rider has
+     * accepted). startForOrder() still applies the acceptance gate to each.
+     * Public so System Diagnostics counts the same candidates.
+     *
+     * @return \Illuminate\Support\Collection<int, int>
+     */
+    public function eligibleWaitingOrderIds()
+    {
+        return Order::where('status', 'waiting_restaurant')
+            ->whereIn('order_type', self::PREPARABLE_ORDER_TYPES)
+            ->where(function ($q) {
+                $q->where('order_type', '!=', 'delivery') // pickup: no rider needed
+                    ->orWhereHas('delivery', fn ($d) => $d->whereNotNull('rider_id'))
+                    ->orWhereHas('groupOrder.delivery', fn ($d) => $d->whereNotNull('rider_id'));
+            })
+            ->pluck('id');
+    }
+
+    /**
      * Promote waiting orders that are already preparation-eligible but were
      * never transitioned (missed event, legacy row, payment-path gap).
      * The scheduler calls this so no order can silently strand itself in
@@ -194,14 +213,7 @@ class PreparationStartService
      */
     public function startEligibleWaitingOrders(): int
     {
-        $candidateIds = Order::where('status', 'waiting_restaurant')
-            ->whereIn('order_type', self::PREPARABLE_ORDER_TYPES)
-            ->where(function ($q) {
-                $q->where('order_type', '!=', 'delivery') // pickup: no rider needed
-                    ->orWhereHas('delivery', fn ($d) => $d->whereNotNull('rider_id'))
-                    ->orWhereHas('groupOrder.delivery', fn ($d) => $d->whereNotNull('rider_id'));
-            })
-            ->pluck('id');
+        $candidateIds = $this->eligibleWaitingOrderIds();
 
         $started = 0;
 

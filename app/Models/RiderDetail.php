@@ -35,6 +35,13 @@ class RiderDetail extends Model
         'destination_longitude',
         'destination_set_at',
         'destination_expires_at',
+        'requested_services',
+        'application_reference',
+        'application_submitted_at',
+        'application_status',
+        'requirements_verified_at',
+        'requirements_verified_by',
+        'requirements_remarks',
     ];
 
     protected $casts = [
@@ -47,6 +54,9 @@ class RiderDetail extends Model
         'destination_longitude' => 'decimal:7',
         'destination_set_at' => 'datetime',
         'destination_expires_at' => 'datetime',
+        'requested_services' => 'array',
+        'application_submitted_at' => 'datetime',
+        'requirements_verified_at' => 'datetime',
     ];
 
     public function user(): BelongsTo

@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Car, CheckCircle2, MessageCircle, Phone, Share2, ShieldAlert, Star, X } from 'lucide-react'
+import { CheckCircle2, MessageCircle, Phone, Share2, ShieldAlert, Star, X } from 'lucide-react'
 import { cn, formatCurrency, toAssetUrl } from '@/shared/utils'
+import { rideVehicleIcon } from './vehicleIcon'
 
 /**
  * Ride-hailing screens after booking (2026-11-10 redesign, "5 seamless
@@ -50,6 +51,8 @@ export function SearchingScreen({ since, vehicleType, onCancel, cancelling, onBa
   onBack: () => void
 }) {
   const elapsed = useElapsed(since)
+  // The vehicle the tourist booked: motorcycle, tricycle, car or van.
+  const VehicleIcon = rideVehicleIcon(vehicleType)
   return (
     <section
       aria-label="Finding your driver"
@@ -71,7 +74,7 @@ export function SearchingScreen({ since, vehicleType, onCancel, cancelling, onBa
           <span className="ride-radar-ring absolute inset-6 rounded-full border border-white/20 [animation-delay:0.6s]" />
           <span className="ride-radar-ring absolute inset-12 rounded-full border border-white/25 [animation-delay:1.2s]" />
           <span className="flex h-24 w-24 items-center justify-center rounded-full bg-[#16803C] shadow-[0_0_40px_rgba(52,211,153,0.35)] ring-4 ring-white/15">
-            <Car className="h-11 w-11 text-white" />
+            <VehicleIcon className="h-11 w-11 text-white" />
           </span>
         </div>
         <h1 className="mt-6 text-2xl font-extrabold tracking-tight text-white!">Finding your driver…</h1>
@@ -96,7 +99,8 @@ export function SearchingScreen({ since, vehicleType, onCancel, cancelling, onBa
 
 /* ── Top card over the map (phases 3–4) ───────────────────────────────── */
 
-export function EtaBanner({ status, minutes }: { status: 'arriving' | 'driver_arrived' | 'in_progress'; minutes: number | null }) {
+export function EtaBanner({ status, minutes, vehicleType }: { status: 'arriving' | 'driver_arrived' | 'in_progress'; minutes: number | null; vehicleType?: string | null }) {
+  const VehicleIcon = rideVehicleIcon(vehicleType)
   const title = status === 'driver_arrived'
     ? 'Your driver has arrived'
     : status === 'in_progress'
@@ -106,7 +110,7 @@ export function EtaBanner({ status, minutes }: { status: 'arriving' | 'driver_ar
   return (
     <div className="pointer-events-auto flex items-center gap-3 rounded-2xl bg-[#fff] px-4 py-3 shadow-xl" data-testid="ride-eta-banner">
       <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#E9F7EF] text-[#087F3F]">
-        <Car className="h-5 w-5" aria-hidden="true" />
+        <VehicleIcon className="h-5 w-5" aria-hidden="true" />
       </span>
       <div className="min-w-0">
         <p className="truncate text-base font-extrabold text-[#17201B]">{title}</p>
@@ -240,7 +244,16 @@ export function SafetyActions({ onSos, onShare, showSos }: { onSos: () => void; 
 
 export function CompletedScreen({
   fare, paymentLabel, paid, onPay, paying, driverName, alreadyRated, rating, allowedTags, onSubmitReview, submitting, receipt, tip,
+  atDropOff = false, switchedToCash = false,
 }: {
+  /**
+   * At the drop-off but not completed yet (2026-11-18): the tourist pays
+   * (GCash) or hands over the cash; the driver confirms it and completes the
+   * ride. Rating opens once the ride is completed.
+   */
+  atDropOff?: boolean
+  /** The driver switched an unpaid GCash ride to cash at the drop-off. */
+  switchedToCash?: boolean
   fare: number
   paymentLabel: string
   paid: boolean
@@ -262,13 +275,24 @@ export function CompletedScreen({
   const [showReceipt, setShowReceipt] = useState(false)
 
   return (
-    <section aria-label="Ride completed" className="mx-auto flex w-full max-w-md flex-col items-center px-5 pb-8 pt-8 text-center">
+    <section aria-label={atDropOff ? 'Arrived at your destination' : 'Ride completed'} className="mx-auto flex w-full max-w-md flex-col items-center px-5 pb-8 pt-8 text-center">
       <span className="ride-pop flex h-20 w-20 items-center justify-center rounded-full bg-[#16803C] text-white shadow-lg">
         <CheckCircle2 className="h-11 w-11" aria-hidden="true" />
       </span>
-      <h1 className="mt-4 text-2xl font-extrabold text-[#17201B]">Ride Completed!</h1>
+      <h1 className="mt-4 text-2xl font-extrabold text-[#17201B]">{atDropOff ? "You've arrived!" : 'Ride Completed!'}</h1>
       <p className="mt-1 text-4xl font-extrabold text-[#17201B]">{formatCurrency(fare)}</p>
       <p className={cn('mt-1 text-sm font-medium', paid ? 'text-[#087F3F]' : 'text-[#B45309]')}>{paymentLabel}</p>
+      {atDropOff && (
+        <p className="mt-2 rounded-xl bg-[#F4FBF6] px-3 py-2 text-sm text-[#17201B]" role="status">
+          {switchedToCash
+            ? `Your driver switched this ride to cash. Pay ${formatCurrency(fare)} in cash; your driver will confirm it and complete the ride.`
+            : onPay
+              ? 'Pay now so your driver can confirm your payment and complete the ride.'
+              : paid && paymentLabel.startsWith('Paid')
+                ? 'Payment received. Your driver will confirm it and complete the ride.'
+                : `Pay your driver ${formatCurrency(fare)} in cash. They will confirm it and complete the ride.`}
+        </p>
+      )}
       {!paid && onPay && (
         <button
           type="button"
@@ -286,7 +310,11 @@ export function CompletedScreen({
       )}
       {showReceipt && receipt && <div className="mt-3 w-full text-left">{receipt}</div>}
 
-      {alreadyRated ? (
+      {atDropOff ? (
+        <p className="mt-6 w-full rounded-2xl border border-[#E5E9E7] p-4 text-sm text-[#56615B]">
+          You can rate {driverName ? driverName.split(' ')[0] : 'your driver'} once the ride is completed.
+        </p>
+      ) : alreadyRated ? (
         <div className="mt-6 w-full rounded-2xl border border-[#CFE8D6] bg-[#F4FBF6] p-4">
           <p className="text-sm font-semibold text-[#17201B]">Thanks for your review!</p>
           <p className="mt-1 flex justify-center gap-1" aria-label={`You rated ${rating ?? 0} out of 5`}>

@@ -68,7 +68,7 @@ export default function MyTrips() {
   }
 
   return (
-    <div className="space-y-4 px-4 pt-4 pb-4">
+    <div className="space-y-4">
       <h1 className="text-xl lg:text-2xl font-bold text-[#17201B]">My Trips</h1>
 
       {/* Tabs */}

@@ -11,7 +11,12 @@ class AdminAuditLogController extends Controller
 {
     public function index(Request $request): JsonResponse
     {
-        $query = ActivityLog::with('user:id,name,email')->orderByDesc('created_at');
+        // Monitor one municipality Tourism Office (same definition the
+        // municipal portal uses for its own activity log).
+        $query = $request->filled('municipality_id')
+            ? app(\App\Services\MunicipalScopeService::class)->activityLogs($request->integer('municipality_id'))
+            : ActivityLog::query();
+        $query->with('user:id,name,email')->orderByDesc('created_at');
 
         if ($request->filled('type')) {
             $query->where('type', $request->input('type'));
