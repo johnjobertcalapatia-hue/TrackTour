@@ -118,4 +118,30 @@ class RiderRegistrationOtpTest extends TestCase
         $response->assertStatus(201);
         $this->assertDatabaseHas('users', ['email' => 'tourist-otp@example.com', 'role' => 'tourist']);
     }
+
+    public function test_the_emailed_code_verifies_the_email_so_no_second_email_step_is_needed(): void
+    {
+        Mail::fake();
+        $code = app(OtpService::class)->send('09171234567', 'Rider-D@Example.com');
+
+        $response = $this->postJson('/api/register', $this->riderPayload('rider-d@example.com', $code));
+
+        $response->assertStatus(201);
+        $this->assertNotNull($response->json('data.user.email_verified_at'));
+        $this->assertNotNull(\App\Models\User::where('email', 'rider-d@example.com')->value('email_verified_at'));
+        $this->assertNull(Cache::get('otp:09171234567:email'));
+    }
+
+    public function test_a_code_sent_to_another_email_cannot_register_or_verify_this_one(): void
+    {
+        Mail::fake();
+        $code = app(OtpService::class)->send('09171234567', 'someone-else@example.com');
+
+        $response = $this->postJson('/api/register', $this->riderPayload('rider-e@example.com', $code));
+
+        $response->assertStatus(422)->assertJsonValidationErrors('email');
+        $this->assertDatabaseMissing('users', ['email' => 'rider-e@example.com']);
+        // The code is left for the address it was sent to.
+        $this->assertSame($code, Cache::get('otp:09171234567'));
+    }
 }

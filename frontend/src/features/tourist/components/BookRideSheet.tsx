@@ -1,18 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ACTIVE_RIDE_KEY } from '@/features/tourist/services/active-ride'
 import { useNavigate } from 'react-router-dom'
 import { get, post } from '@/shared/services/api'
 import { formatCurrency, cn } from '@/shared/utils'
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import { rideVehicleIcon, type VehicleIcon } from '@/features/tourist/components/ride/vehicleIcon'
 import {
-  X, MapPin, Loader2, Car, Bus, Bike, CheckCircle2, ChevronLeft,
+  ArrowLeft, MapPin, Loader2, CheckCircle2, ChevronLeft,
   Navigation, Crosshair, Search, RotateCcw, ArrowRight,
 } from 'lucide-react'
 
 interface RideSheetProps {
-  isOpen: boolean
+  /** Default true: the Book a Ride page always shows the flow. */
+  isOpen?: boolean
+  /** Leaves the booking (the page's Back arrow). */
   onClose: () => void
   destination?: string
   destinationCoords?: { lat: number; lng: number }
@@ -57,6 +61,14 @@ interface VehicleFare {
   duration_min?: number
 }
 
+interface VehicleAvailability {
+  slug: string
+  name: string
+  available: boolean
+  riders_registered: number
+  riders_online: number
+}
+
 interface EstimateResult {
   distance_km: number
   distance_text: string
@@ -64,6 +76,8 @@ interface EstimateResult {
   duration_text: string
   service_fee: number
   fares: Record<string, VehicleFare>
+  /** Ride vehicle types from riders' registered vehicles (TransportController::estimate). */
+  vehicle_types?: VehicleAvailability[]
 }
 
 interface RouteResult {
@@ -81,11 +95,11 @@ interface BookResponse {
 type Step = 'destination' | 'pickup' | 'summary'
 
 /** Same vehicles and passenger limits as TransportationService::getVehicleTypes(). */
-const VEHICLES: { type: string; name: string; icon: typeof Bike; pax: number }[] = [
-  { type: 'motorcycle', name: 'Motorcycle', icon: Bike, pax: 1 },
-  { type: 'tricycle', name: 'Tricycle', icon: Bike, pax: 3 },
-  { type: 'car', name: 'Car', icon: Car, pax: 4 },
-  { type: 'van', name: 'Van', icon: Bus, pax: 8 },
+const VEHICLES: { type: string; name: string; icon: VehicleIcon; pax: number }[] = [
+  { type: 'motorcycle', name: 'Motorcycle', icon: rideVehicleIcon('motorcycle'), pax: 1 },
+  { type: 'tricycle', name: 'Tricycle', icon: rideVehicleIcon('tricycle'), pax: 3 },
+  { type: 'car', name: 'Car', icon: rideVehicleIcon('car'), pax: 4 },
+  { type: 'van', name: 'Van', icon: rideVehicleIcon('van'), pax: 8 },
 ]
 
 /** Rides: cash to the driver, or GCash online (PayMongo). Server: BookTransportRequest. */
@@ -220,8 +234,9 @@ function RoutePreview({
   )
 }
 
-export default function BookRideSheet({ isOpen, onClose, destination, destinationCoords, destinationAddress, initialQuery, initialVehicle, pickupPoint, onBooked }: RideSheetProps) {
+export default function BookRideSheet({ isOpen = true, onClose, destination, destinationCoords, destinationAddress, initialQuery, initialVehicle, pickupPoint, onBooked }: RideSheetProps) {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [step, setStep] = useState<Step>('destination')
   const [dest, setDest] = useState<{ name: string; address: string; lat: number | null; lng: number | null }>()
   const [pickup, setPickup] = useState<{ name: string; lat: number | null; lng: number | null }>()
@@ -234,11 +249,20 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
   const [vehicleType, setVehicleType] = useState('motorcycle')
   const [paymentMethod, setPaymentMethod] = useState('cash')
   const [estimate, setEstimate] = useState<EstimateResult | null>(null)
+  /** Set when the server refused the booking because a ride is unfinished. */
+  const [activeRideUrl, setActiveRideUrl] = useState<string | null>(null)
   const seededRef = useRef(false)
 
   useEffect(() => {
     setRecent(loadRecent())
   }, [])
+
+  useEffect(() => {
+    const types = estimate?.vehicle_types
+    if (!types) return
+    const bookable = VEHICLES.filter((v) => types.some((a) => a.slug === v.type && a.available))
+    if (bookable.length && !bookable.some((v) => v.type === vehicleType)) setVehicleType(bookable[0]!.type)
+  }, [estimate, vehicleType])
 
   useEffect(() => {
     if (isOpen && !seededRef.current) {
@@ -343,8 +367,12 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
       })
     },
     onError: (error: unknown) => {
-      const response = (error as { response?: { status?: number; data?: { message?: string } } })?.response
-      if (response?.status === 409) {
+      const response = (error as { response?: { status?: number; data?: { message?: string; data?: { code?: string; redirect?: string } } } })?.response
+      if (response?.status === 409 && response.data?.data?.code === 'active_ride') {
+        // One ride at a time: show the ride the tourist already has.
+        setBookingNotice(response.data.message ?? 'You already have a ride in progress.')
+        setActiveRideUrl(response.data.data.redirect ?? null)
+      } else if (response?.status === 409) {
         setBookingNotice(response.data?.message ?? 'The fare changed. Please review it and book again.')
         if (pickup?.lat != null && pickup.lng != null && dest?.lat != null && dest.lng != null) {
           estimateMut.mutate({ from: { lat: pickup.lat, lng: pickup.lng }, to: { lat: dest.lat, lng: dest.lng } })
@@ -356,12 +384,15 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
     },
     onSuccess: (data) => {
       setBookingNotice(null)
+      // Booked: this is now the tourist's one ride in progress.
+      queryClient.invalidateQueries({ queryKey: ACTIVE_RIDE_KEY })
       if (dest?.lat != null && dest.lng != null) {
         saveRecent({ name: dest.name, address: dest.address, lat: dest.lat, lng: dest.lng })
       }
       onBooked?.()
       if (data?.redirect) {
-        navigate(data.redirect)
+        // Replace the booking page: Back from tracking must not offer to book again.
+        navigate(data.redirect, { replace: true })
       } else {
         onClose()
       }
@@ -374,8 +405,13 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
   const pointsLocked = Boolean(pickupPoint && destinationCoords)
   const hasDest = Boolean(dest?.name && dest.lat != null && dest.lng != null)
   const hasPickup = Boolean(pickup?.name && pickup.lat != null && pickup.lng != null)
-  const canBook = hasDest && hasPickup && estimate != null && requestRideMutation.isIdle
+  // Only vehicle types that a registered ride-hailing rider has can be booked.
+  const availability = estimate?.vehicle_types
+  const bookableVehicles = availability ? VEHICLES.filter((v) => availability.some((a) => a.slug === v.type && a.available)) : VEHICLES
+  const vehicleInfo = (type: string) => availability?.find((a) => a.slug === type)
+  const canBook = hasDest && hasPickup && estimate != null && requestRideMutation.isIdle && bookableVehicles.some((v) => v.type === vehicleType)
   const currentFare = estimate?.fares?.[vehicleType]
+  const SelectedVehicleIcon = rideVehicleIcon(vehicleType)
 
   const chooseResult = (result: LocationResult) => {
     if (step === 'destination') {
@@ -475,13 +511,26 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
   const activeStepIndex = step === 'destination' ? 0 : step === 'pickup' ? 1 : 2
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-lg bg-white rounded-t-3xl shadow-2xl border-t border-[#E5E9E7] max-h-[88vh] overflow-y-auto">
-        <div className="flex justify-center pt-3 pb-2">
-          <div className="w-10 h-1 bg-[#E5E9E7] rounded-full" />
+    // A normal page (not a pop-up): it scrolls with the layout, whose bottom
+    // padding already clears the bottom navigation bar, so "Book Ride Now" is
+    // never covered.
+    <div data-testid="book-ride-page" className="mx-auto lg:mx-0 w-full max-w-3xl">
+      <div className="mb-4 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="shrink-0 rounded-full border border-[#E5E9E7] bg-white p-2.5 text-[#17201B] transition hover:border-[#087F3F]/40 hover:text-[#087F3F]"
+        >
+          <ArrowLeft className="h-5 w-5" aria-hidden="true" />
+        </button>
+        <div className="min-w-0">
+          <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">Book a Ride</h1>
+          <p className="text-sm text-[#56615B]">Where to, where from, then your vehicle and payment.</p>
         </div>
+      </div>
 
+      <section aria-label={stepTitles[step]} className="bg-white rounded-2xl border border-[#E5E9E7] pt-4">
         {/* Header */}
         <div className="flex items-center justify-between px-5 pb-2">
           <div className="flex items-center gap-2">
@@ -499,13 +548,10 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
               </button>
             )}
             <div className="w-8 h-8 rounded-full bg-[#E9F7EF] flex items-center justify-center">
-              <Bike className="w-4 h-4 text-[#087F3F]" />
+              <SelectedVehicleIcon className="w-4 h-4 text-[#087F3F]" aria-hidden="true" />
             </div>
-            <h3 className="font-semibold text-[#17201B]">{stepTitles[step]}</h3>
+            <h2 className="font-semibold text-[#17201B]">{stepTitles[step]}</h2>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close" className="p-2 rounded-full hover:bg-[#E9F7EF] transition">
-            <X className="w-5 h-5 text-[#68736D]" aria-hidden="true" />
-          </button>
         </div>
 
         {/* Step indicator */}
@@ -740,8 +786,13 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
               {/* Vehicle selection */}
               <div>
                 <p className="text-sm font-bold text-[#17201B] mb-2">Choose a ride</p>
+                {availability && bookableVehicles.length === 0 && (
+                  <p className="rounded-2xl bg-[#FFF8E6] px-3 py-3 text-sm text-[#7C4A03]" role="status">
+                    No ride-hailing vehicles are registered yet. Please try again later.
+                  </p>
+                )}
                 <div className="space-y-2" role="radiogroup" aria-label="Vehicle">
-                  {VEHICLES.map((v) => {
+                  {bookableVehicles.map((v) => {
                     const Icon = v.icon
                     const fare = estimate?.fares?.[v.type]
                     const selected = vehicleType === v.type
@@ -765,6 +816,7 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
                           <span className="block text-sm font-bold text-[#17201B]">{v.name}</span>
                           <span className="block text-xs text-[#56615B]">
                             {fare?.duration_min ? `${fare.duration_min} min • ` : ''}{v.pax} {v.pax === 1 ? 'passenger' : 'pax'}
+                            {vehicleInfo(v.type) && ` • ${vehicleInfo(v.type)!.riders_online ? `${vehicleInfo(v.type)!.riders_online} online` : 'none online now'}`}
                           </span>
                         </span>
                         <span className="shrink-0 text-base font-extrabold text-[#17201B]">{fare ? formatCurrency(fare.fare) : '—'}</span>
@@ -840,11 +892,20 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
               {bookingNotice && (
                 <p role="alert" className="rounded-xl bg-[#FFF7E6] px-3 py-2 text-sm text-[#8A5A00]">
                   {bookingNotice}
+                  {activeRideUrl && (
+                    <button
+                      type="button"
+                      onClick={() => navigate(activeRideUrl, { replace: true })}
+                      className="ml-1 font-semibold text-[#087F3F] underline"
+                    >
+                      View your ride
+                    </button>
+                  )}
                 </p>
               )}
               <button
                 onClick={() => { setBookingNotice(null); requestRideMutation.mutate() }}
-                disabled={!canBook}
+                disabled={!canBook || activeRideUrl != null}
                 className={cn(
                   'w-full h-14 rounded-full font-bold text-base transition flex items-center justify-center gap-2 shadow-md',
                   canBook
@@ -862,7 +923,7 @@ export default function BookRideSheet({ isOpen, onClose, destination, destinatio
             </>
           )}
         </div>
-      </div>
+      </section>
     </div>
   )
 }

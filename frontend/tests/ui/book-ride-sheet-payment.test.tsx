@@ -100,4 +100,32 @@ describe('Ride booking payment', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /Book Ride Now/ })).toBeEnabled())
     api.post.mockImplementation(original)
   })
+
+  // One ride at a time (2026-11-17): the server refuses a booking while the
+  // tourist's earlier ride is unfinished; the page says so and links to it.
+  it('refused because a ride is already in progress: says so, links to it, and does not book', async () => {
+    const original = api.post.getMockImplementation()!
+    api.post.mockImplementation(async (url: string) => {
+      if (url === '/tourist/transport/book') {
+        throw { response: { status: 409, data: {
+          message: 'You already have a ride in progress. Finish or cancel it before booking another ride.',
+          data: { code: 'active_ride', order_id: 17, redirect: '/tourist/transport/tracking/17' },
+        } } }
+      }
+      return original(url)
+    })
+    await openSummary()
+    const book = await screen.findByRole('button', { name: /Book Ride Now/ })
+    await waitFor(() => expect(book).toBeEnabled())
+    const quotesBefore = api.post.mock.calls.filter(([u]) => u === '/tourist/transport/estimate').length
+    await act(async () => { fireEvent.click(book) })
+
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent('You already have a ride in progress')
+    expect(within(alert).getByRole('button', { name: 'View your ride' })).toBeInTheDocument()
+    // Not a fare problem: no re-quote, and Book stays off.
+    expect(api.post.mock.calls.filter(([u]) => u === '/tourist/transport/estimate').length).toBe(quotesBefore)
+    await waitFor(() => expect(screen.getByRole('button', { name: /Book Ride Now/ })).toBeDisabled())
+    api.post.mockImplementation(original)
+  })
 })

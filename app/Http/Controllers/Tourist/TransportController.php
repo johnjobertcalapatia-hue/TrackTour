@@ -30,6 +30,27 @@ class TransportController extends Controller
         return $this->paginatedResponse($trips);
     }
 
+    /**
+     * GET /tourist/transport/active — the tourist's ride that is not finished
+     * yet (searching, driver on the way, in progress), or null. A new ride can
+     * be booked only when this is null.
+     */
+    public function active(Request $request): JsonResponse
+    {
+        $ride = $this->transport->activeRideFor((int) $request->user()->id);
+        if ($ride === null) {
+            return $this->successResponse(null, 'No ride in progress.');
+        }
+
+        return $this->successResponse([
+            'id' => $ride->id,
+            'order_number' => $ride->order_number,
+            'status' => $this->transport->getRideStatus($ride)['ride_status'],
+            'delivery_address' => $ride->delivery?->delivery_address,
+            'redirect' => '/tourist/transport/tracking/'.$ride->id,
+        ]);
+    }
+
     public function tripStatus(Request $request, int $id): JsonResponse
     {
         $trip = Order::where('customer_email', $request->user()->email)
@@ -54,6 +75,23 @@ class TransportController extends Controller
                 ->first();
         }
 
+        // One-time destination change (2026-11-17): once finalized, the fare
+        // is the final fare (verified distance, capped); until then the
+        // booked fare stands and the confirmed estimate is shown beside it.
+        $changes = app(\App\Services\RideDestinationChangeService::class);
+        $change = $changes->changeFor($trip);
+        $eligibility = $changes->eligibility($trip, $delivery);
+        $fare = (float) $ride['booking_fare'];
+        if ($change?->final_fare !== null) {
+            $fare = (float) $change->final_fare;
+            $fareBreakdown['base_fare'] = (float) $change->base_fare;
+            $fareBreakdown['distance_fare'] = round($fare - (float) $change->base_fare, 2);
+        }
+        // Time-based charges (2026-11-18): itemised on top of the ride fare.
+        $timeCharges = app(\App\Services\RideTimeChargeService::class);
+        $charges = $delivery ? $timeCharges->charges($delivery->id) : [];
+        $chargesTotal = round((float) collect($charges)->sum('amount'), 2);
+
         return $this->successResponse([
             'id' => $trip->id,
             'order_number' => $ride['order_number'],
@@ -70,7 +108,12 @@ class TransportController extends Controller
             'payment_method' => $ride['payment_method'],
             'payment_status' => (string) ($trip->payment_status ?? 'pending'),
             'paid_amount' => (float) ($trip->paid_amount ?? 0),
-            'fare' => (float) $ride['booking_fare'],
+            // Total payable: the ride fare plus itemised additional charges.
+            'fare' => round($fare + $chargesTotal, 2),
+            'ride_fare' => $fare,
+            'additional_charges' => $charges,
+            'charges_total' => $chargesTotal,
+            'pickup_waiting' => $delivery ? $timeCharges->waitingState($delivery) : null,
             'base_fare' => $fareBreakdown['base_fare'],
             'distance_fare' => $fareBreakdown['distance_fare'],
             'service_fee' => $fareBreakdown['service_fee'],
@@ -107,7 +150,106 @@ class TransportController extends Controller
                 'recorded_at' => $riderLocation->recorded_at?->toIso8601String(),
             ] : null,
             'tracking' => app(OrderTrackingService::class)->customerBlock($trip, $delivery),
+            // At the drop-off, not completed yet: the tourist pays (GCash) or
+            // hands over the cash, and the driver confirms it and completes
+            // the ride (2026-11-18). Rating opens once completed.
+            'at_drop_off' => $trip->status !== 'completed' && in_array($delivery?->status?->value ?? $delivery?->status, ['arrived_destination', 'delivered'], true),
+            'ride_completed' => $trip->status === 'completed' || ($delivery?->status?->value ?? $delivery?->status) === 'completed',
+            'payment_switched_to_cash' => \App\Services\RidePaymentService::switchedToCash($trip),
+            // Cancellation penalty (Stage B, 2026-11-18): before cancelling, until
+            // when it is free; after, the penalty (if any) and whether it can be disputed.
+            'cancellation_penalty_preview' => in_array($ride['ride_status'], ['searching', 'arriving', 'driver_arrived'], true)
+                ? app(\App\Services\RideCancellationPenaltyService::class)->preview($delivery) : null,
+            'cancellation_penalty' => \App\Models\RideCancellationPenalty::where('cancelled_order_id', $trip->id)->first()?->present(),
+            'destination_change' => $change?->present(),
+            'destination_change_allowed' => $eligibility['allowed'],
+            'destination_changes_left' => $eligibility['changes_left'],
+            'destination_change_unavailable_reason' => $eligibility['allowed'] ? null : $eligibility['reason'],
         ]);
+    }
+
+    /** GET /tourist/transport/penalties — the tourist's cancellation penalties. */
+    public function penalties(Request $request): JsonResponse
+    {
+        $rows = \App\Models\RideCancellationPenalty::where('tourist_id', $request->user()->id)->latest('id')->limit(50)->get();
+
+        return $this->successResponse([
+            'penalties' => $rows->map->present()->values(),
+            'outstanding_total' => round((float) $rows->where('status', \App\Models\RideCancellationPenalty::STATUS_OWED)->sum('penalty_amount'), 2),
+        ]);
+    }
+
+    /** POST /tourist/transport/trip/{id}/penalty/dispute — dispute this ride's cancellation penalty. */
+    public function disputePenalty(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate(['reason' => ['required', 'string', 'min:5', 'max:500']]);
+        $trip = Order::where('customer_email', $request->user()->email)->where('order_type', 'transport')->findOrFail($id);
+        $penalty = \App\Models\RideCancellationPenalty::where('cancelled_order_id', $trip->id)->first();
+        if ($penalty === null) {
+            return $this->errorResponse('This ride has no cancellation penalty.', 404);
+        }
+        try {
+            $penalty = app(\App\Services\RideCancellationPenaltyService::class)->dispute($penalty, $request->user(), $data['reason']);
+        } catch (\App\Exceptions\RidePenaltyException $e) {
+            return $this->errorResponse($e->getMessage(), $e->status);
+        }
+
+        return $this->successResponse(['penalty' => $penalty->present()], 'Your dispute was sent to the Tourism Office. Nothing is collected while it is reviewed.');
+    }
+
+    /**
+     * POST /tourist/transport/trip/{id}/destination-change/preview — the
+     * revised route and fare for a new destination. Stores nothing, so an
+     * abandoned or refused preview never uses the one change.
+     */
+    public function previewDestinationChange(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate([
+            'destination_name' => ['nullable', 'string', 'max:255'],
+            'destination_address' => ['nullable', 'string', 'max:500'],
+            'destination_lat' => ['required', 'numeric', 'between:-90,90'],
+            'destination_lng' => ['required', 'numeric', 'between:-180,180'],
+        ]);
+        $trip = Order::where('customer_email', $request->user()->email)->where('order_type', 'transport')->findOrFail($id);
+
+        try {
+            $preview = app(\App\Services\RideDestinationChangeService::class)->preview($trip, [
+                'name' => $data['destination_name'] ?? null,
+                'address' => $data['destination_address'] ?? null,
+                'latitude' => (float) $data['destination_lat'],
+                'longitude' => (float) $data['destination_lng'],
+            ], $request->user());
+        } catch (\App\Exceptions\RideDestinationChangeException $e) {
+            return $this->errorResponse($e->getMessage(), $e->status);
+        }
+
+        return $this->successResponse($preview, 'Review the new route and fare, then confirm.');
+    }
+
+    /**
+     * POST /tourist/transport/trip/{id}/destination-change — confirm the
+     * previewed change (signed quote + idempotency key). Once per trip.
+     */
+    public function confirmDestinationChange(Request $request, int $id): JsonResponse
+    {
+        $data = $request->validate([
+            'quote_token' => ['required', 'string'],
+            'idempotency_key' => ['required', 'string', 'min:8', 'max:64'],
+        ]);
+        $trip = Order::where('customer_email', $request->user()->email)->where('order_type', 'transport')->findOrFail($id);
+
+        try {
+            $result = app(\App\Services\RideDestinationChangeService::class)
+                ->confirm($trip, $data['quote_token'], $data['idempotency_key'], $request->user());
+        } catch (\App\Exceptions\RideDestinationChangeException $e) {
+            return $this->errorResponse($e->getMessage(), $e->status);
+        }
+
+        return $this->successResponse(
+            ['destination_change' => $result['change']->present(), 'replayed' => $result['replayed']],
+            'Destination changed. Your driver has been told.',
+            $result['replayed'] ? 200 : 201,
+        );
     }
 
     public function cancelTrip(Request $request, int $id): JsonResponse
@@ -190,7 +332,20 @@ class TransportController extends Controller
             (float) $request->destination_lng,
         );
 
+        // Vehicle types come from riders' registered vehicles: only types with
+        // an approved ride-hailing rider are bookable.
+        $vehicleTypes = app(\App\Services\RideVehicles::class)->bookable();
+        $bookable = array_column(array_filter($vehicleTypes, fn ($v) => $v['available']), 'slug');
+        $estimate['vehicle_types'] = $vehicleTypes;
+        $estimate['fares'] = array_intersect_key($estimate['fares'], array_flip($bookable));
+
         return $this->successResponse($estimate);
+    }
+
+    /** Ride vehicle types tourists can book, from riders' registered vehicles. */
+    public function vehicleTypes(): JsonResponse
+    {
+        return $this->successResponse(app(\App\Services\RideVehicles::class)->bookable());
     }
 
     public function route(Request $request): JsonResponse
@@ -220,6 +375,18 @@ class TransportController extends Controller
         // so any client-supplied fare/distance/duration is advisory only.
         try {
             $order = $this->transport->createRide($validated);
+        } catch (\App\Exceptions\ActiveRideExistsException $e) {
+            // One ride at a time: send the tourist back to the ride they have.
+            return response()->json([
+                'success' => false,
+                'message' => $e->getMessage(),
+                'data' => [
+                    'code' => 'active_ride',
+                    'order_id' => $e->ride->id,
+                    'order_number' => $e->ride->order_number,
+                    'redirect' => '/tourist/transport/tracking/'.$e->ride->id,
+                ],
+            ], 409);
         } catch (\App\Exceptions\RideFareChangedException $e) {
             return response()->json([
                 'success' => false,

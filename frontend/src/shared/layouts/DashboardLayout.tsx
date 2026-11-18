@@ -12,7 +12,6 @@ import { ChevronLeft, ChevronRight, ChevronDown, LogOut, Power, User, Settings, 
 import { isUsableGpsFix, locationSentRecently, markLocationSent, RIDER_LOCATION_INTERVAL_MS } from '@/features/rider/gps'
 import RiderDiagnosticsSheet, { OPEN_RIDER_DIAGNOSTICS_EVENT } from '@/features/rider/components/RiderDiagnosticsSheet'
 import RiderDestinationSheet, { useRiderDestination } from '@/features/rider/components/RiderDestinationSheet'
-import { useOfficeProfile } from '@/features/admin/hooks/use-office-profile'
 
 const bottomPanelActions = [
   { label: 'Service Types', icon: Layers },
@@ -65,8 +64,6 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
   const tourism = theme === 'tourism' || tourismOffice
   const admin = theme === 'admin'
   // The office's own branding (set on /admin/profile) drives the sidebar mark.
-  const { data: officeProfile } = useOfficeProfile(admin)
-  const officeLogo = admin ? toAssetUrl(officeProfile?.logo_url) : ''
   const user = useAuthStore((s) => s.user)
   const setUser = useAuthStore((s) => s.setUser)
   const fetchUser = useAuthStore((s) => s.fetchUser)
@@ -604,16 +601,14 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
         )}
       >
         <div className={cn('h-16 flex items-center shrink-0', admin ? 'border-b border-[#E5E9E7]' : tourism ? 'border-b border-[#E5E9E7]' : 'border-b border-white/30', collapsed ? 'justify-center px-2' : 'gap-3 px-5')}>
+          {/* The sidebar always carries the TrackTour brand; the Bansud office
+              logo lives on its Office Profile page. */}
           <img
-            src={officeLogo || '/assets/logo/tracktour.png'}
-            alt={officeLogo ? 'Bansud Tourism Office logo' : 'TrackTour Logo'}
+            src="/assets/logo/tracktour.png"
+            alt="TrackTour Logo"
             className="w-24 h-24 object-contain shrink-0"
           />
-          {!collapsed && (
-            <span className={cn('text-base font-bold min-w-0 truncate', officeLogo ? 'text-[#17201B]' : 'text-[#087F3F]')}>
-              {officeLogo ? officeProfile?.name || 'Bansud Tourism Office' : 'TrackTour'}
-            </span>
-          )}
+          {!collapsed && <span className="text-base font-bold min-w-0 truncate text-[#087F3F]">TrackTour</span>}
         </div>
 
         {!collapsed &&

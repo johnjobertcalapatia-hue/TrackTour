@@ -69,3 +69,16 @@ Schedule::command(\App\Console\Commands\VerifyTransactionIntegrity::class, ['--h
     ->dailyAt('02:30')
     ->withoutOverlapping()
     ->description('Re-verify transaction histories changed in the last 48 hours');
+
+// System Diagnostics (admin): proves the scheduler process is alive. Only the
+// real scheduler writes this; manual "run now" fixes never do.
+Schedule::call(fn () => \Illuminate\Support\Facades\Cache::forever(\App\Services\SystemDiagnosticsService::HEARTBEAT_KEY, now()->toIso8601String()))
+    ->everyMinute()
+    ->name('system-diagnostics-heartbeat')
+    ->description('Record that the scheduler is running (System Diagnostics)');
+
+// Incident history: prune history-only / dismissed records after 180 days
+// (open problems and fixed ones are kept).
+Schedule::command('model:prune', ['--model' => [\App\Models\SystemIncident::class]])
+    ->daily()
+    ->description('Prune old history-only system incidents');

@@ -86,7 +86,10 @@ class VerificationDocumentPrivacyTest extends TestCase
     {
         $document = $this->createBusinessDocument();
         Storage::disk('local')->put($document->file_path, 'private permit');
+        // Municipal Tourism Office review is scoped to its own municipality
+        // (docs/PHASE2-ROLES-PERMISSIONS.md F-3); this office covers the business.
         $staff = $this->createUser(User::ROLE_TOURISM_OFFICE, 'staff@example.com');
+        $staff->update(['municipality_id' => $this->business->municipality_id]);
 
         $response = $this->actingAs($staff, 'sanctum')
             ->getJson("/api/business-documents/{$document->id}/file")
@@ -182,7 +185,10 @@ class VerificationDocumentPrivacyTest extends TestCase
             ->assertOk();
         $this->assertSame('private rider document', $response->streamedContent());
 
+        // Same-municipality office (F-3 scoping): rider and office share it.
+        $rider->update(['municipality_id' => $this->business->municipality_id]);
         $staff = $this->createUser(User::ROLE_TOURISM_OFFICE, 'rider-doc-staff@example.com');
+        $staff->update(['municipality_id' => $this->business->municipality_id]);
         $this->actingAs($staff, 'sanctum')
             ->getJson("/api/rider-details/{$riderDetail->id}/verification-documents/drivers-license-front")
             ->assertOk();

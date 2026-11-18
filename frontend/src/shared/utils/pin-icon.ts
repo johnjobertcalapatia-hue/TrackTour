@@ -154,3 +154,39 @@ export function profilePinIcon(photoUrl: string | null | undefined, initials = '
   profileIconCache.set(key, icon)
   return icon
 }
+
+/**
+ * Ride-hailing pickup: the passenger waiting point. Same pin shape and label
+ * as the restaurant pin, but amber with a person (never a fork and knife —
+ * a ride has no restaurant).
+ */
+export function passengerPickupSvg(label = '') {
+  const labelHtml = label
+    ? `<span class="marker-label" style="position:absolute;left:50%;top:var(--ty, 0px);white-space:nowrap;background:rgba(255,255,255,0.92);color:#7C4A03;font:600 11px/1.2 system-ui,sans-serif;padding:3px 8px;border-radius:10px;transform:translateX(var(--tx, 18px));transition:transform .3s ease, top .3s ease;">${escapeHtml(label)}</span>`
+    : ''
+  return `
+  <svg xmlns="http://www.w3.org/2000/svg" width="48" height="54" viewBox="-5 -7 46 52" style="position:absolute;left:0;top:0;" data-marker="passenger-pickup">
+    <path d="${PIN_SHAPE}" fill="#fff" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="16" cy="13.5" r="14" fill="#D97706" stroke="#fff" stroke-width="2.4"/>
+    <svg x="9" y="6.5" width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="12" cy="8" r="4.5" fill="none" stroke="#fff" stroke-width="2.5"/>
+      <path d="M4 21c0-4.4 3.6-7.5 8-7.5s8 3.1 8 7.5" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+    </svg>
+  </svg>${labelHtml}`
+}
+
+const passengerIconCache = new Map<string, L.DivIcon>()
+
+export function passengerPickupIcon(label = ''): L.DivIcon {
+  const cached = passengerIconCache.get(label)
+  if (cached) return cached
+  const icon = L.divIcon({
+    className: 'landing-pin',
+    html: rotatable(passengerPickupSvg(label), [48, 54], [24, 40]),
+    iconSize: [48, 54],
+    iconAnchor: [24, 40],
+  })
+  if (passengerIconCache.size > 200) passengerIconCache.clear()
+  passengerIconCache.set(label, icon)
+  return icon
+}

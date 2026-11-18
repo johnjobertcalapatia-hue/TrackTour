@@ -113,6 +113,9 @@ Route::get('/resort-catalogue', [\App\Http\Controllers\ResortProfileController::
 
 Route::get('/municipalities/locate', \App\Http\Controllers\Api\MunicipalityLocateController::class)
     ->middleware('throttle:30,1');
+// Public: Tourism Offices that register riders (walk-in applicants)
+Route::get('/rider-registration/offices', \App\Http\Controllers\Api\RiderRegistrationOfficeController::class);
+
 // Public: real photos of a municipality (cover → attractions → businesses) for the tourist UI
 Route::get('/municipalities/{municipality}/photos', \App\Http\Controllers\Api\MunicipalityPhotosController::class);
 
@@ -245,11 +248,17 @@ Route::middleware('token.only')->group(function () {
 
         // Transport
         Route::get('/transport', [TransportController::class, 'index']);
+        Route::get('/transport/active', [TransportController::class, 'active']);
+        Route::get('/transport/penalties', [TransportController::class, 'penalties']);
         Route::post('/transport/estimate', [TransportController::class, 'estimate']);
+        Route::get('/transport/vehicle-types', [TransportController::class, 'vehicleTypes']);
         Route::post('/transport/route', [TransportController::class, 'route']);
         Route::post('/transport/book', [TransportController::class, 'book']);
         Route::get('/transport/trip/{id}/status', [TransportController::class, 'tripStatus']);
         Route::post('/transport/trip/{id}/cancel', [TransportController::class, 'cancelTrip']);
+        Route::post('/transport/trip/{id}/penalty/dispute', [TransportController::class, 'disputePenalty'])->middleware('throttle:10,1');
+        Route::post('/transport/trip/{id}/destination-change/preview', [TransportController::class, 'previewDestinationChange'])->middleware('throttle:20,1');
+        Route::post('/transport/trip/{id}/destination-change', [TransportController::class, 'confirmDestinationChange'])->middleware('throttle:10,1');
         Route::post('/transport/trip/{id}/rate', [TransportController::class, 'rateTrip']);
 
         // Transport — pickup & destination selection (local registry search)
@@ -505,6 +514,13 @@ Route::middleware('token.only')->group(function () {
         Route::get('/profile', [RiderProfileController::class, 'show']);
         Route::put('/profile', [RiderProfileController::class, 'update']);
         Route::post('/profile/photo', [RiderProfileController::class, 'uploadPhoto']);
+
+        // Onboarding: application → appointment → tracker (pending riders).
+        Route::get('/onboarding', [\App\Http\Controllers\Rider\RiderOnboardingController::class, 'show']);
+        Route::post('/onboarding/application', [\App\Http\Controllers\Rider\RiderOnboardingController::class, 'submitApplication'])->middleware('throttle:20,1');
+        Route::get('/onboarding/slots', [\App\Http\Controllers\Rider\RiderOnboardingController::class, 'slots']);
+        Route::post('/onboarding/appointment', [\App\Http\Controllers\Rider\RiderOnboardingController::class, 'book'])->middleware('throttle:20,1');
+        Route::delete('/onboarding/appointment', [\App\Http\Controllers\Rider\RiderOnboardingController::class, 'cancel']);
         Route::get('/earnings', [RiderController::class, 'earnings']);
         Route::get('/cash-fund/daily-receipt', [RiderPurchasingController::class, 'dailyCashReceipt']);
         Route::post('/cash-fund/daily-receipt/submissions', [RiderPurchasingController::class, 'submitDailyCashReconciliation']);
@@ -526,6 +542,8 @@ Route::middleware('token.only')->group(function () {
         Route::get('/deliveries/{delivery}/purchases', [RiderPurchasingController::class, 'purchases']);
         Route::get('/deliveries/{delivery}/pickup-route', [RiderDeliveryController::class, 'pickupRoute']);
         Route::get('/deliveries/{delivery}/pickup-stops', [RiderPickupStopController::class, 'index']);
+        Route::post('/deliveries/{delivery}/destination-change/acknowledge', [RiderDeliveryController::class, 'acknowledgeDestinationChange']);
+        Route::post('/deliveries/{delivery}/ride-payment/cash', [RiderDeliveryController::class, 'switchRideToCash']);
         Route::post('/deliveries/{delivery}/pickup-stops/{business}/arrive', [RiderPickupStopController::class, 'arrive']);
         Route::post('/deliveries/{delivery}/pickup-stops/{business}/confirm', [RiderPickupStopController::class, 'confirm']);
         Route::post('/deliveries/{delivery}/purchases/{purchase}/mark', [RiderPurchasingController::class, 'mark']);
@@ -564,6 +582,11 @@ Route::middleware('token.only')->group(function () {
     Route::middleware('role:bansud_tourism_office')->prefix('admin')->group(function () {
         // Dashboard
         Route::get('/dashboard', [AdminDashboardController::class, 'index']);
+        // Business-intelligence dashboard (period filters, popularity, finance).
+        Route::get('/dashboard/analytics', [\App\Http\Controllers\Admin\AdminAnalyticsController::class, 'index']);
+        Route::get('/platform-expenses', [\App\Http\Controllers\Admin\AdminAnalyticsController::class, 'expenses']);
+        Route::post('/platform-expenses', [\App\Http\Controllers\Admin\AdminAnalyticsController::class, 'storeExpense']);
+        Route::delete('/platform-expenses/{expense}', [\App\Http\Controllers\Admin\AdminAnalyticsController::class, 'destroyExpense'])->whereNumber('expense');
         Route::get('/map-data', [AdminMapController::class, 'index']);
 
         // Bansud Tourism Office profile (logo, cover, contact details).
@@ -612,9 +635,19 @@ Route::middleware('token.only')->group(function () {
         Route::post('/business-categories/{category}/documents/{document}/unarchive', [AdminBusinessCategoryController::class, 'unarchiveDocument']);
         Route::post('/business-categories/{category}/documents/{document}/toggle-required', [AdminBusinessCategoryController::class, 'toggleRequired']);
 
-        // Municipalities
+        // Municipalities (District Super Admin manages every municipality and
+        // its Municipality Tourism Admin accounts).
         Route::get('/municipalities', [AdminMunicipalityController::class, 'index']);
+        Route::post('/municipalities', [AdminMunicipalityController::class, 'store']);
         Route::get('/municipalities/{municipality}', [AdminMunicipalityController::class, 'show']);
+        Route::put('/municipalities/{municipality}', [AdminMunicipalityController::class, 'update']);
+        Route::delete('/municipalities/{municipality}', [AdminMunicipalityController::class, 'destroy']);
+        Route::post('/municipalities/{municipality}/admins', [AdminMunicipalityController::class, 'storeAdmin'])->middleware('throttle:30,1');
+        Route::delete('/municipalities/{municipality}/admins/{user}', [AdminMunicipalityController::class, 'removeAdmin']);
+        // All municipal Tourism Office accounts in one place.
+        Route::get('/municipality-accounts', [AdminMunicipalityController::class, 'accounts']);
+        Route::post('/municipality-accounts', [AdminMunicipalityController::class, 'storeAccount'])->middleware('throttle:30,1');
+        Route::post('/municipality-accounts/{user}/assign', [AdminMunicipalityController::class, 'assignAccount'])->whereNumber('user');
 
         // Riders
         Route::get('/riders', [AdminRiderController::class, 'index']);
@@ -624,6 +657,7 @@ Route::middleware('token.only')->group(function () {
         Route::put('/riders/ride-fares', [AdminRiderController::class, 'updateRideFareSettings']);
         Route::get('/riders/{rider}', [AdminRiderController::class, 'show']);
         Route::put('/riders/{rider}/municipality', [AdminRiderController::class, 'updateMunicipality']);
+        Route::put('/riders/{rider}/vehicle', [AdminRiderController::class, 'updateVehicle']);
         Route::get('/riders/{rider}/records', [AdminRiderController::class, 'records']);
         Route::post('/riders/{rider}/approve', [AdminRiderController::class, 'approve']);
         Route::post('/riders/{rider}/reject', [AdminRiderController::class, 'reject']);
@@ -697,6 +731,15 @@ Route::middleware('token.only')->group(function () {
         Route::get('/system/security/logs', [AdminSystemController::class, 'securityLogs']);
         Route::get('/system/ocr-settings', [AdminSystemController::class, 'ocrSettings']);
         Route::put('/system/ocr-settings', [AdminSystemController::class, 'updateOcrSettings']);
+        // System Diagnostics: detect failures; fixes come from a fixed allow-list.
+        Route::get('/system/diagnostics', [\App\Http\Controllers\Admin\AdminSystemDiagnosticsController::class, 'index'])->middleware('throttle:30,1');
+        Route::post('/system/diagnostics/fix', [\App\Http\Controllers\Admin\AdminSystemDiagnosticsController::class, 'fix'])->middleware('throttle:20,1');
+        // Incident history: every recorded failure, with filters and fix records.
+        Route::get('/system/incidents', [\App\Http\Controllers\Admin\AdminIncidentController::class, 'index']);
+        Route::get('/system/incidents/{incident}', [\App\Http\Controllers\Admin\AdminIncidentController::class, 'show'])->whereNumber('incident');
+        Route::post('/system/incidents/{incident}/resolve', [\App\Http\Controllers\Admin\AdminIncidentController::class, 'resolve'])->whereNumber('incident')->middleware('throttle:60,1');
+        Route::post('/system/incidents/{incident}/dismiss', [\App\Http\Controllers\Admin\AdminIncidentController::class, 'dismiss'])->whereNumber('incident')->middleware('throttle:60,1');
+        Route::post('/system/incidents/{incident}/reopen', [\App\Http\Controllers\Admin\AdminIncidentController::class, 'reopen'])->whereNumber('incident')->middleware('throttle:60,1');
 
         // Trip diagnostics (2026-11-12): canonical path, safe fixes, step resets.
         Route::get('/deliveries/{delivery}/diagnostics', [\App\Http\Controllers\Admin\AdminTripDiagnosticsController::class, 'show'])->whereNumber('delivery');
@@ -705,11 +748,74 @@ Route::middleware('token.only')->group(function () {
 
         // Live Monitoring
         Route::get('/live/deliveries', [AdminLiveController::class, 'deliveries']);
-        Route::get('/live/tours', [AdminLiveController::class, 'tours']);
         Route::get('/live/sos', [AdminLiveController::class, 'sos']);
         Route::post('/live/sos/{id}/acknowledge', [AdminLiveController::class, 'acknowledgeSos']);
         Route::post('/live/sos/{id}/respond', [AdminLiveController::class, 'respondSos']);
         Route::post('/live/sos/{id}/resolve', [AdminLiveController::class, 'resolveSos']);
+    });
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Rider onboarding — Tourism Office side (municipal office: own
+    // municipality; Bansud super admin: ?municipality_id=, default Bansud).
+    // ═══════════════════════════════════════════════════════════════════
+    Route::middleware('role:tourism_office,bansud_tourism_office')->prefix('onboarding-office')->group(function () {
+        $c = \App\Http\Controllers\OnboardingOfficeController::class;
+        Route::get('/availability', [$c, 'availability']);
+        Route::put('/availability/{date}', [$c, 'setAvailability']);
+        Route::get('/affected', [$c, 'affected']);
+        Route::post('/affected/reschedule', [$c, 'rescheduleAffected']);
+        Route::get('/schedules', [$c, 'schedules']);
+        Route::patch('/schedules/{schedule}', [$c, 'updateSchedule'])->whereNumber('schedule');
+        Route::get('/appointments', [$c, 'appointments']);
+        Route::get('/applicants', [$c, 'applicants']);
+        Route::get('/applicants/{rider}', [$c, 'applicant'])->whereNumber('rider');
+        Route::post('/applicants/{rider}/check-in', [$c, 'checkIn'])->whereNumber('rider');
+        Route::post('/applicants/{rider}/no-show', [$c, 'noShow'])->whereNumber('rider');
+        Route::post('/applicants/{rider}/interview', [$c, 'interview'])->whereNumber('rider');
+        Route::post('/applicants/{rider}/attendance', [$c, 'attendance'])->whereNumber('rider');
+        Route::post('/applicants/{rider}/assessment', [$c, 'assessment'])->whereNumber('rider');
+        Route::post('/applicants/{rider}/decision', [$c, 'decision'])->whereNumber('rider');
+        Route::post('/applicants/{rider}/requirements/verify', [$c, 'verifyRequirements'])->whereNumber('rider');
+        Route::post('/applicants/{rider}/requirements/return', [$c, 'returnRequirements'])->whereNumber('rider');
+        Route::post('/applicants/{rider}/quick-approve', [$c, 'quickApprove'])->whereNumber('rider');
+        Route::post('/applicants/{rider}/reschedule', [$c, 'reschedule'])->whereNumber('rider');
+    });
+
+    // ═══════════════════════════════════════════════════════════════════
+    // Municipal Tourism Office API — one municipality's own business owners,
+    // businesses, riders and tourists. Scope comes from the account
+    // (users.municipality_id) via `municipal.scope`, never from the client.
+    // ═══════════════════════════════════════════════════════════════════
+    Route::middleware(['role:tourism_office', 'municipal.scope'])->prefix('municipal')->group(function () {
+        Route::get('/dashboard', [\App\Http\Controllers\Municipal\MunicipalDashboardController::class, 'index']);
+        Route::get('/dashboard/analytics', [\App\Http\Controllers\Municipal\MunicipalDashboardController::class, 'analytics']);
+
+        Route::get('/business-owners', [\App\Http\Controllers\Municipal\MunicipalBusinessOwnerController::class, 'index']);
+        Route::get('/business-owners/{owner}', [\App\Http\Controllers\Municipal\MunicipalBusinessOwnerController::class, 'show'])->whereNumber('owner');
+        Route::post('/business-owners/{owner}/{action}', [\App\Http\Controllers\Municipal\MunicipalBusinessOwnerController::class, 'moderate'])
+            ->whereNumber('owner')->whereIn('action', ['approve', 'reject', 'suspend', 'reactivate']);
+
+        Route::get('/businesses', [\App\Http\Controllers\Municipal\MunicipalBusinessController::class, 'index']);
+        Route::get('/businesses/{business}', [\App\Http\Controllers\Municipal\MunicipalBusinessController::class, 'show'])->whereNumber('business');
+        Route::put('/businesses/{business}/documents/{document}/review', [\App\Http\Controllers\Municipal\MunicipalBusinessController::class, 'reviewDocument'])
+            ->whereNumber('business')->whereNumber('document');
+        Route::post('/businesses/{business}/{action}', [\App\Http\Controllers\Municipal\MunicipalBusinessController::class, 'moderate'])
+            ->whereNumber('business')->whereIn('action', ['approve', 'reject', 'suspend']);
+
+        Route::get('/riders', [\App\Http\Controllers\Municipal\MunicipalRiderController::class, 'index']);
+        Route::get('/riders/{rider}', [\App\Http\Controllers\Municipal\MunicipalRiderController::class, 'show'])->whereNumber('rider');
+        Route::post('/riders/{rider}/{action}', [\App\Http\Controllers\Municipal\MunicipalRiderController::class, 'moderate'])
+            ->whereNumber('rider')->whereIn('action', ['approve', 'reject', 'suspend', 'reactivate']);
+
+        Route::get('/tourists', [\App\Http\Controllers\Municipal\MunicipalTouristController::class, 'index']);
+        Route::get('/tourists/{tourist}', [\App\Http\Controllers\Municipal\MunicipalTouristController::class, 'show'])->whereNumber('tourist');
+
+        Route::get('/documents', [\App\Http\Controllers\Municipal\MunicipalDocumentController::class, 'index']);
+        Route::get('/reports', [\App\Http\Controllers\Municipal\MunicipalReportController::class, 'index']);
+        Route::get('/activity-logs', [\App\Http\Controllers\Municipal\MunicipalActivityLogController::class, 'index']);
+        Route::get('/profile', [\App\Http\Controllers\Municipal\MunicipalProfileController::class, 'show']);
+        // POST because the payload is multipart (image uploads).
+        Route::post('/profile', [\App\Http\Controllers\Municipal\MunicipalProfileController::class, 'update'])->middleware('throttle:30,1');
     });
 
     // ═══════════════════════════════════════════════════════════════════
@@ -754,24 +860,31 @@ Route::middleware('token.only')->group(function () {
 
         // Categories
         Route::get('/categories', [TourismManagementController::class, 'indexCategories']);
-        Route::post('/categories', [TourismManagementController::class, 'storeCategory']);
-        Route::delete('/categories/{id}', [TourismManagementController::class, 'destroyCategory']);
+        // Platform-wide taxonomy and settings: Bansud Tourism Office only.
+        Route::middleware('role:bansud_tourism_office')->group(function () {
+            Route::post('/categories', [TourismManagementController::class, 'storeCategory']);
+            Route::delete('/categories/{id}', [TourismManagementController::class, 'destroyCategory']);
+        });
 
         // ─── Landing Page Content ─────────────────────────────────────
         Route::get('/landing-content', [LandingContentController::class, 'index']);
-        Route::put('/landing-content', [LandingContentController::class, 'update']);
+        Route::put('/landing-content', [LandingContentController::class, 'update'])->middleware('role:bansud_tourism_office');
 
         // ─── Document Management ────────────────────────────────────────
         Route::get('/documents', [TourismOfficeDocumentController::class, 'indexDocuments']);
-        Route::post('/documents', [TourismOfficeDocumentController::class, 'storeDocument']);
-        Route::put('/documents/{id}', [TourismOfficeDocumentController::class, 'updateDocument']);
-        Route::delete('/documents/{id}', [TourismOfficeDocumentController::class, 'destroyDocument']);
+        Route::middleware('role:bansud_tourism_office')->group(function () {
+            Route::post('/documents', [TourismOfficeDocumentController::class, 'storeDocument']);
+            Route::put('/documents/{id}', [TourismOfficeDocumentController::class, 'updateDocument']);
+            Route::delete('/documents/{id}', [TourismOfficeDocumentController::class, 'destroyDocument']);
+        });
 
         // Category-Document assignments
         Route::get('/category-documents', [TourismOfficeDocumentController::class, 'indexCategories']);
         Route::get('/category-documents/{id}', [TourismOfficeDocumentController::class, 'showCategory']);
-        Route::post('/category-documents/{categoryId}/documents', [TourismOfficeDocumentController::class, 'addCategoryDocument']);
-        Route::put('/category-documents/{categoryId}/documents/{documentId}', [TourismOfficeDocumentController::class, 'updateCategoryDocument']);
-        Route::delete('/category-documents/{categoryId}/documents/{documentId}', [TourismOfficeDocumentController::class, 'removeCategoryDocument']);
+        Route::middleware('role:bansud_tourism_office')->group(function () {
+            Route::post('/category-documents/{categoryId}/documents', [TourismOfficeDocumentController::class, 'addCategoryDocument']);
+            Route::put('/category-documents/{categoryId}/documents/{documentId}', [TourismOfficeDocumentController::class, 'updateCategoryDocument']);
+            Route::delete('/category-documents/{categoryId}/documents/{documentId}', [TourismOfficeDocumentController::class, 'removeCategoryDocument']);
+        });
     });
 });

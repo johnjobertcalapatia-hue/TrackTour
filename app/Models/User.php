@@ -289,4 +289,39 @@ class User extends Authenticatable
     {
         return $this->belongsTo(Municipality::class);
     }
+
+    public function serviceEligibilities(): HasMany
+    {
+        return $this->hasMany(RiderServiceEligibility::class, 'rider_id');
+    }
+
+    /**
+     * Riders allowed to work a service. Riders onboarded with per-service
+     * approval need an approved row for it; riders approved before
+     * onboarding existed (no rows) keep their access.
+     */
+    public function scopeEligibleForService(\Illuminate\Database\Eloquent\Builder $query, string $service): \Illuminate\Database\Eloquent\Builder
+    {
+        $query->where(fn ($q) => $q->whereDoesntHave('serviceEligibilities')
+            ->orWhereHas('serviceEligibilities', fn ($e) => $e->where('service', $service)->where('status', RiderServiceEligibility::STATUS_APPROVED)));
+
+        // Ride-hailing is decided by the registered vehicle: only motor
+        // vehicles carry passengers (a bicycle is food delivery only).
+        if ($service === self::SERVICE_TRANSPORT) {
+            $query->whereHas('riderDetail', fn ($d) => $d->whereIn('vehicle_type', \App\Services\RideVehicles::RIDE_HAILING));
+        }
+
+        return $query;
+    }
+
+    public function isEligibleForService(string $service): bool
+    {
+        if ($service === self::SERVICE_TRANSPORT && ! \App\Services\RideVehicles::canRideHail($this->riderDetail()->value('vehicle_type'))) {
+            return false;
+        }
+
+        $rows = $this->serviceEligibilities()->get(['service', 'status']);
+
+        return $rows->isEmpty() || $rows->contains(fn ($r) => $r->service === $service && $r->status === RiderServiceEligibility::STATUS_APPROVED);
+    }
 }

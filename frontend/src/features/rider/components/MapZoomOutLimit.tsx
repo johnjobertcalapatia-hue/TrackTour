@@ -15,7 +15,14 @@ const PAN_MARGIN = 0.15 // fraction of the bounds allowed beyond the edges when 
  * The zoom level that fits depends on the screen size, so it is recomputed
  * on load and whenever the map container resizes.
  */
-export function MapZoomOutLimit({ bounds = PHILIPPINES_BOUNDS }: { bounds?: L.LatLngBounds }) {
+export function MapZoomOutLimit({
+  bounds = PHILIPPINES_BOUNDS,
+  panMargin = PAN_MARGIN,
+}: {
+  bounds?: L.LatLngBounds
+  /** Fraction of the bounds allowed beyond the edges when panning (0 = none). */
+  panMargin?: number
+}) {
   const map = useMap()
 
   useEffect(() => {
@@ -27,12 +34,12 @@ export function MapZoomOutLimit({ bounds = PHILIPPINES_BOUNDS }: { bounds?: L.La
       if (map.getZoom() < fitZoom) map.setZoom(fitZoom)
     }
 
-    map.setMaxBounds(bounds.pad(PAN_MARGIN))
+    map.setMaxBounds(panMargin > 0 ? bounds.pad(panMargin) : bounds)
     map.options.maxBoundsViscosity = 1
     apply()
     map.on('resize', apply)
     return () => { map.off('resize', apply) }
-  }, [map, bounds])
+  }, [map, bounds, panMargin])
 
   return null
 }

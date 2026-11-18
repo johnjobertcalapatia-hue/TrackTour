@@ -317,9 +317,15 @@ export default function RiderRegisterPage() {
       if (data.referral_code) fd.append('referral_code', data.referral_code)
 
       const user = await registerUser(fd as unknown as Record<string, unknown>)
-      navigate('/verify-email', {
-        state: { email: user.email, returnTo: getRoleDashboardPath(user.role) },
-      })
+      // The registration code was emailed, so the email is already verified:
+      // go straight to the rider application (step 2 of 4).
+      if (user.email_verified_at) {
+        navigate('/rider/onboarding', { replace: true })
+      } else {
+        navigate('/verify-email', {
+          state: { email: user.email, returnTo: getRoleDashboardPath(user.role) },
+        })
+      }
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { message?: string; errors?: Record<string, string[]> } } }
       const fieldErrors = axiosErr.response?.data?.errors
@@ -355,11 +361,12 @@ export default function RiderRegisterPage() {
       </div>
 
       <div className="w-full max-w-md px-6 py-8 tourism-card rounded-2xl">
+        <p className="text-center text-xs font-bold uppercase tracking-wide text-[#B8860B] mb-1">Rider application · Step 1 of 4</p>
         <h1 className="text-2xl font-bold text-center text-[#126B32] mb-1">
-          Become a TrackTour Rider
+          Tell us about yourself
         </h1>
         <p className="text-center text-sm text-[#6B7280] mb-6">
-          Create your rider account to start your registration
+          Create your rider account. Next you&apos;ll add your vehicle, upload your requirements and book your onboarding.
         </p>
 
         {error && <Alert type="error" message={error} onDismiss={() => setError('')} />}

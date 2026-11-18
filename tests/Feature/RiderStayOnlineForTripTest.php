@@ -262,6 +262,8 @@ class RiderStayOnlineForTripTest extends TestCase
             'user_id' => $rider->id,
             'rider_status' => $status,
             'current_service' => 'food',
+            // Reconciled 2026-11-16: every rider has a registered vehicle; ride-hailing needs a motor vehicle.
+            'vehicle_type' => 'motorcycle',
         ]);
 
         return $rider;

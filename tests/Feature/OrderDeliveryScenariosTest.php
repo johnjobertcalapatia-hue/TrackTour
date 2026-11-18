@@ -121,7 +121,7 @@ class OrderDeliveryScenariosTest extends TestCase
     private function makeRider(string $email): User
     {
         $rider = User::create(['email' => $email, 'password' => Hash::make('x'), 'role' => 'rider', 'account_status' => 'approved', 'rider_status' => 'available', 'current_service' => 'food', 'municipality_id' => $this->restaurantA->municipality_id]);
-        RiderDetail::create(['user_id' => $rider->id, 'rider_status' => 'available', 'current_service' => 'food']);
+        RiderDetail::create(['user_id' => $rider->id, 'rider_status' => 'available', 'current_service' => 'food', 'vehicle_type' => 'motorcycle']);
         RiderLocation::create(['rider_id' => $rider->id, 'latitude' => 12.505, 'longitude' => 121.305, 'recorded_at' => now()->subMinutes(3)]);
 
         return $rider;
@@ -228,9 +228,9 @@ class OrderDeliveryScenariosTest extends TestCase
         return $this->be($rider)->patchJson('/api/rider/dispatch/accept', ['delivery_id' => $d->id]);
     }
 
-    private function riderStatus(User $rider, Delivery $d, string $status)
+    private function riderStatus(User $rider, Delivery $d, string $status, array $extra = [])
     {
-        return $this->be($rider)->patchJson("/api/rider/deliveries/{$d->id}/status", ['status' => $status]);
+        return $this->be($rider)->patchJson("/api/rider/deliveries/{$d->id}/status", ['status' => $status] + $extra);
     }
 
     private function arriveStop(User $rider, Delivery $d, Business $b)
@@ -895,7 +895,8 @@ class OrderDeliveryScenariosTest extends TestCase
         // Rides never use the food "complete with photo" endpoint.
         $this->riderCompletesDelivery($delivery, $rider)->assertStatus(422);
         // A ride ends at the drop-off; a cash ride then records the fare collected.
-        $this->riderStatus($rider, $delivery, 'delivered')->assertOk();
+        // The rider confirms the cash fare was received (2026-11-18).
+        $this->riderStatus($rider, $delivery, 'delivered', ['payment_confirmed' => true])->assertOk();
         $this->be($rider)->postJson("/api/rider/deliveries/{$delivery->id}/settle-cod", ['cash_received' => (float) $order->fresh()->total])
             ->assertOk();
 
@@ -951,7 +952,8 @@ class OrderDeliveryScenariosTest extends TestCase
         // The app's sequence: arrival (repeatable) → delivered → fare.
         $this->riderStatus($rider, $delivery, 'arrived_destination')->assertOk();
         $this->riderStatus($rider, $delivery, 'arrived_destination')->assertOk();
-        $this->riderStatus($rider, $delivery, 'delivered')->assertOk();
+        // The rider confirms the cash fare was received (2026-11-18).
+        $this->riderStatus($rider, $delivery, 'delivered', ['payment_confirmed' => true])->assertOk();
         $this->be($rider)->postJson("/api/rider/deliveries/{$delivery->id}/settle-cod", ['cash_received' => (float) $order->fresh()->total])
             ->assertOk();
 

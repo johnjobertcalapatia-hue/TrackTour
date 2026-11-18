@@ -52,6 +52,7 @@ export default function RiderProfile() {
   const [success, setSuccess] = useState('')
   const [photoFile, setPhotoFile] = useState<File | null>(null)
   const [photoPreview, setPhotoPreview] = useState<string>('')
+  const [failedAvatarSrc, setFailedAvatarSrc] = useState<string | null>(null)
   const location = useLocation()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -145,8 +146,13 @@ export default function RiderProfile() {
           <div className="flex items-center gap-4">
             <div className="relative shrink-0">
               <div className="w-20 h-20 rounded-full overflow-hidden bg-[#E9F7EF] flex items-center justify-center border border-[#D7E2DC]">
-                {avatarSrc ? (
-                  <img src={avatarSrc} alt={profile?.name} className="w-full h-full object-cover" />
+                {avatarSrc && avatarSrc !== failedAvatarSrc ? (
+                  <img
+                    src={avatarSrc}
+                    alt={profile?.name}
+                    onError={() => setFailedAvatarSrc(avatarSrc)}
+                    className="w-full h-full object-cover"
+                  />
                 ) : (
                   <span className="text-xl font-bold text-[#087F3F]">{getInitials(profile?.name)}</span>
                 )}

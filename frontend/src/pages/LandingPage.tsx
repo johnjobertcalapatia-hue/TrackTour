@@ -1,15 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { MapContainer, TileLayer, Marker, Polyline, useMap, useMapEvents } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, Polyline, Popup, useMap, useMapEvents } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { get } from '@/shared/services/api'
 import { toAssetUrl } from '@/shared/utils'
 import { businessLogoIcon, pinIcon, userPinIcon } from '@/shared/utils/pin-icon'
-import { ApplicationLogo } from '@/shared/components/ApplicationLogo'
+import { MapZoomOutLimit } from '@/features/rider/components/MapZoomOutLimit'
+import LandingDestinations from './components/LandingDestinations'
+import LandingPlaces, { type LandingCard } from './components/LandingPlaces'
+import LandingHero from './components/LandingHero'
+import LandingPopular, { POPULAR_ICONS, type PopularTile } from './components/LandingPopular'
+import LandingFooter from './components/LandingFooter'
+import LandingMapLayerMenu, { type LandingMapType } from './components/LandingMapLayerMenu'
+import LandingMapFilters, { type LandingMapCategory } from './components/LandingMapFilters'
 import {
-  ArrowRight,
+  LocateFixed,
   MapPin,
   Star,
   Compass,
@@ -30,7 +37,6 @@ import {
   Bike,
   Footprints,
   MapPinned,
-  LayoutGrid,
   ExternalLink,
   Film,
   Info,
@@ -125,23 +131,132 @@ function MapResizer() {
 }
 
 const DEFAULT_MAP_CENTER: [number, number] = [12.8667, 121.45]
-let landingUserFocusDone = false
 
-function UserLocation({ userPos }: { userPos: [number, number] | null }) {
+/** The whole town of Bansud (coast to the western barangays): the default view. */
+const BANSUD_CITY_BOUNDS = L.latLngBounds([12.79, 121.36], [12.93, 121.51])
+
+/**
+ * One whole Earth (Web Mercator stops at ±85.05°). The map never repeats:
+ * tiles don't wrap, panning stops at the edges, and the farthest zoom-out
+ * shows the world once.
+ */
+const WORLD_BOUNDS = L.latLngBounds([-85.05, -180], [85.05, 180])
+
+/** Zoom level that shows the whole town on this screen. */
+function cityZoom(map: L.Map): number {
+  return map.getBoundsZoom(BANSUD_CITY_BOUNDS)
+}
+
+/** Default view: the whole town. UserLocation then centres it on the tourist. */
+function CityDefaultView() {
   const map = useMap()
   useEffect(() => {
-    if (!userPos || landingUserFocusDone) return
-    landingUserFocusDone = true
+    map.fitBounds(BANSUD_CITY_BOUNDS, { animate: false })
+  }, [map])
+  return null
+}
+
+function UserLocation({ userPos, markerRef }: { userPos: [number, number] | null; markerRef: React.RefObject<L.Marker | null> }) {
+  const map = useMap()
+  // Centre on the tourist once per map, unless they have already moved the map.
+  const centredRef = useRef(false)
+  const userMovedRef = useRef(false)
+  useMapEvents({ dragstart: () => { userMovedRef.current = true } })
+  useEffect(() => {
+    if (!userPos || centredRef.current) return
+    centredRef.current = true
     const t = window.setTimeout(() => {
-      const c = map.getCenter()
-      const moved =
-        Math.abs(c.lat - DEFAULT_MAP_CENTER[0]) > 0.02 || Math.abs(c.lng - DEFAULT_MAP_CENTER[1]) > 0.02
-      if (!moved) map.flyTo(userPos, 12, { duration: 0.9 })
+      if (!userMovedRef.current) map.setView(userPos, cityZoom(map), { animate: true })
     }, 150)
     return () => window.clearTimeout(t)
   }, [map, userPos])
   if (!userPos) return null
-  return <Marker position={userPos} icon={userPinIcon} />
+  return (
+    <Marker position={userPos} icon={userPinIcon} ref={markerRef} zIndexOffset={1000}>
+      <Popup closeButton={false} offset={[0, -6]}>
+        <span className="text-sm font-semibold text-[#14351F]">You are here</span>
+      </Popup>
+    </Marker>
+  )
+}
+
+/**
+ * Map button that centres the map on the visitor's current location. If the
+ * location is not known yet it asks the browser for it first.
+ */
+function FocusCurrentLocation({
+  userPos,
+  markerRef,
+  children,
+  onLocate,
+}: {
+  userPos: [number, number] | null
+  /** The "You are here" marker, so its pop-up opens after focusing. */
+  markerRef: React.RefObject<L.Marker | null>
+  /** Shown above the focus button (the map type menu). */
+  children?: React.ReactNode
+  onLocate: (cb: (pos: [number, number] | null) => void) => void
+}) {
+  const map = useMap()
+  const ref = useRef<HTMLDivElement>(null)
+  const [state, setState] = useState<'idle' | 'locating' | 'unavailable'>('idle')
+
+  // Clicks and double-clicks on the button must not pan or zoom the map.
+  useEffect(() => {
+    if (!ref.current) return
+    L.DomEvent.disableClickPropagation(ref.current)
+    L.DomEvent.disableScrollPropagation(ref.current)
+  }, [])
+
+  useEffect(() => {
+    if (state !== 'unavailable') return
+    const t = window.setTimeout(() => setState('idle'), 3000)
+    return () => window.clearTimeout(t)
+  }, [state])
+
+  const focus = (pos: [number, number]) => {
+    map.flyTo(pos, Math.max(map.getZoom(), 15), { duration: 0.8 })
+    map.once('moveend', () => markerRef.current?.openPopup())
+  }
+
+  const handleClick = () => {
+    if (userPos) {
+      focus(userPos)
+      return
+    }
+    setState('locating')
+    onLocate((pos) => {
+      if (pos) {
+        setState('idle')
+        focus(pos)
+      } else {
+        setState('unavailable')
+      }
+    })
+  }
+
+  return (
+    <div ref={ref} className="absolute bottom-4 right-3 z-[400] flex flex-col items-end gap-2">
+      {children}
+      <div className="flex items-center gap-2">
+      {state === 'unavailable' && (
+        <span role="status" className="rounded-lg bg-white/95 px-3 py-1.5 text-xs font-medium text-[#8A2C1F] shadow-md">
+          Location unavailable. Allow location access and try again.
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={state === 'locating'}
+        aria-label="Focus on my current location"
+        title="My current location"
+        className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[#087F3F] shadow-md ring-1 ring-black/5 transition-colors hover:bg-[#E9F7EF] disabled:opacity-60"
+      >
+        <LocateFixed className={`h-5 w-5 ${state === 'locating' ? 'animate-pulse' : ''}`} />
+      </button>
+      </div>
+    </div>
+  )
 }
 
 function FitRoute({ route }: { route: [number, number][] | null }) {
@@ -154,6 +269,20 @@ function FitRoute({ route }: { route: [number, number][] | null }) {
   return null
 }
 
+/**
+ * Left and right edges (map-container pixels) of a marker including its name
+ * label, which overflows the icon box. The hover card is placed outside this
+ * span: a card over the name would sit under the cursor and flicker.
+ */
+function markerSpan(element: HTMLElement, container: HTMLElement): [number, number] | undefined {
+  const base = container.getBoundingClientRect()
+  const rects = [element, ...Array.from(element.querySelectorAll('span'))]
+    .map((el) => el.getBoundingClientRect())
+    .filter((r) => r.width > 0)
+  if (rects.length === 0) return undefined
+  return [Math.min(...rects.map((r) => r.left)) - base.left, Math.max(...rects.map((r) => r.right)) - base.left]
+}
+
 function MapMarkers({
   businesses,
   onHover,
@@ -161,7 +290,7 @@ function MapMarkers({
   selectedId,
 }: {
   businesses: MapBusiness[]
-  onHover: (b: MapBusiness | null, pos?: [number, number], size?: [number, number]) => void
+  onHover: (b: MapBusiness | null, pos?: [number, number], size?: [number, number], span?: [number, number]) => void
   onSelect: (b: MapBusiness) => void
   selectedId?: number | null
 }) {
@@ -213,7 +342,13 @@ function MapMarkers({
         marker.getElement()?.addEventListener('mouseenter', () => {
           const pt = map.latLngToContainerPoint([b.latitude, b.longitude])
           const container = map.getContainer()
-          onHoverRef.current(b, [pt.x, pt.y], [container.clientWidth, container.clientHeight])
+          const element = marker?.getElement()
+          onHoverRef.current(
+            b,
+            [pt.x, pt.y],
+            [container.clientWidth, container.clientHeight],
+            element ? markerSpan(element, container) : undefined,
+          )
         })
         marker.getElement()?.addEventListener('mouseleave', () => onHoverRef.current(null))
         marker.getElement()?.addEventListener('click', () => onSelectRef.current(b))
@@ -260,26 +395,33 @@ function MapMarkers({
 
 function LandingMap({
   mapType,
+  onMapTypeChange,
   businesses,
   route,
   userPos,
+  onLocate,
   onHover,
   onSelect,
   selectedId,
 }: {
-  mapType: 'streets' | 'satellite'
+  mapType: LandingMapType
+  onMapTypeChange: (next: LandingMapType) => void
   businesses: MapBusiness[]
   route: [number, number][] | null
   userPos: [number, number] | null
-  onHover: (b: MapBusiness | null, pos?: [number, number], size?: [number, number]) => void
+  onLocate: (cb: (pos: [number, number] | null) => void) => void
+  onHover: (b: MapBusiness | null, pos?: [number, number], size?: [number, number], span?: [number, number]) => void
   onSelect: (b: MapBusiness) => void
   selectedId?: number | null
 }) {
+  const userMarkerRef = useRef<L.Marker | null>(null)
   return (
     <MapContainer
       center={DEFAULT_MAP_CENTER}
-      zoom={11}
-      minZoom={7}
+      zoom={12}
+      worldCopyJump={false}
+      maxBounds={WORLD_BOUNDS}
+      maxBoundsViscosity={1}
       className="w-full h-full z-0"
       zoomControl={false}
       attributionControl={false}
@@ -291,9 +433,17 @@ function LandingMap({
         key={mapType}
         url={MAP_TILES[mapType].url}
         attribution={MAP_TILES[mapType].attribution}
+        noWrap
+        bounds={WORLD_BOUNDS}
       />
       <MapResizer />
-      <UserLocation userPos={userPos} />
+      {/* Farthest zoom-out = the whole Earth once, never a repeated map. */}
+      <MapZoomOutLimit bounds={WORLD_BOUNDS} panMargin={0} />
+      <CityDefaultView />
+      <UserLocation userPos={userPos} markerRef={userMarkerRef} />
+      <FocusCurrentLocation userPos={userPos} markerRef={userMarkerRef} onLocate={onLocate}>
+        <LandingMapLayerMenu value={mapType} onChange={onMapTypeChange} />
+      </FocusCurrentLocation>
       <FitRoute route={route} />
       {businesses.length > 0 && <MapMarkers businesses={businesses} onHover={onHover} onSelect={onSelect} selectedId={selectedId} />}
       {route && route.length > 1 && (
@@ -313,7 +463,8 @@ const DEFAULT_CATEGORIES: LandingCategory[] = [
   { label: 'Resorts', color: '#7C3AED', image: 'https://images.unsplash.com/photo-1566073771259-6a8506099945?auto=format&fit=crop&w=600&q=60', tab: 'stays' },
 ]
 
-const MAP_CATEGORY_OPTIONS = ['all', 'Tourist Spots', 'Restaurants', 'Resorts']
+const RIDE_IMAGE = 'https://images.unsplash.com/photo-1494976388531-d1058494cdd8?auto=format&fit=crop&w=800&q=60'
+const DEFAULT_HERO_SUBTITLE = 'Your all-in-one travel and delivery platform in Bansud \u2014 for a smarter, easier, and more enjoyable experience!'
 
 type PanelTab = 'Overview' | 'Menu' | 'Gallery' | 'Videos' | 'Reviews' | 'About' | 'Amenities' | 'Visitor Info'
 
@@ -352,20 +503,6 @@ interface LandingCategory {
   tab: string
 }
 
-/**
- * One row of the landing card grid, served live from the database by
- * GET /api/landing/cards. `types` lists the filter tabs it belongs to.
- */
-interface LandingCard {
-  key: string
-  types: string[]
-  title: string
-  location: string | null
-  category: string
-  rating: number | null
-  image: string | null
-}
-
 interface LandingContent {
   hero_badge: string
   hero_title: string
@@ -377,26 +514,6 @@ interface LandingContent {
 
 const DISTRICT_2_MUNICIPALITIES = ['Bansud', 'Bongabong', 'Bulalacao', 'Gloria', 'Mansalay', 'Pinamalayan', 'Roxas']
 
-const TABS = ['All', 'Tourist Spots', 'Food', 'Businesses', 'Resorts']
-
-/** Filter-tab label → card `types` membership (null = every card). */
-const TAB_TYPE: Record<string, string | null> = {
-  All: null,
-  'Tourist Spots': 'spot',
-  Food: 'food',
-  Businesses: 'business',
-  Resorts: 'resort',
-}
-
-const PLACEHOLDER_COLORS = [
-  'from-cyan-500 to-blue-600',
-  'from-emerald-500 to-teal-600',
-  'from-blue-500 to-indigo-600',
-  'from-orange-500 to-red-600',
-  'from-pink-500 to-rose-600',
-  'from-amber-500 to-yellow-600',
-]
-
 const CARD_WIDTH = 256
 const CARD_GAP = 10
 
@@ -404,13 +521,14 @@ interface HoverState {
   b: MapBusiness
   pos: [number, number]
   size: [number, number]
+  /** Marker's left/right edges including its name label. */
+  span?: [number, number]
 }
 
 export default function LandingPage() {
   const navigate = useNavigate()
-  const [activeTab, setActiveTab] = useState('All')
-  const [categoryFilter, setCategoryFilter] = useState('all')
-  const [mapType, setMapType] = useState<'streets' | 'satellite'>('streets')
+  const [categoryFilter, setCategoryFilter] = useState<LandingMapCategory>('all')
+  const [mapType, setMapType] = useState<LandingMapType>('streets')
   const [showMap, setShowMap] = useState(false)
   const [hover, setHover] = useState<HoverState | null>(null)
   const [saved, setSaved] = useState(false)
@@ -590,10 +708,36 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
   })()
 
   const categories = landingContent?.categories?.length ? landingContent.categories : DEFAULT_CATEGORIES
-  const filteredSpots = cards.filter((card) => {
-    const tabType = TAB_TYPE[activeTab] ?? null
-    return !tabType || card.types.includes(tabType)
-  })
+
+  const categoryImage = (tab: string, fallback: string) => toAssetUrl(categories.find((c) => c.tab === tab)?.image) || fallback
+  const popularTiles: PopularTile[] = [
+    { label: 'Restaurants & Food Hub', to: '/explore?tab=food', image: categoryImage('food', DEFAULT_CATEGORIES[1]!.image), icon: POPULAR_ICONS.food },
+    { label: 'Resorts & Stays', to: '/explore?tab=stays', image: categoryImage('stays', DEFAULT_CATEGORIES[3]!.image), icon: POPULAR_ICONS.stays },
+    { label: 'Attractions & Tours', to: '/explore?tab=places', image: categoryImage('places', DEFAULT_CATEGORIES[0]!.image), icon: POPULAR_ICONS.places },
+    { label: 'Ride Anywhere', to: '/tourist/transport', image: RIDE_IMAGE, icon: POPULAR_ICONS.ride },
+  ]
+
+  // "Live Map" from the hero: open the map view and bring it into view.
+  const showMapFromHero = () => {
+    setShowMap(true)
+    setHover(null)
+    window.setTimeout(() => document.getElementById('landing-map')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60)
+  }
+
+  // Links from the inner landing pages: /?view=map opens the map, /#about
+  // or /#contact scrolls to that section.
+  const location = useLocation()
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get('view') === 'map') {
+      showMapFromHero()
+      return
+    }
+    if (!location.hash) return
+    const t = window.setTimeout(() => document.getElementById(location.hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150)
+    return () => window.clearTimeout(t)
+    // showMapFromHero only sets state; re-run on navigation changes only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.search, location.hash])
 
   useEffect(() => {
     if (cardRef.current) setCardHeight(cardRef.current.offsetHeight)
@@ -664,12 +808,22 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
   if (hover) {
     const [mx, my] = hover.pos
     const [mw, mh] = hover.size
-    let left = mx + CARD_GAP
+    // Beside the marker, never over its name label (that made the card flicker).
+    const [spanLeft, spanRight] = hover.span ?? [mx, mx]
+    let left = Math.max(mx, spanRight) + CARD_GAP
     let top = my - cardHeight / 2
-    if (left + CARD_WIDTH > mw) left = mx - CARD_GAP - CARD_WIDTH
+    if (left + CARD_WIDTH > mw) left = Math.min(mx, spanLeft) - CARD_GAP - CARD_WIDTH
     left = Math.max(4, Math.min(left, mw - CARD_WIDTH - 4))
     top = Math.max(4, Math.min(top, mh - cardHeight - 4))
     cardStyle = { left, top, opacity: 1 }
+  }
+
+  // Places per map filter, for the counts on the filter bar.
+  const mapCategoryCounts: Record<LandingMapCategory, number> = {
+    all: businesses.length,
+    'Tourist Spots': businesses.filter((b) => getDiscoveryGroup(b.category) === 'spot').length,
+    Restaurants: businesses.filter((b) => getDiscoveryGroup(b.category) === 'dining').length,
+    Resorts: businesses.filter((b) => getDiscoveryGroup(b.category) === 'accommodation').length,
   }
 
   const filteredBusinesses = businesses.filter((b) => {
@@ -682,101 +836,27 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
   })
 
   return (
-    <div className="min-h-screen tourism-bg tourism-bg-orbs text-[#17201A]">
-      <nav className="flex items-center justify-between px-6 py-2 w-full tourism-nav">
-        <Link to="/" className="flex items-center gap-3">
-          <ApplicationLogo className="w-12 h-12" />
-          <span className="text-xl font-bold text-[#16803C]">TrackTour</span>
-        </Link>
-        <div className="flex items-center gap-3">
-          <Link to="/login" className="text-sm text-[#16803C] hover:text-[#126B32] transition-colors">
-            Sign In
-          </Link>
-          <Link to="/role-selection" className="btn-tourism px-4 py-1.5 text-sm font-medium">
-            Get Started
-          </Link>
-        </div>
-      </nav>
+    <div className="min-h-screen bg-[#FAFAF5] text-[#17201A]">
+      <LandingHero
+        videoSrc={heroVideoSrc}
+        title={landingContent?.hero_title || 'Discover the Beauty of'}
+        highlight={landingContent?.hero_title_highlight || 'Oriental Mindoro'}
+        badge={landingContent?.hero_badge || 'Bansud, Oriental Mindoro'}
+        subtitle={landingContent?.hero_subtitle || DEFAULT_HERO_SUBTITLE}
+        onShowMap={showMapFromHero}
+      />
 
-      <section className="relative min-h-screen flex items-center overflow-hidden">
-        <video
-          autoPlay
-          muted
-          loop
-          playsInline
-          poster="/assets/placeholder.svg"
-          className="absolute inset-0 w-full h-full object-cover blur-[2px] scale-105"
-        >
-          <source src={heroVideoSrc} type="video/mp4" />
-        </video>
-        <div className="absolute inset-0 bg-gradient-to-b from-[#0c2a17]/75 via-[#0c2a17]/45 to-[#17201A]" />
-        <div className="max-w-7xl mx-auto px-6 py-28 sm:py-36 relative w-full">
-          <div className="max-w-3xl mx-auto text-center">
-            <div className="flex items-center justify-center gap-2 text-emerald-300 text-sm font-medium mb-6">
-              <MapPin className="w-4 h-4" />
-              {landingContent?.hero_badge || 'Bansud, Oriental Mindoro'}
-            </div>
-            <h1 className="text-4xl sm:text-6xl font-bold leading-tight text-white">
-              <span className="text-white">{landingContent?.hero_title || 'Discover the Beauty of'}</span>{' '}
-              <span className="text-emerald-300">{landingContent?.hero_title_highlight || 'Oriental Mindoro'}</span>
-            </h1>
-            <p className="mt-6 text-lg text-gray-200 max-w-xl mx-auto">
-              {landingContent?.hero_subtitle || 'Book hotels, reserve activities, order food, and request transportation — all from one platform.'}
-            </p>
-            <div className="grid grid-cols-2 gap-4 mt-10 max-w-md mx-auto">
-              <Link
-                to="/role-selection"
-                className="landing-hero-button landing-hero-primary flex items-center justify-center gap-2 px-8 py-4 font-semibold"
-              >
-                Start Exploring <ArrowRight className="w-5 h-5" />
-              </Link>
-              <Link
-                to="/login"
-                className="landing-hero-button landing-hero-secondary flex items-center justify-center gap-2 px-8 py-4 font-semibold"
-              >
-                I Have an Account
-              </Link>
-            </div>
-          </div>
-        </div>
-      </section>
+      <LandingPopular tiles={popularTiles} onShowMap={() => handleToggleMap(true)} />
 
       {/* Map */}
-      <section className="py-14">
+      <section id="landing-map" className="py-14 scroll-mt-4">
         {showMap && (
-        <div className="ml-[10px] mr-[10px] mb-[10px] flex flex-wrap items-center justify-between gap-[10px]">
-          <div className="flex flex-wrap gap-[10px]">
-            {MAP_CATEGORY_OPTIONS.map((cat) => (
-              <button
-                key={cat}
-                onClick={() => setCategoryFilter(cat)}
-                className={`h-[38px] px-[18px] rounded-[20px] text-sm font-medium transition-colors ${
-                  categoryFilter === cat
-                    ? 'bg-[#087F3F] text-white'
-                    : 'bg-white text-[#17201A] border border-[#E2E8E3] hover:bg-[#EAF6ED]'
-                }`}
-              >
-                {cat === 'all' ? 'All' : cat}
-              </button>
-            ))}
-          </div>
-          <div className="relative shrink-0">
-            <button
-              type="button"
-              onClick={() => handleToggleMap()}
-              className={`flex items-center gap-2 h-[38px] px-4 rounded-[20px] text-sm font-medium border transition-colors ${
-                showMap
-                  ? 'bg-white text-[#17201A] border-[#E2E8E3] hover:bg-[#EAF6ED]'
-                  : 'border-[#087F3F]/50 text-[#087F3F] bg-[#EAF6ED]'
-              }`}
-              aria-label="Toggle content and map"
-              title="Toggle content and map"
-            >
-              {showMap ? <LayoutGrid className="w-4 h-4" /> : <MapPinned className="w-4 h-4" />}
-              {showMap ? 'Content' : 'Map'}
-            </button>
-          </div>
-        </div>
+          <LandingMapFilters
+            value={categoryFilter}
+            onChange={setCategoryFilter}
+            counts={mapCategoryCounts}
+            onShowContent={() => handleToggleMap(false)}
+          />
         )}
         {showMap ? (
         <div className="relative h-[75vh] w-[calc(100%-20px)] ml-[10px] mr-[10px] mt-[10px] mb-[10px] rounded-2xl overflow-hidden border border-[#E5E9E7] shadow-md flex">
@@ -1384,13 +1464,15 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
           {showMap ? (
           <LandingMap
             mapType={mapType}
+            onMapTypeChange={setMapType}
             businesses={filteredBusinesses}
             route={route}
             userPos={userPos}
+            onLocate={locateUser}
             selectedId={selectedId}
             onSelect={handleSelectBusiness}
-            onHover={(b, pos, size) => {
-              const next = b && pos && size ? { b, pos, size } : null
+            onHover={(b, pos, size, span) => {
+              const next = b && pos && size ? { b, pos, size, span } : null
               if (hideTimerRef.current) {
                 window.clearTimeout(hideTimerRef.current)
                 hideTimerRef.current = null
@@ -1446,31 +1528,6 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
             </div>
           )}
 
-          {/* Map type toggle (map view only) */}
-          {showMap && (
-            <div className="absolute top-3 right-3 z-[400] flex flex-col gap-1 rounded-lg bg-white/90 backdrop-blur-md shadow-md overflow-hidden">
-              {(
-                [
-                  { key: 'streets', label: 'Street' },
-                  { key: 'satellite', label: 'Satellite' },
-                ] as const
-              ).map(({ key, label }) => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setMapType(key)}
-                  className={`px-3 py-1.5 text-xs font-semibold text-left transition-colors ${
-                    mapType === key
-                      ? 'bg-[#087F3F] text-white'
-                      : 'text-gray-700 hover:bg-gray-100'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
-
           {/* Hover card */}
           {showMap && (
           <div
@@ -1485,7 +1542,11 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
             }}
             onMouseLeave={() => {
               overCardRef.current = false
-              setHover(null)
+              // Short delay, like the marker: moving back onto the marker keeps the card.
+              if (hideTimerRef.current) window.clearTimeout(hideTimerRef.current)
+              hideTimerRef.current = window.setTimeout(() => {
+                if (!overCardRef.current) setHover(null)
+              }, 150)
             }}
             className={`absolute z-[500] w-64 transition-opacity duration-300 ease-out ${
               hover ? 'pointer-events-auto' : 'pointer-events-none'
@@ -1584,149 +1645,15 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
         </div>
         </div>
         ) : (
-          <div id="landing-content" className="ml-[10px] mr-[10px] py-6 space-y-12">
-            {/* Explore by Categories */}
-            <div>
-              <div className="flex items-center justify-between gap-3 mb-6">
-                <h2 className="text-2xl font-bold text-[#087F3F]">Explore by Categories</h2>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleToggleMap(true)}
-                    className="flex items-center gap-2 h-[38px] px-4 rounded-[20px] text-sm font-medium bg-[#087F3F] text-white hover:bg-[#056B35] transition-colors"
-                    aria-label="Show map"
-                    title="Show map"
-                  >
-                    <MapPinned className="w-4 h-4" />
-                    Map
-                  </button>
-                  <Link
-                    to="/explore/categories"
-                    className="inline-flex items-center gap-1 bg-[#087F3F] text-white hover:bg-[#056B35] text-sm font-semibold px-4 py-2 rounded-full transition-colors"
-                  >
-                    View all
-                    <ChevronRight className="w-4 h-4" />
-                  </Link>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-[14px] w-full">
-                {categories.map((cat) => (
-                  <Link
-                    key={cat.label}
-                    to={`/explore?tab=${cat.tab}`}
-                    className="relative w-full h-[112px] rounded-[6px] overflow-hidden border border-[#E2E8E3] bg-white group hover:shadow-md hover:-translate-y-0.5 transition-all"
-                  >
-                    <img
-                      src={cat.image}
-                      alt={cat.label}
-                      loading="lazy"
-                      className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/25 to-transparent" />
-                    <div className="absolute inset-x-0 bottom-0 p-4">
-                      <h3 className="text-sm font-semibold text-white leading-tight drop-shadow-sm">{cat.label}</h3>
-                      <p className="text-xs text-white/85 mt-0.5">Browse {cat.label}</p>
-                    </div>
-                  </Link>
-                ))}
-              </div>
-            </div>
+          <div id="landing-content" className="mx-auto max-w-[1400px] px-5 lg:px-8 py-6 space-y-16">
+            <LandingDestinations municipalities={municipalities} />
 
-            {/* Where to Next */}
-            {municipalities.length > 0 && (
-              <div>
-                <h2 className="text-2xl font-bold text-[#087F3F] mb-6">Where to Next?</h2>
-                <div className="flex gap-[13px] overflow-x-auto pb-2">
-                  {municipalities.map((m, i) => (
-                    <Link
-                      key={m.id}
-                      to={`/explore/municipality/${m.id}`}
-                      className="flex-[0_0_168px] h-[224px] rounded-[12px] overflow-hidden border border-[#E2E8E3] relative hover:shadow-md hover:-translate-y-0.5 transition-all group"
-                    >
-                      <div className={`w-full h-full bg-gradient-to-br ${PLACEHOLDER_COLORS[(i + 2) % PLACEHOLDER_COLORS.length]}`} />
-                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-3">
-                        <h3 className="text-white font-bold text-sm leading-tight">{m.name}</h3>
-                        <p className="mt-1 flex items-center gap-1 text-xs text-gray-200">
-                          <MapPin className="w-3 h-3 text-emerald-300" />
-                          {(m.destinations_count ?? 0) + (m.businesses_count ?? 0)} Places to Explore
-                        </p>
-                      </div>
-                    </Link>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Tabs + spot cards */}
-            <div>
-              <div className="flex justify-center gap-[12px] flex-wrap mb-10">
-                {TABS.map((tab) => (
-                  <button
-                    key={tab}
-                    onClick={() => setActiveTab(tab)}
-                    className={`h-[40px] px-[20px] rounded-[21px] text-sm font-medium transition-colors ${
-                      activeTab === tab
-                        ? 'bg-[#087F3F] text-white'
-                        : 'bg-white text-[#17201A] border border-[#E2E8E3] hover:bg-[#EAF6ED]'
-                    }`}
-                  >
-                    {tab}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex justify-center gap-[14px] flex-wrap">
-                {cardsPending ? (
-                  <p className="text-[#68736D] text-sm py-10">Loading places…</p>
-                ) : filteredSpots.length === 0 ? (
-                  <p className="text-[#68736D] text-sm py-10">
-                    {`No ${activeTab === 'All' ? 'places' : activeTab.toLowerCase()} published yet.`}
-                  </p>
-                ) : filteredSpots.map((spot, i) => (
-                  <div
-                    key={spot.key}
-                    className="w-[266px] min-h-[263px] rounded-[8px] border border-[#E2E8E3] bg-[#0c2a17] overflow-hidden relative hover:shadow-md transition-shadow"
-                  >
-                    {spot.image ? (
-                      <img
-                        src={toAssetUrl(spot.image)}
-                        alt={spot.title}
-                        loading="lazy"
-                        className="absolute inset-0 w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div className={`absolute inset-0 bg-gradient-to-br ${PLACEHOLDER_COLORS[i % PLACEHOLDER_COLORS.length]}`}>
-                        <Compass className="absolute inset-0 m-auto w-10 h-10 text-white/40" />
-                      </div>
-                    )}
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/30 to-transparent" />
-                    <div className="absolute inset-x-0 bottom-0 p-4 pt-16">
-                      <h3 className="text-white font-bold text-lg leading-tight">{spot.title}</h3>
-                      <p className="mt-1 flex items-center gap-1.5 text-sm text-gray-200">
-                        <MapPin className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
-                        {spot.location ?? 'Oriental Mindoro'}
-                      </p>
-                    </div>
-                    <span className="absolute top-3 left-3 px-2.5 py-1 rounded-full bg-white/90 text-[11px] font-semibold text-[#087F3F]">
-                      {spot.category}
-                    </span>
-                    {spot.rating != null && (
-                      <span className="absolute top-3 right-3 flex items-center gap-1 px-2 py-1 rounded-full bg-white/90 text-[11px] font-semibold text-[#17201B]">
-                        <Star className="w-3 h-3 text-[#B08600] fill-[#B08600]" />
-                        {spot.rating.toFixed(1)}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
+            <LandingPlaces cards={cards} pending={cardsPending} />
           </div>
         )}
       </section>
 
-      <footer className="border-t border-ink/5 py-8 text-center text-sm text-ink-soft">
-        &copy; {new Date().getFullYear()} <span className="text-[#16803C] font-semibold">TrackTour</span> — Bansud Tourism Office. All rights reserved.
-      </footer>
+      <LandingFooter badge={landingContent?.hero_badge || 'Bansud, Oriental Mindoro'} />
     </div>
   )
 }

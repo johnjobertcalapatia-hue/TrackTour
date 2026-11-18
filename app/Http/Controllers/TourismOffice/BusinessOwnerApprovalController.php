@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\UserResource;
 use App\Models\Municipality;
 use App\Models\User;
+use App\Services\MunicipalScopeService;
 use App\Services\TourismOfficeService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -19,7 +20,8 @@ class BusinessOwnerApprovalController extends Controller
     ];
 
     public function __construct(
-        private TourismOfficeService $tourismOfficeService
+        private TourismOfficeService $tourismOfficeService,
+        private MunicipalScopeService $scope
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -27,6 +29,21 @@ class BusinessOwnerApprovalController extends Controller
         $query = User::whereIn('role', $this->managedRoles)
             ->with('municipality', 'profile')
             ->withCount('businesses');
+
+        // A Municipality Tourism Admin only sees accounts in its municipality
+        // (docs/PHASE2-ROLES-PERMISSIONS.md F-3); the district admin sees all.
+        if ($request->user()->role === User::ROLE_TOURISM_OFFICE) {
+            $municipalityId = $this->scope->municipalityId($request->user());
+            if ($municipalityId === null) {
+                $query->whereRaw('1 = 0');
+            } else {
+                $query->where(function ($q) use ($municipalityId) {
+                    $q->whereIn('users.id', $this->scope->businessOwners($municipalityId)->select('users.id'))
+                        ->orWhereIn('users.id', $this->scope->riders($municipalityId)->select('users.id'))
+                        ->orWhereIn('users.id', $this->scope->tourists($municipalityId)->select('users.id'));
+                });
+            }
+        }
 
         if ($request->filled('status')) {
             if ($request->status === 'archived') {

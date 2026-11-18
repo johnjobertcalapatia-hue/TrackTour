@@ -34,14 +34,18 @@ class AdminUserController extends Controller
         $user = $this->userService->createUser([
             'email' => $request->email,
             'password' => $request->password,
+            'name' => $request->input('name') ?: trim($request->input('first_name', '').' '.$request->input('last_name', '')),
             'role' => $request->role,
             'account_status' => $request->input('account_status', User::ACCOUNT_STATUS_PENDING),
             'email_verified_at' => now(),
+            // A Municipality Tourism Admin is always bound to one municipality.
+            'municipality_id' => $request->role === User::ROLE_TOURISM_OFFICE ? (int) $request->municipality_id : null,
         ]);
 
         $user->profile()->create([
             'first_name' => $request->input('first_name', $request->input('name', '')),
             'last_name' => $request->input('last_name', ''),
+            'municipality_id' => $request->role === User::ROLE_TOURISM_OFFICE ? (int) $request->municipality_id : null,
         ]);
 
         ActivityLog::record(

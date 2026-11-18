@@ -48,6 +48,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'business.context' => SetBusinessContext::class,
             'staff' => StaffMiddleware::class,
             'token.only' => \App\Http\Middleware\TokenOnlyAuth::class,
+            'municipal.scope' => \App\Http\Middleware\EnsureMunicipalScope::class,
         ]);
 
         $middleware->redirectGuestsTo(fn () => null);
@@ -58,5 +59,32 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
-        //
+        // System incident history (admin → Incident History). Recording never
+        // changes the response: every callback returns null.
+        $exceptions->report(function (\Throwable $e) {
+            \App\Services\SystemIncidentRecorder::exception($e);
+        });
+        $exceptions->render(function (\Illuminate\Validation\ValidationException $e, \Illuminate\Http\Request $request) {
+            if ($request->allFiles() !== []) {
+                \App\Services\SystemIncidentRecorder::uploadRejected($request, $e->errors());
+            }
+
+            return null;
+        });
+        $exceptions->render(function (\Throwable $e, \Illuminate\Http\Request $request) {
+            $forbidden = $e instanceof \Illuminate\Auth\Access\AuthorizationException
+                || ($e instanceof \Symfony\Component\HttpKernel\Exception\HttpExceptionInterface && $e->getStatusCode() === 403);
+            if ($forbidden) {
+                \App\Services\SystemIncidentRecorder::record(
+                    'access', 'access_denied', 'warning',
+                    'Access denied: /'.ltrim($request->path(), '/'),
+                    $e->getMessage() ?: 'The account is not allowed to open this page.',
+                    ['role' => $request->user()?->role],
+                    status: \App\Models\SystemIncident::STATUS_RECORDED,
+                    fingerprintKey: ($request->user()?->id ?? 'guest').'|'.$request->path(),
+                );
+            }
+
+            return null;
+        });
     })->create();

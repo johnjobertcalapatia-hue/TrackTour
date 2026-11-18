@@ -93,11 +93,11 @@ export default function TouristWriteReview() {
 
   if (isLoading && !data) return <DashboardSkeleton />
   if (!section || !item) {
-    return <p role="alert" className="mx-auto max-w-2xl text-sm text-[#B91C1C]">This item can&apos;t be reviewed.</p>
+    return <p role="alert" className="mx-auto lg:mx-0 max-w-2xl text-sm text-[#B91C1C]">This item can&apos;t be reviewed.</p>
   }
 
   return (
-    <main aria-label="Write a review" className="mx-auto w-full max-w-2xl space-y-4">
+    <main aria-label="Write a review" className="mx-auto lg:mx-0 w-full max-w-2xl space-y-4">
       <button type="button" onClick={goBack} className="inline-flex items-center gap-2 text-sm font-semibold text-[#087F3F] hover:text-[#056B35]">
         <ArrowLeft className="w-4 h-4" aria-hidden="true" /> Back
       </button>

@@ -145,7 +145,7 @@ describe('My Orders tabs', () => {
     await waitFor(() => expect(api.get).toHaveBeenLastCalledWith('/tourist/orders', { params: { tab: 'in_transit' } }))
     const order = await screen.findByRole('article', { name: 'Order TT-in_transit' })
     expect(within(order).getByText(/Rico Rider is on the way/)).toBeInTheDocument()
-    expect(within(order).getByRole('link', { name: /Track rider on map/ })).toHaveAttribute('href', '/tourist/orders/40/progress')
+    expect(within(order).getByRole('link', { name: 'Track order' })).toHaveAttribute('href', '/tourist/orders/40/track')
   })
 
   it('To Receive: no tourist confirmation — the rider confirms delivery on arrival (reconciled 2026-11-08)', async () => {
@@ -262,6 +262,28 @@ describe('My Orders tabs', () => {
     }
   })
 
+  it('every order has a Track order button that opens its tracking page (not a cancelled one)', async () => {
+    const tabs: Tab[] = ['to_pay', 'preparing', 'in_transit', 'to_receive', 'to_review', 'completed', 'cancelled']
+    api.get.mockResolvedValue({ tab: 'all', counts: COUNTS, sections: tabs.map((t, i) => section(t, { primary_order_id: 40 + i })) })
+    renderAt()
+
+    for (const [i, t] of tabs.entries()) {
+      const order = within(await screen.findByRole('article', { name: `Order TT-${t}` }))
+      const track = order.queryByRole('link', { name: 'Track order' })
+      if (t === 'cancelled') {
+        expect(track).not.toBeInTheDocument()
+        continue
+      }
+      expect(track).toHaveAttribute('href', `/tourist/orders/${40 + i}/track`)
+    }
+    // Delivered orders keep View order details beside Track order.
+    const review = within(screen.getByRole('article', { name: 'Order TT-to_review' }))
+    expect(review.getByRole('link', { name: 'View order details' })).toHaveAttribute('href', '/tourist/orders/44/details')
+
+    fireEvent.click(review.getByRole('link', { name: 'Track order' }))
+    expect(screen.getByTestId('path')).toHaveTextContent('/tourist/orders/44/track')
+  })
+
   it('COD orders show in To Pay with the cash amount, and keep their progress actions', async () => {
     const cod = section('preparing', { key: 'order-cod', reference: 'TT-COD', payment_method: 'cash', payment_status: 'pending', cod_due: true, tabs: ['preparing', 'to_pay'] })
     api.get.mockResolvedValue({ tab: 'to_pay', counts: { ...COUNTS, to_pay: 1 }, sections: [cod] })
@@ -271,6 +293,6 @@ describe('My Orders tabs', () => {
     expect(within(order).getByText('Cash on delivery')).toBeInTheDocument()
     expect(within(order).getByText(/in cash to your rider when your order arrives/)).toHaveTextContent('Pay ₱643.00 in cash')
     expect(within(order).queryByRole('button', { name: /Complete payment/ })).not.toBeInTheDocument()
-    expect(within(order).getByRole('link', { name: 'View progress' })).toHaveAttribute('href', '/tourist/orders/40/progress')
+    expect(within(order).getByRole('link', { name: 'Track order' })).toHaveAttribute('href', '/tourist/orders/40/track')
   })
 })

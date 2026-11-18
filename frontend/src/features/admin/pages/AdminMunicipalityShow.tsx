@@ -4,12 +4,26 @@ import { get } from '@/shared/services/api'
 import { TableSkeleton } from '@/shared/components/Skeleton'
 import type { Municipality } from '@/shared/types'
 import { useState } from 'react'
-import { ChevronLeft, MapPin, Building2, Search, Store, UtensilsCrossed, Eye, EyeOff, Users } from 'lucide-react'
+import { ChevronLeft, MapPin, Building2, Search, Store, UtensilsCrossed, Eye, EyeOff } from 'lucide-react'
+import {
+  MunicipalityManagementPanel,
+  type MunicipalAdmin,
+  type MunicipalityManagementStats,
+} from '@/features/admin/components/MunicipalityManagementPanel'
 
 interface MunicipalityData {
-  municipality: Municipality & { logo?: string | null; cover_photo?: string | null }
+  municipality: Municipality & {
+    logo?: string | null
+    cover_photo?: string | null
+    district: string
+    province: string
+    latitude?: string | null
+    longitude?: string | null
+    is_home?: boolean
+  }
   barangays: any[]
-  stats?: { barangays_count: number; businesses_count: number }
+  admins?: MunicipalAdmin[]
+  stats?: { barangays_count: number; businesses_count: number } & MunicipalityManagementStats
 }
 
 export default function AdminMunicipalityShow() {
@@ -124,6 +138,20 @@ export default function AdminMunicipalityShow() {
           </div>
         </div>
       </div>
+
+      <MunicipalityManagementPanel
+        municipality={{
+          id: municipality.id,
+          name: municipality.name,
+          district: municipality.district ?? '',
+          province: municipality.province ?? '',
+          latitude: municipality.latitude ?? '',
+          longitude: municipality.longitude ?? '',
+        }}
+        isHome={!!municipality.is_home}
+        stats={stats}
+        admins={data?.admins ?? []}
+      />
 
       {/* Search */}
       <div className="rounded-2xl bg-white border border-[#E2E8E3] shadow-tourism mb-6">

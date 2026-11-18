@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { get } from '@/shared/services/api'
-import { ApplicationLogo } from '@/shared/components/ApplicationLogo'
+import LandingShell from './components/LandingShell'
 import { formatCurrency, toAssetUrl } from '@/shared/utils'
-import { Star, MapPin, ArrowLeft, Heart, UtensilsCrossed, BadgeCheck, Clock, ShoppingCart, Plus, Minus, Info, Images, Phone, Mail, Globe, Link as LinkIcon, AtSign, Navigation } from 'lucide-react'
+import { Star, MapPin, Heart, UtensilsCrossed, BadgeCheck, Clock, ShoppingCart, Plus, Minus, Info, Images, Phone, Mail, Globe, Link as LinkIcon, AtSign, Navigation } from 'lucide-react'
 
 interface MenuItem {
   id: number
@@ -132,11 +132,14 @@ export default function LandingRestaurantPage() {
 
   const addToCart = (item: Pick<MenuItem, 'id' | 'name' | 'price' | 'image'>, delta = 1) => {
     const current = getCart()
-    const existing = current.find((c) => c.id === item.id)
+    // The card controls the plain line; variation lines (e.g. "Tapsilog (Large)")
+    // added from the food item page stay separate.
+    const isLine = (c: CartItem) => c.id === item.id && c.name === item.name
+    const existing = current.find(isLine)
     let updated: CartItem[]
     if (existing) {
       updated = current.map((c) =>
-        c.id === item.id ? { ...c, quantity: Math.max(0, c.quantity + delta) } : c
+        isLine(c) ? { ...c, quantity: Math.max(0, c.quantity + delta) } : c
       ).filter((c) => c.quantity > 0)
     } else {
       updated = [...current, {
@@ -153,7 +156,8 @@ export default function LandingRestaurantPage() {
     setCart(updated)
   }
 
-  const getItemQty = (itemId: number) => cart.filter((c) => c.id === itemId).reduce((s, c) => s + c.quantity, 0)
+  const getItemQty = (item: Pick<MenuItem, 'id' | 'name'>) =>
+    cart.filter((c) => c.id === item.id && c.name === item.name).reduce((s, c) => s + c.quantity, 0)
 
   const toggleFavorite = () => {
     const bizId = Number(id)
@@ -185,33 +189,12 @@ export default function LandingRestaurantPage() {
   const cartTotal = cart.reduce((s, c) => s + c.price * c.quantity, 0)
 
   return (
-    <div className="min-h-screen tourism-bg tourism-bg-orbs text-[#17201A]">
-      <nav className="flex items-center justify-between px-6 py-2 max-w-7xl mx-auto tourism-nav">
-        <Link to="/" className="flex items-center gap-3">
-          <ApplicationLogo className="w-12 h-12" />
-          <span className="text-xl font-bold text-[#16803C]">TrackTour</span>
-        </Link>
-        <div className="flex items-center gap-3">
-          <Link to="/login" className="text-sm text-[#16803C] hover:text-[#126B32] transition-colors">
-            Sign In
-          </Link>
-          <Link to="/role-selection" className="btn-tourism px-4 py-1.5 text-sm font-medium">
-            Get Started
-          </Link>
-        </div>
-      </nav>
-
-      <div className="max-w-7xl mx-auto px-[10px] py-8">
-        <Link
-          to="/explore?tab=food"
-          className="inline-flex items-center gap-2 text-sm font-medium text-[#087F3F] hover:text-[#056B35] transition-colors mb-4"
-        >
-          <ArrowLeft className="w-4 h-4" /> Back to Explore
-        </Link>
+    <LandingShell back={{ to: '/explore?tab=food', label: 'Back to Explore' }}>
+      <div>
 
         {isLoading ? (
           <div className="flex items-center justify-center py-20">
-            <div className="w-6 h-6 border-2 border-[#087F3F] border-t-transparent rounded-full animate-spin" />
+            <div className="w-6 h-6 border-2 border-[#0B5D2E] border-t-transparent rounded-full animate-spin" />
           </div>
         ) : !restaurant ? (
           <div className="py-16 text-center">
@@ -221,7 +204,7 @@ export default function LandingRestaurantPage() {
         ) : (
           <>
             {/* Cover */}
-            <div className="relative h-56 sm:h-72 rounded-2xl overflow-hidden border border-[#E2E8E3] bg-[#E9F7EF]">
+            <div className="relative h-56 sm:h-80 rounded-3xl overflow-hidden shadow-[0_14px_30px_rgba(6,40,20,0.16)] bg-[#E9F7EF]">
               {cover ? (
                 <img src={cover} alt={name} className="w-full h-full object-cover" />
               ) : (
@@ -245,7 +228,7 @@ export default function LandingRestaurantPage() {
 
             {/* Logo + name + rating */}
             <div className="flex -mt-10 relative z-10">
-              <div className="flex-1 bg-white/90 backdrop-blur rounded-xl px-4 py-3 shadow-sm flex items-center gap-4">
+              <div className="flex-1 mx-4 bg-white rounded-3xl px-5 py-4 shadow-[0_12px_28px_rgba(6,40,20,0.12)] ring-1 ring-[#E7E2D6] flex items-center gap-4">
                 <div className="w-20 h-20 rounded-2xl border border-[#E2E8E3] bg-white shadow overflow-hidden flex items-center justify-center shrink-0">
                   {logo ? (
                     <img src={logo} alt={name} className="w-full h-full object-cover" />
@@ -258,7 +241,7 @@ export default function LandingRestaurantPage() {
                     <h1 className="text-2xl font-bold text-[#17201A]">{name}</h1>
                     <span
                       className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
-                        isOpen ? 'bg-[#E6F6EC] text-[#087F3F]' : 'bg-[#FEE2E2] text-[#DC2626]'
+                        isOpen ? 'bg-[#E6F6EC] text-[#0B5D2E]' : 'bg-[#FEE2E2] text-[#DC2626]'
                       }`}
                     >
                       <Clock className="w-3 h-3" /> {isOpen ? 'Open' : 'Closed'}
@@ -288,10 +271,10 @@ export default function LandingRestaurantPage() {
                   <button
                     key={tab.key}
                     onClick={() => setActiveTab(tab.key)}
-                    className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold transition ${
+                    className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-semibold transition ${
                       activeTab === tab.key
-                        ? 'bg-[#087F3F] text-white shadow-sm'
-                        : 'bg-white text-[#68736D] border border-[#E2E8E3] hover:border-[#087F3F]/40 hover:text-[#087F3F]'
+                        ? 'bg-[#0B5D2E] text-white shadow ring-2 ring-[#FFD000]/60'
+                        : 'bg-white text-[#68736D] border border-[#E2E8E3] hover:border-[#0B5D2E]/40 hover:text-[#0B5D2E]'
                     }`}
                   >
                     <Icon className="w-4 h-4" />
@@ -299,7 +282,7 @@ export default function LandingRestaurantPage() {
                     {count > 0 && (
                       <span
                         className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
-                          activeTab === tab.key ? 'bg-white/20 text-white' : 'bg-[#087F3F]/10 text-[#087F3F]'
+                          activeTab === tab.key ? 'bg-white/20 text-white' : 'bg-[#0B5D2E]/10 text-[#0B5D2E]'
                         }`}
                       >
                         {count}
@@ -324,14 +307,19 @@ export default function LandingRestaurantPage() {
                     {menu.map((item) => (
                       <div
                         key={item.id}
-                        className="bg-white border border-[#E5E9E7] rounded-2xl overflow-hidden hover:shadow-lg hover:shadow-[#087F3F]/8 transition group"
+                        className="bg-white border border-[#E5E9E7] rounded-2xl overflow-hidden hover:shadow-lg hover:shadow-[#0B5D2E]/8 transition group"
                       >
+                        <Link
+                          to={`/explore/food/item/${item.id}`}
+                          aria-label={`View ${item.name}`}
+                          className="block w-full text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-[#0B5D2E]"
+                        >
                         <div className="relative aspect-[4/3] overflow-hidden bg-[#E9F7EF]">
                           {item.image ? (
                             <img src={toAssetUrl(item.image)} alt={item.name} className="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
                           ) : (
                             <div className="w-full h-full bg-gradient-to-br from-[#E9F7EF] to-[#DDF4E6] flex items-center justify-center">
-                              <UtensilsCrossed className="w-8 h-8 text-[#087F3F]/30" />
+                              <UtensilsCrossed className="w-8 h-8 text-[#0B5D2E]/30" />
                             </div>
                           )}
                           {item.bestseller && (
@@ -340,13 +328,17 @@ export default function LandingRestaurantPage() {
                             </div>
                           )}
                         </div>
-                        <div className="p-3">
-                          <p className="text-sm font-semibold text-[#17201B] truncate">{item.name}</p>
-                          <p className="text-sm font-extrabold text-[#087F3F] mt-1">{formatCurrency(item.price)}</p>
-                          {getItemQty(item.id) === 0 ? (
+                        <div className="px-3 pt-3">
+                          <p className="text-sm font-semibold text-[#17201B] truncate group-hover:text-[#0B5D2E]">{item.name}</p>
+                          <p className="text-sm font-extrabold text-[#0B5D2E] mt-1">{formatCurrency(item.price)}</p>
+                          <p className="mt-0.5 flex items-center gap-1 text-[11px] font-medium text-[#68736D]"><Info className="h-3 w-3" /> View details</p>
+                        </div>
+                        </Link>
+                        <div className="px-3 pb-3">
+                          {getItemQty(item) === 0 ? (
                             <button
                               onClick={() => addToCart(item)}
-                              className="mt-2 w-full flex items-center justify-center gap-1.5 py-2 bg-[#087F3F] hover:bg-[#056B35] text-white text-xs font-semibold rounded-xl transition"
+                              className="mt-2 w-full flex items-center justify-center gap-1.5 py-2 bg-[#0B5D2E] hover:bg-[#094A25] text-white text-xs font-semibold rounded-xl transition"
                             >
                               <Plus className="w-3.5 h-3.5" /> Add to Cart
                             </button>
@@ -355,8 +347,8 @@ export default function LandingRestaurantPage() {
                               <button onClick={() => addToCart(item, -1)} className="w-7 h-7 rounded-lg bg-[#E5E9E7] flex items-center justify-center hover:bg-[#d1d5db] transition">
                                 <Minus className="w-3 h-3 text-[#17201B]" />
                               </button>
-                              <span className="text-sm font-semibold text-[#17201B]">{getItemQty(item.id)}</span>
-                              <button onClick={() => addToCart(item)} className="w-7 h-7 rounded-lg bg-[#087F3F] flex items-center justify-center hover:bg-[#056B35] transition">
+                              <span className="text-sm font-semibold text-[#17201B]">{getItemQty(item)}</span>
+                              <button onClick={() => addToCart(item)} className="w-7 h-7 rounded-lg bg-[#0B5D2E] flex items-center justify-center hover:bg-[#094A25] transition">
                                 <Plus className="w-3 h-3 text-white" />
                               </button>
                             </div>
@@ -373,7 +365,7 @@ export default function LandingRestaurantPage() {
             {activeTab === 'about' && (
               <div className="bg-white border border-[#E2E8E3] rounded-2xl px-5 py-5 mt-4">
                 <h2 className="text-lg font-bold text-[#17201A] flex items-center gap-2 mb-2">
-                  About <BadgeCheck className="w-5 h-5 text-[#087F3F]" />
+                  About <BadgeCheck className="w-5 h-5 text-[#0B5D2E]" />
                 </h2>
                 <p className="text-sm leading-relaxed text-[#37433D] whitespace-pre-line">
                   {about || (tagline ? tagline : `${name} is a food business in ${restaurant?.municipality?.name ?? 'Bansud, Oriental Mindoro'}.`)}
@@ -410,7 +402,7 @@ export default function LandingRestaurantPage() {
                   {business.contact_number && (
                     <div className="flex items-center gap-3">
                       <span className="w-10 h-10 rounded-xl bg-[#E6F6EC] flex items-center justify-center shrink-0">
-                        <Phone className="w-4 h-4 text-[#087F3F]" />
+                        <Phone className="w-4 h-4 text-[#0B5D2E]" />
                       </span>
                       <div className="min-w-0">
                         <p className="text-xs text-[#68736D]">Phone</p>
@@ -421,7 +413,7 @@ export default function LandingRestaurantPage() {
                   {business.email && (
                     <div className="flex items-center gap-3">
                       <span className="w-10 h-10 rounded-xl bg-[#E6F6EC] flex items-center justify-center shrink-0">
-                        <Mail className="w-4 h-4 text-[#087F3F]" />
+                        <Mail className="w-4 h-4 text-[#0B5D2E]" />
                       </span>
                       <div className="min-w-0">
                         <p className="text-xs text-[#68736D]">Email</p>
@@ -432,39 +424,39 @@ export default function LandingRestaurantPage() {
                   {business.website && (
                     <div className="flex items-center gap-3">
                       <span className="w-10 h-10 rounded-xl bg-[#E6F6EC] flex items-center justify-center shrink-0">
-                        <Globe className="w-4 h-4 text-[#087F3F]" />
+                        <Globe className="w-4 h-4 text-[#0B5D2E]" />
                       </span>
                       <div className="min-w-0">
                         <p className="text-xs text-[#68736D]">Website</p>
-                        <p className="text-sm font-semibold text-[#087F3F] break-words">{business.website}</p>
+                        <p className="text-sm font-semibold text-[#0B5D2E] break-words">{business.website}</p>
                       </div>
                     </div>
                   )}
                   {business.facebook && (
                     <div className="flex items-center gap-3">
                       <span className="w-10 h-10 rounded-xl bg-[#E6F6EC] flex items-center justify-center shrink-0">
-                        <LinkIcon className="w-4 h-4 text-[#087F3F]" />
+                        <LinkIcon className="w-4 h-4 text-[#0B5D2E]" />
                       </span>
                       <div className="min-w-0">
                         <p className="text-xs text-[#68736D]">Facebook</p>
-                        <p className="text-sm font-semibold text-[#087F3F] break-words">{business.facebook}</p>
+                        <p className="text-sm font-semibold text-[#0B5D2E] break-words">{business.facebook}</p>
                       </div>
                     </div>
                   )}
                   {business.instagram && (
                     <div className="flex items-center gap-3">
                       <span className="w-10 h-10 rounded-xl bg-[#E6F6EC] flex items-center justify-center shrink-0">
-                        <AtSign className="w-4 h-4 text-[#087F3F]" />
+                        <AtSign className="w-4 h-4 text-[#0B5D2E]" />
                       </span>
                       <div className="min-w-0">
                         <p className="text-xs text-[#68736D]">Instagram</p>
-                        <p className="text-sm font-semibold text-[#087F3F] break-words">{business.instagram}</p>
+                        <p className="text-sm font-semibold text-[#0B5D2E] break-words">{business.instagram}</p>
                       </div>
                     </div>
                   )}
                   <div className="flex items-center gap-3">
                     <span className="w-10 h-10 rounded-xl bg-[#E6F6EC] flex items-center justify-center shrink-0">
-                      <MapPin className="w-4 h-4 text-[#087F3F]" />
+                      <MapPin className="w-4 h-4 text-[#0B5D2E]" />
                     </span>
                     <div className="min-w-0">
                       <p className="text-xs text-[#68736D]">Address</p>
@@ -476,7 +468,7 @@ export default function LandingRestaurantPage() {
                   {business.landmark && (
                     <div className="flex items-center gap-3">
                       <span className="w-10 h-10 rounded-xl bg-[#E6F6EC] flex items-center justify-center shrink-0">
-                        <Navigation className="w-4 h-4 text-[#087F3F]" />
+                        <Navigation className="w-4 h-4 text-[#0B5D2E]" />
                       </span>
                       <div className="min-w-0">
                         <p className="text-xs text-[#68736D]">Landmark</p>
@@ -486,7 +478,7 @@ export default function LandingRestaurantPage() {
                   )}
                   <div className="flex items-center gap-3">
                     <span className="w-10 h-10 rounded-xl bg-[#E6F6EC] flex items-center justify-center shrink-0">
-                      <Clock className="w-4 h-4 text-[#087F3F]" />
+                      <Clock className="w-4 h-4 text-[#0B5D2E]" />
                     </span>
                     <div className="min-w-0">
                       <p className="text-xs text-[#68736D]">Hours</p>
@@ -500,7 +492,7 @@ export default function LandingRestaurantPage() {
                   {business.price_range && (
                     <div className="flex items-center gap-3">
                       <span className="w-10 h-10 rounded-xl bg-[#E6F6EC] flex items-center justify-center shrink-0">
-                        <UtensilsCrossed className="w-4 h-4 text-[#087F3F]" />
+                        <UtensilsCrossed className="w-4 h-4 text-[#0B5D2E]" />
                       </span>
                       <div className="min-w-0">
                         <p className="text-xs text-[#68736D]">Price Range</p>
@@ -511,7 +503,7 @@ export default function LandingRestaurantPage() {
                   {business.navigation_instructions && (
                     <div className="sm:col-span-2 flex items-center gap-3">
                       <span className="w-10 h-10 rounded-xl bg-[#E6F6EC] flex items-center justify-center shrink-0">
-                        <Navigation className="w-4 h-4 text-[#087F3F]" />
+                        <Navigation className="w-4 h-4 text-[#0B5D2E]" />
                       </span>
                       <div className="min-w-0">
                         <p className="text-xs text-[#68736D]">How to Get There</p>
@@ -531,7 +523,7 @@ export default function LandingRestaurantPage() {
         <div className="fixed bottom-0 left-0 right-0 z-[1001] bg-white border-t border-[#E5E9E7] shadow-[0_-4px_20px_rgba(0,0,0,0.08)]">
           <div className="max-w-5xl mx-auto px-6 py-3 flex items-center gap-4">
             <div className="flex items-center gap-3 flex-1 min-w-0">
-              <div className="w-10 h-10 bg-[#087F3F] rounded-xl flex items-center justify-center shrink-0 relative">
+              <div className="w-10 h-10 bg-[#0B5D2E] rounded-xl flex items-center justify-center shrink-0 relative">
                 <ShoppingCart className="w-5 h-5 text-white" />
                 <span className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-[#F4B400] text-[#17201B] text-[10px] font-bold rounded-full flex items-center justify-center">
                   {cartCount}
@@ -544,7 +536,7 @@ export default function LandingRestaurantPage() {
             </div>
             <button
               onClick={() => navigate('/login')}
-              className="bg-[#087F3F] hover:bg-[#056B35] text-white px-6 py-2.5 rounded-xl text-sm font-semibold transition shrink-0"
+              className="bg-[#0B5D2E] hover:bg-[#094A25] text-white px-6 py-2.5 rounded-xl text-sm font-semibold transition shrink-0"
             >
               Check Out
             </button>
@@ -552,9 +544,6 @@ export default function LandingRestaurantPage() {
         </div>
       )}
 
-      <footer className="border-t border-ink/5 py-8 text-center text-sm text-ink-soft mt-8">
-        &copy; {new Date().getFullYear()} <span className="text-[#16803C] font-semibold">TrackTour</span> — Bansud Tourism Office. All rights reserved.
-      </footer>
-    </div>
+    </LandingShell>
   )
 }

@@ -32,13 +32,18 @@ class DropoffLocationProof
      * @return array{ok: bool, source: ?string, distance: ?float, accuracy: ?float, flagged: bool, message: ?string}
      */
     public function evaluate(Delivery $delivery, int $riderId, ?array $deviceFix, string $action,
-        string $farFormat = 'You must be within %d m of the delivery address (you are %s away).'): array
+        string $farFormat = 'You must be within %d m of the delivery address (you are %s away).',
+        ?array $target = null, ?float $radiusMeters = null): array
     {
-        $radius = (float) config('tracking.dropoff_radius_meters', 50);
+        // Default target: the drop-off. A ride's pickup arrival passes its own
+        // point and radius (2026-11-18), with the same saved / device-fix rules.
+        $radius = $radiusMeters ?? (float) config('tracking.dropoff_radius_meters', 50);
+        $tLat = (float) ($target[0] ?? $delivery->delivery_latitude);
+        $tLng = (float) ($target[1] ?? $delivery->delivery_longitude);
         $maxAge = (int) config('tracking.proof_location_max_age_seconds', 120);
         $saved = $this->sequence->latestRiderLocation($riderId);
         $savedFresh = $saved && $saved['recorded_at'] && ! $saved['recorded_at']->lt(now()->subSeconds($maxAge));
-        $savedDistance = $savedFresh ? $this->distance($saved['latitude'], $saved['longitude'], $delivery) : null;
+        $savedDistance = $savedFresh ? $this->distanceTo($saved['latitude'], $saved['longitude'], $tLat, $tLng) : null;
 
         if ($savedDistance !== null && $savedDistance <= $radius) {
             return $this->pass('saved', $savedDistance, null, false);
@@ -55,7 +60,7 @@ class DropoffLocationProof
             if (! $this->plausible($device, $saved)) {
                 return $this->fail('Your phone\'s location jumped too far from your last saved position. If TrackTour is open in another tab or phone, close it, then try again.');
             }
-            $distance = $this->distance($device['latitude'], $device['longitude'], $delivery);
+            $distance = $this->distanceTo($device['latitude'], $device['longitude'], $tLat, $tLng);
             if ($distance <= $radius) {
                 $flagged = $device['accuracy'] > (float) config('tracking.max_saved_accuracy_m', 50);
                 if ($flagged) {
@@ -127,9 +132,9 @@ class DropoffLocationProof
         return $kph <= (float) config('tracking.max_speed_kph', 150);
     }
 
-    private function distance(float $lat, float $lng, Delivery $delivery): float
+    private function distanceTo(float $lat, float $lng, float $tLat, float $tLng): float
     {
-        return $this->sequence->distanceMeters($lat, $lng, (float) $delivery->delivery_latitude, (float) $delivery->delivery_longitude);
+        return $this->sequence->distanceMeters($lat, $lng, $tLat, $tLng);
     }
 
     private function away(float $meters): string

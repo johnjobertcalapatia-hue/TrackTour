@@ -152,7 +152,8 @@ class TransportRideNotificationsTest extends TestCase
             'user_id' => $rider->id,
             'rider_status' => $overrides['rider_status'] ?? 'available',
             'current_service' => $overrides['current_service'] ?? 'transport',
-            'vehicle_type' => 'Motorcycle',
+            // Reconciled 2026-11-16: canonical lowercase vehicle; must match the booked type.
+            'vehicle_type' => $overrides['vehicle_type'] ?? 'motorcycle',
             'vehicle_plate_number' => 'ABC 1234',
         ]);
 

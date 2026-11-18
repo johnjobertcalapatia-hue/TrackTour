@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
+import { BedDouble, ChevronDown, Compass, LayoutGrid, MapPin, Search, Store, UtensilsCrossed, type LucideIcon } from 'lucide-react'
 import { get } from '@/shared/services/api'
-import { ApplicationLogo } from '@/shared/components/ApplicationLogo'
-import { formatCurrency } from '@/shared/utils'
-import { Star, MapPin, Compass, ArrowLeft, ChevronDown } from 'lucide-react'
+import { cn, formatCurrency, toAssetUrl } from '@/shared/utils'
+import LandingShell from './components/LandingShell'
+import LandingItemCard, { LandingEmpty, LandingSpinner, type LandingItem } from './components/LandingItemCard'
 
 type Tab = 'all' | 'places' | 'food' | 'businesses' | 'stays'
 
@@ -36,17 +37,28 @@ interface MapBusiness {
   review_count?: number
 }
 
-const TYPE_EMOJI: Record<string, string> = { place: '📍', food: '🍴', stay: '🏨', business: '🏪' }
+const TABS: { key: Tab; label: string; icon: LucideIcon }[] = [
+  { key: 'all', label: 'All', icon: LayoutGrid },
+  { key: 'places', label: 'Tourist Spots', icon: Compass },
+  { key: 'food', label: 'Food', icon: UtensilsCrossed },
+  { key: 'businesses', label: 'Businesses', icon: Store },
+  { key: 'stays', label: 'Resorts', icon: BedDouble },
+]
+
+const TYPE_LABEL: Record<ExploreItem['type'], string> = { place: 'Tourist Spot', food: 'Restaurant', stay: 'Resort & Stay' }
+const TYPE_ICON: Record<ExploreItem['type'], LucideIcon> = { place: Compass, food: UtensilsCrossed, stay: BedDouble }
 
 function initialTabFromParams(param: string | null): Tab {
   return param === 'places' || param === 'food' || param === 'businesses' || param === 'stays' ? param : 'all'
 }
 
+/** Public explore page: every published spot, restaurant, stay and business. */
 export default function LandingExplorePage() {
-  const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const tab = initialTabFromParams(searchParams.get('tab'))
+  const query = searchParams.get('q') ?? ''
   const [municipality, setMunicipality] = useState('')
+  const [draft, setDraft] = useState(query)
 
   const { data, isLoading } = useQuery({
     queryKey: ['landing-explore'],
@@ -74,126 +86,148 @@ export default function LandingExplorePage() {
     filtered = filtered.filter((item) => item.municipality === municipality)
   }
 
+  // ?q= from the landing hero search: match name, category or municipality.
+  const needle = query.trim().toLowerCase()
+  if (needle) {
+    filtered = filtered.filter((item) =>
+      [item.name, 'category' in item ? item.category : null, item.municipality]
+        .some((v) => typeof v === 'string' && v.toLowerCase().includes(needle))
+    )
+  }
+
   const municipalities = data?.municipalities ?? []
 
-  const handleTap = (item: ExploreItem | MapBusiness) => {
+  const setParam = (key: 'tab' | 'q', value: string) => {
+    const next = new URLSearchParams(searchParams)
+    if (value && !(key === 'tab' && value === 'all')) next.set(key, value)
+    else next.delete(key)
+    setSearchParams(next, { replace: true })
+  }
+
+  const toItem = (item: ExploreItem | MapBusiness): LandingItem => {
     if ('type' in item) {
-      if (item.type === 'place') navigate(`/tourist/destinations/${item.id}`)
-      else if (item.type === 'food') navigate(`/explore/food/${item.id}`)
-      else navigate(`/tourist/explore/${item.id}`)
-    } else {
-      navigate(`/tourist/explore/${item.id}`)
+      return {
+        key: `${item.type}-${item.id}`,
+        to: item.type === 'place' ? `/tourist/destinations/${item.id}` : item.type === 'food' ? `/explore/food/${item.id}` : `/tourist/explore/${item.id}`,
+        title: item.name,
+        image: item.cover_photo ? toAssetUrl(item.cover_photo) : null,
+        category: TYPE_LABEL[item.type],
+        location: item.municipality,
+        rating: item.rating,
+        note: item.starting_price && item.starting_price > 0 ? `From ${formatCurrency(item.starting_price)}` : null,
+        icon: TYPE_ICON[item.type],
+      }
+    }
+    return {
+      key: `business-${item.id}`,
+      to: `/tourist/explore/${item.id}`,
+      title: item.name,
+      image: item.cover_photo ? toAssetUrl(item.cover_photo) : null,
+      category: item.category ?? 'Business',
+      location: item.municipality ?? null,
+      rating: item.average_rating ?? null,
+      icon: Store,
     }
   }
 
-  return (
-    <div className="min-h-screen tourism-bg tourism-bg-orbs text-[#17201A]">
-      <nav className="flex items-center justify-between px-6 py-2 max-w-7xl mx-auto tourism-nav">
-        <Link to="/" className="flex items-center gap-3">
-          <ApplicationLogo className="w-12 h-12" />
-          <span className="text-xl font-bold text-[#16803C]">TrackTour</span>
-        </Link>
-        <div className="flex items-center gap-3">
-          <Link to="/login" className="text-sm text-[#16803C] hover:text-[#126B32] transition-colors">
-            Sign In
-          </Link>
-          <Link to="/role-selection" className="btn-tourism px-4 py-1.5 text-sm font-medium">
-            Get Started
-          </Link>
-        </div>
-      </nav>
+  const loading = isLoading && tab !== 'businesses'
 
-      <div className="max-w-7xl mx-auto px-[10px] py-8">
-        <Link
-          to="/"
-          onClick={() => sessionStorage.setItem('tracktour_scroll_to_content', '1')}
-          className="inline-flex items-center gap-2 text-sm font-medium text-[#087F3F] hover:text-[#056B35] transition-colors mb-4"
-        >
-          <ArrowLeft className="w-4 h-4" /> Back to Home
-        </Link>
-        <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-          <h1 className="text-2xl lg:text-3xl font-bold text-[#17201A]">Explore Bansud &amp; District 2</h1>
-          <div className="relative">
-            <MapPin className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#087F3F] pointer-events-none" />
+  return (
+    <LandingShell
+      eyebrow="Explore"
+      title="Explore Bansud & District 2"
+      subtitle="Tourist spots, restaurants, resorts and local businesses across Oriental Mindoro."
+      back={{ to: '/', label: 'Back to Home', onClick: () => sessionStorage.setItem('tracktour_scroll_to_content', '1') }}
+      bandExtra={
+        <div className="flex flex-col gap-3 lg:flex-row">
+          <form
+            role="search"
+            onSubmit={(e) => {
+              e.preventDefault()
+              setParam('q', draft.trim())
+            }}
+            className="flex flex-1 items-center gap-2 rounded-full bg-white p-1.5 pl-5 shadow-xl"
+          >
+            <Search className="h-5 w-5 shrink-0 text-[#14351F]" aria-hidden="true" />
+            <input
+              type="search"
+              value={draft}
+              onChange={(e) => {
+                setDraft(e.target.value)
+                if (!e.target.value) setParam('q', '')
+              }}
+              placeholder="Search for restaurants, resorts, attractions..."
+              aria-label="Search places"
+              className="min-w-0 flex-1 !border-0 bg-transparent !px-0 py-2.5 text-sm text-[#14351F] placeholder-[#6B7280] !shadow-none !outline-none !ring-0"
+            />
+            <button type="submit" className="rounded-full bg-[#0B5D2E] px-6 py-2.5 text-sm font-bold text-white hover:bg-[#094A25]">
+              Search
+            </button>
+          </form>
+          <div className="relative lg:w-64">
+            <MapPin className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#0B5D2E]" aria-hidden="true" />
             <select
+              aria-label="Filter by municipality"
               value={municipality}
               onChange={(e) => setMunicipality(e.target.value)}
-              className="appearance-none pl-10 pr-9 py-2.5 rounded-xl bg-white border border-[#E5E9E7] text-sm font-medium text-[#17201A] focus:outline-none focus:ring-2 focus:ring-[#087F3F]/20 focus:border-[#087F3F] cursor-pointer"
+              className="h-full w-full cursor-pointer appearance-none rounded-full border-0 bg-white py-3.5 pl-11 pr-10 text-sm font-semibold text-[#14351F] shadow-xl focus:outline-none focus:ring-2 focus:ring-[#FFD000]"
             >
-              <option value="">All Municipalities</option>
+              <option value="">All municipalities</option>
               {municipalities.map((m) => (
                 <option key={m.id} value={m.name}>
                   {m.name}
                 </option>
               ))}
             </select>
-            <ChevronDown className="absolute right-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-[#68736D] pointer-events-none" />
+            <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#5B6A60]" aria-hidden="true" />
           </div>
         </div>
-
-        {/* Grid */}
-        {isLoading && tab !== 'businesses' ? (
-          <div className="flex items-center justify-center py-20">
-            <div className="w-6 h-6 border-2 border-[#087F3F] border-t-transparent rounded-full animate-spin" />
-          </div>
-        ) : filtered.length === 0 ? (
-          <div className="py-16 text-center">
-            <Compass className="w-12 h-12 text-[#9CA3AF] mx-auto mb-4" />
-            <p className="text-[#68736D]">Nothing found</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 pb-4">
-            {filtered.map((item) => {
-              const isBusiness = !('type' in item)
-              const key = isBusiness ? `business-${(item as MapBusiness).id}` : `${(item as ExploreItem).type}-${(item as ExploreItem).id}`
-              const name = item.name
-              const cover = item.cover_photo
-              const rating = isBusiness ? (item as MapBusiness).average_rating ?? null : (item as ExploreItem).rating
-              const municipality = isBusiness
-                ? (item as MapBusiness).municipality ?? ''
-                : (item as ExploreItem).municipality
-              const emoji = isBusiness ? TYPE_EMOJI.business : TYPE_EMOJI[item.type]
-              const startingPrice = isBusiness ? undefined : (item as ExploreItem).starting_price
-
-              return (
-                <div
-                  key={key}
-                  onClick={() => handleTap(item)}
-                  className="bg-white border border-[#E5E9E7] rounded-2xl overflow-hidden cursor-pointer hover:border-[#087F3F]/40 transition-all group"
-                >
-                  <div className="aspect-[4/3] bg-[#E9F7EF] overflow-hidden relative">
-                    {cover ? (
-                      <img src={cover} alt={name} className="w-full h-full object-cover group-hover:scale-105 transition duration-500" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center">
-                        <span className="text-4xl">{emoji}</span>
-                      </div>
-                    )}
-                    {rating != null && (
-                      <div className="absolute bottom-2 left-2 flex items-center gap-1 bg-black/60 backdrop-blur-md text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-md">
-                        <Star className="w-3 h-3 text-[#F4B400] fill-[#F4B400]" /> {rating.toFixed(1)}
-                      </div>
-                    )}
-                  </div>
-                  <div className="p-2 h-[80px] flex flex-col justify-center">
-                    <h3 className="text-sm font-semibold text-[#17201B] truncate group-hover:text-[#087F3F] transition">{name}</h3>
-                    <div className="flex items-center gap-1 mt-0.5 text-[11px] text-[#68736D]">
-                      <MapPin className="w-3 h-3 shrink-0" /> <span className="truncate">{municipality}</span>
-                    </div>
-                    {!isBusiness && startingPrice != null && startingPrice > 0 && (
-                      <p className="text-[11px] font-bold text-[#087F3F] mt-1">From {formatCurrency(startingPrice)}</p>
-                    )}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
+      }
+    >
+      <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div className="no-scrollbar flex gap-2 overflow-x-auto rounded-full bg-white p-1.5 shadow-[0_8px_24px_rgba(6,40,20,0.08)] ring-1 ring-[#E7E2D6]" role="tablist" aria-label="Filter places">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={tab === t.key}
+              onClick={() => setParam('tab', t.key)}
+              className={cn(
+                'flex shrink-0 items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold transition-colors',
+                tab === t.key ? 'bg-[#0B5D2E] text-white shadow' : 'text-[#14351F] hover:bg-[#EAF6ED]'
+              )}
+            >
+              <t.icon className={cn('h-4 w-4', tab === t.key ? 'text-[#FFD000]' : 'text-[#0B5D2E]')} aria-hidden="true" />
+              {t.label}
+            </button>
+          ))}
+        </div>
+        {!loading && (
+          <p className="text-sm text-[#5B6A60]">
+            <span className="font-bold text-[#14351F]">{filtered.length}</span> {filtered.length === 1 ? 'place' : 'places'}
+            {needle && <> matching &ldquo;{query}&rdquo;</>}
+            {municipality && <> in {municipality}</>}
+          </p>
         )}
       </div>
 
-      <footer className="border-t border-ink/5 py-8 text-center text-sm text-ink-soft mt-8">
-        &copy; {new Date().getFullYear()} <span className="text-[#16803C] font-semibold">TrackTour</span> — Bansud Tourism Office. All rights reserved.
-      </footer>
-    </div>
+      {loading ? (
+        <LandingSpinner />
+      ) : filtered.length === 0 ? (
+        <LandingEmpty message={needle ? `Nothing matches “${query}”. Try another word or clear the search.` : 'Nothing found'} />
+      ) : (
+        <ul className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {filtered.map((item, i) => {
+            const card = toItem(item)
+            return (
+              <li key={card.key}>
+                <LandingItemCard item={card} index={i} />
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </LandingShell>
   )
 }

@@ -1,10 +1,12 @@
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { get } from '@/shared/services/api'
-import { ApplicationLogo } from '@/shared/components/ApplicationLogo'
 import { categoryName, formatCurrency, safeText, toAssetUrl } from '@/shared/utils'
 import { getDiscoveryGroup } from '@/shared/utils/category'
-import { Star, MapPin, ArrowLeft, Compass } from 'lucide-react'
+import type { MunicipalityPhoto } from '@/shared/hooks/use-current-municipality'
+import { BedDouble, Compass, Store, UtensilsCrossed, type LucideIcon } from 'lucide-react'
+import LandingShell from './components/LandingShell'
+import LandingItemCard, { LandingEmpty, LandingSpinner, type LandingItem } from './components/LandingItemCard'
 
 interface BizCategory {
   id: number
@@ -53,68 +55,8 @@ interface MunicipalityResponse {
   }
 }
 
-const EMOJI_FOOD = '🍴'
-const EMOJI_STAY = '🏨'
-const EMOJI_PLACE = '📍'
-const EMOJI_BUSINESS = '🏪'
-
-interface CardItem {
-  key: string
-  id: number
-  name: string
-  cover: string | null
-  rating: number | null
-  location: string
-  category: string
-  emoji: string
-  price?: number
-  onOpen: () => void
-}
-
-function Card({ item }: { item: CardItem }) {
-  return (
-    <div
-      onClick={item.onOpen}
-      className="bg-white border border-[#E5E9E7] rounded-2xl overflow-hidden cursor-pointer hover:border-[#087F3F]/40 hover:shadow-md transition-all group"
-    >
-      <div className="aspect-[4/3] bg-[#E9F7EF] overflow-hidden relative">
-        {item.cover ? (
-          <img
-            src={item.cover}
-            alt={item.name}
-            loading="lazy"
-            className="w-full h-full object-cover group-hover:scale-105 transition duration-500"
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center">
-            <span className="text-4xl">{item.emoji}</span>
-          </div>
-        )}
-        {item.rating != null && (
-          <div className="absolute bottom-2 left-2 flex items-center gap-1 bg-black/60 backdrop-blur-md text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-md">
-            <Star className="w-3 h-3 text-[#F4B400] fill-[#F4B400]" /> {item.rating.toFixed(1)}
-          </div>
-        )}
-      </div>
-      <div className="p-3">
-        <p className="text-[11px] font-semibold text-[#087F3F]">{item.category}</p>
-        <h3 className="mt-0.5 text-sm font-semibold text-[#17201B] truncate group-hover:text-[#087F3F] transition">
-          {item.name}
-        </h3>
-        <div className="flex items-center gap-1 mt-0.5 text-[11px] text-[#68736D]">
-          <MapPin className="w-3 h-3 shrink-0" /> <span className="truncate">{item.location}</span>
-        </div>
-        {item.price != null && item.price > 0 && (
-          <p className="text-[11px] font-bold text-[#087F3F] mt-1">Entrance {formatCurrency(item.price)}</p>
-        )}
-      </div>
-    </div>
-  )
-}
-
 export default function LandingMunicipalityPage() {
   const { id } = useParams<{ id: string }>()
-  const navigate = useNavigate()
 
   const { data, isLoading } = useQuery<MunicipalityResponse>({
     queryKey: ['landing-municipality', id],
@@ -126,6 +68,13 @@ export default function LandingMunicipalityPage() {
     queryKey: ['landing-municipality-destinations', id],
     queryFn: () => get('/tourist/destinations', { params: { municipality: id } }),
     enabled: !!id,
+  })
+
+  const { data: photos = [] } = useQuery({
+    queryKey: ['municipality-photos', Number(id)],
+    queryFn: () => get<MunicipalityPhoto[]>(`/municipalities/${id}/photos`),
+    enabled: !!id,
+    staleTime: 10 * 60 * 1000,
   })
 
   const municipality = data?.municipality
@@ -145,127 +94,109 @@ export default function LandingMunicipalityPage() {
   const businessCategory = (b: Biz) => categoryName(b.category) || 'Place'
   const businessRank = (b: Biz) => (b.average_rating ?? 0) > 0 ? Number(b.average_rating) : null
 
-  const openBiz = (b: Biz) =>
-    navigate(groupOf(b) === 'dining' ? `/explore/food/${b.id}` : `/tourist/explore/${b.id}`)
+  const bizLink = (b: Biz) => (groupOf(b) === 'dining' ? `/explore/food/${b.id}` : `/tourist/explore/${b.id}`)
 
-  const toRestaurantCards = (list: Biz[], emoji: string): CardItem[] =>
+  const toBizItems = (list: Biz[], icon: LucideIcon): LandingItem[] =>
     list.map((b) => ({
-      key: `biz-${emoji}-${b.id}`,
-      id: b.id,
-      name: b.business_name ?? b.name ?? '',
-      cover: businessCover(b),
-      rating: businessRank(b),
-      location: businessLocation(b),
+      key: `biz-${b.id}`,
+      to: bizLink(b),
+      title: b.business_name ?? b.name ?? '',
+      image: businessCover(b),
       category: businessCategory(b),
-      emoji,
-      onOpen: () => openBiz(b),
+      location: businessLocation(b),
+      rating: businessRank(b),
+      icon,
     }))
 
-  const placeCards: CardItem[] = destinations.map((d) => ({
+  const placeItems: LandingItem[] = destinations.map((d) => ({
     key: `place-${d.id}`,
-    id: d.id,
-    name: d.name,
-    cover: d.images?.[0] ? toAssetUrl(d.images[0]) : null,
-    rating: d.rating ? Number(d.rating) : null,
-    location: d.municipality?.name || d.address || 'Oriental Mindoro',
+    to: `/tourist/destinations/${d.id}`,
+    title: d.name,
+    image: d.images?.[0] ? toAssetUrl(d.images[0]) : null,
     category: categoryName(d.category) || 'Tourist Spot',
-    emoji: EMOJI_PLACE,
-    price: d.entrance_fee,
-    onOpen: () => navigate(`/tourist/destinations/${d.id}`),
+    location: d.municipality?.name || d.address || 'Oriental Mindoro',
+    rating: d.rating ? Number(d.rating) : null,
+    note: d.entrance_fee && d.entrance_fee > 0 ? `Entrance ${formatCurrency(d.entrance_fee)}` : null,
+    icon: Compass,
   }))
 
-  const sections: { key: string; title: string; items: CardItem[] }[] = [
-    { key: 'restaurants', title: 'Restaurants', items: toRestaurantCards(restaurants, EMOJI_FOOD) },
-    { key: 'resorts', title: 'Resorts & Stays', items: toRestaurantCards(resorts, EMOJI_STAY) },
-    { key: 'places', title: 'Tourist Spots', items: placeCards },
+  const sections: { key: string; title: string; icon: LucideIcon; items: LandingItem[] }[] = [
+    { key: 'restaurants', title: 'Restaurants', icon: UtensilsCrossed, items: toBizItems(restaurants, UtensilsCrossed) },
+    { key: 'resorts', title: 'Resorts & Stays', icon: BedDouble, items: toBizItems(resorts, BedDouble) },
+    { key: 'places', title: 'Tourist Spots', icon: Compass, items: placeItems },
+    ...(others.length > 0 ? [{ key: 'others', title: 'More Places & Services', icon: Store, items: toBizItems(others, Store) }] : []),
   ]
 
-  const finalSections = others.length > 0
-    ? [...sections, { key: 'others', title: 'More Places & Services', items: toRestaurantCards(others, EMOJI_BUSINESS) }]
-    : sections
+  const totalPlaces = sections.reduce((n, sec) => n + sec.items.length, 0)
+  const backdrop = photos[0]?.src ? toAssetUrl(photos[0].src) : null
+  const back = { to: '/', label: 'Back to Home', onClick: () => sessionStorage.setItem('tracktour_scroll_to_content', '1') }
+
+  if (isLoading) {
+    return (
+      <LandingShell back={back}>
+        <LandingSpinner />
+      </LandingShell>
+    )
+  }
+
+  if (!municipality) {
+    return (
+      <LandingShell back={back} title="Municipality not found" subtitle="The municipality you’re looking for doesn’t exist.">
+        <LandingEmpty message="Pick another municipality from the home page." />
+      </LandingShell>
+    )
+  }
 
   return (
-    <div className="min-h-screen tourism-bg tourism-bg-orbs text-[#17201A]">
-      <nav className="flex items-center justify-between px-6 py-2 max-w-7xl mx-auto tourism-nav">
-        <Link to="/" className="flex items-center gap-3">
-          <ApplicationLogo className="w-12 h-12" />
-          <span className="text-xl font-bold text-[#16803C]">TrackTour</span>
-        </Link>
-        <div className="flex items-center gap-3">
-          <Link to="/login" className="text-sm text-[#16803C] hover:text-[#126B32] transition-colors">
-            Sign In
-          </Link>
-          <Link to="/role-selection" className="btn-tourism px-4 py-1.5 text-sm font-medium">
-            Get Started
-          </Link>
+    <LandingShell
+      back={back}
+      backdrop={backdrop}
+      eyebrow={[municipality.district, municipality.province || 'Oriental Mindoro'].filter(Boolean).join(' · ')}
+      title={municipality.name}
+      subtitle={totalPlaces > 0 ? `${totalPlaces} ${totalPlaces === 1 ? 'place' : 'places'} to explore — food, stays and tourist spots.` : 'Places are joining TrackTour soon.'}
+      bandExtra={
+        <div className="flex flex-wrap gap-2">
+          {sections.map((sec) => (
+            <a
+              key={sec.key}
+              href={`#municipality-${sec.key}`}
+              className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-sm font-semibold text-white ring-1 ring-white/25 backdrop-blur hover:bg-white/20"
+            >
+              <sec.icon className="h-4 w-4 text-[#FFD000]" aria-hidden="true" /> {sec.title}
+              <span className="rounded-full bg-[#FFD000] px-2 text-xs font-bold text-[#14351F]">{sec.items.length}</span>
+            </a>
+          ))}
         </div>
-      </nav>
-
-      <div className="max-w-7xl mx-auto px-[10px] py-8">
-        <Link
-          to="/"
-          onClick={() => sessionStorage.setItem('tracktour_scroll_to_content', '1')}
-          className="inline-flex items-center gap-2 text-sm font-medium text-[#087F3F] hover:text-[#056B35] transition-colors mb-4"
-        >
-          <ArrowLeft className="w-4 h-4" /> Back to Home
-        </Link>
-
-        {isLoading ? (
-          <div className="flex items-center justify-center py-20">
-            <div className="w-6 h-6 border-2 border-[#087F3F] border-t-transparent rounded-full animate-spin" />
-          </div>
-        ) : !municipality ? (
-          <div className="text-center py-20">
-            <Compass className="w-14 h-14 text-[#9AB5A6] mx-auto mb-4" />
-            <h2 className="text-xl font-bold text-[#17201A] mb-2">Municipality not found</h2>
-            <p className="text-[#68736D] text-sm">The municipality you're looking for doesn't exist.</p>
-          </div>
-        ) : (
-          <>
-            <h1 className="text-2xl lg:text-3xl font-bold text-[#17201A] mb-8">
-              {municipality.name}
-              {municipality.district ? (
-                <span className="block mt-1 text-sm font-medium text-[#68736D]">
-                  {municipality.district} District, {municipality.province || 'Oriental Mindoro'}
-                </span>
-              ) : null}
-            </h1>
-
-            <div className="space-y-10">
-              {finalSections.map((section) => (
-                <section key={section.key}>
-                  <div className="flex items-center gap-2 mb-4">
-                    <h2 className="text-lg lg:text-xl font-bold text-[#087F3F]">{section.title}</h2>
-                    <span className="inline-flex items-center gap-1 bg-white border border-[#E2E8E3] text-[#17201A] text-xs font-semibold px-2.5 py-1 rounded-full">
-                      {section.items.length}
-                    </span>
-                  </div>
-                  {loadingDestinations && section.key === 'places' ? (
-                    <div className="flex items-center justify-center py-12">
-                      <div className="w-5 h-5 border-2 border-[#087F3F] border-t-transparent rounded-full animate-spin" />
-                    </div>
-                  ) : section.items.length === 0 ? (
-                    <div className="py-10 text-center bg-white border border-[#E5E9E7] rounded-2xl">
-                      <Compass className="w-10 h-10 text-[#9CA3AF] mx-auto mb-3" />
-                      <p className="text-[#68736D] text-sm">Nothing listed here yet.</p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                      {section.items.map((item) => (
-                        <Card key={item.key} item={item} />
-                      ))}
-                    </div>
-                  )}
-                </section>
-              ))}
+      }
+    >
+      <div className="space-y-14">
+        {sections.map((sec) => (
+          <section key={sec.key} id={`municipality-${sec.key}`} className="scroll-mt-6" aria-labelledby={`municipality-${sec.key}-heading`}>
+            <div className="mb-6 flex items-center gap-4">
+              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#0B5D2E] text-[#FFD000] shadow-md">
+                <sec.icon className="h-6 w-6" aria-hidden="true" />
+              </span>
+              <div>
+                <h2 id={`municipality-${sec.key}-heading`} className="text-2xl font-bold text-[#0B5D2E] sm:text-3xl">{sec.title}</h2>
+                <p className="text-sm text-[#5B6A60]">{sec.items.length} in {municipality.name}</p>
+              </div>
             </div>
-          </>
-        )}
+            {loadingDestinations && sec.key === 'places' ? (
+              <LandingSpinner />
+            ) : sec.items.length === 0 ? (
+              <LandingEmpty message="Nothing listed here yet." />
+            ) : (
+              <ul className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {sec.items.map((item, i) => (
+                  <li key={item.key}>
+                    <LandingItemCard item={item} index={i} />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        ))}
       </div>
-
-      <footer className="border-t border-ink/5 py-8 text-center text-sm text-ink-soft mt-8">
-        &copy; {new Date().getFullYear()} <span className="text-[#16803C] font-semibold">TrackTour</span> — Bansud Tourism Office. All rights reserved.
-      </footer>
-    </div>
+    </LandingShell>
   )
 }

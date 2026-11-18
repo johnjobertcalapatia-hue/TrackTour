@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import GlobalRiderAlert from '@/features/rider/components/GlobalRiderAlert'
+import RiderDestinationChangeBanner from '@/features/rider/components/RiderDestinationChangeBanner'
 import { COD_PICKUP_GATE_MESSAGE } from '@/features/rider/gating'
 
 const h = vi.hoisted(() => {
@@ -457,8 +458,158 @@ describe('GlobalRiderAlert — ride booking wording (2026-11-11)', () => {
     expect(screen.getByText(/Collect ₱211\.36 in cash from the passenger/)).toBeInTheDocument()
     expect(screen.queryByText(/food/i)).toBeNull()
     expect(screen.queryByText(/photo/i)).toBeNull()
+    // The rider confirms the cash before completing (2026-11-18).
+    expect(screen.getByRole('button', { name: /fare collected · complete ride/i })).toBeDisabled()
+    fireEvent.click(screen.getByLabelText('I received ₱211.36 in cash from the passenger'))
     fireEvent.click(screen.getByRole('button', { name: /fare collected · complete ride/i }))
     expect(onCompleteRide).toHaveBeenCalledWith(211.36)
+  })
+
+  // 2026-11-17: a rider AT the destination was stuck on "Location saved (waiting:
+  // GPS is not precise enough…)". Like the food drop-off, the phone's own fix
+  // counts up to ±200 m when the server could not save it for precision.
+  it('at the destination a GPS fix too coarse to SAVE (±80 m) still lets the ride complete', () => {
+    const onCompleteRide = vi.fn()
+    h.setOverrides({
+      activeDelivery: { ...ride, status: 'arrived_destination', is_cod: false, order_total: 150, payment_method: 'gcash', payment_status: 'paid' },
+      arrivalAlert: 'DROPOFF', tripState: 'ARRIVED_AT_DROPOFF', onCompleteRide,
+      positionKnown: true, riderPosition: [12.86, 121.48],
+      locationRefusal: 'low_accuracy', deviceAccuracy: 80,
+    })
+
+    render(<GlobalRiderAlert />)
+
+    expect(screen.queryByText(/GPS is not precise enough, move to an open area/)).toBeNull()
+    expect(screen.getByText('Location checked from your phone (±80 m)')).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText("I confirm the passenger's GCash payment of ₱150.00 was received"))
+    const complete = screen.getByRole('button', { name: /complete ride/i })
+    expect(complete).toBeEnabled()
+    fireEvent.click(complete)
+    expect(onCompleteRide).toHaveBeenCalledWith(null)
+  })
+
+  it('at the destination a fix coarser than ±200 m still waits, and says what to do', () => {
+    const onCompleteRide = vi.fn()
+    h.setOverrides({
+      activeDelivery: { ...ride, status: 'arrived_destination', is_cod: false, order_total: 150 },
+      arrivalAlert: 'DROPOFF', tripState: 'ARRIVED_AT_DROPOFF', onCompleteRide,
+      positionKnown: true, riderPosition: [12.86, 121.48],
+      locationRefusal: 'low_accuracy', deviceAccuracy: 350,
+    })
+
+    render(<GlobalRiderAlert />)
+
+    expect(screen.getByText(/now ±350 m; needs ±200 m or better — turn on Precise location or step outside/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /complete ride/i })).toBeDisabled()
+  })
+
+  // One-time destination change (2026-11-17).
+  const change = {
+    id: 1, status: 'confirmed', original: { address: 'Pagasa', latitude: 12.6, longitude: 121.4 },
+    new: { name: 'Tambangan Falls', address: 'Tambangan, Bansud', latitude: 12.53, longitude: 121.31 },
+    confirmed_at: '2026-11-17T08:04:00Z', original_fare: 120, estimated_fare: 76.1, max_fare: 87.52,
+    traveled_km_at_change: 1.11, remaining_km_estimate: 1.5, rider_notification_status: 'sent', rider_acknowledged_at: null,
+    verified_km: null, unverified_km: null, computed_fare: null, final_fare: null, cap_adjustment: null,
+    original_commission: 48, final_commission: null, fare_review_status: null, review_reasons: [], finalized_at: null,
+  }
+
+  it("a changed ride records the arrival first (I've Arrived) — the final fare is set there", () => {
+    const arriveAtRideDestination = vi.fn()
+    const onCompleteRide = vi.fn()
+    h.setOverrides({
+      activeDelivery: { ...ride, status: 'in_transit', is_cod: true, order_total: 120, destination_change: change },
+      arrivalAlert: 'DROPOFF', tripState: 'ARRIVED_AT_DROPOFF', onCompleteRide, arriveAtRideDestination,
+      positionKnown: true, riderPosition: [12.86, 121.48],
+    })
+
+    render(<GlobalRiderAlert />)
+
+    expect(screen.getByText(/The passenger changed the destination\. Tap I've Arrived/)).toHaveTextContent('at most ₱87.52')
+    expect(screen.queryByText(/Collect ₱120\.00/)).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /I've Arrived/i }))
+    expect(arriveAtRideDestination).toHaveBeenCalledTimes(1)
+    expect(onCompleteRide).not.toHaveBeenCalled()
+  })
+
+  it('a GCash ride at the drop-off waits for the payment; the rider may switch it to cash', () => {
+    const switchRideToCash = vi.fn()
+    h.setOverrides({
+      activeDelivery: { ...ride, status: 'arrived_destination', is_cod: false, order_total: 150, payment_method: 'gcash', payment_status: 'pending' },
+      arrivalAlert: 'DROPOFF', tripState: 'ARRIVED_AT_DROPOFF', switchRideToCash,
+      positionKnown: true, riderPosition: [12.86, 121.48],
+    })
+
+    render(<GlobalRiderAlert />)
+
+    expect(screen.getByText(/Waiting for the passenger's GCash payment of ₱150\.00/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^complete ride$/i })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: /Switch to cash/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, switch to cash' }))
+    expect(switchRideToCash).toHaveBeenCalledTimes(1)
+  })
+
+  it('once the final fare is set, the rider collects exactly that', () => {
+    const onCompleteRide = vi.fn()
+    h.setOverrides({
+      activeDelivery: { ...ride, status: 'arrived_destination', is_cod: true, order_total: 83.36, destination_change: { ...change, status: 'finalized', final_fare: 83.36 } },
+      arrivalAlert: 'DROPOFF', tripState: 'ARRIVED_AT_DROPOFF', onCompleteRide,
+      positionKnown: true, riderPosition: [12.86, 121.48],
+    })
+
+    render(<GlobalRiderAlert />)
+
+    expect(screen.getByText(/Collect ₱83\.36 in cash from the passenger/)).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText('I received ₱83.36 in cash from the passenger'))
+    fireEvent.click(screen.getByRole('button', { name: /fare collected · complete ride/i }))
+    expect(onCompleteRide).toHaveBeenCalledWith(83.36)
+  })
+
+  it('the rider is told about the new destination until they acknowledge it', () => {
+    const acknowledgeDestinationChange = vi.fn()
+    h.setOverrides({ activeDelivery: { ...ride, status: 'in_transit', destination_change: change }, acknowledgeDestinationChange, acknowledgeBusy: false })
+    const { rerender } = render(<RiderDestinationChangeBanner />)
+
+    const alert = screen.getByRole('alertdialog', { name: 'Destination changed' })
+    expect(alert).toHaveTextContent('The passenger changed the destination')
+    expect(alert).toHaveTextContent('Tambangan Falls')
+    expect(screen.getByText('Pagasa')).toHaveClass('line-through')
+    fireEvent.click(screen.getByRole('button', { name: /Got it/ }))
+    expect(acknowledgeDestinationChange).toHaveBeenCalledTimes(1)
+
+    h.setOverrides({ activeDelivery: { ...ride, status: 'in_transit', destination_change: { ...change, rider_acknowledged_at: '2026-11-17T08:05:00Z' } } })
+    rerender(<RiderDestinationChangeBanner />)
+    expect(screen.queryByRole('alertdialog', { name: 'Destination changed' })).toBeNull()
+  })
+
+  // Pickup arrival (2026-11-18): rides never arrive by themselves.
+  it("near the pickup the rider confirms I've Arrived first — that starts the waiting", () => {
+    const onArrivedPickup = vi.fn()
+    const onMarkPickedUp = vi.fn()
+    h.setOverrides({ activeDelivery: { ...ride, status: 'assigned' }, arrivalAlert: 'PICKUP', tripState: 'ARRIVED_AT_PICKUP', onArrivedPickup, onMarkPickedUp })
+
+    render(<GlobalRiderAlert />)
+
+    expect(screen.getByTestId('ride-arrival-step')).toHaveTextContent('their waiting time starts')
+    expect(screen.queryByRole('button', { name: /passenger on board/i })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /I've Arrived/i }))
+    expect(onArrivedPickup).toHaveBeenCalledTimes(1)
+    expect(onMarkPickedUp).not.toHaveBeenCalled()
+  })
+
+  it('after the confirmed arrival: the waiting timer and Passenger On Board', () => {
+    const onMarkPickedUp = vi.fn()
+    const now = new Date().toISOString()
+    h.setOverrides({
+      activeDelivery: { ...ride, status: 'arrived_pickup', pickup_waiting: { arrived_at: new Date(Date.now() - 400_000).toISOString(), ended_at: null, server_now: now, free_seconds: 180, unit_seconds: 180, rate: 2, charged_seconds: null, amount: null } },
+      arrivalAlert: 'PICKUP', tripState: 'ARRIVED_AT_PICKUP', onMarkPickedUp,
+    })
+
+    render(<GlobalRiderAlert />)
+
+    expect(screen.getByTestId('ride-waiting-step')).toHaveTextContent(/Waiting 0[6-8]:\d\d/)
+    expect(screen.getByTestId('ride-waiting-step')).toHaveTextContent('₱2.00 so far')
+    fireEvent.click(screen.getByRole('button', { name: /passenger on board/i }))
+    expect(onMarkPickedUp).toHaveBeenCalledTimes(1)
   })
 
   it('after Complete Ride the closing message never flashes the food photo step', () => {

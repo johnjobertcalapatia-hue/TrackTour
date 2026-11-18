@@ -75,7 +75,8 @@ class ScheduledDispatchProcessor
      * legacy rows that never carried a retry timestamp — the attempt cap bounds
      * them to dispatch_failed, so they cannot loop forever).
      */
-    private function dueDeliveryIds(): array
+    // Public so System Diagnostics counts exactly what this processor would pick up.
+    public function dueDeliveryIds(): array
     {
         $claimTimeout = now()->subMinutes((int) config('delivery.scheduler.claim_timeout_minutes', 5));
 

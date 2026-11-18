@@ -1,15 +1,14 @@
 /**
  * TrackTour — Customer UI Architecture: Sub-Status Message Matrix Engine
  *
- * Resolves the 5-step progress stages and dynamic customer messaging for multi-restaurant
+ * Resolves the 4-step progress stages and dynamic customer messaging for multi-restaurant
  * restaurant fulfillment groups within a shared order as well as single-restaurant tracking.
  *
- * Progress Stages (1 to 5):
- * 1. Placed
- * 2. Preparing
- * 3. Ready
- * 4. On The Way
- * 5. Delivered
+ * Progress Stages (1 to 4):
+ * 1. Order Placed
+ * 2. Preparing   (includes "ready — waiting for the rider to pick it up")
+ * 3. On The Way
+ * 4. Delivered
  *
  * Backend Field Mapping:
  * - order_status → order.status (order_status column)
@@ -34,7 +33,7 @@ export interface StepItem {
 }
 
 export interface SubOrderStatusResolution {
-  stepIndex: number // 1..5, or -1 for cancelled
+  stepIndex: number // 1..4, or -1 for cancelled
   stepLabel: string
   statusMessage: string
   stageCondition: string
@@ -43,7 +42,9 @@ export interface SubOrderStatusResolution {
   steps: StepItem[]
 }
 
-export const FIVE_STAGE_LABELS = ['Placed', 'Preparing', 'Ready', 'On The Way', 'Delivered'] as const
+export const ORDER_STAGE_LABELS = ['Order Placed', 'Preparing', 'On The Way', 'Delivered'] as const
+
+const LAST_STAGE = ORDER_STAGE_LABELS.length
 
 /**
  * Maps delivery.status (TripStatus enum) to the spec's rider_assignment_status values.
@@ -107,7 +108,7 @@ export function resolveSubOrderStatus(input: SubOrderInput): SubOrderStatusResol
       stageCondition: 'CANCELLED',
       payoutText,
       isCancelled: true,
-      steps: FIVE_STAGE_LABELS.map((label, idx) => ({
+      steps: ORDER_STAGE_LABELS.map((label, idx) => ({
         index: idx + 1,
         label,
         state: 'upcoming',
@@ -116,33 +117,33 @@ export function resolveSubOrderStatus(input: SubOrderInput): SubOrderStatusResol
   }
 
   let stepIndex = 1
-  let stepLabel = 'Placed'
+  let stepLabel = 'Order Placed'
   let statusMessage = ''
   let stageCondition = '1A'
 
-  // 📍 Stage 5: Delivered (Step Index: 5)
+  // 📍 Stage 4: Delivered (Step Index: 4)
   // Backend Status: order_status: DELIVERED | PAYMENT_RECEIVED | COMPLETED
   if (['delivered', 'completed'].includes(orderStatus) || ['delivered', 'completed'].includes(deliveryStatus)) {
-    stepIndex = 5
+    stepIndex = 4
     stepLabel = 'Delivered'
-    stageCondition = '5A'
+    stageCondition = '4A'
     statusMessage = '🎉 Enjoy your meal! Thank you for using TrackTour.'
   }
 
-  // 📍 Stage 4: On The Way (Step Index: 4)
+  // 📍 Stage 3: On The Way (Step Index: 3)
   // Backend Status: order_status: PICKED_UP | IN_TRANSIT | OUT_FOR_DELIVERY | ON_THE_WAY
   // rider_assignment_status: IN_TRANSIT | ARRIVED_AT_CUSTOMER
   else if (
     ['picked_up', 'in_transit', 'out_for_delivery', 'on_the_way'].includes(orderStatus) ||
     ['picked_up', 'in_transit', 'en_route_destination', 'arrived_destination'].includes(deliveryStatus)
   ) {
-    stepIndex = 4
+    stepIndex = 3
     stepLabel = 'On The Way'
 
     // Condition B: Courier breaks through the ≤50m geofence bubble enclosing tourist target coordinates
     // rider_assignment_status: ARRIVED_AT_CUSTOMER
     if (riderAssignmentStatus === 'ARRIVED_AT_CUSTOMER' || orderStatus === 'near_customer') {
-      stageCondition = '4B'
+      stageCondition = '3B'
       statusMessage = paymentMethod === 'cash'
         ? `✨ Rider is outside! Please prepare ${payoutText} cash.`
         : '✨ Rider is outside! Your order has arrived.'
@@ -150,24 +151,24 @@ export function resolveSubOrderStatus(input: SubOrderInput): SubOrderStatusResol
     // Condition A: Rider completes parcel handoff check and begins driving route pathing
     // rider_assignment_status: IN_TRANSIT
     else {
-      stageCondition = '4A'
+      stageCondition = '3A'
       statusMessage = riderName
         ? `🚴 Rider ${riderName} is bringing your order to you.`
         : '🚴 Your order is on the way!'
     }
   }
 
-  // 📍 Stage 3: Ready for Pickup (Step Index: 3)
+  // 📍 Stage 2 (end): food ready, waiting for the rider — still "Preparing" (Step Index: 2)
   // Backend Status: order_status: READY_FOR_PICKUP
   // rider_assignment_status: ACCEPTED | ARRIVED_AT_STORE
   else if (orderStatus === 'ready') {
-    stepIndex = 3
-    stepLabel = 'Ready'
+    stepIndex = 2
+    stepLabel = 'Preparing'
 
     // Condition B: Courier arrives inside restaurant storefront boundary threshold
     // rider_assignment_status: ARRIVED_AT_STORE
     if (riderAssignmentStatus === 'ARRIVED_AT_STORE') {
-      stageCondition = '3B'
+      stageCondition = '2D'
       statusMessage = riderName
         ? `Your order is packed! Rider ${riderName} is at the store picking it up.`
         : 'Your order is packed! Rider is at the store picking it up.'
@@ -175,7 +176,7 @@ export function resolveSubOrderStatus(input: SubOrderInput): SubOrderStatusResol
     // Condition A: Merchant flags fulfillment completely finished; package tagged for courier transit
     // rider_assignment_status: ACCEPTED
     else {
-      stageCondition = '3A'
+      stageCondition = '2C'
       statusMessage = 'Your order is packed! Waiting for rider pickup.'
     }
   }
@@ -203,12 +204,12 @@ export function resolveSubOrderStatus(input: SubOrderInput): SubOrderStatusResol
     }
   }
 
-  // 📍 Stage 1: Placed (Step Index: 1)
+  // 📍 Stage 1: Order Placed (Step Index: 1)
   // Backend Status: order_status: ORDER_PLACED | FINDING_RIDER | RIDER_ASSIGNED
   // rider_assignment_status: UNASSIGNED | ACCEPTED
   else {
     stepIndex = 1
-    stepLabel = 'Placed'
+    stepLabel = 'Order Placed'
 
     // Condition B: Rider found and confirmed
     // rider_assignment_status: ACCEPTED
@@ -224,13 +225,13 @@ export function resolveSubOrderStatus(input: SubOrderInput): SubOrderStatusResol
     }
   }
 
-  const steps: StepItem[] = FIVE_STAGE_LABELS.map((label, idx) => {
+  const steps: StepItem[] = ORDER_STAGE_LABELS.map((label, idx) => {
     const sIndex = idx + 1
     let state: 'completed' | 'current' | 'upcoming' = 'upcoming'
     if (sIndex < stepIndex) {
       state = 'completed'
     } else if (sIndex === stepIndex) {
-      state = stepIndex === 5 ? 'completed' : 'current'
+      state = stepIndex === LAST_STAGE ? 'completed' : 'current'
     }
     return {
       index: sIndex,

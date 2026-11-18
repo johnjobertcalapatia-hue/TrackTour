@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import BookRideSheet from '@/features/tourist/components/BookRideSheet'
@@ -42,6 +42,19 @@ describe('BookRideSheet: starting from a known trip', () => {
     expect(screen.getByRole('heading', { name: 'Pickup location' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Back' }))
     expect(screen.getByRole('heading', { name: 'Where to?' })).toBeInTheDocument()
+  })
+
+  it('is a page, not a pop-up: a heading, no overlay, nothing fixed over the bottom navigation bar', () => {
+    renderSheet({ initialQuery: 'falls' })
+    const page = screen.getByTestId('book-ride-page')
+    expect(screen.getByRole('heading', { level: 1, name: 'Book a Ride' })).toBeInTheDocument()
+    expect(within(page).getByRole('region', { name: 'Where to?' })).toBeInTheDocument()
+    // Scrolls with the layout (whose bottom padding clears the bar) so Book Ride Now is never covered.
+    expect(page.querySelector('.fixed')).toBeNull()
+    expect(page.closest('.fixed')).toBeNull()
+    expect(document.body.querySelector('[class*="backdrop-blur"]')).toBeNull()
+    // Desktop: starts right after the layout's padding beside the sidebar, like the other tourist pages.
+    expect(page).toHaveClass('lg:mx-0')
   })
 
   it('no destination starts at "Where to?", and the close button is labelled', () => {

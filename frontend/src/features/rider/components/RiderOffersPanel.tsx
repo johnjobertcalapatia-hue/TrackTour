@@ -59,10 +59,12 @@ export default function RiderOffersPanel({ offers, onAccept, acceptDeliveryId = 
                       {offer.order_number ?? `TT-${String(offer.order_id ?? 0).padStart(5, '0')}`}
                     </div>
                     <h3 className="text-base font-bold text-white truncate mt-0.5">
-                      {offer.business_name ?? 'Merchant Store'}
+                      {offer.is_ride ? offer.passenger_name || 'Passenger' : offer.business_name ?? 'Merchant Store'}
                     </h3>
                     <div className="text-xs text-zinc-400 mt-0.5 truncate">
-                      {itemLabel(offer)} · {offer.stops ?? offer.restaurant_count ?? 1} stop
+                      {offer.is_ride
+                        ? `Ride · ${offer.passenger_count ?? 1} ${(offer.passenger_count ?? 1) === 1 ? 'passenger' : 'passengers'} · ${offer.pickup_address ?? 'Pickup'}`
+                        : `${itemLabel(offer)} · ${offer.stops ?? offer.restaurant_count ?? 1} stop`}
                     </div>
                   </div>
                   <span

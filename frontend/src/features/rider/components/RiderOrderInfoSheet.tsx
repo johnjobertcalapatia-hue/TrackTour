@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { get } from '@/shared/services/api'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { useRiderActiveTrip } from '@/features/rider/context/RiderActiveTripContext'
+import { useAuthStore } from '@/features/auth/services/auth-store'
 import { cn } from '@/shared/utils'
 import {
   ChevronUp,
@@ -17,7 +18,7 @@ import {
 import { resolveStopArrival, formatStopDistance, STOP_ARRIVAL_THRESHOLD_METERS } from '@/features/rider/stop-arrival'
 import { pickupReadyLabel, pickupStopReasonLabel } from '@/features/rider/pickup-stops'
 import { useOsrmRoute } from '@/features/rider/hooks/useOsrmRoute'
-import RiderOrderBoard, { useRiderBoard } from '@/features/rider/components/RiderOrderBoard'
+import RiderOrderBoard, { availableOffers, useRiderBoard } from '@/features/rider/components/RiderOrderBoard'
 
 // Shares the `rider-map-location` cache key with RiderActiveTripProvider and
 // RiderMap, so this sheet never issues a duplicate request — it re-renders on
@@ -116,7 +117,9 @@ export default function RiderOrderInfoSheet() {
     retry: false,
   })
   const { data: boardData } = useRiderBoard()
-  const boardOrders = boardData?.orders ?? []
+  // Only offers the rider can still take, for the current service (2026-11-18).
+  const onRideService = useAuthStore((state) => state.user?.current_service) === 'transport'
+  const boardOrders = availableOffers(boardData?.orders ?? [], onRideService)
 
   const activeId = activeDelivery?.id ?? null
   const purchaseStops = pickupStopsData?.stops ?? []
@@ -171,6 +174,10 @@ export default function RiderOrderInfoSheet() {
     activeId != null ? (deliveries.find((d) => d.id === activeId) ?? activeDelivery) : null
   const others = activeId != null ? deliveries.filter((d) => d.id !== activeId) : deliveries
   const activeIsRide = isRide(active)
+  // Ride hailing (2026-11-18): the panel speaks of bookings, not orders —
+  // the active trip decides; with none, the rider's current service does.
+  const rideService = useAuthStore((state) => state.user?.current_service) === 'transport'
+  const rideWording = active ? activeIsRide : rideService
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLElement>) => {
     startYRef.current = event.clientY
@@ -228,7 +235,7 @@ export default function RiderOrderInfoSheet() {
         <button
           type="button"
           aria-expanded={false}
-          aria-label={activeIsRide ? 'Show booking details' : 'Show order details'}
+          aria-label={rideWording ? 'Show booking details' : 'Show order details'}
           onClick={handleClick}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
@@ -237,7 +244,7 @@ export default function RiderOrderInfoSheet() {
           className="flex w-full touch-none items-center justify-center gap-2 px-4 py-2.5"
         >
           <span className="h-1 w-10 shrink-0 rounded-full bg-[#DCDEE3]" aria-hidden="true" />
-          <span className="text-[11px] font-semibold text-[#17201B]">{activeIsRide ? 'Booking details' : 'Order details'}</span>
+          <span className="text-[11px] font-semibold text-[#17201B]">{rideWording ? 'Booking details' : 'Order details'}</span>
           {orderCount > 0 && (
             <span className="rounded-full bg-[#E9F7EF] px-1.5 py-0.5 text-[10px] font-bold text-[#087F3F]">
               {orderCount}
@@ -250,7 +257,7 @@ export default function RiderOrderInfoSheet() {
           <button
             type="button"
             aria-expanded={true}
-            aria-label={activeIsRide ? 'Hide booking details' : 'Hide order details'}
+            aria-label={rideWording ? 'Hide booking details' : 'Hide order details'}
             onClick={handleClick}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
@@ -260,7 +267,7 @@ export default function RiderOrderInfoSheet() {
           >
             <div className="flex min-w-0 items-center gap-2">
               <span className="h-1 w-10 shrink-0 rounded-full bg-[#DCDEE3]" aria-hidden="true" />
-              <span className="text-xs font-bold text-[#17201B]">{activeIsRide ? 'Booking details' : 'Order details'}</span>
+              <span className="text-xs font-bold text-[#17201B]">{rideWording ? 'Booking details' : 'Order details'}</span>
               {orderCount > 0 && (
                 <span className="rounded-full bg-[#E9F7EF] px-1.5 py-0.5 text-[10px] font-bold text-[#087F3F]">
                   {orderCount}
@@ -477,7 +484,7 @@ export default function RiderOrderInfoSheet() {
           {others.length > 0 && (
             <div className={cn('px-4 py-3', !active && 'pt-4')}>
               <p className="pb-2 text-[10px] font-bold uppercase tracking-wider text-[#6B7280]">
-                {active ? 'Other orders' : 'Recent orders'}
+                {active ? (rideWording ? 'Other bookings' : 'Other orders') : rideWording ? 'Recent bookings' : 'Recent orders'}
               </p>
               <div className="space-y-2.5">
                 {others.map((delivery) => (

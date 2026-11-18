@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import RidePaymentStep from '@/features/rider/components/RidePaymentStep'
+import RideWaitingStep from '@/features/rider/components/RideWaitingStep'
 import { CheckCircle, ShoppingBag, Loader2, AlertTriangle, Zap, Banknote, Store, MapPin, ChevronDown, ChevronUp } from 'lucide-react'
 import { useRiderActiveTrip } from '@/features/rider/context/RiderActiveTripContext'
 import { formatCurrency } from '@/shared/utils'
@@ -6,7 +8,7 @@ import { RunDiagnosticsLink } from './RiderDiagnosticsSheet'
 import { formatStopDistance } from '@/features/rider/stop-arrival'
 import { DeliveryPhotoCapture } from '@/features/rider/components/DeliveryPhotoCapture'
 import { TripConditions } from '@/features/rider/components/TripConditions'
-import { allMet, deliveryConditions, distanceMeters, withDropoffLocation, withSavedLocation } from '@/features/rider/trip-steps'
+import { allMet, deliveryConditions, distanceMeters, withDropoffLocation } from '@/features/rider/trip-steps'
 
 export default function GlobalRiderAlert() {
   const {
@@ -17,6 +19,7 @@ export default function GlobalRiderAlert() {
     pickupGateBlocked,
     pickupGateMessage,
     onMarkPickedUp,
+    onArrivedPickup,
     onConfirmDelivery,
     onCompleteRide,
     dismissArrivalAlert,
@@ -38,6 +41,12 @@ export default function GlobalRiderAlert() {
     positionKnown,
     locationRefusal,
     deviceAccuracy,
+    arriveAtRideDestination,
+    arriveBusy,
+    arriveError,
+    switchRideToCash,
+    switchToCashBusy,
+    switchToCashError,
   } = useRiderActiveTrip()
 
   // Ride or food: remembered after the trip ends, so the closing animation
@@ -76,9 +85,14 @@ export default function GlobalRiderAlert() {
 
   // Proof-of-delivery photo for the drop-off (required to complete).
   const [proofPhoto, setProofPhoto] = useState<File | null>(null)
+  // Ride: the rider ticks that the payment was received (2026-11-18).
+  const [paymentConfirmed, setPaymentConfirmed] = useState(false)
+  const [confirmSwitch, setConfirmSwitch] = useState(false)
   useEffect(() => {
     setProofPhoto(null)
-  }, [activeDelivery?.id])
+    setPaymentConfirmed(false)
+    setConfirmSwitch(false)
+  }, [activeDelivery?.id, activeDelivery?.payment_method])
 
   useEffect(() => {
     if (prevAlert.current && arrivalAlert === null) {
@@ -350,11 +364,25 @@ export default function GlobalRiderAlert() {
   const arrivingNow = !!arrivalAlert || finalPickupFallback
 
   const isPickup = arrivalAlert === 'PICKUP' || exitAlertKind === 'PICKUP' || finalPickupFallback
-  const isConfirming = busy
+  // Ride drop-off (2026-11-18): 1) I've Arrived records the arrival — the
+  // fare is final there (a changed destination's final fare too) and the
+  // passenger can pay with GCash; 2) the rider confirms the payment (cash
+  // received / GCash verified) and completes the ride.
+  const destinationChange = isRide ? activeDelivery?.destination_change ?? null : null
+  const rideArrived = isRide && ['arrived_destination', 'delivered'].includes(String(activeDelivery?.status ?? ''))
+  const needsArrival = isRide && !rideArrived
+  const rideOnline = isRide && String(activeDelivery?.payment_method ?? 'cash').toLowerCase() !== 'cash'
+  const ridePaid = rideOnline && activeDelivery?.payment_status === 'paid'
+  const awaitingGcash = isRide && rideArrived && rideOnline && !ridePaid
+  const isConfirming = busy || Boolean(arriveBusy)
+  // Ride pickup (2026-11-18): 1) I've Arrived — the rider confirms the arrival
+  // (location checked) and the passenger's waiting time starts; 2) Passenger
+  // On Board starts the trip and ends the waiting.
+  const rideAwaitingArrival = isRide && isPickup && ['assigned', 'en_route_pickup'].includes(String(activeDelivery?.status ?? ''))
 
   const confirmLabel = isPickup
-    ? isRide ? 'Passenger On Board' : 'I Picked Up the Food'
-    : isRide ? (activeDelivery?.is_cod ? 'Fare Collected · Complete Ride' : 'Complete Ride') : 'Confirm Delivered'
+    ? isRide ? (rideAwaitingArrival ? "I've Arrived" : 'Passenger On Board') : 'I Picked Up the Food'
+    : isRide ? (needsArrival ? "I've Arrived" : rideOnline ? 'Complete Ride' : 'Fare Collected · Complete Ride') : 'Confirm Delivered'
   const confirmIcon = isPickup && !isRide ? ShoppingBag : CheckCircle
 
   // Waypoint shown in the receipt slice — the relevant name/address for this leg.
@@ -369,8 +397,10 @@ export default function GlobalRiderAlert() {
   const rideFare = activeDelivery?.order_total ?? null
   const rideCash = isRide && Boolean(activeDelivery?.is_cod)
   const handleConfirm = () => {
-    if (isPickup) onMarkPickedUp()
-    else if (isRide) onCompleteRide(rideCash ? rideFare : null)
+    if (isPickup && rideAwaitingArrival) onArrivedPickup?.()
+    else if (isPickup) onMarkPickedUp()
+    else if (isRide && needsArrival) arriveAtRideDestination?.()
+    else if (isRide && paymentConfirmed && !awaitingGcash) onCompleteRide(rideCash ? rideFare : null)
     else if (proofPhoto) onConfirmDelivery(proofPhoto)
   }
   const needsPhoto = !isPickup && !isRide && !proofPhoto
@@ -382,10 +412,13 @@ export default function GlobalRiderAlert() {
   const dropoffDistance = positionKnown && Array.isArray(riderPosition) && dropLat != null && dropLng != null
     ? distanceMeters(riderPosition, [Number(dropLat), Number(dropLng)])
     : null
-  // Rides keep the saved-location rule; the food drop-off may use the
-  // phone's own fix up to ±200 m (owner decision 2026-11-12).
+  // Every drop-off — food (owner decision 2026-11-12) and, since 2026-11-17,
+  // rides — may use the phone's own fix up to ±200 m when the server could
+  // not SAVE it for precision. A rider standing at the ride's destination was
+  // stuck on "GPS is not precise enough" (the server never blocks a ride on
+  // location; it records the fix as trip evidence).
   const deliveryChecks = isRide
-    ? withSavedLocation(deliveryConditions(dropoffDistance, !!positionKnown, true).slice(0, 1), locationRefusal)
+    ? withDropoffLocation(deliveryConditions(dropoffDistance, !!positionKnown, true).slice(0, 1), locationRefusal, deviceAccuracy)
     : withDropoffLocation(deliveryConditions(dropoffDistance, !!positionKnown, !!proofPhoto), locationRefusal, deviceAccuracy)
   const deliveryBlocked = !isPickup && !allMet(deliveryChecks)
 
@@ -516,12 +549,27 @@ export default function GlobalRiderAlert() {
                 </div>
               )}
 
+              {isPickup && isRide && (
+                <RideWaitingStep awaitingArrival={rideAwaitingArrival} passenger={activeDelivery?.customer_name ?? null} waiting={activeDelivery?.pickup_waiting ?? null} />
+              )}
               {!isPickup && isRide && (
-                <p className="rounded-xl border border-[#CFE8D6] bg-[#F4FBF6] px-3 py-2.5 text-sm font-medium text-[#17201B]">
-                  {rideCash
-                    ? `Collect ${rideFare != null ? `₱${rideFare.toFixed(2)}` : 'the fare'} in cash from the passenger, then complete the ride.`
-                    : 'The fare was paid online. Nothing to collect.'}
-                </p>
+                <RidePaymentStep
+                  needsArrival={needsArrival}
+                  changedMaxFare={destinationChange && destinationChange.final_fare == null ? destinationChange.max_fare : null}
+                  online={rideOnline}
+                  paid={ridePaid}
+                  fare={rideFare}
+                  confirmed={paymentConfirmed}
+                  onConfirmedChange={setPaymentConfirmed}
+                  confirmSwitch={confirmSwitch}
+                  onAskSwitch={() => setConfirmSwitch(true)}
+                  onCancelSwitch={() => setConfirmSwitch(false)}
+                  onSwitch={() => { setConfirmSwitch(false); switchRideToCash?.() }}
+                  switching={!!switchToCashBusy}
+                />
+              )}
+              {!isPickup && isRide && (arriveError || switchToCashError) && (
+                <p role="alert" className="rounded-xl border border-[#FCA5A5] bg-[#FEF2F2] px-3 py-2.5 text-sm font-medium text-[#B91C1C]">{arriveError ?? switchToCashError}</p>
               )}
               {!isPickup && !isRide && arrivingNow && (
                 <DeliveryPhotoCapture
@@ -539,7 +587,7 @@ export default function GlobalRiderAlert() {
               <button
                 type="button"
                 onClick={handleConfirm}
-                disabled={isConfirming || needsPhoto || deliveryBlocked}
+                disabled={isConfirming || needsPhoto || deliveryBlocked || (isRide && !isPickup && !needsArrival && (!paymentConfirmed || awaitingGcash))}
                 className="flex w-full items-center justify-center gap-2 rounded-full bg-[#16803C] py-3.5 text-base font-bold text-white shadow-md hover:bg-[#126B32] transition active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isConfirming ? (
@@ -607,4 +655,3 @@ function CollapsedBar({ label, title, subtitle, icon, onExpand }: {
 function ConfirmGlyph({ icon: Icon }: { icon: typeof CheckCircle }) {
   return <Icon className="h-4 w-4" />
 }
-

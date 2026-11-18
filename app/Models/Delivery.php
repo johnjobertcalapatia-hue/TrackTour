@@ -177,6 +177,12 @@ class Delivery extends Model
         return $this->hasMany(CodPurchase::class);
     }
 
+    /** A ride's one confirmed destination change (2026-11-17), if any. */
+    public function destinationChange(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(RideDestinationChange::class);
+    }
+
     public function riderCashFund(): BelongsTo
     {
         return $this->belongsTo(RiderCashFund::class);

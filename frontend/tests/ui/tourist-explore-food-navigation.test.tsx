@@ -21,6 +21,17 @@ const map = {
   getBounds: vi.fn(() => ({ contains: () => true })),
   panTo: vi.fn(),
   getContainer: vi.fn(() => document.createElement('div')),
+  // Landing map: single-world limits and the default town view.
+  fitBounds: vi.fn(),
+  getCenter: vi.fn(() => ({ lat: 0, lng: 0 })),
+  setMaxBounds: vi.fn(),
+  setMinZoom: vi.fn(),
+  setZoom: vi.fn(),
+  setView: vi.fn(),
+  getBoundsZoom: vi.fn(() => 13),
+  on: vi.fn(),
+  off: vi.fn(),
+  options: {} as Record<string, unknown>,
 }
 
 vi.mock('@/shared/services/api', () => ({
@@ -49,6 +60,7 @@ vi.mock('react-leaflet', async () => {
       ? React.createElement('button', { type: 'button', 'aria-label': 'Select map business', onClick: eventHandlers.click })
       : null,
     Polyline: Empty,
+    Popup: Empty,
     useMap: () => map,
     useMapEvents: () => undefined,
   }
@@ -75,6 +87,8 @@ vi.mock('leaflet', () => ({
     },
     divIcon: vi.fn(() => ({})),
     latLngBounds: vi.fn(() => ({})),
+    // The landing map's current-location button stops clicks reaching the map.
+    DomEvent: { disableClickPropagation: vi.fn(), disableScrollPropagation: vi.fn() },
   },
 }))
 

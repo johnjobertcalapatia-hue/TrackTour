@@ -28,7 +28,7 @@ export default function TouristOrderDetails() {
 
   if (!section) {
     return (
-      <div className="mx-auto max-w-3xl bg-white border border-[#E5E9E7] rounded-2xl p-10 text-center">
+      <div className="mx-auto lg:mx-0 max-w-3xl bg-white border border-[#E5E9E7] rounded-2xl p-10 text-center">
         <p className="text-lg font-bold text-[#17201B]">Order not found</p>
         <Link to="/tourist/activities?view=orders" className="mt-4 inline-flex h-10 px-5 items-center rounded-full bg-[#087F3F] text-white text-sm font-semibold">My orders</Link>
       </div>
@@ -39,7 +39,7 @@ export default function TouristOrderDetails() {
   const payment = section.payment_method ? PAYMENT_LABEL[section.payment_method.toLowerCase()] ?? section.payment_method : null
 
   return (
-    <main aria-label="Order details" className="mx-auto w-full max-w-3xl space-y-4">
+    <main aria-label="Order details" className="mx-auto lg:mx-0 w-full max-w-3xl space-y-4">
       <button type="button" onClick={goBack} className="inline-flex items-center gap-2 text-sm font-semibold text-[#087F3F] hover:text-[#056B35]">
         <ArrowLeft className="w-4 h-4" aria-hidden="true" /> Back
       </button>

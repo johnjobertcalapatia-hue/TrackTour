@@ -11,7 +11,11 @@ export interface GuestCartItem {
   image?: string | null
   business_name?: string
   business_id: number
+  business_latitude?: number | null
+  business_longitude?: number | null
   quantity: number
+  /** Variation chosen on the food item page; the name and price already carry it. */
+  variation?: string
 }
 
 function readJSON<T>(key: string, fallback: T): T {
@@ -51,7 +55,9 @@ async function syncGuestCart(): Promise<void> {
     const merged = [...touristCart]
 
     for (const item of guestCart) {
-      const existing = merged.find((c) => c.id === item.id)
+      // Same line = same item and same name, so "Tapsilog (Large)" stays
+      // separate from "Tapsilog" (matches the food item page's cart rule).
+      const existing = merged.find((c) => c.id === item.id && c.name === item.name)
       if (existing) {
         existing.quantity += item.quantity
       } else {
@@ -62,7 +68,10 @@ async function syncGuestCart(): Promise<void> {
           image: item.image ?? null,
           business_name: item.business_name ?? '',
           business_id: item.business_id ?? null,
+          ...(item.business_latitude != null ? { business_latitude: item.business_latitude } : {}),
+          ...(item.business_longitude != null ? { business_longitude: item.business_longitude } : {}),
           quantity: item.quantity ?? 1,
+          ...(item.variation ? { variation: item.variation } : {}),
         })
       }
     }

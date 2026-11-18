@@ -37,6 +37,17 @@ class TouristTransportRouteContractTest extends TestCase
             'role' => 'tourist',
             'account_status' => 'approved',
         ]);
+
+        // Reconciled 2026-11-16 (AGENTS.md §12): the estimate lists fares only
+        // for vehicle types a registered ride-hailing rider has. Register one
+        // offline rider per ride vehicle so every type stays quotable here.
+        foreach (\App\Services\RideVehicles::RIDE_HAILING as $vehicle) {
+            $rider = User::create([
+                'name' => "Fleet {$vehicle}", 'email' => "fleet-{$vehicle}@example.com", 'password' => Hash::make('Password123!'),
+                'role' => 'rider', 'account_status' => 'approved',
+            ]);
+            \App\Models\RiderDetail::create(['user_id' => $rider->id, 'rider_status' => 'offline', 'current_service' => 'transport', 'vehicle_type' => $vehicle]);
+        }
     }
 
     // ---------- helpers ----------

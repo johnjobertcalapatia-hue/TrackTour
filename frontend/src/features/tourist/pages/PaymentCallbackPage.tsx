@@ -3,7 +3,7 @@ import { useBackOr } from '@/shared/hooks/use-back-or'
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { checkAndConfirmPayment } from '@/shared/services/payment'
-import { CheckCircle2, XCircle, Clock, Loader2, ArrowLeft, Package, Ban } from 'lucide-react'
+import { CheckCircle2, XCircle, Clock, Loader2, ArrowLeft, Package, Ban, Car } from 'lucide-react'
 import { formatCurrency } from '@/shared/utils'
 
 interface PaymentStatusData {
@@ -15,6 +15,8 @@ interface PaymentStatusData {
   payable_type?: 'order' | 'booking' | 'group_order'
   order_id?: number | null
   group_order_id?: number | null
+  /** 'transport' = a ride (2026-11-18): this page returns to the ride, not a food order. */
+  order_type?: string | null
 }
 
 export default function PaymentCallbackPage() {
@@ -56,20 +58,22 @@ export default function PaymentCallbackPage() {
 
   const type = payableType === 'group_order' ? 'group_order' : 'order'
   const targetId = type === 'group_order' ? groupId : orderId
+  // Ride hailing: PayMongo's success page and its "Return to merchant" link
+  // both come back to the ride's tracking page.
+  const isRide = type === 'order' && (searchParams.get('kind') === 'ride' || payment?.order_type === 'transport')
+  const targetUrl = type === 'group_order'
+    ? `/tourist/food/group-order/${targetId}`
+    : isRide ? `/tourist/transport/tracking/${targetId}` : `/tourist/orders/${targetId}/track`
 
   useEffect(() => {
     if (!isSuccess || !targetId) return
     if (countdown <= 0) {
-      if (type === 'group_order') {
-        navigate(`/tourist/food/group-order/${targetId}`, { replace: true })
-      } else {
-        navigate(`/tourist/orders/${targetId}/progress`, { replace: true })
-      }
+      navigate(targetUrl, { replace: true })
       return
     }
     const timer = window.setTimeout(() => setCountdown((value) => value - 1), 1000)
     return () => window.clearTimeout(timer)
-  }, [countdown, isSuccess, navigate, type, targetId])
+  }, [countdown, isSuccess, navigate, targetUrl, targetId])
 
   return (
     <div className="min-h-screen bg-[#F8FAF9] flex items-center justify-center p-4">
@@ -89,7 +93,9 @@ export default function PaymentCallbackPage() {
             <p className="text-sm text-[#6B7280] mb-4">
               {type === 'group_order'
                 ? 'Your GCash payment has been processed. Each restaurant will now accept and prepare its part of your group order.'
-                : 'Your GCash payment has been processed. Waiting for a rider to accept your order delivery offer.'}
+                : isRide
+                  ? 'Your GCash payment for the ride has been received. Your driver will confirm it and complete the ride.'
+                  : 'Your GCash payment has been processed. Waiting for a rider to accept your order delivery offer.'}
             </p>
             {payment && (
               <div className="bg-[#F8FAF9] rounded-xl p-4 mb-6 text-left space-y-2">
@@ -111,7 +117,7 @@ export default function PaymentCallbackPage() {
               <p className="text-sm text-[#087F3F] font-semibold">
                 {type === 'group_order'
                   ? `Redirecting to your group order in ${countdown}...`
-                  : `Redirecting to your order in ${countdown}...`}
+                  : isRide ? `Returning to your ride in ${countdown}...` : `Redirecting to your order in ${countdown}...`}
               </p>
             )}
           </>
@@ -122,7 +128,9 @@ export default function PaymentCallbackPage() {
             </div>
             <h1 className="text-2xl font-bold text-[#17201B] mb-2">Payment Cancelled</h1>
             <p className="text-sm text-[#6B7280] mb-6">
-              You cancelled the payment. Your order has not been charged.
+              {isRide
+                ? 'Your ride has not been paid yet, and you were not charged. Go back to your ride to pay with GCash, or pay your driver in cash.'
+                : 'You cancelled the payment. Your order has not been charged.'}
             </p>
           </>
         ) : isFailed ? (
@@ -132,7 +140,9 @@ export default function PaymentCallbackPage() {
             </div>
             <h1 className="text-2xl font-bold text-[#17201B] mb-2">Payment Failed</h1>
             <p className="text-sm text-[#6B7280] mb-6">
-              Your payment could not be processed. Please try again.
+              {isRide
+                ? 'Your GCash payment could not be processed. Go back to your ride to try again, or pay your driver in cash.'
+                : 'Your payment could not be processed. Please try again.'}
             </p>
           </>
         ) : (
@@ -149,13 +159,17 @@ export default function PaymentCallbackPage() {
         )}
 
         <div className="space-y-3">
-          {isSuccess && targetId ? (
+          {isRide && targetId ? (
+            // Success, cancelled ("Return to merchant") or failed: back to the ride.
             <button
-              onClick={() =>
-                type === 'group_order'
-                  ? navigate(`/tourist/food/group-order/${targetId}`, { replace: true })
-                  : navigate(`/tourist/orders/${targetId}/progress`, { replace: true })
-              }
+              onClick={() => navigate(targetUrl, { replace: true })}
+              className="w-full bg-[#087F3F] hover:bg-[#056B35] text-white py-3 rounded-xl font-semibold transition flex items-center justify-center gap-2"
+            >
+              <Car className="w-4 h-4" /> Back to your ride
+            </button>
+          ) : isSuccess && targetId ? (
+            <button
+              onClick={() => navigate(targetUrl, { replace: true })}
               className="w-full bg-[#087F3F] hover:bg-[#056B35] text-white py-3 rounded-xl font-semibold transition flex items-center justify-center gap-2"
             >
               <Package className="w-4 h-4" /> {type === 'group_order' ? 'View Group Order' : 'View Order Status'}
@@ -168,12 +182,14 @@ export default function PaymentCallbackPage() {
               Browse Food
             </button>
           )}
-          <button
-            onClick={goBack}
-            className="w-full bg-[#F8FAF9] hover:bg-[#E9F7EF] text-[#17201B] py-3 rounded-xl font-semibold transition flex items-center justify-center gap-2"
-          >
-            <ArrowLeft className="w-4 h-4" /> Go Back
-          </button>
+          {!isRide && (
+            <button
+              onClick={goBack}
+              className="w-full bg-[#F8FAF9] hover:bg-[#E9F7EF] text-[#17201B] py-3 rounded-xl font-semibold transition flex items-center justify-center gap-2"
+            >
+              <ArrowLeft className="w-4 h-4" /> Go Back
+            </button>
+          )}
         </div>
       </div>
     </div>

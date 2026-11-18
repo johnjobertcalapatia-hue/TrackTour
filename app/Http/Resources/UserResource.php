@@ -28,6 +28,18 @@ class UserResource extends JsonResource
             'profile_photo' => $profile?->avatar,
             'rider_status' => $this->whenLoaded('riderDetail', fn () => $this->riderDetail?->rider_status),
             'current_service' => $this->whenLoaded('riderDetail', fn () => $this->riderDetail?->current_service),
+            // Registered vehicle (decides ride-hailing: motor vehicles only).
+            'vehicle_type' => $this->whenLoaded('riderDetail', fn () => $this->riderDetail?->vehicle_type),
+            'vehicle_plate' => $this->whenLoaded('riderDetail', fn () => $this->riderDetail?->vehicle_plate_number),
+            'vehicle_make' => $this->whenLoaded('riderDetail', fn () => $this->riderDetail?->vehicle_make),
+            'vehicle_model' => $this->whenLoaded('riderDetail', fn () => $this->riderDetail?->vehicle_model),
+            'vehicle_year' => $this->whenLoaded('riderDetail', fn () => $this->riderDetail?->vehicle_year),
+            'can_ride_hail' => $this->when(
+                $this->relationLoaded('riderDetail'),
+                fn () => \App\Services\RideVehicles::canRideHail($this->riderDetail?->vehicle_type)
+            ),
+            'license_number' => $this->whenLoaded('riderDetail', fn () => $this->riderDetail?->license_number),
+            'license_expiry' => $this->whenLoaded('riderDetail', fn () => $this->riderDetail?->license_expiry?->toDateString()),
             // NOT whenLoaded(): that helper returns null whenever the related
             // row is absent, which would read as "unknown" for a rider who has
             // never created a rider_details row. Auto accept has a definite

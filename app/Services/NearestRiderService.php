@@ -9,6 +9,7 @@ use App\Models\BookingDispatchLog;
 use App\Models\Delivery;
 use App\Models\Order;
 use App\Models\Payment;
+use App\Models\RiderDetail;
 use App\Models\RiderEarning;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
@@ -76,12 +77,31 @@ class NearestRiderService
         return $this->findNearestFromMySql($pickupLat, $pickupLng, $serviceType, $limit, $municipalityId);
     }
 
+    /**
+     * Nearest non-COD candidates for a delivery. A ride is offered only to
+     * riders whose registered vehicle is the booked type; rides search a wider
+     * pool first so nearer riders with other vehicles cannot crowd out a match.
+     */
+    private function nearestForDelivery(Delivery $delivery, float $lat, float $lng, string $serviceType, int $limit, ?int $municipalityId): Collection
+    {
+        $booked = RideVehicles::bookedVehicle($delivery);
+        if ($booked === null) {
+            return $this->findNearestAvailableRiders($lat, $lng, $serviceType, $limit, $municipalityId);
+        }
+
+        return $this->findNearestAvailableRiders($lat, $lng, $serviceType, max($limit, 50), $municipalityId)
+            ->filter(fn (User $r) => RideVehicles::riderMatches($r->riderDetail?->vehicle_type, $delivery))
+            ->take($limit)
+            ->values();
+    }
+
     protected function findNearestFromMySql(float $pickupLat, float $pickupLng, string $serviceType = 'food', int $limit = 5, ?int $municipalityId = null): Collection
     {
         $excludeRiderIds = $this->getBusyRiderIds();
 
         return User::where('role', User::ROLE_RIDER)
             ->where('account_status', User::ACCOUNT_STATUS_APPROVED)
+            ->eligibleForService($serviceType)
             ->whereHas('riderDetail', function ($q) use ($serviceType) {
                 $q->whereIn('rider_status', [
                     User::RIDER_STATUS_ONLINE,
@@ -137,6 +157,7 @@ class NearestRiderService
         $riders = User::query()
             ->where('role', User::ROLE_RIDER)
             ->where('account_status', User::ACCOUNT_STATUS_APPROVED)
+            ->eligibleForService($serviceType)
             ->whereHas('riderDetail', function ($q) use ($serviceType) {
                 $q->where('rider_status', User::RIDER_STATUS_AVAILABLE)
                     ->where('current_service', $serviceType);
@@ -215,7 +236,7 @@ class NearestRiderService
 
         $riders = $isCod
             ? $this->findNearestEligibleCodRiders($delivery, $lat, $lng, $serviceType, $pool, $municipalityId)
-            : $this->findNearestAvailableRiders($lat, $lng, $serviceType, $pool, $municipalityId);
+            : $this->nearestForDelivery($delivery, $lat, $lng, $serviceType, $pool, $municipalityId);
         // My Destination: a rider heading somewhere is offered only jobs on the way.
         $riders = app(RiderDestinationService::class)->rejectOffRoute($riders, $delivery);
 
@@ -298,6 +319,18 @@ class NearestRiderService
             }
 
             if ($rider->account_status !== User::ACCOUNT_STATUS_APPROVED) {
+                return false;
+            }
+
+            // Per-service approval from Tourism Office onboarding (riders
+            // approved before onboarding existed keep full access).
+            $gateService = $lockedDelivery->primaryOrder()?->order_type === 'transport' ? 'transport' : 'food';
+            if (! $rider->isEligibleForService($gateService)) {
+                return false;
+            }
+
+            // A ride can be accepted only with the booked vehicle type.
+            if (! RideVehicles::riderMatches($detail->vehicle_type, $lockedDelivery)) {
                 return false;
             }
 
@@ -620,7 +653,7 @@ class NearestRiderService
 
         $nearestRiders = $isCod
             ? $this->findNearestEligibleCodRiders($delivery, (float) $pickupLat, (float) $pickupLng, $serviceType, 5, $municipalityId)
-            : $this->findNearestAvailableRiders((float) $pickupLat, (float) $pickupLng, $serviceType, 5, $municipalityId);
+            : $this->nearestForDelivery($delivery, (float) $pickupLat, (float) $pickupLng, $serviceType, 5, $municipalityId);
         // My Destination: a rider heading somewhere is offered only jobs on the way.
         $nearestRiders = app(RiderDestinationService::class)->rejectOffRoute($nearestRiders, $delivery);
 
@@ -819,6 +852,7 @@ class NearestRiderService
         $radarMaxAgeMs = ((int) config('delivery.radar_location_max_age_seconds', 120)) * 1000;
         $nowMs = (int) floor(microtime(true) * 1000);
 
+        $bookedVehicle = RideVehicles::bookedVehicle($delivery);
         $candidates = [];
         foreach ($onlineRiders as $rider) {
             if (($rider['status'] ?? '') !== 'available') {
@@ -858,6 +892,11 @@ class NearestRiderService
             // unsettled delivered COD must stay radar-eligible.
             if (! $isCod && in_array($riderId, $busyRiderIds, true)) {
                 $radarExclusions[$riderId] = 'busy';
+                continue;
+            }
+
+            if ($bookedVehicle !== null && RiderDetail::where('user_id', $riderId)->value('vehicle_type') !== $bookedVehicle) {
+                $radarExclusions[$riderId] = 'wrong_vehicle';
                 continue;
             }
 
@@ -2129,6 +2168,19 @@ class NearestRiderService
                 'delivery_id' => $delivery->id,
                 'reason' => $reason,
             ]);
+            // Incident history only (no dispatch behaviour change).
+            \App\Services\SystemIncidentRecorder::record(
+                'dispatch',
+                $reason === 'invalid_pickup_coordinates' ? 'dispatch_invalid_pickup' : 'dispatch_no_rider',
+                $reason === 'invalid_pickup_coordinates' ? 'error' : 'warning',
+                $reason === 'invalid_pickup_coordinates'
+                    ? 'Order could not be sent to riders: the pickup location is invalid'
+                    : 'No rider accepted an order',
+                'Delivery #'.$delivery->id.' stopped looking for a rider ('.str_replace('_', ' ', (string) $reason).').',
+                ['delivery_id' => $delivery->id, 'reason' => $reason, 'attempts' => $delivery->dispatch_attempts],
+                $delivery,
+                fingerprintKey: (string) $delivery->id,
+            );
         }
 
         $delivery->refresh();

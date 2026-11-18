@@ -106,7 +106,7 @@ class RegisteredUserController extends Controller
             'email' => $request->email,
             'password' => Hash::make($request->password),
             'role' => $request->role,
-            'account_status' => $request->role === User::ROLE_BUSINESS_OWNER
+            'account_status' => in_array($request->role, [User::ROLE_BUSINESS_OWNER, User::ROLE_RIDER], true)
                 ? User::ACCOUNT_STATUS_PENDING
                 : User::ACCOUNT_STATUS_APPROVED,
         ];

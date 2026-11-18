@@ -43,7 +43,7 @@ class RideHailingIntegrityTest extends TestCase
 
         $this->tourist = User::create(['name' => 'Jayvie De Torres', 'email' => 'tourist@ride.test', 'password' => Hash::make('x'), 'role' => 'tourist', 'account_status' => 'approved']);
         $this->rider = User::create(['name' => 'Aldrin Robledo', 'email' => 'rider@ride.test', 'password' => Hash::make('x'), 'role' => 'rider', 'account_status' => 'approved', 'rider_status' => 'busy', 'current_service' => 'transport']);
-        RiderDetail::create(['user_id' => $this->rider->id, 'rider_status' => 'busy', 'current_service' => 'transport']);
+        RiderDetail::create(['user_id' => $this->rider->id, 'rider_status' => 'busy', 'current_service' => 'transport', 'vehicle_type' => 'motorcycle']);
     }
 
     private function serverFare(string $vehicle = 'motorcycle'): float
@@ -108,7 +108,9 @@ class RideHailingIntegrityTest extends TestCase
         $this->step($delivery, 'picked_up', ['latitude' => 12.5101, 'longitude' => 121.3101, 'accuracy' => 9, 'fix_at' => now()->subSeconds(2)->toIso8601String()])->assertOk();
         $this->savedFix($endLat, $endLng);
         $this->step($delivery, 'arrived_destination', ['latitude' => $endLat, 'longitude' => $endLng, 'accuracy' => 7])->assertOk();
-        $this->step($delivery, 'delivered', ['latitude' => $endLat, 'longitude' => $endLng, 'accuracy' => 7])->assertOk();
+        // GCash: paid at the drop-off, then confirmed by the rider (2026-11-18).
+        $order->update(['payment_status' => 'paid', 'paid_amount' => $order->total]);
+        $this->step($delivery, 'delivered', ['latitude' => $endLat, 'longitude' => $endLng, 'accuracy' => 7, 'payment_confirmed' => true])->assertOk();
 
         return $order->fresh();
     }
@@ -134,7 +136,9 @@ class RideHailingIntegrityTest extends TestCase
 
     public function test_the_confirmed_fare_books_and_a_changed_fare_is_refused(): void
     {
-        $this->actingAs($this->tourist, 'sanctum')->postJson('/api/tourist/transport/book', $this->bookPayload(['fare' => $this->serverFare()]))->assertCreated();
+        $first = $this->actingAs($this->tourist, 'sanctum')->postJson('/api/tourist/transport/book', $this->bookPayload(['fare' => $this->serverFare()]))->assertCreated();
+        // One ride at a time (2026-11-17): the first ride is cancelled before the next booking.
+        $this->actingAs($this->tourist, 'sanctum')->postJson('/api/tourist/transport/trip/'.$first->json('data.order_id').'/cancel', ['reason' => 'changed_plans'])->assertOk();
 
         // Tourism Office raised the fares after the tourist saw the quote.
         $this->actingAs($this->tourist, 'sanctum')->postJson('/api/tourist/transport/book', $this->bookPayload(['fare' => $this->serverFare() - 5]))
@@ -256,12 +260,18 @@ class RideHailingIntegrityTest extends TestCase
 
     // ---------------- payments ----------------
 
-    public function test_online_payment_opens_only_after_the_ride_is_completed(): void
+    public function test_online_payment_opens_only_at_the_drop_off(): void
     {
+        // Owner decision 2026-11-18: paid at the destination so the rider can confirm it before completing.
         $order = $this->ride();
+        $delivery = $this->assign($order, 'in_transit');
         $this->actingAs($this->tourist, 'sanctum')->postJson('/api/payments/create-intent', ['payable_type' => 'order', 'payable_id' => $order->id, 'method' => 'gcash'])
             ->assertStatus(422)
-            ->assertJsonPath('message', 'You can pay for this ride once it is completed.');
+            ->assertJsonPath('message', 'You can pay for this ride once you reach your destination.');
+        $this->assertTrue(app(\App\Services\RidePaymentService::class)->canPayOnline($order->fresh()) === false);
+
+        $delivery->update(['status' => 'arrived_destination']);
+        $this->assertTrue(app(\App\Services\RidePaymentService::class)->canPayOnline($order->fresh()));
     }
 
     public function test_a_payment_that_lands_on_a_cancelled_ride_is_refunded(): void

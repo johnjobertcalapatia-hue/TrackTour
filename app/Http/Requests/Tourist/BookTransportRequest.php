@@ -20,7 +20,12 @@ class BookTransportRequest extends FormRequest
             'destination_lat' => ['required', 'numeric'],
             'destination_lng' => ['required', 'numeric'],
             'destination_address' => ['nullable', 'string', 'max:500'],
-            'vehicle_type' => ['required', 'string', 'in:motorcycle,tricycle,car,van'],
+            // Only vehicle types that registered, ride-hailing riders actually have.
+            'vehicle_type' => ['required', 'string', 'in:motorcycle,tricycle,car,van', function (string $attribute, mixed $value, \Closure $fail) {
+                if (! in_array($value, app(\App\Services\RideVehicles::class)->bookableSlugs(), true)) {
+                    $fail('No registered ride-hailing rider uses this vehicle type yet. Please choose another vehicle.');
+                }
+            }],
             'passenger_count' => ['required', 'integer', 'min:1', 'max:8'],
             'fare' => ['sometimes', 'numeric', 'min:0'],
             'distance_km' => ['sometimes', 'numeric', 'min:0'],

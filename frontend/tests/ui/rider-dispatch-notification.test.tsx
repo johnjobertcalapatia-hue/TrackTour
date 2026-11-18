@@ -198,7 +198,29 @@ describe('RiderDispatchNotification — real incoming order ping renders rider U
       expect(apiMock.patch).toHaveBeenCalledWith('/rider/dispatch/accept', { delivery_id: 42 })
     )
     await screen.findByText(/order accepted/i)
+    expect(screen.getByText('Starting navigation to the restaurant.')).toBeInTheDocument()
     void offersResponse
+  })
+
+  it('accepting a ride says "Ride Accepted" and heads to the passenger (2026-11-18)', async () => {
+    const RIDE = {
+      ...OFFER, delivery_id: 43, order_number: 'TRP-1', business_name: 'Gloria, Oriental Mindoro', items: [],
+      is_ride: true, order_type: 'transport', passenger_name: 'Jayvie De Torres', passenger_count: 1, vehicle_type: 'motorcycle', fare: 84.41,
+    }
+    apiMock.get.mockImplementation((url: string) => {
+      if (url === '/rider/dispatch/offers') return Promise.resolve({ offers: [RIDE] })
+      if (url === '/user') return Promise.resolve(RIDER_USER)
+      return Promise.resolve({})
+    })
+    apiMock.patch.mockResolvedValue({ success: true, data: { success: true } })
+
+    renderDispatch()
+    fireEvent.click(await screen.findByRole('button', { name: /accept ride request/i }))
+
+    await waitFor(() => expect(apiMock.patch).toHaveBeenCalledWith('/rider/dispatch/accept', { delivery_id: 43 }))
+    expect(await screen.findByText('Ride Accepted')).toBeInTheDocument()
+    expect(screen.getByText("Starting navigation to Jayvie De Torres's pickup point.")).toBeInTheDocument()
+    expect(screen.queryByText(/order accepted/i)).toBeNull()
   })
 
   it('polling recovery: no socket ping at all — the HTTP offers poll still surfaces the card', async () => {

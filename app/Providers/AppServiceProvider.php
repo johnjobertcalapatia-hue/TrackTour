@@ -111,5 +111,52 @@ class AppServiceProvider extends ServiceProvider
         // authoritative writer; this observer only catches bypassing writes.
         \App\Models\Offering::observe(\App\Observers\MenuAvailabilityObserver::class);
         \App\Models\OfferingVariation::observe(\App\Observers\MenuAvailabilityObserver::class);
+
+        $this->recordIncidents();
+    }
+
+    /**
+     * System incident history (admin → Incident History). These hooks only
+     * WRITE a history row; they never change the payment, refund or job.
+     */
+    private function recordIncidents(): void
+    {
+        $failedPayment = function (\App\Models\Payment $payment) {
+            \App\Services\SystemIncidentRecorder::record(
+                'payment', 'payment_failed', 'warning',
+                'Payment failed: '.($payment->payment_number ?? "#{$payment->id}"),
+                'The '.strtoupper((string) ($payment->method ?? 'online')).' payment of ₱'.number_format((float) $payment->amount, 2).' did not go through.',
+                ['payment_number' => $payment->payment_number, 'amount' => (float) $payment->amount, 'method' => $payment->method, 'provider' => $payment->provider],
+                $payment, \App\Models\SystemIncident::STATUS_RECORDED,
+                fingerprintKey: (string) $payment->id,
+                user: $payment->user_id ? \App\Models\User::find($payment->user_id) : null,
+            );
+        };
+        \App\Models\Payment::created(fn ($p) => $p->status === 'failed' ? $failedPayment($p) : null);
+        \App\Models\Payment::updated(fn ($p) => $p->wasChanged('status') && $p->status === 'failed' ? $failedPayment($p) : null);
+
+        \App\Models\Refund::updated(function (\App\Models\Refund $refund) {
+            if (! $refund->wasChanged('status') || $refund->status !== 'failed') {
+                return;
+            }
+            \App\Services\SystemIncidentRecorder::record(
+                'refund', 'refund_failed', 'error',
+                'Refund failed: ₱'.number_format((float) $refund->amount, 2),
+                'PayMongo did not complete this refund. The payment stays refundable — try the refund again or contact the customer.',
+                ['refund_id' => $refund->id, 'payment_id' => $refund->payment_id, 'amount' => (float) $refund->amount],
+                $refund, fingerprintKey: (string) $refund->id,
+            );
+        });
+
+        \Illuminate\Support\Facades\Queue::failing(function (\Illuminate\Queue\Events\JobFailed $event) {
+            $name = $event->job->resolveName();
+            \App\Services\SystemIncidentRecorder::record(
+                'jobs', 'job_failed', 'error',
+                'Background task failed: '.class_basename($name),
+                \Illuminate\Support\Str::limit($event->exception->getMessage(), 1000),
+                ['job' => $name, 'queue' => $event->job->getQueue(), 'connection' => $event->connectionName, 'exception' => $event->exception::class],
+                fingerprintKey: $name.'|'.$event->exception::class,
+            );
+        });
     }
 }

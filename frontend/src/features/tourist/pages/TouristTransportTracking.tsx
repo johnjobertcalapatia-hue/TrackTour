@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { get, post } from '@/shared/services/api'
+import { ACTIVE_RIDE_KEY } from '@/features/tourist/services/active-ride'
 import { createCheckoutSession } from '@/shared/services/payment'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
@@ -12,6 +13,11 @@ import { useUserSocketNotifier } from '@/shared/hooks/useUserSocketNotifier'
 import { useOsrmRoute } from '@/features/rider/hooks/useOsrmRoute'
 import { riderMarkerIcon, pickupMarkerIcon, destinationMarkerIcon } from '@/shared/utils/map-markers'
 import TripReceipt from '@/features/tourist/components/TripReceipt'
+import DestinationChangeCard from '@/features/tourist/components/ride/DestinationChangeCard'
+import PickupWaitingCard from '@/features/tourist/components/ride/PickupWaitingCard'
+import CancellationPenaltyCard, { cancellationFeeNote, type CancellationPenalty, type CancellationPenaltyPreview } from '@/features/tourist/components/ride/CancellationPenaltyCard'
+import type { PickupWaiting } from '@/features/rider/context/RiderActiveTripContext'
+import type { DestinationChange } from '@/features/tourist/services/destination-change'
 import {
   CompletedScreen, DriverCard, EtaBanner, InTripStats, RideProgress, SafetyActions, SearchingScreen, vehicleLabel,
 } from '@/features/tourist/components/ride/RidePhases'
@@ -97,6 +103,22 @@ interface TripData {
   cancelled_at: string | null
   cancellation_reason: string | null
   cancellation_fee: number
+  /** Ride fare before additional charges; `fare` is the total payable (2026-11-18). */
+  ride_fare?: number
+  additional_charges?: { id: number; type: string; label: string; amount: number; duration_seconds: number }[]
+  charges_total?: number
+  pickup_waiting?: PickupWaiting | null
+  /** Cancellation penalty (Stage B, 2026-11-18). */
+  cancellation_penalty_preview?: CancellationPenaltyPreview | null
+  cancellation_penalty?: CancellationPenalty | null
+  /** At the drop-off, waiting for the driver to confirm the payment and complete the ride (2026-11-18). */
+  at_drop_off?: boolean
+  ride_completed?: boolean
+  payment_switched_to_cash?: boolean
+  /** One-time destination change (2026-11-17). */
+  destination_change?: DestinationChange | null
+  destination_change_allowed?: boolean
+  destination_changes_left?: number
 }
 
 function num(v: number | string | null | undefined): number | null {
@@ -138,8 +160,11 @@ export default function TouristTransportTracking() {
     queryFn: () => get(`/tourist/transport/trip/${id}/status`),
     enabled: !!id,
     refetchInterval: (query) => {
-      const status = query.state.data?.status
-      if (status && !['completed', 'cancelled'].includes(status)) {
+      const data = query.state.data as TripData | undefined
+      const status = data?.status
+      // Keep refreshing at the drop-off until the driver confirms the
+      // payment and completes the ride (2026-11-18).
+      if (status && (!['completed', 'cancelled'].includes(status) || data?.at_drop_off)) {
         return 5000
       }
       return false
@@ -229,6 +254,8 @@ export default function TouristTransportTracking() {
     mutationFn: () => post(`/tourist/transport/trip/${id}/cancel`, { reason: cancelReason }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tourist', 'trip-tracking', id] })
+      // Cancelled: the tourist may book a new ride.
+      queryClient.invalidateQueries({ queryKey: ACTIVE_RIDE_KEY })
       setShowCancelModal(false)
       setCancelReason('')
     },
@@ -293,7 +320,7 @@ export default function TouristTransportTracking() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen">
+      <div>
         <DashboardSkeleton />
       </div>
     )
@@ -301,7 +328,7 @@ export default function TouristTransportTracking() {
 
   if (isError || !trip) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="flex items-center justify-center py-20">
         <div className="text-center">
           <Car className="w-16 h-16 text-[#9CA3AF] mx-auto mb-4" />
           <h2 className="text-xl font-semibold text-[#17201B] mb-2">Trip not found</h2>
@@ -359,7 +386,11 @@ export default function TouristTransportTracking() {
   const onTheMove = displayStatus === 'arriving' || displayStatus === 'driver_arrived' || displayStatus === 'in_progress'
 
   return (
-    <div className="min-h-[100dvh] bg-[#fff]">
+    // No min-height here: below the header a full-screen-tall wrapper always
+    // scrolled. The search and map phases (.tourist-map-page) fill exactly the
+    // space between the header and the bottom bar; the completed screen is a
+    // normal page.
+    <div className="bg-[#fff]">
       {displayStatus === 'searching' ? (
         /* ───────────── Phase 2: finding your driver ───────────── */
         <SearchingScreen
@@ -381,6 +412,8 @@ export default function TouristTransportTracking() {
             <ArrowLeft className="h-5 w-5" />
           </button>
           <CompletedScreen
+            atDropOff={!!trip.at_drop_off}
+            switchedToCash={!!trip.payment_switched_to_cash}
             fare={trip.fare}
             paymentLabel={paymentLabel}
             paid={isPaid || trip.payment_method === 'cash'}
@@ -405,9 +438,15 @@ export default function TouristTransportTracking() {
                 paymentMethod={trip.payment_method}
                 paymentStatus={trip.payment_status}
                 paidAmount={trip.paid_amount}
+                additionalCharges={trip.additional_charges ?? []}
               />
             )}
           />
+          {trip.destination_change && (
+            <div className="mx-auto max-w-xl px-4 pb-6">
+              <DestinationChangeCard change={trip.destination_change} changesLeft={0} canChange={false} onChange={() => {}} />
+            </div>
+          )}
         </div>
       ) : (
         /* ───────────── Phases 3–4: driver on the way / in trip ───────────── */
@@ -486,7 +525,7 @@ export default function TouristTransportTracking() {
               </button>
               {onTheMove && (
                 <div className="min-w-0 flex-1">
-                  <EtaBanner status={displayStatus as 'arriving' | 'driver_arrived' | 'in_progress'} minutes={etaMinutes} />
+                  <EtaBanner status={displayStatus as 'arriving' | 'driver_arrived' | 'in_progress'} minutes={etaMinutes} vehicleType={trip.vehicle_type} />
                   {liveStatus && (
                     <span className={cn('pointer-events-auto mt-2 inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium shadow', liveStatus.className)}>
                       {liveStatus.pulse && <span className={cn('h-1.5 w-1.5 animate-pulse rounded-full', liveStatus.dot)} />}
@@ -512,6 +551,7 @@ export default function TouristTransportTracking() {
                       </p>
                     </div>
                   </div>
+                  {trip.cancellation_penalty && <CancellationPenaltyCard tripId={trip.id} penalty={trip.cancellation_penalty} />}
                   <button
                     type="button"
                     onClick={() => navigate('/tourist/transport')}
@@ -545,6 +585,20 @@ export default function TouristTransportTracking() {
                     </p>
                   </div>
 
+                  {/* Driver has arrived: the waiting rule, a live timer and the fee so far (2026-11-18). */}
+                  {trip.pickup_waiting?.arrived_at && (displayStatus === 'driver_arrived' || (trip.charges_total ?? 0) > 0) && (
+                    <PickupWaitingCard waiting={trip.pickup_waiting} driverName={trip.rider?.name ?? null} />
+                  )}
+
+                  {(trip.destination_change || trip.destination_change_allowed) && (
+                    <DestinationChangeCard
+                      change={trip.destination_change ?? null}
+                      changesLeft={trip.destination_changes_left ?? 0}
+                      canChange={!!trip.destination_change_allowed}
+                      onChange={() => navigate(`/tourist/transport/tracking/${trip.id}/change-destination`)}
+                    />
+                  )}
+
                   <SafetyActions showSos={displayStatus === 'in_progress'} onSos={() => setShowSafety(true)} onShare={shareTrip} />
 
                   {canCancel && (
@@ -573,7 +627,7 @@ export default function TouristTransportTracking() {
         >
           <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6 w-full max-w-md shadow-2xl">
             <h3 id="cancel-ride-title" className="text-lg font-semibold text-[#17201B] mb-2">Cancel Ride</h3>
-            <p className="text-sm text-[#68736D] mb-4">Are you sure you want to cancel this ride? A cancellation fee may apply.</p>
+            <p className="text-sm text-[#68736D] mb-4" data-testid="cancel-fee-note">{cancellationFeeNote(trip.cancellation_penalty_preview)}</p>
             <textarea
               value={cancelReason}
               onChange={(e) => setCancelReason(e.target.value)}

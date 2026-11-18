@@ -8,11 +8,14 @@ use App\Models\Business;
 use App\Models\Booking;
 use App\Models\Order;
 use App\Models\User;
+use App\Services\MunicipalScopeService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class TourismOfficeFullController extends Controller
 {
+    public function __construct(private MunicipalScopeService $scope) {}
+
     public function dashboard(Request $request): JsonResponse
     {
         return $this->successResponse([
@@ -34,9 +37,12 @@ class TourismOfficeFullController extends Controller
         ]);
     }
 
-    public function showBusinessOwner(int $id): JsonResponse
+    public function showBusinessOwner(Request $request, int $id): JsonResponse
     {
         $user = User::with('businesses')->findOrFail($id);
+        if (! $this->mayManage($request->user(), $user)) {
+            return $this->notFoundResponse('User not found.');
+        }
 
         return $this->successResponse(UserResource::make($user));
     }
@@ -44,6 +50,9 @@ class TourismOfficeFullController extends Controller
     public function updateBusinessOwnerStatus(Request $request, int $id): JsonResponse
     {
         $user = User::findOrFail($id);
+        if (! $this->mayManage($request->user(), $user)) {
+            return $this->notFoundResponse('User not found.');
+        }
 
         $validated = $request->validate([
             'status' => 'required|string|in:approved,rejected,suspended',
@@ -53,6 +62,13 @@ class TourismOfficeFullController extends Controller
         $user->update(['account_status' => $validated['status']]);
 
         return $this->successResponse(UserResource::make($user->fresh()), 'Status updated.');
+    }
+
+    /** District admin: any account. Municipal admin: only accounts in its municipality. */
+    private function mayManage(User $actor, User $subject): bool
+    {
+        return $actor->role === User::ROLE_BANSUD_TOURISM_OFFICE
+            || $this->scope->coversUser($actor, $subject);
     }
 
     public function reports(Request $request): JsonResponse

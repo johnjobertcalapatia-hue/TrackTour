@@ -79,3 +79,10 @@ selenium_failure.png
 /storage/app/public/businesses/videos/
 /public/storage/businesses/videos/
 
+
+# graphify local data (the graph itself, graph.json / GRAPH_REPORT.md / graph.html, is committed)
+graphify-out/cache/
+graphify-out/*.pre-update-backup.json
+graphify-out/.graphify_python
+graphify-out/.graphify_root
+graphify-out/cost.json

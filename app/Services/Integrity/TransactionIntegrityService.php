@@ -232,6 +232,9 @@ class TransactionIntegrityService
     {
         $quote = $events->firstWhere('event_type', 'ride_quoted')?->payload;
         $add('ride_quote', 'Fare quote recorded at booking', $quote !== null, self::FLAG, 'This ride has no recorded fare quote.');
+        // One-time destination change (2026-11-17): the final fare replaces the
+        // booked fare on the order; the booking quote stays as it was.
+        $finalized = $events->where('event_type', 'ride_fare_finalized')->last()?->payload;
 
         if ($quote !== null && isset($quote['distance_km_exact'], $quote['base_fare'], $quote['per_km'], $quote['fare'])) {
             // Stage 5: recompute the booked fare and commission from the
@@ -239,7 +242,8 @@ class TransactionIntegrityService
             $base = (float) $quote['base_fare'];
             $fare = round(max($base + round((float) $quote['distance_km_exact'] * (float) $quote['per_km'], 2), $base), 2);
             $commission = round(max((float) ($quote['commission_minimum'] ?? 20), $fare * (float) ($quote['commission_rate'] ?? 0.4)), 2);
-            $fareOk = abs($fare - (float) $quote['fare']) < 0.005 && abs($fare - (float) $order->subtotal) < 0.005
+            $fareOk = abs($fare - (float) $quote['fare']) < 0.005
+                && ($finalized !== null || abs($fare - (float) $order->subtotal) < 0.005)
                 && abs($commission - (float) ($quote['rider_commission'] ?? -1)) < 0.005;
             $add('ride_fare', 'Fare and commission recompute from the recorded quote', $fareOk, self::FLAG, sprintf(
                 'Recomputed fare ₱%s / commission ₱%s; recorded fare ₱%s, order ₱%s, commission ₱%s.',
@@ -250,7 +254,7 @@ class TransactionIntegrityService
 
         if ($quote !== null) {
             $commission = $quote['rider_commission'] ?? null;
-            foreach ($events->where('event_type', 'delivery_fee_changed') as $change) {
+            foreach ($events->whereIn('event_type', ['delivery_fee_changed', 'ride_fare_finalized', 'ride_charges_applied']) as $change) {
                 $commission = $change->payload['rider_commission'] ?? $commission;
             }
             $commission = $commission !== null ? round((float) $commission, 2) : null;
@@ -264,6 +268,47 @@ class TransactionIntegrityService
                 }
             }
             $add('ride_commission', 'Rider earning equals the commission fixed at booking', $diff === [], self::FLAG, implode('; ', $diff));
+        }
+
+        if ($finalized !== null) {
+            // Recompute the final fare from the recorded verified distance and cap.
+            $base = (float) ($finalized['base_fare'] ?? 0);
+            $computed = round(max($base + round((float) ($finalized['verified_km'] ?? 0) * (float) ($finalized['per_km'] ?? 0), 2), $base), 2);
+            $final = min($computed, (float) ($finalized['max_fare'] ?? $computed));
+            $commission = round(max(20, $final * 0.4), 2);
+            $ok = abs($computed - (float) ($finalized['computed_fare'] ?? -1)) < 0.005
+                && abs($final - (float) ($finalized['final_fare'] ?? -1)) < 0.005
+                && abs($final - (float) $order->subtotal) < 0.005
+                && abs($commission - (float) ($finalized['rider_commission'] ?? -1)) < 0.005;
+            $add('ride_final_fare', 'Changed-destination fare recomputes from the verified distance and the 115% cap', $ok, self::FLAG, sprintf(
+                'Recomputed final fare ₱%s (computed ₱%s, cap ₱%s) / commission ₱%s; recorded final ₱%s, order ₱%s, commission ₱%s.',
+                number_format($final, 2), number_format($computed, 2), number_format((float) ($finalized['max_fare'] ?? 0), 2), number_format($commission, 2),
+                number_format((float) ($finalized['final_fare'] ?? 0), 2), number_format((float) $order->subtotal, 2), number_format((float) ($finalized['rider_commission'] ?? 0), 2)
+            ));
+            $reasons = (array) ($finalized['review_reasons'] ?? []);
+            $add('ride_fare_gps', 'Changed-destination fare had complete GPS evidence', ($finalized['fare_review_status'] ?? 'ok') === 'ok', self::FLAG,
+                $reasons === [] ? null : 'Only verified distance was charged. '.implode(' ', $reasons));
+        }
+
+        // Time-based charges (2026-11-18): total = ride fare (subtotal) + approved
+        // charges; the commission follows the rule on that total.
+        $applied = $events->where('event_type', 'ride_charges_applied')->last()?->payload;
+        if ($applied !== null) {
+            $chargesTotal = round((float) collect($applied['charges'] ?? [])->sum('amount'), 2);
+            $total = round((float) ($applied['subtotal'] ?? 0) + $chargesTotal, 2);
+            $commission = round(max(20, $total * 0.4), 2);
+            $live = round((float) \App\Models\RideAdditionalCharge::where('order_id', $order->id)->where('status', 'approved')->sum('amount'), 2);
+            $ok = abs($chargesTotal - (float) ($applied['charges_total'] ?? -1)) < 0.005
+                && abs($total - (float) ($applied['total'] ?? -1)) < 0.005
+                && abs($total - (float) $order->total) < 0.005
+                && abs((float) ($applied['subtotal'] ?? -1) - (float) $order->subtotal) < 0.005
+                && abs($live - $chargesTotal) < 0.005
+                && abs($commission - (float) ($applied['rider_commission'] ?? -1)) < 0.005;
+            $add('ride_charges', 'Ride total equals the fare plus the itemised additional charges', $ok, self::FLAG, sprintf(
+                'Fare ₱%s + charges ₱%s (recorded ₱%s, live ₱%s) = ₱%s; order total ₱%s; commission ₱%s (recorded ₱%s).',
+                number_format((float) ($applied['subtotal'] ?? 0), 2), number_format($chargesTotal, 2), number_format((float) ($applied['charges_total'] ?? 0), 2),
+                number_format($live, 2), number_format($total, 2), number_format((float) $order->total, 2), number_format($commission, 2), number_format((float) ($applied['rider_commission'] ?? 0), 2)
+            ));
         }
 
         $finished = $blueprint->finalized_at !== null || in_array(TransactionLedger::scalar($order->status), ['completed', 'delivered'], true);

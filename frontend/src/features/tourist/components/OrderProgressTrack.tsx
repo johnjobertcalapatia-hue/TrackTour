@@ -1,11 +1,10 @@
 import React from 'react'
-import { Check, MessageSquare, ClipboardList, ChefHat, ClipboardCheck, Truck, CheckCircle2 } from 'lucide-react'
+import { Check, MessageSquare, ClipboardList, ChefHat, Truck, CheckCircle2 } from 'lucide-react'
 import { SubOrderStatusResolution } from '../utils/subOrderStatusEngine'
 
 const STEP_ICONS: Record<string, React.FC<{ className?: string }>> = {
-  'Placed': ClipboardList,
+  'Order Placed': ClipboardList,
   'Preparing': ChefHat,
-  'Ready': ClipboardCheck,
   'On The Way': Truck,
   'Delivered': CheckCircle2,
 }
@@ -29,7 +28,7 @@ export const OrderProgressTrack: React.FC<OrderProgressTrackProps> = ({ resoluti
 
   return (
     <div className={`space-y-4 ${className}`}>
-      {/* 5-Step Progress Track */}
+      {/* 4-Step Progress Track */}
       <div className="relative py-2 px-1">
         <div className="flex items-center justify-between relative z-10">
           {steps.map((step, idx) => {

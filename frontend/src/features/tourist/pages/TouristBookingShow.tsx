@@ -49,7 +49,7 @@ export default function TouristBookingShow() {
   const canPay = booking.status === 'confirmed' && booking.total_amount > 0
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-2xl mx-auto lg:mx-0">
       <button onClick={() => navigate(-1)} className="inline-flex items-center gap-2 text-sm text-[#68736D] hover:text-[#17201B] mb-6 transition">
         <ArrowLeft className="w-4 h-4" /> Back
       </button>

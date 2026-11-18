@@ -8,8 +8,10 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 
 /**
- * Issues and verifies the one-time codes used to prove ownership of a mobile
- * number (rider registration).
+ * Issues and verifies the one-time codes used during rider registration. The
+ * code is delivered to the applicant's email address, which is remembered
+ * with the code so registration can confirm the same address is used — the
+ * code then doubles as the email verification (no second email step).
  *
  * A code lives in the cache for {@see self::TTL_MINUTES} minutes. Verification
  * that gates a durable side effect (creating the rider account) must go through
@@ -31,6 +33,7 @@ class OtpService
         $otp = str_pad((string) random_int(100000, 999999), 6, '0', STR_PAD_LEFT);
 
         Cache::put($this->key($mobile), $otp, now()->addMinutes(self::TTL_MINUTES));
+        Cache::put($this->emailKey($mobile), self::normalizeEmail($email), now()->addMinutes(self::TTL_MINUTES));
 
         // A newly issued code intentionally does NOT reset the failed-attempt
         // counter: otherwise a locked-out caller could bypass the limit simply
@@ -82,12 +85,34 @@ class OtpService
             }
 
             Cache::forget($this->key($mobile));
+            Cache::forget($this->emailKey($mobile));
             Cache::forget($this->attemptsKey($mobile));
 
             return true;
         } finally {
             $lock->release();
         }
+    }
+
+    /**
+     * The email address the current code was sent to (null when none is
+     * recorded). Read it before consuming the code.
+     */
+    public function boundEmail(string $mobile): ?string
+    {
+        $email = Cache::get($this->emailKey($mobile));
+
+        return is_string($email) && $email !== '' ? $email : null;
+    }
+
+    public static function normalizeEmail(string $email): string
+    {
+        return strtolower(trim($email));
+    }
+
+    private function emailKey(string $mobile): string
+    {
+        return $this->key($mobile).':email';
     }
 
     /**

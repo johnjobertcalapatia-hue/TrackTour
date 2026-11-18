@@ -49,6 +49,7 @@ class LoginRequest extends FormRequest
 
         if (! $user) {
             $this->recordFailedAttempt();
+            $this->recordIncident('login_failed', 'Failed login: no account for this email', 'No account found with this email address.');
             throw ValidationException::withMessages([
                 'email' => 'No account found with this email address.',
             ]);
@@ -56,6 +57,7 @@ class LoginRequest extends FormRequest
 
         if (! Hash::check($this->string('password'), $user->password)) {
             $this->recordFailedAttempt();
+            $this->recordIncident('login_failed', 'Failed login: wrong password', 'Incorrect password.', $user);
             throw ValidationException::withMessages([
                 'password' => 'Incorrect password. Please try again.',
             ]);
@@ -70,6 +72,7 @@ class LoginRequest extends FormRequest
 
         if ($user && $user->locked_until && now()->lessThan($user->locked_until)) {
             $seconds = now()->diffInSeconds($user->locked_until);
+            $this->recordIncident('login_blocked', 'Login attempt on a locked account', 'The account is locked after too many failed logins.', $user);
 
             throw ValidationException::withMessages([
                 'email' => 'Account is locked. Try again in ' . ceil($seconds / 60) . ' minute(s).',
@@ -97,9 +100,23 @@ class LoginRequest extends FormRequest
                 'failed_login_attempts' => $attempts,
                 'locked_until' => now()->addMinutes(self::LOCKOUT_MINUTES),
             ]);
+            // Worth a look: repeated wrong passwords can mean someone is guessing.
+            $this->recordIncident('account_locked', "Account locked after {$attempts} failed logins",
+                'The account is locked for '.self::LOCKOUT_MINUTES.' minutes. Check whether the owner forgot the password or someone is guessing it.',
+                $user, \App\Models\SystemIncident::STATUS_OPEN);
         } else {
             $user->update(['failed_login_attempts' => $attempts]);
         }
+    }
+
+    /** Failed-login history (admin → Incident History). The password is never stored. */
+    private function recordIncident(string $code, string $title, string $message, ?User $user = null, string $status = \App\Models\SystemIncident::STATUS_RECORDED): void
+    {
+        \App\Services\SystemIncidentRecorder::record(
+            'auth', $code, $code === 'account_locked' ? 'error' : 'warning', $title, $message,
+            ['email' => (string) $this->string('email'), 'account' => $user?->name, 'role' => $user?->role],
+            $user, $status, fingerprintKey: strtolower((string) $this->string('email')), user: $user,
+        );
     }
 
     private function clearFailedAttempts(): void
@@ -121,6 +138,7 @@ class LoginRequest extends FormRequest
         }
 
         event(new Lockout($this));
+        $this->recordIncident('login_rate_limited', 'Too many login attempts from one device', 'Login was paused for this email and IP address.');
 
         $seconds = RateLimiter::availableIn($this->throttleKey());
 

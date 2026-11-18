@@ -32,9 +32,10 @@ class AuthController extends Controller
 
     public function register(RegisterRequest $request): JsonResponse
     {
-        // Rider registration proves mobile ownership with a single-use code.
-        // This is the authoritative consume point: the account cannot be created
-        // with a missing, wrong, expired or already-used code.
+        // Rider registration requires a single-use code, delivered to the
+        // applicant's email. This is the authoritative consume point: the
+        // account cannot be created with a missing, wrong, expired or
+        // already-used code, and a code bound to another email is refused.
         if ($request->role === User::ROLE_RIDER) {
             if ($this->otpService->isLockedOut($request->mobile_number)) {
                 $seconds = $this->otpService->lockoutSecondsRemaining($request->mobile_number);
@@ -44,6 +45,15 @@ class AuthController extends Controller
                     'message' => 'Too many failed attempts. Please try again in '.(int) max(1, ceil($seconds / 60)).' minute(s).',
                     'retry_after' => $seconds,
                 ], 429);
+            }
+
+            // The code was emailed; it proves the email only if it is used with
+            // the same address it was sent to.
+            $boundEmail = $this->otpService->boundEmail($request->mobile_number);
+            if ($boundEmail !== null && $boundEmail !== OtpService::normalizeEmail((string) $request->email)) {
+                throw ValidationException::withMessages([
+                    'email' => ['Use the email address the verification code was sent to, or request a new code.'],
+                ]);
             }
 
             if (! $this->otpService->verifyAndConsume($request->mobile_number, (string) $request->otp_code)) {
@@ -57,7 +67,10 @@ class AuthController extends Controller
             'email' => $request->email,
             'password' => Hash::make($request->password),
             'role' => $request->role,
-            'account_status' => $request->role === User::ROLE_BUSINESS_OWNER
+            // Business owners await document approval; riders complete the
+            // Tourism Office onboarding (appointment, interview, training,
+            // assessment) before activation.
+            'account_status' => in_array($request->role, [User::ROLE_BUSINESS_OWNER, User::ROLE_RIDER], true)
                 ? User::ACCOUNT_STATUS_PENDING
                 : User::ACCOUNT_STATUS_APPROVED,
         ];
@@ -104,6 +117,11 @@ class AuthController extends Controller
             } elseif ($request->role === User::ROLE_RIDER) {
                 $userData['name'] = trim($request->first_name.' '.$request->last_name);
                 $userData['municipality_id'] = (int) $request->municipality_id;
+                // The registration code was emailed to this address, so a
+                // successful code is the email verification.
+                if (isset($boundEmail) && $boundEmail !== null) {
+                    $userData['email_verified_at'] = now();
+                }
             } else {
                 $userData['name'] = $request->name;
             }

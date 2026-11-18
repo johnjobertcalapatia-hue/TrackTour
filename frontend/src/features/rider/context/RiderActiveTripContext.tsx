@@ -6,6 +6,7 @@ import { resolvePickupGate, isArrivalDismissed, markArrivalDismissed } from '@/f
 import { resolveStopArrival, STOP_ARRIVAL_THRESHOLD_METERS } from '@/features/rider/stop-arrival'
 import type { PickupStopsData } from '@/features/rider/pickup-stops'
 import type { Delivery } from '@/shared/types'
+import type { DestinationChange } from '@/features/tourist/services/destination-change'
 import { useUserSocketNotifier } from '@/shared/hooks/useUserSocketNotifier'
 import { isUsableGpsFix, markLocationSent } from '@/features/rider/gps'
 
@@ -35,7 +36,26 @@ export interface TripDelivery {
   /** Ride: the fare (order total) and whether the passenger pays cash. */
   order_total?: number | null
   is_cod?: boolean
+  /** Ride: how the passenger pays and whether an online payment is verified (2026-11-18). */
+  payment_method?: string | null
+  payment_status?: string | null
+  /** Ride: the passenger's one destination change (2026-11-17), if any. */
+  destination_change?: DestinationChange | null
+  /** Ride: pickup waiting (started by the rider's confirmed arrival) — 2026-11-18. */
+  pickup_waiting?: PickupWaiting | null
+  additional_charges?: { id: number; type: string; label: string; amount: number; duration_seconds: number }[]
   created_at?: string | null
+}
+
+export interface PickupWaiting {
+  arrived_at: string | null
+  ended_at: string | null
+  server_now: string
+  free_seconds: number
+  unit_seconds: number
+  rate: number
+  charged_seconds: number | null
+  amount: number | null
 }
 
 export type ArrivalAlertKind = 'PICKUP' | 'DROPOFF' | null
@@ -88,6 +108,21 @@ interface RiderActiveTripContextValue {
    * the trip screen").
    */
   onCompleteRide: (cashCollected: number | null) => void
+  /** Ride with a changed destination: confirm the new destination was received. */
+  acknowledgeDestinationChange: () => void
+  acknowledgeBusy: boolean
+  /**
+   * Ride: record arrival at the destination. The fare is final there (a
+   * changed destination's final fare is worked out) and the passenger can
+   * pay with GCash; then the rider confirms the payment and completes.
+   */
+  arriveAtRideDestination: () => void
+  arriveBusy: boolean
+  arriveError: string | null
+  /** Ride: the passenger cannot pay with GCash — switch the unpaid ride to cash at the drop-off. */
+  switchRideToCash: () => void
+  switchToCashBusy: boolean
+  switchToCashError: string | null
   /** Why the server refused the rider's latest location ('implausible_movement' | 'low_accuracy'), or null when saved. */
   locationRefusal: string | null
   /** The phone's latest GPS precision in metres (null = unknown). */
@@ -279,8 +314,14 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
     queryClient.invalidateQueries({ queryKey: ['rider-map-location'] })
   }, [queryClient])
 
+  // Rides (2026-11-18): the rider's confirmed arrival starts the passenger's
+  // waiting time; the server checks the location, so send a fresh fix.
   const arrivedPickupMutation = useMutation({
-    mutationFn: (id: number) => patch(`/rider/deliveries/${id}/status`, { status: 'arrived_pickup' }),
+    mutationFn: async (id: number) => {
+      await readFreshDeviceFix()
+      await sendFreshFix()
+      return patch(`/rider/deliveries/${id}/status`, { status: 'arrived_pickup', ...(pickupEvidenceBody() ?? {}) })
+    },
     onSuccess: arrivalsRefetch,
   })
   const pickupMutation = useMutation({
@@ -311,7 +352,8 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
         const status = (e as { response?: { status?: number } })?.response?.status
         if (status !== 409) throw e // 409: already past arrival (e.g. delivered) — carry on.
       })
-      await patch(`/rider/deliveries/${id}/status`, { status: 'delivered', ...(pickupEvidenceBody() ?? {}) }).catch((e: unknown) => {
+      // Sent only after the rider confirmed the payment on screen (2026-11-18).
+      await patch(`/rider/deliveries/${id}/status`, { status: 'delivered', payment_confirmed: true, ...(pickupEvidenceBody() ?? {}) }).catch((e: unknown) => {
         const status = (e as { response?: { status?: number } })?.response?.status
         // Already delivered (a cash ride whose fare was not recorded yet): settle below.
         if (!(status === 409 && cashCollected != null)) throw e
@@ -332,6 +374,26 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
       queryClient.invalidateQueries({ queryKey: ['rider-deliveries-active'] })
       arrivalsRefetch()
     },
+  })
+
+  // One-time destination change (2026-11-17).
+  const acknowledgeMutation = useMutation({
+    mutationFn: (id: number) => post(`/rider/deliveries/${id}/destination-change/acknowledge`, {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rider-map-location'] }),
+  })
+  const switchToCashMutation = useMutation({
+    mutationFn: (id: number) => post(`/rider/deliveries/${id}/ride-payment/cash`, {}),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['rider-map-location'] }),
+  })
+  const finalFareMutation = useMutation({
+    mutationFn: async (id: number) => {
+      await sendFreshFix()
+      await patch(`/rider/deliveries/${id}/status`, { status: 'arrived_destination', ...(pickupEvidenceBody() ?? {}) }).catch((e: unknown) => {
+        const status = (e as { response?: { status?: number } })?.response?.status
+        if (status !== 409) throw e // 409: already arrived — the final fare is already set.
+      })
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['rider-map-location'] }),
   })
 
   // Food deliveries complete with a proof photo at the drop-off (decision
@@ -600,7 +662,18 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
     // the status, causing the alert to be skipped. `nearDropoff` is kept only as
     // a fallback so the alert can still fire if the frontend tracks the rider
     // inside the geofence before the backend has had a chance to confirm.
+    // Rides: near the pickup but not confirmed yet → ask the rider to confirm
+    // the arrival (rides never arrive automatically; 2026-11-18).
     if (
+      activeDelivery.order_type === 'transport' &&
+      ['assigned', 'en_route_pickup'].includes(status) &&
+      nearPickup &&
+      lastAlertStatus.current !== 'near_pickup' &&
+      lastAlertStatus.current !== 'arrived_pickup'
+    ) {
+      lastAlertStatus.current = 'near_pickup'
+      setArrivalAlert('PICKUP')
+    } else if (
       status === 'arrived_pickup' &&
       lastAlertStatus.current !== 'arrived_pickup' &&
       pickupStopsQuery.isSuccess &&
@@ -623,19 +696,19 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
       lastAlertStatus.current = null
       setArrivalAlert(null)
     }
-  }, [activeDelivery, nearDropoff, pickupStopsData, pickupStopsQuery.isSuccess])
+  }, [activeDelivery, nearDropoff, nearPickup, pickupStopsData, pickupStopsQuery.isSuccess])
 
   // Also nudge the backend when arriving at a geofence so the authoritative
   // proximity controller transitions the status (keeps server truth in sync).
   useEffect(() => {
     if (user?.id && positionKnown && nearPickup && activeDelivery?.status === 'assigned' && locationMutation.isIdle) {
-      locationMutation.mutate({ latitude: riderPosition[0], longitude: riderPosition[1] })
+      locationMutation.mutate({ latitude: riderPosition[0], longitude: riderPosition[1], ...(deviceAccuracy != null ? { accuracy: deviceAccuracy } : {}) })
     }
   }, [nearPickup]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (user?.id && positionKnown && nearDropoff && (activeDelivery?.status === 'picked_up' || activeDelivery?.status === 'in_transit') && locationMutation.isIdle) {
-      locationMutation.mutate({ latitude: riderPosition[0], longitude: riderPosition[1] })
+      locationMutation.mutate({ latitude: riderPosition[0], longitude: riderPosition[1], ...(deviceAccuracy != null ? { accuracy: deviceAccuracy } : {}) })
     }
   }, [nearDropoff]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -682,6 +755,20 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
     onCompleteRide: (cashCollected: number | null) => {
       if (activeDelivery) completeRideMutation.mutate({ id: activeDelivery.id, cashCollected })
     },
+    acknowledgeDestinationChange: () => {
+      if (activeDelivery) acknowledgeMutation.mutate(activeDelivery.id)
+    },
+    acknowledgeBusy: acknowledgeMutation.isPending,
+    arriveAtRideDestination: () => {
+      if (activeDelivery) finalFareMutation.mutate(activeDelivery.id)
+    },
+    arriveBusy: finalFareMutation.isPending,
+    arriveError: finalFareMutation.isError ? apiErrorMessage(finalFareMutation.error) : null,
+    switchRideToCash: () => {
+      if (activeDelivery) switchToCashMutation.mutate(activeDelivery.id)
+    },
+    switchToCashBusy: switchToCashMutation.isPending,
+    switchToCashError: switchToCashMutation.isError ? apiErrorMessage(switchToCashMutation.error) : null,
     pickupStopsData: pickupStopsData ?? null,
     confirmArrivalStop: (businessId) => {
       if (activeDelivery) confirmArrivalStopMutation.mutate(businessId)

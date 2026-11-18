@@ -101,9 +101,9 @@ function PaymentBadge({ payment }: { payment: 'cod' | 'online' }) {
   )
 }
 
-function Card({ title, icon, children, aside }: { title: string; icon: React.ReactNode; children: React.ReactNode; aside?: React.ReactNode }) {
+function Card({ title, icon, children, aside, className = '' }: { title: string; icon: React.ReactNode; children: React.ReactNode; aside?: React.ReactNode; className?: string }) {
   return (
-    <section aria-label={title} className="rounded-2xl border border-[#E2E8E3] bg-white p-4 shadow-tourism">
+    <section aria-label={title} className={`rounded-2xl border border-[#E2E8E3] bg-white p-5 ${className}`}>
       <div className="mb-3 flex items-center justify-between gap-3">
         <h3 className="flex items-center gap-2 text-base font-semibold text-[#17201A]">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#EAF6ED] text-[#16803C]" aria-hidden="true">
@@ -148,13 +148,13 @@ export function RiderRecords({ riderId }: { riderId: number | string }) {
   })
 
   return (
-    <div className="mb-8 space-y-4" data-testid="rider-records">
+    <div className="space-y-4" data-testid="rider-records">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-[#17201A]">Rider records</h2>
-          <p className="text-sm text-[#6B7280]">Deliveries, earnings, COD cash and cash out</p>
+          <p className="text-sm text-[#6B7280]">Deliveries, earnings, COD cash and cash out{isToday ? '' : ` · ${date}`}</p>
         </div>
-        <label className="flex items-center gap-2 text-sm font-medium text-[#17201A]">
+        <label className="flex items-center gap-2 rounded-xl border border-[#D7E8DB] bg-white px-3 py-1.5 text-sm font-medium text-[#17201A]">
           <CalendarDays className="h-4 w-4 text-[#16803C]" aria-hidden="true" /> Day
           <input
             type="date"
@@ -162,7 +162,7 @@ export function RiderRecords({ riderId }: { riderId: number | string }) {
             value={date}
             max={today}
             onChange={(e) => e.target.value && setDate(e.target.value)}
-            className="rounded-lg border border-[#D7E8DB] px-3 py-1.5 text-sm"
+            className="text-sm outline-none"
           />
         </label>
       </div>
@@ -236,8 +236,9 @@ export function RiderRecords({ riderId }: { riderId: number | string }) {
             </Card>
           </div>
 
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <Card
+              className="lg:col-span-2"
               title={`COD cash · ${dayLabel}`}
               icon={<HandCoins className="h-4 w-4" />}
               aside={
@@ -251,7 +252,7 @@ export function RiderRecords({ riderId }: { riderId: number | string }) {
             >
               {data.cod_cash.available ? (
                 <>
-                  <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-4">
                     <Figure name="Office cash issued" value={formatCurrency(data.cod_cash.office_cash_issued)} />
                     <Figure name="Office cash used" value={formatCurrency(data.cod_cash.office_cash_used)} />
                     <Figure

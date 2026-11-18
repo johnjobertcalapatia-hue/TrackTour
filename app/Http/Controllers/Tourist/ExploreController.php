@@ -872,6 +872,9 @@ class ExploreController extends Controller
             abort(404);
         }
 
+        // Real, de-duplicated profile view for popularity analytics.
+        app(\App\Services\BusinessEngagementRecorder::class)->profileView($business, $request);
+
         $business->load([
             'category',
             'municipality',

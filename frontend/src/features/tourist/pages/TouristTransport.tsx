@@ -2,11 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { MapContainer, Marker, TileLayer, useMap } from 'react-leaflet'
-import { get } from '@/shared/services/api'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { cn } from '@/shared/utils'
 import { Map as MapIcon, ArrowRight, ChevronRight, Lock, Pencil } from 'lucide-react'
-import BookRideSheet from '../components/BookRideSheet'
+import { BOOK_RIDE_PATH, type BookRideSeed } from './TouristBookRide'
+import { ACTIVE_RIDE_KEY, fetchActiveRide } from '@/features/tourist/services/active-ride'
 import RideLocationPicker, { RIDE_POINT_COLORS, ridePointIcon, type RidePoint, type RidePointKind } from '../components/ride/RideLocationPicker'
 
 /**
@@ -17,12 +17,7 @@ import RideLocationPicker, { RIDE_POINT_COLORS, ridePointIcon, type RidePoint, t
  * the points cannot be edited while the ride is active.
  */
 
-interface TripRow {
-  id: number
-  order_number: string
-  status: string
-  delivery_address: string | null
-}
+
 
 /** Handed over from the map's route card ("Book a Rider"). */
 interface PendingBooking {
@@ -54,7 +49,6 @@ const STATUS_INFO: Record<string, string> = {
   driver_arrived: 'Driver Arrived',
   in_progress: 'Trip In Progress',
 }
-const ACTIVE_RIDE_STATUSES = Object.keys(STATUS_INFO)
 
 function readPendingBooking(): PendingBooking | null {
   const raw = localStorage.getItem(PENDING_BOOKING_KEY)
@@ -168,7 +162,6 @@ export default function TouristTransport() {
   const navigate = useNavigate()
   const [draft, setDraft] = useState<RideDraft>(readDraft)
   const [picker, setPicker] = useState<{ kind: RidePointKind; query?: string } | null>(null)
-  const [sheetOpen, setSheetOpen] = useState(false)
 
   useEffect(() => {
     sessionStorage.setItem(RIDE_DRAFT_KEY, JSON.stringify(draft))
@@ -189,12 +182,14 @@ export default function TouristTransport() {
     }
   }, [])
 
+  // One ride at a time (2026-11-17): the server says which ride is unfinished.
+  // (The rides list carries raw order statuses — 'pending' while searching —
+  // so a searching ride used to go unnoticed and a second one could be booked.)
   const { data, isLoading, dataUpdatedAt } = useQuery({
-    queryKey: ['tourist-transport'],
-    queryFn: () => get<{ data: TripRow[] }>('/tourist/transport'),
+    queryKey: ACTIVE_RIDE_KEY,
+    queryFn: fetchActiveRide,
   })
-  const rows = data?.data ?? []
-  const activeRide = rows.find((t) => ACTIVE_RIDE_STATUSES.includes(t.status))
+  const activeRide = data ?? null
 
   // The booked ride has ended (seen in a rides list loaded after booking): start a fresh trip.
   useEffect(() => {
@@ -213,7 +208,7 @@ export default function TouristTransport() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl">
+    <div className="mx-auto lg:mx-0 max-w-3xl">
       <div className="mb-6 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">Ride Hailing</h1>
@@ -276,7 +271,16 @@ export default function TouristTransport() {
           <LockedPointsMap pickup={pickup} dropoff={dropoff} />
           <button
             type="button"
-            onClick={() => setSheetOpen(true)}
+            onClick={() => navigate(BOOK_RIDE_PATH, {
+              state: {
+                destination: dropoff.name,
+                destinationAddress: dropoff.address,
+                destinationCoords: { lat: dropoff.lat, lng: dropoff.lng },
+                pickupPoint: { name: pickup.address ? `${pickup.name}, ${pickup.address}` : pickup.name, lat: pickup.lat, lng: pickup.lng },
+                initialVehicle: draft.vehicle,
+                draftKey: RIDE_DRAFT_KEY,
+              } satisfies BookRideSeed,
+            })}
             className="h-12 w-full inline-flex items-center justify-center gap-2 rounded-2xl bg-[#087F3F] text-base font-bold text-white transition hover:bg-[#056B35]"
           >
             Continue <ArrowRight className="h-5 w-5" aria-hidden="true" />
@@ -296,22 +300,6 @@ export default function TouristTransport() {
         />
       )}
 
-      {ready && (
-        <BookRideSheet
-          isOpen={sheetOpen}
-          onClose={() => setSheetOpen(false)}
-          destination={dropoff.name}
-          destinationAddress={dropoff.address}
-          destinationCoords={{ lat: dropoff.lat, lng: dropoff.lng }}
-          pickupPoint={{ name: pickup.address ? `${pickup.name}, ${pickup.address}` : pickup.name, lat: pickup.lat, lng: pickup.lng }}
-          initialVehicle={draft.vehicle}
-          onBooked={() => {
-            const booked = { ...draft, booked: true, bookedAt: Date.now() }
-            sessionStorage.setItem(RIDE_DRAFT_KEY, JSON.stringify(booked))
-            setDraft(booked)
-          }}
-        />
-      )}
     </div>
   )
 }

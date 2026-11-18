@@ -3,13 +3,14 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TouristTransport, { RIDE_DRAFT_KEY } from '@/features/tourist/pages/TouristTransport'
+import TouristBookRide from '@/features/tourist/pages/TouristBookRide'
 
 /** Ride Hailing: Pickup and Drop-off cards, each set on a full-screen map (2026-11-10). */
 
 const rides = vi.hoisted(() => ({ rows: [] as unknown[] }))
 const api = vi.hoisted(() => ({
   get: vi.fn(async (url: string, config?: { params?: { lat: number; lng: number } }) => {
-    if (url === '/tourist/transport') return { data: rides.rows }
+    if (url === '/tourist/transport/active') return rides.rows[0] ?? null
     if (url.startsWith('/tourist/transport/locations/search')) {
       return [
         { id: 1, type: 'restaurant', name: 'Eksklusibo Grill', address: 'Pag-asa, Bansud', lat: 12.861, lng: 121.461 },
@@ -31,7 +32,7 @@ vi.mock('@/shared/services/api', () => ({ get: api.get, post: vi.fn(), default: 
 vi.mock('@/features/tourist/components/BookRideSheet', () => ({
   default: (props: Record<string, unknown>) => {
     sheet.props = props
-    return props.isOpen ? <div data-testid="ride-sheet" /> : null
+    return props.isOpen !== false ? <div data-testid="ride-sheet" /> : null
   },
 }))
 
@@ -70,6 +71,7 @@ function renderPage() {
         <Routes>
           <Route path="/tourist/transport" element={<TouristTransport />} />
           <Route path="/tourist/transport/map" element={<LocationProbe />} />
+          <Route path="/tourist/transport/book" element={<><TouristBookRide /><LocationProbe /></>} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -171,7 +173,7 @@ describe('Ride Hailing page: Pickup and Drop-off', () => {
     expect(JSON.parse(sessionStorage.getItem(RIDE_DRAFT_KEY)!).pickup).toMatchObject({ lat: 12.86, lng: 121.45 })
   })
 
-  it('with both set: both markers on a fixed map, and Continue opens the trip summary with them', async () => {
+  it('with both set: both markers on a fixed map, and Continue opens the Book a Ride page with them', async () => {
     sessionStorage.setItem(RIDE_DRAFT_KEY, JSON.stringify({
       pickup: { name: 'Hotel', address: 'Bansud', lat: 12.86, lng: 121.45 },
       dropoff: { name: 'Tambangan Falls', address: 'Gloria', lat: 12.95, lng: 121.46 },
@@ -183,6 +185,9 @@ describe('Ride Hailing page: Pickup and Drop-off', () => {
     expect(markers.every((m) => m.dataset.draggable === 'false')).toBe(true)
 
     fireEvent.click(screen.getByRole('button', { name: /Continue/ }))
+    // A page of its own, not a pop-up over the Ride Hailing page.
+    expect(screen.getByTestId('location')).toHaveTextContent('/tourist/transport/book')
+    expect(screen.queryByTestId('ride-card-pickup')).not.toBeInTheDocument()
     expect(screen.getByTestId('ride-sheet')).toBeInTheDocument()
     expect(sheet.props).toMatchObject({
       destination: 'Tambangan Falls',
@@ -197,7 +202,7 @@ describe('Ride Hailing page: Pickup and Drop-off', () => {
   })
 
   it('while a ride is active the points cannot be edited', async () => {
-    rides.rows = [{ id: 9, order_number: 'RIDE-9', status: 'arriving', delivery_address: 'Tambangan Falls' }]
+    rides.rows = [{ id: 9, order_number: 'RIDE-9', status: 'arriving', delivery_address: 'Tambangan Falls', redirect: '/tourist/transport/tracking/9' }]
     sessionStorage.setItem(RIDE_DRAFT_KEY, JSON.stringify({
       pickup: { name: 'Hotel', address: 'Bansud', lat: 12.86, lng: 121.45 },
       dropoff: { name: 'Tambangan Falls', address: 'Gloria', lat: 12.95, lng: 121.46 },
@@ -213,6 +218,38 @@ describe('Ride Hailing page: Pickup and Drop-off', () => {
     fireEvent.click(card('pickup'))
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Continue/ })).not.toBeInTheDocument()
+  })
+
+  it('a ride still finding a driver also blocks booking another (one ride at a time)', async () => {
+    rides.rows = [{ id: 17, order_number: 'TRP-17', status: 'searching', delivery_address: 'Tambangan Falls', redirect: '/tourist/transport/tracking/17' }]
+    sessionStorage.setItem(RIDE_DRAFT_KEY, JSON.stringify({
+      pickup: { name: 'Hotel', address: 'Bansud', lat: 12.86, lng: 121.45 },
+      dropoff: { name: 'Gloria Bay Resort', address: 'Gloria', lat: 12.97, lng: 121.47 },
+    }))
+    renderPage()
+
+    expect(await screen.findByText('Finding a Driver')).toBeInTheDocument()
+    expect(api.get).toHaveBeenCalledWith('/tourist/transport/active')
+    expect(card('pickup')).toBeDisabled()
+    expect(card('dropoff')).toBeDisabled()
+    expect(screen.queryByRole('button', { name: /Continue/ })).not.toBeInTheDocument()
+  })
+
+  it('Book a Ride says a ride is in progress and links to it instead of booking another', async () => {
+    rides.rows = [{ id: 17, order_number: 'TRP-17', status: 'searching', delivery_address: 'Tambangan Falls', redirect: '/tourist/transport/tracking/17' }]
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={['/tourist/transport/book']}>
+          <Routes><Route path="/tourist/transport/book" element={<TouristBookRide />} /></Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    const notice = await screen.findByRole('alert', { name: 'Ride in progress' })
+    expect(notice).toHaveTextContent('You already have a ride in progress')
+    expect(notice).toHaveTextContent('once this one is completed or cancelled')
+    expect(within(notice).getByRole('link', { name: /View your ride/ })).toHaveAttribute('href', '/tourist/transport/tracking/17')
+    expect(screen.queryByTestId('ride-sheet')).not.toBeInTheDocument()
   })
 
   it('after the booked ride ends, the cards start fresh', async () => {

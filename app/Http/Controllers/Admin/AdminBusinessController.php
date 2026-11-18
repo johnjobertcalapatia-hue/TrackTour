@@ -5,21 +5,19 @@ namespace App\Http\Controllers\Admin;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\BusinessDocumentResource;
 use App\Http\Resources\BusinessResource;
-use App\Models\ActivityLog;
+use App\Exceptions\ModerationException;
 use App\Models\Business;
-use App\Models\BusinessCategory;
 use App\Models\BusinessDocument;
-use App\Models\BusinessStatusLog;
-use App\Models\Municipality;
+use App\Services\BusinessModerationService;
 use App\Services\BusinessService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
 
 class AdminBusinessController extends Controller
 {
     public function __construct(
-        private BusinessService $businessService
+        private BusinessService $businessService,
+        private BusinessModerationService $moderation
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -49,30 +47,11 @@ class AdminBusinessController extends Controller
 
     public function approve(Request $request, Business $business): JsonResponse
     {
-        $unverified = BusinessDocument::where('business_id', $business->id)
-            ->where('verification_status', '!=', 'verified')
-            ->count();
-
-        if ($unverified > 0) {
-            return $this->errorResponse(
-                'All documents must be approved before the business can be approved. ' . $unverified . ' document(s) still pending or rejected.',
-                422
-            );
+        try {
+            $this->moderation->approve($business, $request->user(), $request->input('remarks'));
+        } catch (ModerationException $e) {
+            return $this->errorResponse($e->getMessage(), 422);
         }
-
-        $business->update(['status' => 'approved']);
-
-        BusinessStatusLog::create([
-            'business_id' => $business->id,
-            'status' => 'approved',
-            'remarks' => $request->input('remarks', 'Business approved by Tourism Office'),
-            'reviewed_by' => $request->user()->id,
-        ]);
-
-        $business->syncModulesFromCategory();
-        Cache::forget("business_{$business->id}_modules");
-
-        ActivityLog::record('business.approved', sprintf('Approved business "%s".', $business->business_name), $business);
 
         return $this->successResponse(
             BusinessResource::make($business->fresh()->load(['owner', 'category', 'municipality'])),
@@ -86,16 +65,7 @@ class AdminBusinessController extends Controller
             'remarks' => 'required|string|max:500',
         ]);
 
-        $business->update(['status' => 'rejected']);
-
-        BusinessStatusLog::create([
-            'business_id' => $business->id,
-            'status' => 'rejected',
-            'remarks' => $request->remarks,
-            'reviewed_by' => $request->user()->id,
-        ]);
-
-        ActivityLog::record('business.rejected', sprintf('Rejected business "%s". Remarks: %s', $business->business_name, $request->remarks), $business);
+        $this->moderation->reject($business, $request->user(), $request->remarks);
 
         return $this->successResponse(
             BusinessResource::make($business),
@@ -109,16 +79,7 @@ class AdminBusinessController extends Controller
             'remarks' => 'required|string|max:500',
         ]);
 
-        $business->update(['status' => 'suspended']);
-
-        BusinessStatusLog::create([
-            'business_id' => $business->id,
-            'status' => 'suspended',
-            'remarks' => $request->remarks,
-            'reviewed_by' => $request->user()->id,
-        ]);
-
-        ActivityLog::record('business.suspended', sprintf('Suspended business "%s". Remarks: %s', $business->business_name, $request->remarks), $business);
+        $this->moderation->suspend($business, $request->user(), $request->remarks);
 
         return $this->successResponse(
             BusinessResource::make($business),
@@ -137,24 +98,12 @@ class AdminBusinessController extends Controller
             'admin_remarks' => ['nullable', 'string', 'max:1000'],
         ]);
 
-        $document->update([
-            'verification_status' => $validated['verification_status'],
-            'admin_remarks' => $validated['admin_remarks'] ?? $document->admin_remarks,
-            'verified_by' => $request->user()->id,
-            'verified_at' => now(),
-        ]);
-
-        $document->load('requiredDocument');
-
-        ActivityLog::record(
-            'business_document.reviewed',
-            sprintf(
-                'Reviewed document "%s" for business "%s" → %s.',
-                $document->requiredDocument?->name ?? $document->id,
-                $business->business_name,
-                $validated['verification_status']
-            ),
-            $business
+        $document = $this->moderation->reviewDocument(
+            $business,
+            $document,
+            $request->user(),
+            $validated['verification_status'],
+            $validated['admin_remarks'] ?? null
         );
 
         return $this->successResponse(BusinessDocumentResource::make($document), 'Document status updated.');

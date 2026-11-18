@@ -6,7 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const api = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn() }))
 vi.mock('@/shared/services/api', () => ({ ...api, apiErrorMessage: (_e: unknown, f: string) => f }))
 
-import AdminRiders from '@/features/admin/pages/AdminRiders'
+// Fares moved to Riders → Fare configuration (2026-11-16); accounts stay on Riders.
+import { AdminRiderFares as AdminRiders } from '@/features/admin/pages/AdminRiders'
 
 const foodFares = {
   base_fare: 40, included_kilometers: 2, per_kilometer: 15, minimum_fee: 40, service_adjustment: 0, surge_multiplier: 1,

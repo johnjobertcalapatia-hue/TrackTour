@@ -29,7 +29,6 @@ return [
     // time; others cannot view or accept it until it is accepted, released
     // or expires.
     'offer_review_seconds' => (int) env('RIDER_OFFER_REVIEW_SECONDS', 90),
-    'board_claimed_limit' => (int) env('RIDER_BOARD_CLAIMED_LIMIT', 8),
     // B2 (Option C, master spec §14): a live socket-radar entry is trusted as
     // the GPS freshness source only when the rider reported within this window.
     // Mirrors socket-validation.js LIMITS.radarStaleMs (2 minutes).

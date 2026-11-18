@@ -1,9 +1,10 @@
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
+import { ArrowRight, BedDouble, Compass, Map as MapIcon, MapPin, Store, UtensilsCrossed, type LucideIcon } from 'lucide-react'
 import { get } from '@/shared/services/api'
-import { ApplicationLogo } from '@/shared/components/ApplicationLogo'
-import { formatCurrency } from '@/shared/utils'
-import { Star, MapPin, ArrowLeft, Compass } from 'lucide-react'
+import { formatCurrency, toAssetUrl } from '@/shared/utils'
+import LandingShell from './components/LandingShell'
+import LandingItemCard, { LandingEmpty, LandingSpinner, type LandingItem } from './components/LandingItemCard'
 
 interface ExploreItem {
   id: number
@@ -34,155 +35,163 @@ interface ExploreData {
   counts?: { places: number; food: number; stays: number }
 }
 
-const TYPE_EMOJI: Record<string, string> = { place: '📍', food: '🍴', stay: '🏨', business: '🏪' }
-
 interface Section {
-  key: string
+  key: 'places' | 'food' | 'businesses' | 'stays'
   title: string
+  blurb: string
   count: number
-  countLabel: string
-  items: (ExploreItem | MapBusiness)[]
+  countLabel: [string, string]
+  icon: LucideIcon
+  items: LandingItem[]
 }
 
+/** How many cards each category previews before "See all". */
+const PREVIEW = 8
+
+/** Public "All Categories" page: a preview of every category. */
 export default function LandingAllCategoriesPage() {
-  const navigate = useNavigate()
+  // Municipality filter, kept in the URL (?municipality=) so a filtered view can be shared.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const municipalityId = Number(searchParams.get('municipality')) || null
+  const chooseMunicipality = (id: string) => {
+    const next = new URLSearchParams(searchParams)
+    if (id) next.set('municipality', id)
+    else next.delete('municipality')
+    setSearchParams(next, { replace: true })
+  }
 
   const { data, isLoading } = useQuery({
-    queryKey: ['landing-explore'],
-    queryFn: () => get<ExploreData>('/tourist/explore'),
+    queryKey: ['landing-explore', municipalityId],
+    queryFn: () => get<ExploreData>('/tourist/explore', municipalityId ? { params: { municipality_id: municipalityId } } : undefined),
   })
+  // The municipality list stays complete whichever municipality is chosen.
+  const municipalities = [...(data?.municipalities ?? [])].sort((a, b) => a.name.localeCompare(b.name))
+  const municipalityName = municipalities.find((m) => m.id === municipalityId)?.name ?? null
 
   const { data: businessData } = useQuery({
     queryKey: ['landing-explore-businesses'],
     queryFn: () => get<MapBusiness[]>('/map/businesses'),
   })
 
-  const places = data?.places ?? []
-  const food = data?.food ?? []
-  const stays = data?.stays ?? []
-  const businesses = businessData ?? []
   const counts = data?.counts ?? { places: 0, food: 0, stays: 0 }
 
+  const fromExplore = (list: ExploreItem[], category: string, icon: LucideIcon): LandingItem[] =>
+    list.map((item) => ({
+      key: `${item.type}-${item.id}`,
+      to: item.type === 'place' ? `/tourist/destinations/${item.id}` : item.type === 'food' ? `/explore/food/${item.id}` : `/tourist/explore/${item.id}`,
+      title: item.name,
+      image: item.cover_photo ? toAssetUrl(item.cover_photo) : null,
+      category,
+      location: item.municipality,
+      rating: item.rating,
+      note: item.starting_price && item.starting_price > 0 ? `From ${formatCurrency(item.starting_price)}` : null,
+      icon,
+    }))
+
+  const businessItems: LandingItem[] = (businessData ?? []).filter((b) => !municipalityName || b.municipality === municipalityName).map((b) => ({
+    key: `business-${b.id}`,
+    to: `/tourist/explore/${b.id}`,
+    title: b.name,
+    image: b.cover_photo ? toAssetUrl(b.cover_photo) : null,
+    category: b.category ?? 'Business',
+    location: b.municipality ?? null,
+    rating: b.average_rating ?? null,
+    icon: Store,
+  }))
+
   const sections: Section[] = [
-    { key: 'places', title: 'Tourist Spots', count: counts.places, countLabel: 'tourist spots', items: places },
-    { key: 'food', title: 'Food', count: counts.food, countLabel: 'restaurants', items: food },
-    { key: 'businesses', title: 'Businesses', count: businesses.length, countLabel: 'businesses', items: businesses },
-    { key: 'stays', title: 'Resorts', count: counts.stays, countLabel: 'resorts', items: stays },
+    { key: 'places', title: 'Tourist Spots', blurb: 'Waterfalls, viewpoints, parks and heritage sites.', count: counts.places, countLabel: ['tourist spot', 'tourist spots'], icon: Compass, items: fromExplore(data?.places ?? [], 'Tourist Spot', Compass) },
+    { key: 'food', title: 'Food', blurb: 'Local restaurants and food hubs that deliver.', count: counts.food, countLabel: ['restaurant', 'restaurants'], icon: UtensilsCrossed, items: fromExplore(data?.food ?? [], 'Restaurant', UtensilsCrossed) },
+    { key: 'businesses', title: 'Businesses', blurb: 'Shops and services run by local owners.', count: businessItems.length, countLabel: ['business', 'businesses'], icon: Store, items: businessItems },
+    { key: 'stays', title: 'Resorts', blurb: 'Resorts and stays for every kind of trip.', count: counts.stays, countLabel: ['resort', 'resorts'], icon: BedDouble, items: fromExplore(data?.stays ?? [], 'Resort & Stay', BedDouble) },
   ]
 
-  const handleTap = (item: ExploreItem | MapBusiness) => {
-    if ('type' in item) {
-      if (item.type === 'place') navigate(`/tourist/destinations/${item.id}`)
-      else if (item.type === 'food') navigate(`/explore/food/${item.id}`)
-      else navigate(`/tourist/explore/${item.id}`)
-    } else {
-      navigate(`/tourist/explore/${item.id}`)
-    }
-  }
-
   return (
-    <div className="min-h-screen tourism-bg tourism-bg-orbs text-[#17201A]">
-      <nav className="flex items-center justify-between px-6 py-2 max-w-7xl mx-auto tourism-nav">
-        <Link to="/" className="flex items-center gap-3">
-          <ApplicationLogo className="w-12 h-12" />
-          <span className="text-xl font-bold text-[#16803C]">TrackTour</span>
-        </Link>
-        <div className="flex items-center gap-3">
-          <Link to="/login" className="text-sm text-[#16803C] hover:text-[#126B32] transition-colors">
-            Sign In
-          </Link>
-          <Link to="/role-selection" className="btn-tourism px-4 py-1.5 text-sm font-medium">
-            Get Started
+    <LandingShell
+      eyebrow="Browse"
+      title="Explore All Categories"
+      subtitle={municipalityName ? `Everything on TrackTour in ${municipalityName}, grouped by what you want to do.` : 'Everything on TrackTour, grouped by what you want to do.'}
+      back={{ to: '/', label: 'Back to Home', onClick: () => sessionStorage.setItem('tracktour_scroll_to_content', '1') }}
+      bandExtra={
+        <div className="flex flex-wrap items-center gap-2">
+          {sections.map((s) => (
+            <a
+              key={s.key}
+              href={`#category-${s.key}`}
+              className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-sm font-semibold text-white ring-1 ring-white/25 backdrop-blur hover:bg-white/20"
+            >
+              <s.icon className="h-4 w-4 text-[#FFD000]" aria-hidden="true" /> {s.title}
+              <span className="rounded-full bg-[#FFD000] px-2 text-xs font-bold text-[#14351F]">{s.count}</span>
+            </a>
+          ))}
+          <span className="mx-1 hidden h-6 w-px bg-white/25 sm:block" aria-hidden="true" />
+          <label className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-sm font-semibold text-[#14351F] shadow">
+            <MapPin className="h-4 w-4 text-[#0B5D2E]" aria-hidden="true" />
+            <span className="sr-only">Municipality</span>
+            <select
+              aria-label="Municipality"
+              value={municipalityId ?? ''}
+              onChange={(e) => chooseMunicipality(e.target.value)}
+              className="bg-transparent font-semibold outline-none"
+            >
+              <option value="">All municipalities</option>
+              {municipalities.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </label>
+          <Link
+            to="/?view=map"
+            className="inline-flex items-center gap-2 rounded-full bg-[#FFD000] px-4 py-2 text-sm font-bold text-[#14351F] shadow hover:bg-[#FFDD33]"
+          >
+            <MapIcon className="h-4 w-4" aria-hidden="true" /> Map view
           </Link>
         </div>
-      </nav>
-
-      <div className="max-w-7xl mx-auto px-[10px] py-8">
-        <Link
-          to="/"
-          onClick={() => sessionStorage.setItem('tracktour_scroll_to_content', '1')}
-          className="inline-flex items-center gap-2 text-sm font-medium text-[#087F3F] hover:text-[#056B35] transition-colors mb-4"
-        >
-          <ArrowLeft className="w-4 h-4" /> Back to Home
-        </Link>
-        <h1 className="text-2xl lg:text-3xl font-bold text-[#17201A] mb-8">Explore All Categories</h1>
-
-        {isLoading ? (
-          <div className="flex items-center justify-center py-20">
-            <div className="w-6 h-6 border-2 border-[#087F3F] border-t-transparent rounded-full animate-spin" />
-          </div>
-        ) : (
-          <div className="space-y-12">
-            {sections.map((section) => (
-              <section key={section.key}>
-                <div className="flex items-center gap-3 mb-4">
-                  <h2 className="text-lg lg:text-xl font-bold text-[#087F3F]">{section.title}</h2>
-                  <span className="inline-flex items-center gap-1 bg-white border border-[#E2E8E3] text-[#17201A] text-xs font-semibold px-2.5 py-1 rounded-full">
-                    {section.count} {section.countLabel}
+      }
+    >
+      {isLoading ? (
+        <LandingSpinner />
+      ) : (
+        <div className="space-y-16">
+          {sections.map((section) => (
+            <section key={section.key} id={`category-${section.key}`} className="scroll-mt-6" aria-labelledby={`category-${section.key}-heading`}>
+              <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div className="flex items-start gap-4">
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[#0B5D2E] text-[#FFD000] shadow-md">
+                    <section.icon className="h-6 w-6" aria-hidden="true" />
                   </span>
+                  <div>
+                    <h2 id={`category-${section.key}-heading`} className="text-2xl font-bold text-[#0B5D2E] sm:text-3xl">
+                      {section.title}
+                    </h2>
+                    <p className="text-sm text-[#5B6A60]">
+                      {section.count} {section.countLabel[section.count === 1 ? 0 : 1]} · {section.blurb}
+                    </p>
+                  </div>
                 </div>
-
-                {section.items.length === 0 ? (
-                  <div className="py-10 text-center bg-white border border-[#E5E9E7] rounded-2xl">
-                    <Compass className="w-10 h-10 text-[#9CA3AF] mx-auto mb-3" />
-                    <p className="text-[#68736D] text-sm">Nothing found in this category yet.</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-                    {section.items.map((item) => {
-                      const isBusiness = !('type' in item)
-                      const name = item.name
-                      const cover = item.cover_photo
-                      const rating = isBusiness ? (item as MapBusiness).average_rating ?? null : (item as ExploreItem).rating
-                      const municipality = isBusiness
-                        ? (item as MapBusiness).municipality ?? ''
-                        : (item as ExploreItem).municipality
-                      const emoji = isBusiness ? TYPE_EMOJI.business : TYPE_EMOJI[item.type]
-                      const startingPrice = isBusiness ? undefined : (item as ExploreItem).starting_price
-
-                      return (
-                        <div
-                          key={`${section.key}-${item.id}`}
-                          onClick={() => handleTap(item)}
-                          className="bg-white border border-[#E5E9E7] rounded-2xl overflow-hidden cursor-pointer hover:border-[#087F3F]/40 transition-all group"
-                        >
-                          <div className="aspect-[4/3] bg-[#E9F7EF] overflow-hidden relative">
-                            {cover ? (
-                              <img src={cover} alt={name} className="w-full h-full object-cover group-hover:scale-105 transition duration-500" />
-                            ) : (
-                              <div className="w-full h-full flex items-center justify-center">
-                                <span className="text-4xl">{emoji}</span>
-                              </div>
-                            )}
-                            {rating != null && (
-                              <div className="absolute bottom-2 left-2 flex items-center gap-1 bg-black/60 backdrop-blur-md text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-md">
-                                <Star className="w-3 h-3 text-[#F4B400] fill-[#F4B400]" /> {rating.toFixed(1)}
-                              </div>
-                            )}
-                          </div>
-                          <div className="p-2 h-[80px] flex flex-col justify-center">
-                            <h3 className="text-sm font-semibold text-[#17201B] truncate group-hover:text-[#087F3F] transition">{name}</h3>
-                            <div className="flex items-center gap-1 mt-0.5 text-[11px] text-[#68736D]">
-                              <MapPin className="w-3 h-3 shrink-0" /> <span className="truncate">{municipality}</span>
-                            </div>
-                            {!isBusiness && startingPrice != null && startingPrice > 0 && (
-                              <p className="text-[11px] font-bold text-[#087F3F] mt-1">From {formatCurrency(startingPrice)}</p>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
+                {section.items.length > PREVIEW && (
+                  <Link
+                    to={`/explore?tab=${section.key}`}
+                    className="inline-flex items-center gap-1.5 self-start rounded-full bg-[#FFD000] px-5 py-2.5 text-sm font-bold text-[#14351F] shadow hover:bg-[#FFDD33] sm:self-auto"
+                  >
+                    See all {section.title.toLowerCase()} <ArrowRight className="h-4 w-4" />
+                  </Link>
                 )}
-              </section>
-            ))}
-          </div>
-        )}
-      </div>
+              </div>
 
-      <footer className="border-t border-ink/5 py-8 text-center text-sm text-ink-soft mt-8">
-        &copy; {new Date().getFullYear()} <span className="text-[#16803C] font-semibold">TrackTour</span> — Bansud Tourism Office. All rights reserved.
-      </footer>
-    </div>
+              {section.items.length === 0 ? (
+                <LandingEmpty message="Nothing found in this category yet." />
+              ) : (
+                <ul className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                  {section.items.slice(0, PREVIEW).map((item, i) => (
+                    <li key={item.key}>
+                      <LandingItemCard item={item} index={i} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          ))}
+        </div>
+      )}
+    </LandingShell>
   )
 }

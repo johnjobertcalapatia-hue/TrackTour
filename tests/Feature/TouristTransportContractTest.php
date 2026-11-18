@@ -71,6 +71,16 @@ class TouristTransportContractTest extends TestCase
             'account_status' => 'approved',
         ]);
 
+        // Reconciled 2026-11-16 (AGENTS.md §12): tourists can book only vehicle
+        // types that a registered ride-hailing rider has. One offline
+        // motorcycle rider (no location, never dispatched) makes motorcycle
+        // bookable without changing any dispatch expectation below.
+        $fleet = User::create([
+            'name' => 'Registered Fleet Rider', 'email' => 'contract-fleet@example.com', 'password' => Hash::make('Password123!'),
+            'role' => 'rider', 'account_status' => 'approved',
+        ]);
+        RiderDetail::create(['user_id' => $fleet->id, 'rider_status' => 'offline', 'current_service' => 'transport', 'vehicle_type' => 'motorcycle']);
+
         $this->app->instance(NearestRiderService::class, new class() extends NearestRiderService {
             public Collection $candidates;
 
@@ -154,7 +164,8 @@ class TouristTransportContractTest extends TestCase
             'user_id' => $rider->id,
             'rider_status' => $overrides['rider_status'] ?? 'available',
             'current_service' => $overrides['current_service'] ?? 'food',
-            'vehicle_type' => 'Motorcycle',
+            // Every rider has a registered vehicle; ride-hailing needs a motor vehicle (RideVehicles).
+            'vehicle_type' => $overrides['vehicle_type'] ?? 'motorcycle',
             'vehicle_plate_number' => 'ABC 1234',
         ]);
 
@@ -249,9 +260,11 @@ class TouristTransportContractTest extends TestCase
     {
         // Rides are paid in cash to the driver or online with GCash (PayMongo), 2026-11-10.
         foreach (['cash', 'gcash'] as $method) {
-            $this->postJson('/api/tourist/transport/book', $this->bookPayload(['payment_method' => $method]), $this->authHeaders($this->tourist))
+            $booked = $this->postJson('/api/tourist/transport/book', $this->bookPayload(['payment_method' => $method]), $this->authHeaders($this->tourist))
                 ->assertStatus(201);
             $this->assertSame($method, Order::where('order_type', 'transport')->latest('id')->value('payment_method'));
+            // One ride at a time (2026-11-17): cancel it before trying the next method.
+            $this->postJson('/api/tourist/transport/trip/'.$booked->json('data.order_id').'/cancel', ['reason' => 'changed_plans'], $this->authHeaders($this->tourist))->assertOk();
         }
         foreach (['maya', 'card'] as $method) {
             $this->postJson('/api/tourist/transport/book', $this->bookPayload(['payment_method' => $method]), $this->authHeaders($this->tourist))
@@ -307,6 +320,74 @@ class TouristTransportContractTest extends TestCase
 
         $order = Order::find($response->json('data.order_id'));
         $this->assertSame($this->expectedMotorcycleFare(), (float) $order->total);
+    }
+
+    // ---------- 1b. one ride at a time (2026-11-17) ----------
+
+    public function test_a_second_ride_is_refused_while_the_first_is_not_finished(): void
+    {
+        $first = $this->postJson('/api/tourist/transport/book', $this->bookPayload(), $this->authHeaders($this->tourist))->assertCreated();
+        $firstId = $first->json('data.order_id');
+
+        $this->getJson('/api/tourist/transport/active', $this->authHeaders($this->tourist))
+            ->assertOk()
+            ->assertJsonPath('data.id', $firstId)
+            ->assertJsonPath('data.status', 'searching')
+            ->assertJsonPath('data.redirect', '/tourist/transport/tracking/'.$firstId);
+
+        // Still searching for a driver: refused, and pointed back to the first ride.
+        $this->postJson('/api/tourist/transport/book', $this->bookPayload(), $this->authHeaders($this->tourist))
+            ->assertStatus(409)
+            ->assertJsonPath('data.code', 'active_ride')
+            ->assertJsonPath('data.order_id', $firstId)
+            ->assertJsonPath('data.redirect', '/tourist/transport/tracking/'.$firstId)
+            ->assertJsonPath('message', 'You already have a ride in progress. Finish or cancel it before booking another ride.');
+        $this->assertSame(1, Order::where('order_type', 'transport')->count(), 'The refused booking creates nothing.');
+
+        // Driver on the way / in the trip: still refused.
+        foreach (['assigned', 'arrived_pickup', 'in_transit'] as $status) {
+            Delivery::where('order_id', $firstId)->update(['status' => $status]);
+            $this->postJson('/api/tourist/transport/book', $this->bookPayload(), $this->authHeaders($this->tourist))
+                ->assertStatus(409)->assertJsonPath('data.code', 'active_ride');
+        }
+        $this->assertSame(1, Order::where('order_type', 'transport')->count());
+    }
+
+    public function test_a_new_ride_can_be_booked_once_the_first_is_cancelled(): void
+    {
+        $first = $this->postJson('/api/tourist/transport/book', $this->bookPayload(), $this->authHeaders($this->tourist))->assertCreated();
+        $this->postJson('/api/tourist/transport/trip/'.$first->json('data.order_id').'/cancel', ['reason' => 'changed_plans'], $this->authHeaders($this->tourist))->assertOk();
+
+        $this->getJson('/api/tourist/transport/active', $this->authHeaders($this->tourist))->assertOk()->assertJsonPath('data', null);
+        $this->postJson('/api/tourist/transport/book', $this->bookPayload(), $this->authHeaders($this->tourist))->assertCreated();
+        $this->assertSame(2, Order::where('order_type', 'transport')->count());
+    }
+
+    public function test_a_new_ride_can_be_booked_once_the_first_is_completed(): void
+    {
+        $first = $this->postJson('/api/tourist/transport/book', $this->bookPayload(), $this->authHeaders($this->tourist))->assertCreated();
+        $firstId = $first->json('data.order_id');
+
+        // Delivered (COD cash still to settle) already ends the ride for the tourist.
+        Delivery::where('order_id', $firstId)->update(['status' => 'delivered']);
+        $second = $this->postJson('/api/tourist/transport/book', $this->bookPayload(), $this->authHeaders($this->tourist))->assertCreated();
+
+        // Completed order.
+        Order::whereKey($second->json('data.order_id'))->update(['status' => 'completed']);
+        $this->postJson('/api/tourist/transport/book', $this->bookPayload(), $this->authHeaders($this->tourist))->assertCreated();
+        $this->assertSame(3, Order::where('order_type', 'transport')->count());
+    }
+
+    public function test_another_tourists_ride_does_not_block_booking(): void
+    {
+        $this->postJson('/api/tourist/transport/book', $this->bookPayload(), $this->authHeaders($this->tourist))->assertCreated();
+
+        $other = User::create([
+            'name' => 'Other Tourist', 'email' => 'contract-other-tourist@example.com', 'password' => Hash::make('Password123!'),
+            'role' => 'tourist', 'account_status' => 'approved',
+        ]);
+        $this->getJson('/api/tourist/transport/active', $this->authHeaders($other))->assertOk()->assertJsonPath('data', null);
+        $this->postJson('/api/tourist/transport/book', $this->bookPayload(), $this->authHeaders($other))->assertCreated();
     }
 
     // ---------- 2. estimate ----------

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import RidePaymentStep from '@/features/rider/components/RidePaymentStep'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
@@ -263,6 +264,14 @@ function RideTrip({ offer, id, isThisTrip, status }: {
   const trip = useRiderActiveTrip()
   const ride = offer.ride ?? null
   const fare = ride?.fare ?? null
+  // Payment before completing (2026-11-18): GCash verified paid, or cash
+  // received — the rider ticks it; an unpaid GCash ride can switch to cash.
+  const live = isThisTrip ? trip.activeDelivery : null
+  const online = String(live?.payment_method ?? (offer.is_cod ? 'cash' : 'gcash')).toLowerCase() !== 'cash'
+  const paid = online && live?.payment_status === 'paid'
+  const [paymentConfirmed, setPaymentConfirmed] = useState(false)
+  const [confirmSwitch, setConfirmSwitch] = useState(false)
+  useEffect(() => { setPaymentConfirmed(false); setConfirmSwitch(false) }, [id, live?.payment_method])
 
   // A cash ride already 'delivered' but whose fare is not recorded yet stays on step 4.
   const unsettled = trip.pendingSettlement?.deliveryId === id
@@ -274,7 +283,10 @@ function RideTrip({ offer, id, isThisTrip, status }: {
   const distanceTo = (lat: number | null | undefined, lng: number | null | undefined) =>
     locationKnown && lat != null && lng != null ? distanceMeters(trip.riderPosition, [Number(lat), Number(lng)]) : null
   const pickupConditions = withSavedLocation(ridePickupConditions(distanceTo(offer.pickup.latitude, offer.pickup.longitude), locationKnown), trip.locationRefusal)
-  const dropConditions = withSavedLocation(rideDropoffConditions(distanceTo(offer.dropoff.latitude, offer.dropoff.longitude), locationKnown), trip.locationRefusal)
+  // Drop-off: like the food drop-off, the phone's own fix counts up to ±200 m when the
+  // server could not SAVE it for precision (2026-11-17: a rider at the destination was
+  // stuck on "GPS is not precise enough"; the server never blocks a ride on location).
+  const dropConditions = withDropoffLocation(rideDropoffConditions(distanceTo(offer.dropoff.latitude, offer.dropoff.longitude), locationKnown), trip.locationRefusal, trip.deviceAccuracy)
   const vehicle = ride ? ride.vehicle_type.charAt(0).toUpperCase() + ride.vehicle_type.slice(1) : 'Ride'
   const passengers = ride?.passenger_count ?? 1
 
@@ -385,15 +397,33 @@ function RideTrip({ offer, id, isThisTrip, status }: {
         >
           {stepState(4, stage) === 'current' && isThisTrip && (
             <div className="space-y-3">
-              <p className="rounded-xl border border-[#CFE8D6] bg-[#F4FBF6] px-3 py-2.5 text-sm font-medium text-[#17201B]">
-                {offer.is_cod ? `Collect ${peso(fare)} in cash from the passenger.` : 'Paid online. Nothing to collect.'}
-              </p>
+              {unsettled ? (
+                <p className="rounded-xl border border-[#CFE8D6] bg-[#F4FBF6] px-3 py-2.5 text-sm font-medium text-[#17201B]">
+                  Record the {peso(fare)} cash fare you collected.
+                </p>
+              ) : (
+                <RidePaymentStep
+                  needsArrival={false}
+                  changedMaxFare={null}
+                  online={online}
+                  paid={paid}
+                  fare={fare}
+                  confirmed={paymentConfirmed}
+                  onConfirmedChange={setPaymentConfirmed}
+                  confirmSwitch={confirmSwitch}
+                  onAskSwitch={() => setConfirmSwitch(true)}
+                  onCancelSwitch={() => setConfirmSwitch(false)}
+                  onSwitch={() => { setConfirmSwitch(false); trip.switchRideToCash() }}
+                  switching={trip.switchToCashBusy}
+                />
+              )}
+              {trip.switchToCashError && <p role="alert" className="text-sm font-medium text-[#B91C1C]">{trip.switchToCashError}</p>}
               <ActionButton
-                onClick={() => (unsettled ? trip.settleCod(fare ?? trip.pendingSettlement?.cashDue ?? 0) : trip.onCompleteRide(offer.is_cod ? fare : null))}
-                disabled={trip.busy || trip.settleBusy}
+                onClick={() => (unsettled ? trip.settleCod(fare ?? trip.pendingSettlement?.cashDue ?? 0) : trip.onCompleteRide(online ? null : fare))}
+                disabled={trip.busy || trip.settleBusy || (!unsettled && (!paymentConfirmed || (online && !paid)))}
                 icon={<Check className="h-5 w-5" />}
               >
-                {offer.is_cod ? 'Fare Collected · Complete Ride' : 'Complete Ride'}
+                {online ? 'Complete Ride' : 'Fare Collected · Complete Ride'}
               </ActionButton>
             </div>
           )}

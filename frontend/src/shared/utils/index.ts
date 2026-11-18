@@ -104,7 +104,7 @@ export function getRoleDashboardPath(role: string): string {
     staff: '/staff/dashboard',
     rider: '/rider/map',
     bansud_tourism_office: '/admin/dashboard',
-    tourism_office: '/tourism-office/dashboard',
+    tourism_office: '/municipal/dashboard',
   }
   return routes[role] || '/unauthorized'
 }

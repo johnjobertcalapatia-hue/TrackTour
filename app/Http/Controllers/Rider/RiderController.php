@@ -88,6 +88,11 @@ class RiderController extends Controller
             $newService = User::SERVICE_FOOD;
         }
 
+        // Per-service approval from Tourism Office onboarding.
+        if (! $user->isEligibleForService($newService)) {
+            return $this->errorResponse($this->ineligibleMessage($user, $newService), 403);
+        }
+
         $user->riderDetail()->updateOrCreate(
             ['user_id' => $user->id],
             ['current_service' => $newService]
@@ -138,6 +143,15 @@ class RiderController extends Controller
         // mid-delivery or mid-ride — they must remain online for the whole trip.
         if ($currentStatus === User::RIDER_STATUS_BUSY || $this->hasActiveTrip($user)) {
             return $this->errorResponse('You are currently on a delivery or trip. Complete it before going offline.', 409);
+        }
+
+        // Only an activated rider may go online; applicants finish the
+        // Tourism Office onboarding first.
+        if ($currentStatus === User::RIDER_STATUS_OFFLINE && $user->account_status !== User::ACCOUNT_STATUS_APPROVED) {
+            return $this->errorResponse('Finish your Tourism Office onboarding before going online.', 403);
+        }
+        if ($currentStatus === User::RIDER_STATUS_OFFLINE && ! $user->isEligibleForService($service = $user->riderDetail?->current_service ?? User::SERVICE_FOOD)) {
+            return $this->errorResponse($this->ineligibleMessage($user, $service), 403);
         }
 
         if ($currentStatus === User::RIDER_STATUS_OFFLINE) {
@@ -272,5 +286,17 @@ class RiderController extends Controller
                 'subtotal' => (float) $item->subtotal,
             ])->values()->all() ?? [],
         ]);
+    }
+
+    /** Why a rider cannot work a service (vehicle first: it decides ride-hailing). */
+    private function ineligibleMessage(User $user, string $service): string
+    {
+        if ($service === User::SERVICE_TRANSPORT && ! \App\Services\RideVehicles::canRideHail($user->riderDetail?->vehicle_type)) {
+            return $user->riderDetail?->vehicle_type === 'bicycle'
+                ? 'A bicycle can be used for food delivery only, not ride-hailing.'
+                : 'Ride-hailing needs a registered motorcycle, tricycle, car or van. Ask the Tourism Office to record your vehicle.';
+        }
+
+        return 'You are not approved for this service yet. Contact the Tourism Office.';
     }
 }

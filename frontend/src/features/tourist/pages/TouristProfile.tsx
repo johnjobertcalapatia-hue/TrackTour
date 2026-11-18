@@ -73,7 +73,7 @@ export default function TouristProfile() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-xl space-y-6 px-4 pt-6 pb-4">
+    <div className="mx-auto lg:mx-0 w-full max-w-xl space-y-6">
       {/* Avatar */}
       <div className="flex flex-col items-center gap-3">
         <div className="relative">
