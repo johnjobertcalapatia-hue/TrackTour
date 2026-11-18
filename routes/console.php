@@ -16,12 +16,19 @@ Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
 
+// Every task runs ->onOneServer() (2026-11-18): if two containers run the
+// scheduler at once (a Railway deploy overlap or more than one replica), only
+// one of them runs each task per minute. The lock lives in the shared
+// `database` cache (cache_locks table); the server that wins a minute keeps
+// the sub-minute repeats of that minute.
 Schedule::command(CleanupRiderLocations::class, ['--days' => 30])
     ->daily()
+    ->onOneServer()
     ->description('Purge old GPS checkpoint data, keeping only the encoded polyline');
 
 Schedule::command(CheckExpiredDocuments::class)
     ->everySixHours()
+    ->onOneServer()
     ->description('Suspend businesses with expired documents and reinstate renewed ones');
 
 // Never auto-cancel: orders that never find a rider wait indefinitely by
@@ -30,14 +37,17 @@ Schedule::command(CheckExpiredDocuments::class)
 // eligible preparations and flips due timers PREPARING → READY at 00:00.
 Schedule::command(AdvancePreparationOrders::class)
     ->everyMinute()
+    ->onOneServer()
     ->description('Start preparation for rider-accepted orders and complete due preparation timers');
 
 Schedule::command(AutoCancelUndeliveredOrder::class)
     ->everyMinute()
+    ->onOneServer()
     ->description('Flag accepted orders not delivered within 60 minutes (never cancels or refunds them)');
 
 Schedule::command(DispatchScheduledDeliveries::class)
     ->everyMinute()
+    ->onOneServer()
     ->description('Dispatch due scheduled deliveries to the nearest eligible rider');
 
 // Sequential dispatch: server-owned 60 s targeted offer timers (a reject
@@ -46,16 +56,19 @@ Schedule::command(DispatchScheduledDeliveries::class)
 Schedule::command(ProcessDispatchOfferTimeouts::class)
     ->everyFiveSeconds()
     ->withoutOverlapping()
+    ->onOneServer()
     ->description('Expire overdue rider offers and advance sequential dispatch');
 
 // Stage D: dish popularity (ratings + sales) for the tourist Food page.
 Schedule::command(RecomputeFoodPopularity::class)
     ->everyTenMinutes()
     ->withoutOverlapping()
+    ->onOneServer()
     ->description('Recompute dish popularity scores from ratings and sales');
 
 Schedule::command(ReconcilePendingRefunds::class)
     ->everyThirtyMinutes()
+    ->onOneServer()
     ->description('Reconcile pending_refund payments against the PayMongo refund state');
 
 // Secure transaction architecture (docs/secure-transaction-audit.md): sign
@@ -63,11 +76,13 @@ Schedule::command(ReconcilePendingRefunds::class)
 Schedule::command(\App\Console\Commands\CreateTransactionCheckpoint::class)
     ->hourly()
     ->withoutOverlapping()
+    ->onOneServer()
     ->description('Sign a checkpoint of changed transaction histories');
 
 Schedule::command(\App\Console\Commands\VerifyTransactionIntegrity::class, ['--hours' => 48])
     ->dailyAt('02:30')
     ->withoutOverlapping()
+    ->onOneServer()
     ->description('Re-verify transaction histories changed in the last 48 hours');
 
 // System Diagnostics (admin): proves the scheduler process is alive. Only the
@@ -82,10 +97,12 @@ Schedule::call(function (): void {
 })
     ->everyMinute()
     ->name('system-diagnostics-heartbeat')
+    ->onOneServer()
     ->description('Record that the scheduler is running (System Diagnostics)');
 
 // Incident history: prune history-only / dismissed records after 180 days
 // (open problems and fixed ones are kept).
 Schedule::command('model:prune', ['--model' => [\App\Models\SystemIncident::class]])
     ->daily()
+    ->onOneServer()
     ->description('Prune old history-only system incidents');

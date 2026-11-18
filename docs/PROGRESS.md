@@ -1,5 +1,12 @@
 # Project Progress — Tourism Management Portal
 
+## Scheduler — every task runs on one server only (2026-11-18)
+
+- **Why:** on Railway the heartbeat false alarm repeated every minute from 1:21 to 1:33 PM, which means two schedulers ran at once (a long deploy overlap or more than one replica). Each container runs `schedule:work` from supervisord, so with two containers every task would run twice a minute: scheduled dispatch, late-order flags, preparation starts, and so on.
+- **Change:** all 12 tasks in `routes/console.php` have `->onOneServer()`. One scheduler claims each task per minute through a lock in the shared `database` cache (`cache_locks`). The one that wins a minute also runs the every-5-second offer-timeout repeats for that minute. With a single container nothing changes.
+- **Test:** `SystemDiagnosticsTest::test_every_scheduled_task_runs_on_one_server_only`: every task is single-server, a second scheduler skips the claimed minute, and the next minute is free. Laravel **1291 passed, 2 skipped**.
+- **Still check:** that the Railway service runs 1 replica.
+
 ## Production — "Scheduled command [] failed with exit code [1]" (2026-11-18)
 
 - **Seen on Railway:** 3 Server error incidents (1:00, 1:21, 1:22 PM), no account. The empty `[]` means a scheduled *closure*; the only one is the System Diagnostics heartbeat.
