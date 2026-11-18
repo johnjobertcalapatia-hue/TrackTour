@@ -383,6 +383,9 @@ function IncidentDialog({ id, onClose, onOpen }: { id: number; onClose: () => vo
   const [mode, setMode] = useState<'view' | 'fix' | 'dismiss'>('view')
   const [note, setNote] = useState('')
   const [similar, setSimilar] = useState(false)
+  // Reopen asks first: right after "Save as fixed" the Reopen button appears in
+  // the same spot, so a double-click used to reopen what was just fixed.
+  const [confirmReopen, setConfirmReopen] = useState(false)
 
   const { data: i, isLoading } = useQuery({ queryKey: ['admin-incident', id], queryFn: () => get<IncidentDetail>(`${API}/${id}`) })
 
@@ -394,6 +397,7 @@ function IncidentDialog({ id, onClose, onOpen }: { id: number; onClose: () => vo
       setMode('view')
       setNote('')
       setSimilar(false)
+      setConfirmReopen(false)
     },
   })
 
@@ -549,10 +553,20 @@ function IncidentDialog({ id, onClose, onOpen }: { id: number; onClose: () => vo
                     </button>
                   </>
                 )}
-                {!canClose && (
-                  <button type="button" onClick={() => act.mutate({ action: 'reopen' })} disabled={act.isPending} className="inline-flex items-center gap-1.5 rounded-xl border border-[#E7E2D6] px-4 py-2 text-sm font-medium text-[#1C2B22] hover:bg-[#FAF7F0]">
+                {!canClose && !confirmReopen && (
+                  <button type="button" onClick={() => setConfirmReopen(true)} disabled={act.isPending} className="inline-flex items-center gap-1.5 rounded-xl border border-[#E7E2D6] px-4 py-2 text-sm font-medium text-[#1C2B22] hover:bg-[#FAF7F0]">
                     <RotateCcw className="h-4 w-4" aria-hidden="true" /> Reopen
                   </button>
+                )}
+                {!canClose && confirmReopen && (
+                  <div role="group" aria-label="Confirm reopen" className="flex flex-wrap items-center justify-end gap-2">
+                    <span className="text-sm text-[#3F4B43]">Reopen this incident? It will show as Needs fixing again.</span>
+                    {/* "Yes" sits left; Cancel takes Reopen's old spot, so extra clicks land on Cancel. */}
+                    <button type="button" onClick={() => act.mutate({ action: 'reopen' })} disabled={act.isPending} className="inline-flex items-center gap-1.5 rounded-xl bg-[#D99A00] px-4 py-2 text-sm font-semibold text-white hover:bg-[#B98200] disabled:opacity-50">
+                      {act.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" aria-hidden="true" />} Yes, reopen
+                    </button>
+                    <button type="button" onClick={() => setConfirmReopen(false)} className="rounded-xl border border-[#E7E2D6] px-4 py-2 text-sm font-medium text-[#1C2B22] hover:bg-[#FAF7F0]">Cancel</button>
+                  </div>
                 )}
               </div>
             )}

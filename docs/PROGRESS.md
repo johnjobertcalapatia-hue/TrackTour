@@ -1,5 +1,12 @@
 # Project Progress — Tourism Management Portal
 
+## Admin incidents — Reopen asks for confirmation (2026-11-18)
+
+- **Seen on production:** an incident was "Marked as fixed" and "Reopened" by the same account in the same minute (1:56 PM).
+- **Cause:** after **Save as fixed** the form closes and **Reopen** appears in the same spot, so a double-click reopened what was just fixed.
+- **Fix:** `AdminIncidentHistory.tsx`: Reopen now asks "Reopen this incident?" with **Yes, reopen** on the left and **Cancel** in Reopen's old spot, so extra clicks land on Cancel.
+- **Test:** `admin-incident-history.test.tsx` (one click on Reopen sends nothing; Cancel backs out; Yes reopens). Frontend **128 files / 887 tests passed**; build clean.
+
 ## Scheduler — every task runs on one server only (2026-11-18)
 
 - **Why:** on Railway the heartbeat false alarm repeated every minute from 1:21 to 1:33 PM, which means two schedulers ran at once (a long deploy overlap or more than one replica). Each container runs `schedule:work` from supervisord, so with two containers every task would run twice a minute: scheduled dispatch, late-order flags, preparation starts, and so on.
