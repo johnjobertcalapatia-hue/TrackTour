@@ -5,6 +5,7 @@ import { StatusBadge } from '@/shared/components/StatusBadge'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { formatCurrency, formatDateTime } from '@/shared/utils'
 import { useBusinessOwnerStore } from '../services/business-owner-store'
+import RestaurantOwnerDashboard from './Dashboard/RestaurantOwnerDashboard'
 import { Package, DollarSign, CalendarCheck, ClipboardList, Utensils, Megaphone, ArrowRight, ClipboardCheck, Leaf, Bed, Users, Car, MapPin, Truck, ShoppingBag } from 'lucide-react'
 
 interface DashboardData {
@@ -249,6 +250,11 @@ export default function BusinessOwnerDashboard() {
   const { business, stats, recent_orders: orders, recent_bookings: bookings } = data
   const selectedBiz = getSelectedBusiness()
   const category = selectedBiz?.category || business?.category || 'Restaurant'
+
+  // Redesigned restaurant dashboard (TrackTour owner mockup) for one selected food business.
+  if (selectedBusinessId && ['Restaurant', 'Café', 'Food Hub', 'Hotel & Restaurant Combination'].includes(category)) {
+    return <RestaurantOwnerDashboard data={{ ...data, business: { ...business, category } }} businessId={selectedBusinessId} />
+  }
 
   const categoryLabel: Record<string, string> = {
     Restaurant: 'Restaurant',

@@ -421,7 +421,7 @@ class TransportationService
         $perKm = (float) $fareBlock['per_km'];
         $distanceKm = (float) $estimate['distance_km'];
         $durationMin = (int) $estimate['duration_min'];
-        $riderCommission = max(20, $fare * 0.4);
+        $riderCommission = RideDestinationChangeService::commission($fare);
 
         // Stage 4: the tourist books the fare they were shown. If rates or the
         // route changed since the quote, refuse so they can review the new
@@ -445,7 +445,7 @@ class TransportationService
             'quoted_fare' => isset($data['fare']) && is_numeric($data['fare']) ? (float) $data['fare'] : null,
             'distance_km_exact' => (float) ($estimate['distance_km_exact'] ?? $distanceKm),
             'rider_commission' => round($riderCommission, 2),
-            'commission_rule' => 'max(₱20, 40% of fare)',
+            'commission_rule' => 'max(₱20, 40% of fare), at most the fare',
             'commission_rate' => 0.4,
             'commission_minimum' => 20.0,
             'payment_method' => $data['payment_method'] ?? 'cash',

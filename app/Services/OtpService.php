@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Exceptions\OtpDeliveryException;
 use App\Mail\RiderOtpMail;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
@@ -39,7 +40,18 @@ class OtpService
         // counter: otherwise a locked-out caller could bypass the limit simply
         // by requesting a fresh code.
 
-        Mail::to($email)->send(new RiderOtpMail($otp, $mobile));
+        try {
+            Mail::to($email)->send(new RiderOtpMail($otp, $mobile));
+        } catch (\Throwable $e) {
+            // The code never reached the rider: discard it, keep the reason in
+            // the log, and let the caller answer with a clear message instead
+            // of a bare 500 (e.g. Resend refusing an unverified sender domain).
+            Cache::forget($this->key($mobile));
+            Cache::forget($this->emailKey($mobile));
+            report($e);
+
+            throw new OtpDeliveryException('The verification code could not be emailed.', 0, $e);
+        }
 
         // SMS delivery requires a configured provider; retain the mobile target in logs for local integration.
         Log::info("Rider OTP generated for mobile {$mobile} and email {$email}");

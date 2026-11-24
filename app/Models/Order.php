@@ -174,6 +174,13 @@ class Order extends Model
 
     public function isManagedBy(User $user): bool
     {
+        // Active staff: only orders containing their own business's items
+        // (Staff Management Stage 1). Item- and whole-order scope is enforced
+        // by the staff.order middleware on top of this.
+        if ($user->role === 'staff') {
+            return app(\App\Services\StaffAccess::class)->staffSharesOrder($user, $this);
+        }
+
         if ($this->business?->owner_id === $user->id) {
             return true;
         }
@@ -191,6 +198,12 @@ class Order extends Model
     public function items(): HasMany
     {
         return $this->hasMany(OrderItem::class);
+    }
+
+    /** Restaurants' "Handed to rider" confirmations (Staff Management §5). */
+    public function restaurantHandovers(): HasMany
+    {
+        return $this->hasMany(RestaurantHandover::class);
     }
 
     /**

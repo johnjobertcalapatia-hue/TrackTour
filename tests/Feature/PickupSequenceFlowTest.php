@@ -598,6 +598,102 @@ class PickupSequenceFlowTest extends TestCase
     //    in the same transaction, and the picked_up gate stays closed until
     //    every restaurant stop is confirmed.
     // ───────────────────────────────────────────────────────────────
+    public function test_an_old_saved_position_never_counts_as_arriving_at_the_restaurant(): void
+    {
+        // 2026-11-23: a fix saved before the rider logged out sat next to the
+        // restaurant, so arrival could be confirmed from far away.
+        config(['tracking.pickup_radius_meters' => 50, 'tracking.proof_location_max_age_seconds' => 120]);
+        $order = $this->makeOrder('gcash');
+        $delivery = $this->makeDelivery($order);
+        $this->readyItems($order, $this->restaurantA);
+
+        $this->placeLocation($this->rider, $this->latitudeAtPickupDistance(10), (float) $this->restaurantA->longitude);
+        RiderLocation::where('rider_id', $this->rider->id)->update(['recorded_at' => now()->subMinutes(30)]);
+
+        $stop = $this->be($this->rider)->getJson($this->stopsUrl($delivery))->assertOk()->json('data.stops.0');
+        $this->assertFalse($stop['arrival_can_confirm'], 'A 30-minute-old fix is not where the rider is now.');
+        $this->assertNull($stop['distance_meters']);
+        $this->be($this->rider)->postJson($this->arriveUrl($delivery, $this->restaurantA))
+            ->assertStatus(422)
+            ->assertJsonFragment(['message' => 'A current GPS location is required to confirm arrival.']);
+
+        // A current fix at the same spot is accepted.
+        $this->placeLocation($this->rider, $this->latitudeAtPickupDistance(10), (float) $this->restaurantA->longitude);
+        $this->assertTrue($this->be($this->rider)->getJson($this->stopsUrl($delivery))->json('data.stops.0.arrival_can_confirm'));
+        $this->be($this->rider)->postJson($this->arriveUrl($delivery, $this->restaurantA))->assertOk();
+    }
+
+    /** The phone's own fix sent with an action (latitude, longitude, accuracy, fix_at). */
+    private function phoneFix(float $distanceMeters, float $accuracy, int $ageSeconds = 2): array
+    {
+        return [
+            'latitude' => $this->latitudeAtPickupDistance($distanceMeters),
+            'longitude' => (float) $this->restaurantA->longitude,
+            'accuracy' => $accuracy,
+            'fix_at' => now()->subSeconds($ageSeconds)->toIso8601String(),
+        ];
+    }
+
+    public function test_the_phones_own_fix_stands_in_at_the_restaurant_up_to_200_m_precision(): void
+    {
+        // Owner decision 2026-11-24 (the food drop-off rules of 2026-11-12):
+        // a rider indoors at the restaurant whose fixes are never SAVED (worse
+        // than ±50 m) may confirm with the phone's own fix up to ±200 m.
+        config(['tracking.pickup_radius_meters' => 50, 'tracking.proof_location_max_age_seconds' => 120]);
+        $order = $this->makeOrder('gcash');
+        $delivery = $this->makeDelivery($order);
+        $this->readyItems($order, $this->restaurantA);
+        // The only saved fix is old: the server alone cannot place the rider.
+        RiderLocation::where('rider_id', $this->rider->id)->update(['recorded_at' => now()->subMinutes(30)]);
+
+        // Without a phone fix the original refusal stands.
+        $this->be($this->rider)->postJson($this->arriveUrl($delivery, $this->restaurantA))
+            ->assertStatus(422)->assertJsonPath('message', 'A current GPS location is required to confirm arrival.');
+        // Coarser than ±200 m: refused with what to do.
+        $this->be($this->rider)->postJson($this->arriveUrl($delivery, $this->restaurantA), $this->phoneFix(10, 250))
+            ->assertStatus(422)->assertJsonPath('message', 'Your GPS is not precise enough (±250 m); it needs ±200 m or better. Turn on Precise location for TrackTour, or step outside away from the roof, then try again.');
+        // An old phone fix (over 30 s) does not count either.
+        $this->be($this->rider)->postJson($this->arriveUrl($delivery, $this->restaurantA), $this->phoneFix(10, 40, 60))
+            ->assertStatus(422)->assertJsonPath('message', 'We need your current location. Keep the map open with location on, then try again.');
+        // Too far from the restaurant.
+        $this->be($this->rider)->postJson($this->arriveUrl($delivery, $this->restaurantA), $this->phoneFix(300, 40))
+            ->assertStatus(422)->assertJsonPath('message', 'You must be within 50 m of the restaurant (you are 300 m away).');
+
+        // ±120 m, 10 m from the restaurant: arrival confirmed and flagged for review.
+        $this->be($this->rider)->postJson($this->arriveUrl($delivery, $this->restaurantA), $this->phoneFix(10, 120))->assertOk();
+        $this->assertNotNull($this->stop($delivery, $this->restaurantA)->arrived_at);
+        $flag = \App\Models\ActivityLog::where('action', 'escalation.pickup_low_precision_gps')->sole();
+        $this->assertStringContainsString('Confirm Arrival at the restaurant', $flag->description);
+        $this->assertStringContainsString('±120 m', $flag->description);
+        $this->assertStringContainsString('from the restaurant', $flag->description);
+
+        // Confirm Pick Up the same way; ±40 m is precise enough, so no new flag.
+        $this->be($this->rider)->postJson($this->confirmUrl($delivery, $this->restaurantA), $this->phoneFix(30, 40))
+            ->assertOk()->assertJsonPath('data.stop.status', DeliveryPickupStop::STATUS_COLLECTED);
+        $this->assertSame(1, \App\Models\ActivityLog::where('action', 'escalation.pickup_low_precision_gps')->count());
+        $this->assertSame(0, \App\Models\ActivityLog::where('action', 'escalation.dropoff_low_precision_gps')->count());
+    }
+
+    public function test_confirm_pick_up_by_phone_fix_still_needs_payment_and_ready_food(): void
+    {
+        $order = $this->makeOrder('gcash');
+        $delivery = $this->makeDelivery($order);
+        $this->be($this->rider)->postJson($this->arriveUrl($delivery, $this->restaurantA))->assertOk();
+        RiderLocation::where('rider_id', $this->rider->id)->update(['recorded_at' => now()->subMinutes(30)]);
+
+        // A good phone fix never skips the other gates: the food is not ready yet.
+        $this->be($this->rider)->postJson($this->confirmUrl($delivery, $this->restaurantA), $this->phoneFix(10, 80))
+            ->assertStatus(422)->assertJsonFragment(['message' => 'Your order is not ready for pickup at this restaurant. Please wait for the restaurant to finish preparing before confirming.']);
+
+        $this->readyItems($order, $this->restaurantA);
+        $stop = $this->be($this->rider)->getJson($this->stopsUrl($delivery))->json('data.stops.0');
+        // Only the location is missing: the app may stand in with the phone's fix.
+        $this->assertSame('gps_unavailable', $stop['reason']);
+        $this->assertSame(12.51, $stop['pickup_lat']);
+
+        $this->be($this->rider)->postJson($this->confirmUrl($delivery, $this->restaurantA), $this->phoneFix(10, 80))->assertOk();
+    }
+
     public function test_cod_confirm_collects_the_purchasing_cash_row_in_step(): void
     {
         $order = $this->makeOrder('cash');

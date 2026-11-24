@@ -35,6 +35,7 @@ class SendBookingStatusNotification implements ShouldQueue
                 'title' => 'Booking Status Updated',
                 'message' => "Booking #{$booking->booking_number}: {$message}",
                 'type' => 'booking_status_changed',
+                'data' => ['booking_id' => $booking->id],
             ]);
         }
     }

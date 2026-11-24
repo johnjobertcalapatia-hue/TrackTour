@@ -212,7 +212,12 @@ class AdminRiderController extends Controller
 
         $before = $rider->municipality?->name;
         $rider->update(['municipality_id' => (int) $validated['municipality_id']]);
-        $rider->profile?->update(['municipality_id' => (int) $validated['municipality_id']]);
+        // A barangay belongs to one municipality: moving the rider clears a
+        // barangay that is not in the new municipality.
+        $newMunicipality = (int) $validated['municipality_id'];
+        $barangayId = $rider->profile?->barangay_id;
+        $keepBarangay = $barangayId && \App\Models\Barangay::whereKey($barangayId)->where('municipality_id', $newMunicipality)->exists();
+        $rider->profile?->update(['municipality_id' => $newMunicipality, 'barangay_id' => $keepBarangay ? $barangayId : null]);
         $rider->load('municipality');
 
         ActivityLog::record(

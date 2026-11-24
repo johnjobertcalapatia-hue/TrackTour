@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react'
+import type { CompensationPayout } from '@/features/compensation/types'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -103,6 +104,9 @@ export interface CashoutDetail {
     at: string
   } | null
   decision_note_min?: number
+  /** Stage D2: cancellation compensation paid with this cashout (own validator), and the one GCash transfer total. */
+  compensation_payout?: CompensationPayout | null
+  transfer_total?: number
 }
 
 /** GET /admin/payouts/{id}/earnings/{earning} (AdminPayoutController::investigate). */
@@ -260,7 +264,8 @@ export function CashoutInvestigation({ id }: { id: number }) {
             </p>
           </div>
           <div className="text-right">
-            <p className="text-3xl font-bold text-[#17201B]">{formatCurrency(d.amount)}</p>
+            <p className="text-3xl font-bold text-[#17201B]">{formatCurrency(d.transfer_total ?? d.amount)}</p>
+            {d.compensation_payout && <p className="text-[11px] text-[#6B7280]">earnings {formatCurrency(d.amount)} + compensation {formatCurrency(d.compensation_payout.amount)}</p>}
             <CashoutStatusChip status={d.status} />
           </div>
         </div>
@@ -289,6 +294,7 @@ export function CashoutInvestigation({ id }: { id: number }) {
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="min-w-0 space-y-4">
           <Breakdown detail={d} current={current} onSelect={setSelected} />
+          {d.compensation_payout && <CompensationPart payout={d.compensation_payout} earnings={d.amount} total={d.transfer_total ?? d.amount} />}
           {current !== null && <OriginalRecordsPanel payoutId={d.id} earningId={current} reference={d.items.find((i) => i.earning_id === current)?.reference ?? null} />}
           {d.financial && <FinancialVerification detail={d} />}
         </div>
@@ -317,7 +323,7 @@ export function CashoutInvestigation({ id }: { id: number }) {
               {reviewable && (
                 <ApproveForm
                   id={d.id}
-                  disabled={d.all_verified === false || d.validation?.result === 'block'}
+                  disabled={d.all_verified === false || d.validation?.result === 'block' || d.compensation_payout?.validation?.result === 'block'}
                   flagged={d.validation?.result === 'flag'}
                   noteMin={d.decision_note_min ?? 10}
                   onDone={done}
@@ -843,9 +849,37 @@ function ApproveForm({ id, disabled, flagged = false, noteMin = 10, onDone, onEr
   )
 }
 
+/** Stage D2: the cancellation-compensation part of this cashout and its own checks. */
+export function CompensationPart({ payout, earnings, total }: { payout: CompensationPayout; earnings: number; total: number }) {
+  const failedChecks = payout.validation?.checks.filter((c) => !c.ok) ?? []
+  return (
+    <section aria-label="Cancellation compensation" className={card}>
+      <h2 className="mb-1 flex items-center gap-1 text-sm font-bold text-[#17201B]"><HandCoins className={`h-4 w-4 ${GOLD}`} aria-hidden="true" /> Cancellation compensation · {formatCurrency(payout.amount)}</h2>
+      <p className="text-xs text-[#6B7280]">
+        Paid with this cashout: earnings {formatCurrency(earnings)} + compensation {formatCurrency(payout.amount)} = one GCash transfer of {formatCurrency(total)}. {payout.payout_number} · {payout.status}
+      </p>
+      <ul className="mt-2 divide-y divide-[#EEF1EF] text-xs" aria-label="Compensation items">
+        {payout.items.map((i) => (
+          <li key={i.compensation_id} className="flex items-center justify-between gap-2 py-1.5">
+            <span>Cancelled booking {i.order_number ?? `#${i.compensation_id}`} · {i.funding === 'advance' ? 'office advance' : 'tourist paid'}</span>
+            <span className="font-semibold">{formatCurrency(i.amount)}</span>
+          </li>
+        ))}
+      </ul>
+      {payout.validation && (
+        <p className={`mt-2 rounded-lg px-2 py-1 text-xs font-semibold ${payout.validation.result === 'pass' ? 'bg-[#F0FDF4] text-[#166534]' : 'bg-[#FEF2F2] text-[#B91C1C]'}`} data-testid="compensation-validation">
+          {payout.validation.result === 'pass' ? 'Compensation checks pass: original rider, tourist payment received, not paid elsewhere, ledger and booking history verified.' : `Blocked: ${failedChecks.map((c) => `${c.label} — ${c.detail ?? ''}`).join(' ')}`}
+        </p>
+      )}
+    </section>
+  )
+}
+
 function PaymentForm({ detail, onDone, onError }: { detail: CashoutDetail; onDone: (t: string) => void; onError: (e: unknown, f: string) => void }) {
   const [reference, setReference] = useState('')
-  const [amount, setAmount] = useState(String(detail.amount))
+  // Stage D2: one GCash transfer pays the earnings and any linked cancellation compensation.
+  const total = detail.transfer_total ?? detail.amount
+  const [amount, setAmount] = useState(String(total))
   const [number, setNumber] = useState(detail.destination.gcash_number ?? '')
   const [name, setName] = useState(detail.destination.account_name ?? '')
   const [paidAt, setPaidAt] = useState(() => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16))
@@ -871,7 +905,8 @@ function PaymentForm({ detail, onDone, onError }: { detail: CashoutDetail; onDon
     <form className="rounded-xl border-2 border-[#16803C] p-3" aria-label="Confirm GCash payment" onSubmit={(e) => { e.preventDefault(); m.mutate() }}>
       <p className="flex items-center gap-1 text-sm font-bold text-[#17201B]"><HandCoins className="h-4 w-4 text-[#16803C]" aria-hidden="true" /> Confirm GCash payment</p>
       <p className="text-[11px] text-[#6B7280]">
-        Send {formatCurrency(detail.amount)} from the Tourism Office GCash to {detail.destination.gcash_number}, then record the transfer. TrackTour never sends money itself.
+        Send {formatCurrency(total)} from the Tourism Office GCash to {detail.destination.gcash_number}
+        {detail.compensation_payout ? ` (earnings ${formatCurrency(detail.amount)} + cancellation compensation ${formatCurrency(detail.compensation_payout.amount)})` : ''}, then record the transfer. TrackTour never sends money itself.
       </p>
       {detail.two_person_required && (
         <p className="mt-1 text-[11px] font-medium text-[#B45309]">
@@ -880,7 +915,7 @@ function PaymentForm({ detail, onDone, onError }: { detail: CashoutDetail; onDon
       )}
       <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-1">
         <label className="text-xs font-medium text-[#4B5563]">GCash reference no.<input value={reference} onChange={(e) => setReference(e.target.value)} maxLength={64} aria-label="GCash reference number" className={field} /></label>
-        <label className="text-xs font-medium text-[#4B5563]">Amount sent (₱)<input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} aria-label="Amount sent" className={field} /></label>
+        <label className="text-xs font-medium text-[#4B5563]">{detail.compensation_payout ? 'Total amount sent (₱)' : 'Amount sent (₱)'}<input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} aria-label="Amount sent" className={field} /></label>
         <label className="text-xs font-medium text-[#4B5563]">Recipient GCash no.<input value={number} onChange={(e) => setNumber(e.target.value)} maxLength={11} aria-label="Recipient GCash number" className={field} /></label>
         <label className="text-xs font-medium text-[#4B5563]">Recipient name<input value={name} onChange={(e) => setName(e.target.value)} maxLength={120} aria-label="Recipient name" className={field} /></label>
         <label className="text-xs font-medium text-[#4B5563]">Date and time sent<input type="datetime-local" value={paidAt} onChange={(e) => setPaidAt(e.target.value)} aria-label="Date sent" className={field} /></label>

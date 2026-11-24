@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
+use App\Exceptions\OtpDeliveryException;
 use App\Services\OtpService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -25,7 +26,14 @@ class OtpController extends Controller
             return $this->lockedOutResponse($mobile);
         }
 
-        $otp = $this->otpService->send($mobile, $email);
+        try {
+            $otp = $this->otpService->send($mobile, $email);
+        } catch (OtpDeliveryException) {
+            return response()->json([
+                'success' => false,
+                'message' => "We couldn't email the verification code to {$email} right now. Please check the address or try again later.",
+            ], 503);
+        }
 
         return response()->json([
             'success' => true,

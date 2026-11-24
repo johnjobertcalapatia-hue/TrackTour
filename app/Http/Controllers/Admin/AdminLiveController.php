@@ -2,9 +2,16 @@
 
 namespace App\Http\Controllers\Admin;
 
+use App\Exceptions\SosException;
 use App\Http\Controllers\Controller;
 use App\Models\Delivery;
+use App\Models\DeliveryPickupStop;
 use App\Models\Municipality;
+use App\Models\RiderLocation;
+use App\Models\SosAlert;
+use App\Models\TouristLocationShare;
+use App\Models\User;
+use App\Services\SosAlertService;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
@@ -151,23 +158,257 @@ class AdminLiveController extends Controller
         ];
     }
 
-    public function sos(): JsonResponse
+    /** Trip statuses where the rider is still heading to (or at) the pickup. */
+    private const PICKUP_STAGE = ['assigned', 'en_route_pickup', 'arrived_pickup'];
+
+    /** Trip statuses that put a rider on the live map as "on a trip". */
+    private const LIVE_TRIP = ['assigned', 'en_route_pickup', 'arrived_pickup', 'picked_up', 'in_transit', 'arrived_destination'];
+
+    /**
+     * GET /admin/live/riders — every rider who is on duty (online, available
+     * or busy) or holding a live trip, across all municipalities, with their
+     * latest GPS fix and the trip they are on: stage, remaining pickup stops
+     * and the drop-off, so the live map can draw the route.
+     *
+     * Read-only: pickup stops are read as stored, never seeded from here.
+     */
+    public function riders(): JsonResponse
     {
-        return $this->successResponse([]);
+        $onDuty = [User::RIDER_STATUS_ONLINE, User::RIDER_STATUS_AVAILABLE, User::RIDER_STATUS_BUSY];
+
+        $riders = User::query()
+            ->where('role', User::ROLE_RIDER)
+            ->where(fn ($q) => $q
+                ->whereHas('riderDetail', fn ($d) => $d->whereIn('rider_status', $onDuty))
+                ->orWhereIn('id', Delivery::query()->select('rider_id')->whereNotNull('rider_id')->whereIn('status', self::LIVE_TRIP)))
+            ->with(['profile:id,user_id,first_name,last_name,mobile_number,avatar', 'riderDetail', 'municipality:id,name'])
+            ->get();
+
+        $ids = $riders->pluck('id');
+
+        $locations = RiderLocation::query()
+            ->whereIn('id', RiderLocation::query()->selectRaw('MAX(id)')->whereIn('rider_id', $ids)->groupBy('rider_id'))
+            ->get()
+            ->keyBy('rider_id');
+
+        $trips = Delivery::query()
+            ->whereIn('rider_id', $ids)
+            ->whereIn('status', self::LIVE_TRIP)
+            ->with(['order:id,order_number,order_type,customer_name,delivery_address,business_id', 'order.business:id,business_name,latitude,longitude'])
+            ->orderByDesc('id')
+            ->get()
+            ->unique('rider_id')
+            ->keyBy('rider_id');
+
+        $stops = DeliveryPickupStop::query()
+            ->whereIn('delivery_id', $trips->pluck('id'))
+            ->with('business:id,business_name')
+            ->orderBy('sequence')
+            ->get()
+            ->groupBy('delivery_id');
+
+        $data = $riders->map(function (User $rider) use ($locations, $trips, $stops) {
+            $loc = $locations->get($rider->id);
+            $trip = $trips->get($rider->id);
+            $detail = $rider->riderDetail;
+
+            return [
+                'id' => $rider->id,
+                'name' => $rider->full_name ?: $rider->name,
+                'phone' => $rider->profile?->mobile_number,
+                // A photo whose file is gone is reported as none (initials show instead).
+                'photo' => ($avatar = $rider->profile?->avatar) && \Illuminate\Support\Facades\Storage::disk('public')->exists($avatar) ? $avatar : null,
+                'municipality' => $rider->municipality?->name,
+                'rider_status' => $detail?->rider_status ?? User::RIDER_STATUS_OFFLINE,
+                'service' => $detail?->current_service,
+                'vehicle_type' => $detail?->vehicle_type,
+                'plate_number' => $detail?->vehicle_plate_number,
+                // available | busy | delivering | transporting
+                'activity' => $trip
+                    ? ($trip->order?->order_type === 'transport' ? 'transporting' : 'delivering')
+                    : ($detail?->rider_status === User::RIDER_STATUS_BUSY ? 'busy' : 'available'),
+                'location' => $loc ? [
+                    'lat' => (float) $loc->latitude,
+                    'lng' => (float) $loc->longitude,
+                    'accuracy_m' => $loc->accuracy_m !== null ? (float) $loc->accuracy_m : null,
+                    'at' => $loc->recorded_at?->toIso8601String(),
+                ] : null,
+                'trip' => $trip ? $this->presentLiveTrip($trip, $stops->get($trip->id, collect())) : null,
+            ];
+        })->values();
+
+        return $this->successResponse($data, 'Live riders retrieved.');
     }
 
-    public function acknowledgeSos(string $id): JsonResponse
+    /**
+     * GET /admin/live/tourists — tourists who opted in to share their location
+     * with the tourism office and whose app reported it in the last few
+     * minutes. Latest position only; tourists who never opted in never appear.
+     */
+    public function tourists(): JsonResponse
     {
-        return $this->successResponse(null, 'SOS acknowledged.');
+        $shares = TouristLocationShare::query()
+            ->live()
+            ->whereHas('user', fn ($u) => $u->where('role', User::ROLE_TOURIST))
+            ->with('user:id,name,email', 'user.profile:id,user_id,first_name,last_name,mobile_number,avatar')
+            ->orderByDesc('location_at')
+            ->get();
+
+        $data = $shares->map(function (TouristLocationShare $s) {
+            $avatar = $s->user?->profile?->avatar;
+
+            return [
+                'id' => $s->user_id,
+                // Account name, else the name on the profile.
+                'name' => trim((string) $s->user?->name) ?: (trim(($s->user?->profile?->first_name ?? '').' '.($s->user?->profile?->last_name ?? '')) ?: null),
+                'phone' => $s->user?->profile?->mobile_number,
+                'photo' => $avatar && \Illuminate\Support\Facades\Storage::disk('public')->exists($avatar) ? $avatar : null,
+                'location' => [
+                    'lat' => (float) $s->latitude,
+                    'lng' => (float) $s->longitude,
+                    'accuracy_m' => $s->accuracy_m,
+                    'at' => $s->location_at?->toIso8601String(),
+                ],
+            ];
+        })->values();
+
+        return $this->successResponse($data, 'Live tourists retrieved.');
     }
 
-    public function respondSos(string $id): JsonResponse
+    private function presentLiveTrip(Delivery $trip, $stops): array
     {
-        return $this->successResponse(null, 'Response dispatched.');
+        $order = $trip->order;
+        $isRide = $order?->order_type === 'transport';
+        // status is cast to the TripStatus enum; compare its string value.
+        $status = $trip->status instanceof \BackedEnum ? $trip->status->value : (string) $trip->status;
+        $toPickup = in_array($status, self::PICKUP_STAGE, true);
+        $point = fn ($lat, $lng) => $lat !== null && $lng !== null && (float) $lat != 0.0 && (float) $lng != 0.0
+            ? ['lat' => (float) $lat, 'lng' => (float) $lng]
+            : null;
+
+        // Food pickups: the stored restaurant stops, else the order's restaurant.
+        // Rides: the passenger's pickup point.
+        $pickups = collect();
+        if (! $isRide) {
+            $pickups = $stops->map(fn (DeliveryPickupStop $s) => [
+                'name' => $s->business?->business_name,
+                'address' => $s->pickup_address,
+                'collected' => $s->status === DeliveryPickupStop::STATUS_COLLECTED,
+            ] + ($point($s->pickup_latitude, $s->pickup_longitude) ?? ['lat' => null, 'lng' => null]))->values();
+        }
+        if ($pickups->isEmpty()) {
+            $pickups = collect([[
+                'name' => $isRide ? 'Passenger pickup' : $order?->business?->business_name,
+                'address' => $trip->pickup_address,
+                'collected' => ! $toPickup,
+            ] + ($point($trip->pickup_latitude, $trip->pickup_longitude)
+                ?? $point($order?->business?->latitude, $order?->business?->longitude)
+                ?? ['lat' => null, 'lng' => null])]);
+        }
+
+        return [
+            'id' => $trip->id,
+            'order_number' => $order?->order_number,
+            'type' => $isRide ? 'ride' : 'food',
+            'status' => $status,
+            'stage' => $toPickup ? 'to_pickup' : 'to_dropoff',
+            'customer_name' => $order?->customer_name,
+            'pickups' => $pickups,
+            'dropoff' => [
+                'address' => $trip->delivery_address ?: $order?->delivery_address,
+            ] + ($point($trip->delivery_latitude, $trip->delivery_longitude) ?? ['lat' => null, 'lng' => null]),
+            'assigned_at' => $trip->assigned_at?->toIso8601String(),
+            'picked_up_at' => $trip->picked_up_at?->toIso8601String(),
+        ];
     }
 
-    public function resolveSos(string $id): JsonResponse
+    /*
+     * SOS alerts (2026-11-18): raised by a tourist during a ride or a rider
+     * during any trip; handled here: acknowledge → send help → resolve.
+     */
+
+    /** GET /admin/live/sos?filter=active|resolved|all — active ones on top, newest first. */
+    public function sos(Request $request, SosAlertService $service): JsonResponse
     {
-        return $this->successResponse(null, 'SOS resolved.');
+        $filter = in_array($request->query('filter'), ['active', 'resolved', 'all'], true) ? $request->query('filter') : 'active';
+        $alerts = SosAlert::query()
+            ->when($filter === 'active', fn ($q) => $q->whereIn('status', SosAlert::ACTIVE))
+            ->when($filter === 'resolved', fn ($q) => $q->where('status', SosAlert::STATUS_RESOLVED))
+            ->orderByRaw("CASE status WHEN 'pending' THEN 0 WHEN 'acknowledged' THEN 1 WHEN 'responding' THEN 2 ELSE 3 END")
+            ->latest('raised_at')
+            ->limit(100)
+            ->get();
+
+        return $this->successResponse([
+            'data' => $alerts->map(fn ($a) => $service->presentForAdmin($a))->values(),
+            'summary' => $this->sosCounts(),
+        ]);
+    }
+
+    /** GET /admin/live/sos/summary — for the alarm banner on every admin page. */
+    public function sosSummary(): JsonResponse
+    {
+        $latest = SosAlert::with('sender:id,name')
+            ->where('status', SosAlert::STATUS_PENDING)
+            ->latest('raised_at')
+            ->first();
+
+        return $this->successResponse($this->sosCounts() + [
+            'latest_pending' => $latest ? [
+                'id' => $latest->id,
+                'reference' => $latest->reference,
+                'raised_by_role' => $latest->raised_by_role,
+                'service' => $latest->service,
+                'name' => $latest->sender?->name,
+                'raised_at' => $latest->raised_at?->toIso8601String(),
+            ] : null,
+        ]);
+    }
+
+    private function sosCounts(): array
+    {
+        $counts = SosAlert::whereIn('status', SosAlert::ACTIVE)
+            ->selectRaw('status, COUNT(*) as n')->groupBy('status')->pluck('n', 'status');
+
+        return [
+            'active' => (int) $counts->sum(),
+            'pending' => (int) ($counts[SosAlert::STATUS_PENDING] ?? 0),
+        ];
+    }
+
+    public function acknowledgeSos(Request $request, SosAlertService $service, string $id): JsonResponse
+    {
+        return $this->sosAction(fn () => $service->acknowledge($request->user(), (int) $id), $service, 'SOS acknowledged.');
+    }
+
+    public function respondSos(Request $request, SosAlertService $service, string $id): JsonResponse
+    {
+        $data = $request->validate([
+            'responder' => ['required', 'string', 'min:2', 'max:120'],
+            'note' => ['nullable', 'string', 'max:1000'],
+        ]);
+
+        return $this->sosAction(fn () => $service->respond($request->user(), (int) $id, $data['responder'], $data['note'] ?? null), $service, 'Help sent.');
+    }
+
+    public function resolveSos(Request $request, SosAlertService $service, string $id): JsonResponse
+    {
+        $data = $request->validate([
+            'outcome' => ['required', Rule::in([SosAlert::OUTCOME_HANDLED, SosAlert::OUTCOME_FALSE_ALARM])],
+            'note' => ['required', 'string', 'min:3', 'max:1000'],
+        ]);
+
+        return $this->sosAction(fn () => $service->resolve($request->user(), (int) $id, $data['outcome'], $data['note']), $service, 'SOS resolved.');
+    }
+
+    private function sosAction(callable $action, SosAlertService $service, string $message): JsonResponse
+    {
+        try {
+            $alert = $action();
+        } catch (SosException $e) {
+            return $this->errorResponse($e->getMessage(), $e->status);
+        }
+
+        return $this->successResponse($service->presentForAdmin($alert), $message);
     }
 }

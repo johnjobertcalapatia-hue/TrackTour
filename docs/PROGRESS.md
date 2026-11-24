@@ -1,5 +1,417 @@
 # Project Progress — Tourism Management Portal
 
+## Restaurant pickup: phone GPS up to ±200 m (2026-11-24)
+
+A rider stood at the restaurant for days and Confirm Pick Up never appeared. The server confirms a pickup only from a SAVED location (≤ 2 minutes old), and it saves a location only at ±50 m or better. The rider's phone/browser always reported worse than ±50 m, so nothing was saved, and the restaurant row only said "turn on your location".
+
+- **Owner decision:** restaurant arrival and Confirm Pick Up use the food drop-off rule of 2026-11-12. When the saved location can't place the rider, the phone's own location sent with the action counts if it is ≤ 30 s old, ±200 m or better, inside the 50 m pickup radius and plausible (no teleport).
+- **Review flag:** a pickup confirmed with worse than ±50 m precision is logged for the Tourism Office as `escalation.pickup_low_precision_gps`.
+- **Server:** `PickupSequenceService::assertAtRestaurantByPhone` reuses `DropoffLocationProof` with the restaurant's point and radius. Payment, readiness and route order are checked as before.
+- **App:** `withPhoneFixAtStop` applies the same rule to the current stop, so the button, the "Confirm pickup" message and the conditions appear when the server will agree. The conditions show "Location checked from your phone (±X m)". When GPS is too imprecise, the row says so with the phone's precision instead of "turn on your location".
+- **Tests:** `PickupSequenceFlowTest` (+2) and `rider-trip-status.test.tsx` (+2).
+
+## Deals & Posts: Facebook-style feed, comments, follows and post analytics (2026-11-24)
+
+Follow-up to Promotions Part B. Owner decisions: comments are **on** (the business moderates them), and **Follow** is its own feature, separate from favorites.
+
+**Owner (Deals & Posts, formerly Promotions; same for Menu & Promotions staff)**
+- The page header has Create Post and Create Sale buttons. There are two tabs: Posts, and Sales (badges now sit below the sales).
+- Posts are shown as large feed cards, as tourists see them, with filters for All / Published / Drafts / Hidden.
+- Each card has a ⋯ menu: Edit post, Hide / Unhide / Publish now, View insights, Delete post. It also shows the recorded likes, comments, shares, saves and views.
+- Right column: the running sale, the 3 most-viewed posts, and the follower count.
+- Posts can be saved as **drafts**. A draft is never shown to tourists and can be published later. A published post can be hidden but not turned back into a draft.
+- **Insights** page: views, unique viewers, likes, comments (and how many are hidden), saves, shares, followers, a 14-day views chart, and comment moderation (hide, show, delete).
+
+**Tourist**
+- `/tourist/posts`: a feed with All / Following / Saved tabs. Following and Saved need a tourist login.
+- The tourist home shows the 2 newest posts with "View all".
+- Cards are laid out like Facebook posts:
+  - business logo, name, Follow button, date, Public globe;
+  - caption with See more;
+  - photos or video at full width, never cropped (portrait video sits centred with black sides);
+  - the recorded counts, then Like, Comment (opens comments under the post), Save and Share.
+- **Media viewer** `/tourist/posts/:id` (also the link that sharing copies):
+  - top: back, business, date and a ⋯ menu (copy link, view business);
+  - the photo or video at full size, with arrows and swipe between photos;
+  - right side: Heart, Comment, Save, Share, in that order, with counts;
+  - bottom: business, full caption, views, the linked sale and Shop the deal;
+  - the comments panel opens beside the media on desktop, and as a bottom sheet on phones.
+
+**Counting rules** (`App\Services\PostEngagement`; every counter is recomputed from its own table)
+- **View:** the page reports one when a post is at least half on screen for one second, or opened in the viewer. The server counts it only for tourists and guests (never the business, staff or admins), and at most **once per viewer per post every 30 minutes**. A viewer is the tourist, or for a guest a salted hash of IP address + browser; raw IPs are not stored. Unique viewers = distinct viewers.
+- **Share:** once per viewer per post per 24 hours.
+- **Likes, saves, follows:** one per tourist (unique indexes).
+- **Comments:** count only those not hidden. Tourists delete their own comments; author emails are never shown.
+
+**Business comments (later the same day).**
+- The owner and Menu & Promotions staff can comment on their own posts, from the post card (Comment) or the insights page.
+- Tourists see the comment as the business, with its name, logo and an "Author" badge. `user_id` still records who wrote it.
+- Migration `2026_11_27_000004_add_business_author_to_post_comments`.
+
+**Explore = Deals & Posts (later the same day).** Tourist Explore opens on Deals & Posts. Tabs at the top, also floating on the map, switch between Deals & Posts, Businesses (the earlier business cards, ?view=businesses) and Map; the category carries between Businesses and Map. /tourist/posts now redirects to Explore.
+
+**Fix: HTTP 500 on Save or Like.**
+- Simultaneous actions on one post (Save, Like, a comment, a view report) could deadlock in MySQL (error 1213).
+- Every change now goes through `PostEngagement::locked()`, which takes the post row's write lock first and retries on deadlock.
+- Checked against the local MySQL with 40 simultaneous requests: no 500s and no deadlocks.
+
+**Migration:** `2026_11_27_000003_add_social_features_to_business_posts`. It adds the counters on `business_posts` and the views, comments, saves, shares and followers tables, with short index names because of MySQL's 64-character limit.
+
+**Tests:** `BusinessPostsSocialTest` (5) and `tests/ui/promotions-posts.test.tsx` (rewritten, 11).
+
+## Promotions: posts and dish sales (2026-11-24)
+
+The owner's Promotions page now has three tabs: **Posts**, **Sales** and **Badges** (the earlier label-only promotions, unchanged). The owner and Menu & Promotions staff (`promotions.manage`) can use it; the server checks this.
+
+**Part A: dish sales.** A sale takes % off (below 100%) or ₱ off from chosen dishes for a period of Manila days. Tourists pay the sale price at checkout and the business pays for the discount.
+- Tourists see the sale price, the menu price struck through and a "25% off" chip on the Food page, restaurant and business pages, the dish page and the cart. The cart refreshes its prices, says what changed, and sends the price it showed; a checkout with a stale price is refused.
+- Endpoints `/{business-owner|staff}/dish-sales`: list, dishes, show, create, update, end, archive.
+- Full transaction write-up: `docs/secure-transaction-audit.md` §S.
+
+**Part B: posts.** A caption with up to 10 photos (JPG, PNG or WebP, 10 MB each) or one video (MP4, MOV or WebM, up to 100 MB), optionally linked to a sale. A post can be published or hidden, edited and deleted (deleting removes its files).
+- Only approved businesses publish. Tourists see published posts of approved businesses in a **Deals & Posts** section on the tourist home, a **Posts** tab on the restaurant page and a Posts section on other business pages.
+- Tourists can like a post once; the count is recomputed from the likes table.
+- A linked running sale shows its dishes at their sale price with a "Shop the deal" button.
+- Endpoints: `/{business-owner|staff}/posts`, plus `GET /tourist/posts` and `POST|DELETE /tourist/posts/{id}/like`.
+
+**Migrations:** `2026_11_27_000001_add_item_sales_to_promotions` and `2026_11_27_000002_create_business_posts_tables`.
+
+**Configuration:** `docker/uploads.ini` now allows `upload_max_filesize = 105M`, `post_max_size = 120M` and `max_input_time = 300`. Local XAMPP needs the same values in `C:\xampp\php\php.ini`, then an Apache restart.
+
+**Tests:** `DishSalesTest` (8), `BusinessPostsTest` (6), `tests/ui/promotions-sales.test.tsx` (5) and `tests/ui/promotions-posts.test.tsx` (6).
+
+## Reports & Analytics redesign (2026-11-23)
+
+The business owner Reports page was rebuilt to match the TrackTour mockup, using real figures only. It is now served by one new endpoint, `GET /business-owner/reports/overview?from=&to=` (also available to finance staff at `/staff/…`), built in `App\Services\OwnerReportOverview`.
+
+- **Header:** a date-range dropdown (Last 7 / 30 / 90 Days, This Month, Last Month, This Year, Custom range) and an Export menu with the sales and orders reports. Business and Business Type filters sit below it. The old weekly / monthly / yearly Period select is replaced by these presets.
+- **Summary tiles:** Total Orders, Total Revenue and Total Earnings, each showing the % change against the previous period of the same length and a sparkline (hidden when flat). The fourth tile is Average Rating (restaurant and dish reviews, rejected ones excluded).
+- **Sales Overview:** a line chart of Orders, Revenue or Earnings, this period vs the previous one. It shows daily points for ranges up to 92 days and weekly points beyond.
+- **Top Selling Items:** the top 5 dishes by quantity, with photo, revenue and a bar.
+- **Orders by Status:** a donut in 4 groups (Completed, In progress, Pending, Cancelled) using a validated colour-blind-safe palette, with each slice labelled.
+- **Revenue Breakdown:** revenue per week (per 30 days for long ranges), this period vs the previous one.
+- **Recent Activity:** the latest owner notifications. Owners only.
+- **Bookings:** a summary card appears only when there are bookings in the range.
+- **How money is counted:** per restaurant, from its own order items in completed orders, on Philippine calendar days. In a group checkout each restaurant counts only its own dishes. Delivery fees and cancelled dishes are excluded. **Earnings = sales − expenses recorded for the same days.** No per-restaurant platform fee is stored yet, so none is subtracted.
+- **Layout fix:** cards were overlapping at laptop widths. Grid cards now shrink (`min-w-0`, `overflow-hidden`), and each chart sits in a fixed-height, absolutely positioned box, so charts always take their card's current width. The four tiles and the three-card row only go side by side from 1280px; Orders by Status stacks when narrow. Checked at 1240, 1300, 1366 and 1440px with the portal sidebar.
+
+**Tests:** new `OwnerReportOverviewTest` (3). `owner-reports-filters.test.tsx` was rewritten (3) for the new range presets, a documented reconciliation since the Period select is gone. Laravel 1449 passed, 2 skipped; frontend 976 passed; production build clean.
+
+## Notifications module: detail pages, customer messages, reviews, maintenance notices (2026-11-23)
+
+Business owner Notifications now has tabs: **All · Orders & Bookings · Messages & Concerns · Reviews & Ratings · System**. Each tab shows an unread count, and filtering and paging happen on the server.
+
+- **Detail page** (`/business-owner/notifications/:id`): clicking a card opens it and marks it read. The page shows the full message and the record it is about: an order (only this restaurant's items in a group order), a booking, a conversation, a review or a maintenance notice, with a link to open it. Linked records are re-checked against the owner's businesses each time the page loads. Older notifications have no link, so they show the title and message only. Each notification's category comes from its type (`App\Support\NotificationCategory`), so old rows are sorted into tabs too.
+- **Chat per order:** a tourist messages a restaurant from Order details ("Message the restaurant"; in a group order, one button per restaurant, each with its own thread). The tourist's Messages page lists their conversations. The owner reads and replies under Messages & Concerns (`/business-owner/notifications/messages/:roomId`). Only the order's tourist and that restaurant's current owner can see a conversation; anyone else gets a 404. Messages are plain text up to 2,000 characters, rate-limited, and limited to food orders. Each side is notified of new messages, and repeats fold into one unread notification per conversation. Reading a conversation clears that notification. Built on the existing `chat_rooms` tables. The unrouted `ChatController` and the placeholder `/tourist/messages` endpoints are left unchanged.
+- **Reviews & Ratings:** new restaurant and dish reviews notify the owner, and several reviews on one order fold into one notification. The tab shows the average rating, the count per star (clicking a star row filters) and a paged list of restaurant and dish reviews across the owner's businesses, filterable by business and type. Rejected reviews are excluded. **Known gap:** nothing in the app approves restaurant reviews (they stay "pending"), so pending reviews are shown to the owner too.
+- **System maintenance notices:** the admin (Bansud Tourism Office) adds them under Admin → System Notices: title, message, audience (business owners and their staff, riders, tourists or everyone) and start/end in Philippine time. Sending asks for confirmation first. Each recipient gets a System notification, and the owner portal shows a banner until the window ends. A notice can be cancelled, which removes its banner.
+- Existing order, booking, delivery and business-approval notifications now record the order, booking or business they are about (`notifications.data`).
+
+**Database:** migrations `2026_11_26_000001` (notifications.data), `000002` (chat_rooms.order_id, unique per order and restaurant), `000003` (system_notices), all run locally.
+
+**Tests:** new `NotificationsModuleTest` (10) and `owner-notifications.test.tsx` (8). `admin-navigation.test.tsx` was updated for the new System Notices sidebar entry. Laravel 1446 passed, 2 skipped; frontend 974 passed; production build clean.
+
+## Staff Management — restaurant staff roles (2026-11-23)
+
+Plan and record: `docs/staff-management-plan.md` §5. Restaurants, cafés and food hubs only; resorts, attractions and transport keep their roles.
+
+- **Order & Pickup Staff:** orders, ready, rider's cash confirmation and the new **Handed to rider** record (staff, time, restaurant, rider). The rider still confirms pickup; the pickup flow is unchanged.
+- **Finance Staff:** sales, earnings, reports, COD settlements; add and edit expenses. Deleting expenses, payouts and bank details stay owner-only.
+- **Menu & Promotions Staff:** the owner's menu manager (photos, availability), categories and promotions.
+- One employee can hold several roles. All data is limited to the staff member's restaurant; staff routes reuse the owner's controllers.
+- Fixed along the way (the roles reuse them): owner promotion creation and editing were broken.
+
+**Database:** migrations `2026_11_25_000005…000007`, verified locally.
+
+**Tests:** new `RestaurantStaffRolesTest` (12) and `restaurant-staff-roles.test.tsx` (8). Frontend 957 passed; production build clean.
+
+## Staff Management — Stage 1: staff accounts and security fixes (2026-11-23)
+
+Plan, decisions and full record: `docs/staff-management-plan.md`. Stages 2–4 are on hold.
+
+**Security gaps fixed**
+- **Suspended staff kept access:** login now refuses pending, suspended, deactivated and removed staff, every staff route needs an active staff record, and suspend/deactivate/remove delete all the staff member's tokens.
+- **Permissions never enforced:** every staff route now needs a permission (`staff_role_permissions`, catalogue in `App\Support\StaffPermissions`). Existing roles are mapped by migration.
+- **Unsafe staff order endpoint:** removed. Staff use the owner's canonical actions (rider-acceptance gate, accepted-order policy, unpaid checks), limited to their own restaurant's items. In a group checkout, staff see and update only their items.
+- **Owner-set passwords:** replaced by invitation-based activation (SHA-256 hashed token, single use, 72 hours). The plain-text password reset is gone; owners send a reset link instead.
+
+**Also:** owner Staff Management page (Overview, All Staff, Invitations), staff profile with actions and activity history, public activation page, permission-based staff menu, and `staff_activity_logs` from the start. Fixed the staff menu API (failed on every call) and the staff orders page (never showed orders).
+
+**Database:** 4 additive migrations `2026_11_25_000001…000004`, verified on local MySQL (`SHOW CREATE TABLE`, live 1062/1452 probes).
+
+**Tests:** Laravel 1,413 passed, 2 skipped (pre-existing), 0 failures, 9,446 assertions; new `StaffManagementStage1Test` (23); `StaffApiTest` and `RiderAcceptanceGateTest` reconciled. Frontend 949 passed; new `staff-management.test.tsx` (10). Production build clean.
+
+**Deferred:** owner-side group-checkout gaps (owner whole-order actions and item checks), listed in the plan doc §4.
+
+## Ride Hailing — Stage D2: compensation paid inside the rider's payout; earnings statement (2026-11-18)
+
+The rules are in `docs/secure-transaction-audit.md` §P.10.
+
+**How a rider is paid now**
+- **One cashout request** includes the rider's online earnings (existing rules, unchanged) and any payable **cancellation compensation**. A rider with only compensation can request it on its own, with no minimum.
+- **One office action** approves or pays both parts together. If either part is refused, neither changes.
+- **One GCash transfer:** staff enter the total sent (earnings + compensation). The two-person rule applies to that total.
+- **Reject, failed or cancel** returns the compensation to the rider's balance, so it can be requested again.
+- **Never paid twice:** a compensation can only be in one live payout, and repeated clicks change nothing.
+- **Waived or refunded during a payout:** the compensation is voided and payment is blocked.
+
+**Earnings statement** (rider and office): ride earnings, delivery earnings, cancellation compensation, adjustments, cash kept, total payable now, previously paid, remaining balance, and each compensation with its cancelled booking.
+
+**Not changed:** the existing payout service, cashout validator, earnings verifier and earnings ledger (no diff), the earnings formula, the COD cash fund, food settlement and group orders.
+
+**Next:** D3, the rider and office screens.
+
+**Tests:** Laravel `PayoutStatementTest` (10).
+
+## Ride Hailing — Stage D1: the original rider's cancellation compensation (core) (2026-11-18)
+
+The design and rules are in `docs/secure-transaction-audit.md` §P and §P.9.
+
+**What D1 does**
+- **Owner:** the ₱50 compensation belongs to the rider who **accepted** the cancelled booking. A rider who later collects the cash only hands it in.
+- **Created once**, when the full fee is **received**:
+  - online: as soon as PayMongo confirms;
+  - cash: only after Tourism Office staff record a **numbered receipt** for the rider's remittance, one line per fee. Partial amounts are allocated per fee; a fee counts only when fully received.
+- **Advance** (optional): with a reason and reference, recorded as an advance. When the tourist later pays it is "recovered", with no second credit. At or above the payout two-person threshold a second staff member must approve.
+- **Waiver or refund:** an unpaid compensation is voided; a paid one is written off (the rider keeps it).
+- **Dispute:** holds an advanced, unpaid compensation.
+- **Audit:** every step goes into an append-only compensation ledger (the database refuses edits and deletes), the transaction ledger of the cancelled ride and the activity log.
+
+**Not touched:** normal rider earnings, cashout checks, the `max(₱20, 40%)` formula, the COD cash fund, food settlement and group orders.
+
+**Next:** D2 (paying compensation inside the rider's payout, plus the earnings statement), then D3 (rider and office screens).
+
+**Tests:** Laravel `RideCompensationTest` (14).
+
+## Ride Hailing — Stage C2: every qualifying cancellation owes ₱50; Tourism Office can waive (2026-11-18)
+
+The rules are in `docs/secure-transaction-audit.md` §O.
+
+**Rule**
+- A tourist who cancels **more than 300 s** after the driver accepted now always owes ₱50 (`owed`).
+- No GPS or arrival confirmation is needed. GPS and arrival are still recorded as evidence for reference.
+- Exactly 300 s or less is free; rider cancellations are exempt.
+- The earlier under-review penalty is left as it was.
+
+**Tourist**
+- The cancel dialog now says the fee **applies** ("…If you think it is wrong, you can dispute it after cancelling").
+- The fee notification says the same.
+- A waived fee shows "Waived by the Tourism Office — you owe nothing for it" with the reason.
+
+**Tourism Office:** Admin › Riders › **Cancellation fees**.
+- Filter by status. Each fee shows who cancelled, when, the driver it's owed to, the GPS evidence (for reference), any dispute and any earlier review note.
+- **Waive** requires a reason. It is recorded in the ledger and activity log, and the tourist is notified.
+- A paid fee can't be waived.
+
+**Ride earnings:** unchanged, `max(₱20, 40% of fare)`; no 18% deduction.
+
+**New**
+- `RideCancellationPenaltyService::waive`; `RideCancellationPenalty::resolver()` and the waiver fields in `present()` and `notice()`.
+- `AdminRidePenaltyController` (`GET /admin/ride-penalties`, `POST /admin/ride-penalties/{id}/waive`).
+- `AdminRidePenalties.tsx`; the Riders tab "Cancellation fees".
+
+**Tests**
+- Laravel `RideCancellationPenaltyTest`: the two under-review tests are now "owed, with the evidence kept", plus a DB-level uniqueness test.
+- Laravel `RidePenaltyWaiverTest` (5): waive with a reason (ledger, log, notification, not payable, repeat-safe, references kept); disputed can be waived but paid cannot; office only; list with counts and evidence; the historical under-review penalty is kept and nothing is collected automatically.
+- `RideCancellationPenaltyCollectionTest`: the cancel → `owed` notification.
+- Frontend: `ride-cancellation-penalty` (new note text, waived card) and `admin-ride-penalties` (4).
+
+## Tourist — Trip details page for past rides, no map (2026-11-18)
+
+**Change:** in My Activities › Travels › Transport, **View Trip** now opens `/tourist/transport/trips/{id}` (`TouristTripDetails.tsx`), a details page with **no map**. The live tracking page with its map stays for current rides.
+
+**Sections**
+- **Route:** pickup point and destination, each with its place name and coordinates (6 decimals). A changed destination shows the original.
+- **Fare calculation:**
+  - base fare, distance (km) and service fee;
+  - a "fare change (new destination)" or adjustment line when the final fare differs from the booked breakdown;
+  - each extra charge (e.g. Pickup waiting) and the total;
+  - "not charged" for a cancelled ride, and any cancellation fee.
+- **Payment:** method (Cash / "GCash or QR Ph (online)", or once paid the one used, e.g. QR Ph), status (Paid / Not paid yet / Not charged) and amount paid.
+- **Driver:** name, mobile number (tap to call), vehicle make/model, plate number and rating; or "No driver was assigned".
+- **Trip information:**
+  - travel date, and the time of each step: booked, driver accepted, arrived at pickup, picked up, arrived at destination, completed or cancelled (with the reason);
+  - **travel time** (pickup to destination), **waiting at pickup**, **total trip time** (or time until cancelled);
+  - **route distance (booked)** and estimated travel time, plus the GPS-verified distance when a destination change measured one;
+  - trip number, payment reference, vehicle type, passengers, your rating and your note.
+
+**API:** the ride status gains `trip_times` (booked, accepted, arrived pickup, picked up, arrived destination, completed) and `payment_reference` (the paid payment's number).
+
+**Tests**
+- Laravel `TripDetailsPayloadTest`.
+- Frontend `tourist-trip-details.test.tsx` (5): route names, coordinates and no map; fare, payment and driver; times, durations, distance and references; cancelled with no driver; duration format.
+- `tourist-history-trip-link` now expects the new page.
+- **Totals:** Laravel **1311 passed, 2 skipped**; frontend **132 files / 906 tests passed**; build clean.
+
+## Ride Hailing — Stage C: collecting the ₱50 cancellation fee, and telling the tourist (2026-11-18)
+
+The rules are in `docs/secure-transaction-audit.md` §M.
+
+**Tourist**
+- **Told right away:** after a cancellation that creates a fee, an alert explains it. Example: "₱50.00 cancellation fee under review — You cancelled ride TRP-… 17 min after your driver accepted (cancelling is free for the first 5 minutes)…". An in-app notification with the same text goes to the bell, and another when the fee is paid.
+- **Book a ride:** a banner shows the fee.
+  - **Owed:** "You owe a ₱50.00 cancellation fee… Pay it now, or your next driver will collect it in cash", with **Pay ₱50.00 now (GCash or QR Ph)**.
+  - **Under review:** "…nothing is charged until the Tourism Office decides".
+  - Each banner links to the cancelled ride.
+- **Next ride:** an "Unpaid cancellation fee" card with Pay now; otherwise the tourist gives it to the driver in cash on top of the fare.
+- **Cancelled ride's fee card:** Pay now while owed; "Paid in cash to your driver / online" once paid.
+- **Payment return page:** "Your cancellation fee has been paid", then back to Book a ride.
+
+**Rider:** at the drop-off of a passenger who owes a fee: "Also collect a ₱50.00 cancellation fee… It goes to another driver: hand it in with your cash remittance", with a separate **I collected ₱50.00 in cash** button. Not collected? The ride completes normally and the fee stays owed.
+
+**Never:**
+- added to a ride's fare;
+- collected twice (locks; a late online payment is escalated for a refund);
+- collected while under review or disputed.
+
+**New**
+- Migration `2026_11_18_000004_add_collection_to_ride_cancellation_penalties` (applied to dev by path).
+- `RideCancellationPenalty`: status `collected` and `notice()`.
+- `RideCancellationPenaltyService`: `dueOnRide`, `collectCash`, `collectOnline`, notifications.
+- `RiderCancellationFeeController`; `payable_type=ride_penalty` in `PaymentController`.
+- Rider payload and tourist ride status gain `cancellation_fee_due`; the cancel response gains `cancellation_penalty`.
+- The rider daily cash receipt gains `cancellation_fees`.
+- Frontend: `CancellationFeeBanner`, `CancellationFeeDueCard`, `usePayCancellationFee`, `RiderCancellationFeeCollect`; ride page alert; payment return page.
+
+**Tests**
+- Laravel `RideCancellationPenaltyCollectionTest` (7):
+  - cancel → notification text and penalty in the response;
+  - an owed fee shows on the next ride for driver and tourist, with amounts untouched;
+  - cash collection only at the drop-off, by that driver, once (ledger, log, "paid" notification, receipt line);
+  - under review is never collected or payable;
+  - online payment on its own (line item, reference, webhook → collected, status `ride_penalty`, no second payment);
+  - a late online payment after cash is never applied twice (incident raised);
+  - another tourist can't pay someone else's fee.
+- Frontend `ride-cancellation-fee-collection.test.tsx` (5) and the ride-screen cancel alert test.
+- **Totals:** Laravel **1310 passed, 2 skipped**; frontend **131 files / 901 tests passed**; build clean; TypeScript errors unchanged (96).
+
+## Rider — arrival alert stayed up after the passenger cancelled (2026-11-18)
+
+- **Bug:** the passenger cancelled while the rider's **You've Arrived / Passenger On Board** alert was showing. The alert stayed up, showing "Passenger · Address unavailable · Destination Location".
+- **Cause:** in `RiderActiveTripContext`, the effect that shows and clears the arrival alert began with `if (!activeDelivery) return`. A cancelled trip leaves the active list, so `activeDelivery` became null and the effect never reached the line that clears the alert.
+- **Fix:** with no active trip, the alert and its "already shown" marker are cleared. Completed trips already cleared it themselves; drop-off and payment happen while the trip is still active (`arrived_destination`), so they are unaffected.
+- **Test:** `rider-alert-closes-on-cancel.test.tsx` (real provider): at the pickup the alert is up; the trip disappears from the poll and the alert closes. It fails without the fix. Frontend **130 files / 895 tests passed**; build clean; TypeScript errors unchanged (96).
+
+## Tourist — Cancel ride button did nothing (2026-11-18)
+
+- **Bug:** on the ride screen (driver on the way / arrived), **Cancel ride** opened its dialog *behind* the map and the bottom panel. The dialog was `z-50`, while Leaflet's panes reach z-1000 and the panel is `z-[1001]`, so tapping the button seemed to do nothing. The SOS **Safety** sheet had the same `z-50`.
+- **Fix:** the Cancel Ride and Safety dialogs in `TouristTransportTracking.tsx` are now `z-[2500]`. The same change applies to the Cancel Order and Rate Your Order dialogs on the food tracking page (`TouristOrderStatus.tsx`), which also has a map.
+- **Test:** `tourist-ride-phases` test 3 now opens Cancel ride, checks the dialog is layered above the panel and the map (fails with the old `z-50`), and confirms it posts `/cancel`. Frontend **129 files / 894 tests passed**; build clean.
+
+## Payments — QR Ph added to online payment (2026-11-18)
+
+**What the tourist sees**
+- "Pay online" (food checkout, ride payment, booking) opens PayMongo's checkout with **GCash and QR Ph**.
+- QR Ph is a code the tourist scans with GCash, Maya or most bank apps. It lasts 30 minutes, and a new one can be made on the same page.
+- Wording:
+  - Food checkout option: "GCash or QR Ph"; button "Pay with GCash or QR Ph (₱…)"; "You will be redirected to PayMongo…".
+  - Ride booking: "GCash or QR Ph (online)".
+- Once paid, the ride and food order receipts say **"Paid via QR Ph"** or **"Paid via GCash"**.
+
+**Design (kept small on purpose)**
+- `orders.payment_method` and `payments.method` stay `gcash`, meaning "online through PayMongo". Settlement (`OrderSettlementService`), the restaurant's online/offline split, reports, integrity checks and refunds are unchanged.
+- **Which one was used** comes from what PayMongo reports. `Payment::paidVia()` reads the paid payment's `source.type`, or the checkout session's `payment_method_used` / `payments[0]`, from the metadata already saved by the webhook or verify path. No migration.
+- API: the ride status and the tourist order list gain `paid_via` (`gcash` | `qrph` | `card` | null). Payments made before this change have no `paid_via` and show as GCash, which is what they were.
+- **Switch:** `PAYMONGO_ONLINE_METHODS` (default `gcash,qrph`, read in `config/services.php` as `paymongo.online_methods`). Set it to `gcash` if the PayMongo account has no QR Ph. Card payments stay card-only.
+
+**PayMongo facts checked (docs, 2026-11-18)**
+- Checkout Sessions accept `qrph` in `payment_method_types`.
+- QR Ph is activated with the account.
+- QR Ph payments can be refunded through the API within 30 days, partial refunds allowed, so the existing refund flow applies.
+- Not yet verified live: the first real QR Ph payment and refund in test mode.
+
+**Not changed:** the restaurant's and admin's payment pages still label these payments "GCash" (online). They could show `paid_via` later.
+
+**Tests**
+- Laravel `PaymentQrPhTest` (5):
+  - pay online sends `['gcash','qrph']` and records method `gcash`;
+  - the switch turns QR Ph off; card stays `['card']`;
+  - `paidVia()` reads every PayMongo shape (webhook payment, session `payment_method_used`, session payments, after refund) and returns null when unknown or unpaid;
+  - the ride status shows `paid_via: qrph`.
+- The `TouristTransportContractTest` checkout assertion is updated.
+- Frontend: a ride paid with QR Ph says "Paid via QR Ph", and before paying shows "GCash or QR Ph". The booking test is updated for the new wording, and payment mocks keep the real helpers.
+- **Totals:** Laravel **1303 passed, 2 skipped**; frontend **129 files / 894 tests passed**; build clean; TypeScript errors unchanged (96, pre-existing).
+
+## SOS alerts — tourists during a ride, riders during any trip (2026-11-18)
+
+**Owner decisions**
+- Who sends: a **tourist during a ride** and a **rider during any trip** (ride or food delivery).
+- Who receives: the **Bansud Tourism Office**.
+- Mis-taps: **hold for 3 seconds**.
+- Delivery: **in-app only**, since no SMS provider is configured (SMS can be a later stage).
+
+**Sending**
+- **Tourist:** the red button on the in-trip ride screen now reads "Hold for SOS".
+  - Holding fills it for 3 s, then it sends the phone's location (sent without one if GPS doesn't answer in 5 s) and opens the Safety sheet with the SOS status.
+  - A tap or an early release sends nothing. It also works with the keyboard (hold Space or Enter).
+- **Rider:** a floating **SOS** button on every rider screen while a trip is active.
+  - It sends the rider's position; the server falls back to the rider's GPS from the last 5 minutes.
+- **Both senders** see their status:
+  - "SOS sent", "The Tourism Office has seen your SOS", "Help is on the way: <who was sent>", or "SOS closed".
+  - **Call 911** and **I'm safe now** buttons. "I'm safe now" is noted, but the alert stays open until the office closes it.
+
+**Rules (server)**
+- Only while the trip has a rider and hasn't ended: `assigned` … `arrived_destination`. Tourists only on their own ride; riders only on their own trip.
+- One active alert per sender per trip, made safe by locking the trip row. A repeat press refreshes the location instead of creating a second alert. After it is resolved, a new emergency opens a new alert.
+- **The other person on the trip is never told**: the driver's and customer's views carry nothing about it.
+- Every step is in the activity log (`sos.raised`, `sos.sender_safe`, `sos.acknowledged`, `sos.responding`, `sos.resolved`; type security).
+
+**Tourism Office**
+- **SOS Alerts** (`/admin/live/sos`) shows real alerts, active ones first, refreshing every 5 s. Each card shows:
+  - status, reference, "Tourist · Ride" / "Rider · Food delivery", and how long ago it was raised;
+  - the sender (name, phone to call);
+  - the other person on the trip, marked "not told" (driver with vehicle and plate, or passenger/customer);
+  - order number with pickup → drop-off, the sender's message;
+  - **Where the SOS was sent** (Google Maps link with accuracy and source), plus the **Live position** from the rider's GPS while active;
+  - a timeline of what was done.
+- **Actions:**
+  - **Acknowledge**;
+  - **Send help**: "Who was sent?" is required (e.g. PNP Bansud), with an optional note;
+  - **Resolve**: Handled or False alarm, with "What happened?" required.
+- **Red alarm banner** on every admin page while an SOS is waiting, with a short sound when a new one arrives (browsers may mute it until the page has been clicked once). It links to SOS Alerts and is hidden on that page.
+- The sidebar's **SOS Alerts** shows a red count of active alerts.
+
+**New**
+- Migration `2026_11_18_000003_create_sos_alerts_table` (applied to dev by path).
+- `SosAlert`, `SosAlertService`, `SosException`, `SosController`.
+- Admin `GET /admin/live/sos?filter=active|resolved|all`, `GET /admin/live/sos/summary`, and `POST …/{id}/acknowledge|respond|resolve`, replacing the stubs.
+- Tourist `POST /tourist/transport/trip/{id}/sos` and `…/sos/safe`. Rider `GET|POST /rider/deliveries/{delivery}/sos` and `…/sos/safe`.
+- The trip status gains `sos`.
+- Frontend:
+  - `HoldToSendButton`, `features/sos/{sos.ts,SosStatusCard.tsx}`;
+  - `RiderSosButton` (mounted in the rider layout), `AdminSosAlarm`;
+  - `AdminLiveSOS` rewritten.
+
+**Note:** `deliveries.status` is cast to the `TripStatus` enum. The service compares its value, because plain string comparison silently failed.
+
+**Not yet**
+- SMS to an emergency contact.
+- Pushing alerts over the socket bridge: the admin side polls every 5 s.
+- Municipal-office alerts.
+- A live map pin for SOS: the card links to Google Maps and the Live Map.
+
+**Tests**
+- Laravel `SosAlertTest` (7):
+  - tourist SOS during a ride, seen by the office with driver, plate, message and live GPS;
+  - a double press keeps one alert;
+  - only while in progress and only on your own ride;
+  - rider SOS during a food delivery uses rider GPS, and another rider gets 403;
+  - the other party is never told;
+  - acknowledge → send help (who is required) → tourist sees "help on the way" and "I'm safe" (stays open) → resolve (note required) → resolved can't change → a new SOS opens a new alert;
+  - only the Tourism Office can see or handle alerts.
+- Frontend `sos.test.tsx` (5): hold timing, early release and keyboard; rider SOS hidden without a trip, then send, status and "I'm safe"; the admin card details, acknowledge, send help and resolve as a false alarm; the alarm banner.
+- `tourist-ride-phases` test 4: a tap or short press sends nothing; a 3 s hold sends with the phone location, then shows the status, Call 911 and "I'm safe now".
+- **Totals:** Laravel **1298 passed, 2 skipped**; frontend **129 files / 893 tests passed**; build clean; TypeScript errors unchanged (96, pre-existing).
+
+## Admin Settings — a page of buttons instead of tabs (2026-11-18)
+
+- **Before:** Settings opened Platform Configuration with a tab bar of the 7 settings areas.
+- **Now:** `/admin/settings` is a Settings page with one button per area (icon, name, what it is for): Platform Configuration, Access Control, Document Verification, Security, Data Backup, System Diagnostics, Incident History. Clicking one opens its own page (same URLs as before, e.g. `/admin/settings/diagnostics`) with a **← Settings** back link and a "Settings › name" path. There is no tab bar.
+- System Diagnostics and Incident History have no title of their own, so the layout shows their name and description. The other five pages keep their existing titles.
+- The sidebar's single **Settings** entry stays highlighted on every settings page. Old URLs (`/admin/system/*`, `/admin/roles`) still redirect.
+- **New:** `AdminSettingsLayout` and `AdminSettingsHome` (`frontend/src/features/admin/components/AdminSettingsLayout.tsx`); `SETTINGS_TABS` gains `showTitle`.
+- **Tests:** `admin-navigation.test.tsx` covers the button page, opening Diagnostics and going back, and the back link with no tab bar on sub-pages. Frontend **128 files / 888 tests passed**; build clean; TypeScript errors unchanged (96, pre-existing).
+
 ## Admin incidents — Reopen asks for confirmation (2026-11-18)
 
 - **Seen on production:** an incident was "Marked as fixed" and "Reopened" by the same account in the same minute (1:56 PM).

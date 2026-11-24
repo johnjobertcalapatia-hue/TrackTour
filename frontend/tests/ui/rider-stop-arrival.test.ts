@@ -3,6 +3,7 @@ import {
   haversineMeters,
   formatStopDistance,
   resolveStopArrival,
+  shouldPromptStopArrival,
   STOP_ARRIVAL_THRESHOLD_METERS,
   type ArrivalStop,
 } from '@/features/rider/stop-arrival'
@@ -116,5 +117,29 @@ describe('resolveStopArrival — stop-level arrival detection', () => {
     const result = resolveStopArrival({ riderLatitude: 12.86, riderLongitude: 121.45, stops: [] })
     expect(result.activeStop).toBe(null)
     expect(result.arrived).toBe(false)
+  })
+})
+
+describe('shouldPromptStopArrival (2026-11-23)', () => {
+  const at = (meters: number) => ({ lat: stop2.latitude! + meters / 111_320, lng: stop2.longitude! })
+
+  it('shows the prompt only when the live GPS is inside the radius AND the server agrees', () => {
+    const near = at(30)
+    const nearResult = resolveStopArrival({ riderLatitude: near.lat, riderLongitude: near.lng, stops: [stop1, stop2], thresholdMeters: 50 })
+    expect(shouldPromptStopArrival(nearResult, true)).toBe(true)
+    expect(shouldPromptStopArrival(nearResult, false)).toBe(false)
+  })
+
+  it('never shows it while the rider is far, even if the server (an old saved fix) says yes', () => {
+    const far = at(2_000)
+    const farResult = resolveStopArrival({ riderLatitude: far.lat, riderLongitude: far.lng, stops: [stop1, stop2], thresholdMeters: 50 })
+    expect(farResult.arrived).toBe(false)
+    expect(shouldPromptStopArrival(farResult, true)).toBe(false)
+  })
+
+  it('never shows it for a stop without coordinates (nothing to measure)', () => {
+    const noCoords: ArrivalStop = { ...stop2, latitude: null, longitude: null }
+    const r = resolveStopArrival({ riderLatitude: 12.88, riderLongitude: 121.47, stops: [noCoords], thresholdMeters: 50 })
+    expect(shouldPromptStopArrival(r, true)).toBe(false)
   })
 })

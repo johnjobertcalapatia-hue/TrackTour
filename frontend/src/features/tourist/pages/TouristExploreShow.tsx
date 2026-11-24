@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { SalePrice, type DishSale } from '@/shared/components/SalePrice'
 import ResortDetail, { type ResortBusiness, type ResortInfo, type ResortReview } from '@/features/tourist/components/resort/ResortDetail'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -14,6 +15,7 @@ import {
   ShoppingCart, X, Share2, Navigation, Ticket, Camera, Video, Compass,
   Building2, CheckCircle2, Mail, ExternalLink
 } from 'lucide-react'
+import PostFeed from '@/features/tourist/components/posts/PostFeed'
 
 interface Variation {
   id: number
@@ -27,6 +29,8 @@ interface MenuItem {
   name: string
   description?: string
   price: number
+  original_price?: number | null
+  sale?: DishSale | null
   image: string | null
   is_available: boolean
   has_variations: boolean
@@ -493,6 +497,16 @@ export default function TouristExploreShow() {
             </div>
           )}
 
+          {/* Posts (Promotions Part B) */}
+          {business && (
+            <PostFeed
+              businessId={business.id}
+              perPage={4}
+              hideWhenEmpty
+              header={<h2 className="mb-4 text-lg font-bold text-[#17201B]">Posts</h2>}
+            />
+          )}
+
           {/* Visitor Reviews */}
           <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6 shadow-sm">
             <div className="flex items-center justify-between mb-4">
@@ -691,7 +705,7 @@ export default function TouristExploreShow() {
                       <p className="text-sm font-extrabold text-[#087F3F] mt-1">
                         {item.has_variations && item.variations?.length
                           ? `${formatCurrency(Math.min(...item.variations.filter(v => v.is_available).map(v => v.price)))} – ${formatCurrency(Math.max(...item.variations.filter(v => v.is_available).map(v => v.price)))}`
-                          : formatCurrency(item.price)
+                          : <SalePrice price={item.price} original_price={item.original_price} sale={item.sale} className="font-extrabold text-[#087F3F]" compact />
                         }
                       </p>
                     </div>

@@ -9,6 +9,8 @@ import { ApplicationLogo } from '@/shared/components/ApplicationLogo'
 import { Alert } from '@/shared/components/Alert'
 import { get } from '@/shared/services/api'
 import { resolvePostAuthDestination } from '@/shared/services/pending-action'
+import TouristSignUp from '@/features/auth/components/TouristSignUp'
+import BusinessOwnerSignUp from '@/features/auth/components/BusinessOwnerSignUp'
 import { ChevronLeft, ChevronRight, Eye, EyeOff } from 'lucide-react'
 
 interface Municipality {
@@ -289,330 +291,6 @@ export default function RegisterPage() {
   }
 
   const renderStep = () => {
-    if (role === 'tourist') {
-      return (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className={labelClasses}>First Name</label>
-              <input {...form.register('first_name')} className={inputClasses} placeholder="Juan" />
-            </div>
-            <div>
-              <label className={labelClasses}>Middle Name</label>
-              <input {...form.register('middle_name')} className={inputClasses} placeholder="Optional" />
-            </div>
-          </div>
-          <div>
-            <label className={labelClasses}>Last Name</label>
-            <input {...form.register('last_name')} className={inputClasses} placeholder="Dela Cruz" />
-          </div>
-          <div>
-            <label className={labelClasses}>Birthdate</label>
-            <input {...form.register('date_of_birth')} type="date" className={inputClasses} />
-          </div>
-          <div>
-            <label className={labelClasses}>Email Address</label>
-            <input {...form.register('email')} type="email" className={inputClasses} placeholder="you@example.com" />
-          </div>
-          <div>
-            <label className={labelClasses}>Phone Number</label>
-            <input {...form.register('mobile_number')} className={inputClasses} placeholder="09XXXXXXXXX" />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className={labelClasses}>Password</label>
-              <input
-                {...form.register('password')}
-                type={showPassword ? 'text' : 'password'}
-                className={inputClasses}
-                placeholder="••••••••"
-              />
-            </div>
-            <div>
-              <label className={labelClasses}>Confirm</label>
-              <div className="relative">
-                <input
-                  {...form.register('password_confirmation')}
-                  type={showPassword ? 'text' : 'password'}
-                  className={inputClasses}
-                  placeholder="••••••••"
-                />
-                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#6B7280]">
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-            </div>
-          </div>
-          <p className="text-xs text-[#9CA3AF]">Min 8 characters with uppercase, lowercase, number, and symbol.</p>
-        </div>
-      )
-    }
-
-    if (role === 'business_owner') {
-      switch (step) {
-        case 1:
-          return (
-            <div className="space-y-4">
-              <h3 className="text-sm font-semibold text-[#6B7280] uppercase tracking-wide">Personal Information</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className={labelClasses}>First Name</label>
-                  <input {...form.register('first_name')} className={inputClasses} placeholder="Juan" />
-                </div>
-                <div>
-                  <label className={labelClasses}>Middle Name</label>
-                  <input {...form.register('middle_name')} className={inputClasses} placeholder="Optional" />
-                </div>
-              </div>
-              <div>
-                <label className={labelClasses}>Last Name</label>
-                <input {...form.register('last_name')} className={inputClasses} placeholder="Dela Cruz" />
-              </div>
-              <div>
-                <label className={labelClasses}>Date of Birth</label>
-                <input {...form.register('date_of_birth')} type="date" className={inputClasses} />
-              </div>
-              <div>
-                <label className={labelClasses}>Sex</label>
-                <select {...form.register('sex')} className={inputClasses}>
-                  <option value="">Select sex</option>
-                  <option value="male">Male</option>
-                  <option value="female">Female</option>
-                </select>
-              </div>
-              <div>
-                <label className={labelClasses}>Nationality</label>
-                <select {...form.register('nationality')} className={inputClasses}>
-                  <option value="">Select nationality</option>
-                  {NATIONALITIES.map((n) => (
-                    <option key={n} value={n}>{n}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className={labelClasses}>Email Address</label>
-                <input {...form.register('email')} type="email" className={inputClasses} placeholder="you@gmail.com" />
-              </div>
-              <div>
-                <label className={labelClasses}>Contact Number</label>
-                <input {...form.register('mobile_number')} className={inputClasses} placeholder="09XXXXXXXXX" />
-              </div>
-            </div>
-          )
-        case 2:
-          return (
-            <div className="space-y-4">
-              <h3 className="text-sm font-semibold text-[#6B7280] uppercase tracking-wide">Address</h3>
-              <div>
-                <label className={labelClasses}>Municipality</label>
-                <select {...form.register('municipality_id')} className={inputClasses}>
-                  <option value="">Select municipality</option>
-                  {municipalities.map((m) => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className={labelClasses}>Barangay</label>
-                <select {...form.register('barangay')} className={inputClasses} disabled={!selectedMunicipality}>
-                  <option value="">Select barangay</option>
-                  {selectedMunicipality?.barangays.map((b) => (
-                    <option key={b.id} value={b.name}>{b.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className={labelClasses}>Complete Address</label>
-                <input {...form.register('house_no_street')} className={inputClasses} placeholder="Street, Sitio, etc." />
-                {addressPrefix && (
-                  <p className="text-xs text-[#16803C] mt-1">Auto-filled: {addressPrefix}<span className="text-[#6B7280]">type your street/sitio...</span></p>
-                )}
-              </div>
-            </div>
-          )
-        case 3:
-          return (
-            <div className="space-y-4">
-              <h3 className="text-sm font-semibold text-[#6B7280] uppercase tracking-wide">Government Issued ID</h3>
-              <div>
-                <label className={labelClasses}>ID Type</label>
-                <select {...form.register('government_id_type')} className={inputClasses}>
-                  <option value="">Select ID type</option>
-                  <option value="passport">Passport</option>
-                  <option value="drivers_license">Driver&apos;s License</option>
-                  <option value="national_id">National ID</option>
-                  <option value="sss_id">SSS ID</option>
-                  <option value="philhealth_id">PhilHealth ID</option>
-                  <option value="postal_id">Postal ID</option>
-                  <option value="voters_id">Voter&apos;s ID</option>
-                </select>
-              </div>
-              <div>
-                <label className={labelClasses}>ID Number</label>
-                <input {...form.register('government_id_number')} className={inputClasses} placeholder="Enter ID number" />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className={labelClasses}>ID Front Photo</label>
-                  <label className="flex flex-col items-center justify-center w-full h-40 border-2 border-dashed border-[#D7E8DB] rounded-xl cursor-pointer hover:border-[#16803C] transition-colors overflow-hidden">
-                    <input
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0] || null
-                        setIdFront(file)
-                        if (file) {
-                          setIdFrontPreview(URL.createObjectURL(file))
-                        } else {
-                          setIdFrontPreview('')
-                        }
-                      }}
-                    />
-                    {idFrontPreview ? (
-                      <img src={idFrontPreview} alt="ID Front" className="w-full h-full object-cover" />
-                    ) : idFront ? (
-                      <div className="text-center px-2">
-                        <p className="text-xs text-[#16803C] truncate max-w-[120px]">{idFront.name}</p>
-                        <p className="text-xs text-[#6B7280] mt-1">Click to change</p>
-                      </div>
-                    ) : (
-                      <div className="text-center">
-                        <p className="text-sm text-[#6B7280]">Click to upload</p>
-                        <p className="text-xs text-[#6B7280]/70 mt-1">JPG, PNG, WebP</p>
-                      </div>
-                    )}
-                  </label>
-                </div>
-                <div>
-                  <label className={labelClasses}>ID Back Photo</label>
-                  <label className="flex flex-col items-center justify-center w-full h-40 border-2 border-dashed border-[#D7E8DB] rounded-xl cursor-pointer hover:border-[#16803C] transition-colors overflow-hidden">
-                    <input
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0] || null
-                        setIdBack(file)
-                        if (file) {
-                          setIdBackPreview(URL.createObjectURL(file))
-                        } else {
-                          setIdBackPreview('')
-                        }
-                      }}
-                    />
-                    {idBackPreview ? (
-                      <img src={idBackPreview} alt="ID Back" className="w-full h-full object-cover" />
-                    ) : idBack ? (
-                      <div className="text-center px-2">
-                        <p className="text-xs text-[#16803C] truncate max-w-[120px]">{idBack.name}</p>
-                        <p className="text-xs text-[#6B7280] mt-1">Click to change</p>
-                      </div>
-                    ) : (
-                      <div className="text-center">
-                        <p className="text-sm text-[#6B7280]">Click to upload</p>
-                        <p className="text-xs text-[#6B7280]/70 mt-1">JPG, PNG, WebP</p>
-                      </div>
-                    )}
-                  </label>
-                </div>
-              </div>
-              <div>
-                <label className={labelClasses}>Selfie Holding ID</label>
-                <label className="flex flex-col items-center justify-center w-full h-40 border-2 border-dashed border-[#D7E8DB] rounded-xl cursor-pointer hover:border-[#16803C] transition-colors overflow-hidden">
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    className="hidden"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0] || null
-                      setSelfie(file)
-                      if (file) {
-                        setSelfiePreview(URL.createObjectURL(file))
-                      } else {
-                        setSelfiePreview('')
-                      }
-                    }}
-                  />
-                  {selfiePreview ? (
-                    <img src={selfiePreview} alt="Selfie" className="w-full h-full object-cover" />
-                  ) : selfie ? (
-                    <div className="text-center px-2">
-                      <p className="text-xs text-[#16803C] truncate max-w-[120px]">{selfie.name}</p>
-                      <p className="text-xs text-[#6B7280] mt-1">Click to change</p>
-                    </div>
-                  ) : (
-                    <div className="text-center">
-                      <p className="text-sm text-[#6B7280]">Click to upload</p>
-                      <p className="text-xs text-[#6B7280]/70 mt-1">JPG, PNG, WebP (max 5MB)</p>
-                    </div>
-                  )}
-                </label>
-              </div>
-            </div>
-          )
-        case 4:
-          return (
-            <div className="space-y-4">
-              <h3 className="text-sm font-semibold text-[#6B7280] uppercase tracking-wide">Create Password</h3>
-              <div>
-                <label className={labelClasses}>Password</label>
-                <div className="relative">
-                  <input
-                    {...form.register('password')}
-                    type={showPassword ? 'text' : 'password'}
-                    className={inputClasses}
-                    placeholder="Min 8 characters"
-                  />
-                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#6B7280]">
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-              <div>
-                <label className={labelClasses}>Confirm Password</label>
-                <input
-                  {...form.register('password_confirmation')}
-                  type={showPassword ? 'text' : 'password'}
-                  className={inputClasses}
-                  placeholder="••••••••"
-                />
-              </div>
-            </div>
-          )
-        case 5:
-          return (
-            <div className="space-y-4 text-sm text-[#17201A]">
-              <h3 className="text-lg font-semibold text-[#17201A]">Review & Submit</h3>
-              <div className="space-y-2 bg-white/60 backdrop-blur-sm border border-white/40 rounded-xl p-4">
-                <div className="flex justify-between"><span className="text-[#6B7280]">Name</span><span>{form.watch('first_name')} {form.watch('middle_name')} {form.watch('last_name')}</span></div>
-                <div className="flex justify-between"><span className="text-[#6B7280]">Birthdate</span><span>{form.watch('date_of_birth')}</span></div>
-                <div className="flex justify-between"><span className="text-[#6B7280]">Sex</span><span>{form.watch('sex')}</span></div>
-                <div className="flex justify-between"><span className="text-[#6B7280]">Nationality</span><span>{form.watch('nationality')}</span></div>
-                <div className="flex justify-between"><span className="text-[#6B7280]">Email</span><span>{form.watch('email')}</span></div>
-                <div className="flex justify-between"><span className="text-[#6B7280]">Phone</span><span>{form.watch('mobile_number')}</span></div>
-                <div className="flex justify-between"><span className="text-[#6B7280]">ID Type</span><span>{form.watch('government_id_type')}</span></div>
-                <div className="flex justify-between"><span className="text-[#6B7280]">ID Number</span><span>{form.watch('government_id_number')}</span></div>
-                <div className="flex justify-between"><span className="text-[#6B7280]">ID Front</span><span className="text-[#16803C]">{idFront ? idFront.name : 'Not uploaded'}</span></div>
-                <div className="flex justify-between"><span className="text-[#6B7280]">ID Back</span><span className="text-[#16803C]">{idBack ? idBack.name : 'Not uploaded'}</span></div>
-                <div className="flex justify-between"><span className="text-[#6B7280]">Selfie</span><span className="text-[#16803C]">{selfie ? selfie.name : 'Not uploaded'}</span></div>
-              </div>
-              <div className="bg-emerald-50/80 backdrop-blur-sm border border-emerald-200 rounded-xl p-4">
-                <p className="text-emerald-800 font-medium">What Happens Next?</p>
-                <ul className="mt-2 space-y-1 text-emerald-700/80 text-sm">
-                  <li>• Your account will be reviewed by the tourism office</li>
-                  <li>• You&apos;ll receive an email once approved</li>
-                  <li>• Then you can create your business from the dashboard</li>
-                </ul>
-              </div>
-            </div>
-          )
-        default:
-          return null
-      }
-    }
-
-    // Rider
     switch (step) {
       case 1:
         return (
@@ -842,6 +520,41 @@ export default function RegisterPage() {
     }
   }
 
+  // Tourist sign-up: same look as the sign-in page (2026-11-24). Errors show
+  // under each field, so no extra banner for them; server errors still use it.
+  // Business owner sign-up: same look, five steps (2026-11-24).
+  if (role === 'business_owner') {
+    return (
+      <BusinessOwnerSignUp
+        form={form}
+        step={step}
+        onStepChange={setStep}
+        municipalities={municipalities}
+        selectedMunicipality={selectedMunicipality}
+        addressPrefix={addressPrefix}
+        nationalities={NATIONALITIES}
+        files={{ front: idFront, back: idBack, selfie }}
+        onFile={(kind, file) => (kind === 'front' ? setIdFront(file) : kind === 'back' ? setIdBack(file) : setSelfie(file))}
+        onSubmit={onSubmit}
+        onInvalid={onInvalid}
+        error={error}
+        onDismissError={() => setError('')}
+      />
+    )
+  }
+
+  if (role === 'tourist') {
+    return (
+      <TouristSignUp
+        form={form}
+        onSubmit={onSubmit}
+        onInvalid={() => setError('')}
+        error={error}
+        onDismissError={() => setError('')}
+      />
+    )
+  }
+
   return (
     <div className="min-h-screen tourism-bg tourism-bg-orbs flex flex-col items-center justify-center px-6 py-12">
       <div className="mb-6">
@@ -852,12 +565,10 @@ export default function RegisterPage() {
 
       <div className="w-full max-w-md px-6 py-8 tourism-card rounded-2xl">
         <h1 className="text-2xl font-bold text-center text-[#126B32] mb-1">
-          {role === 'tourist' ? 'Create Account' : role === 'business_owner' ? 'Business Registration' : 'Rider Registration'}
+          Rider Registration
         </h1>
         <p className="text-center text-sm text-[#6B7280] mb-6">
-          {role === 'tourist'
-            ? 'Start exploring Oriental Mindoro'
-            : `Step ${step} of ${totalSteps}`}
+          {`Step ${step} of ${totalSteps}`}
         </p>
 
         {error && <Alert type="error" message={error} onDismiss={() => setError('')} />}
@@ -865,45 +576,34 @@ export default function RegisterPage() {
         <form onSubmit={form.handleSubmit(onSubmit, onInvalid)}>
           {renderStep()}
 
-          {role !== 'tourist' && (
-            <div className="flex justify-between mt-6">
+          <div className="flex justify-between mt-6">
+            <button
+              type="button"
+              onClick={() => setStep((s) => Math.max(1, s - 1))}
+              disabled={step === 1}
+              className="flex items-center gap-1 px-4 py-2 text-sm text-[#6B7280] hover:text-[#17201A] disabled:opacity-30 transition-colors"
+            >
+              <ChevronLeft className="w-4 h-4" /> Back
+            </button>
+            {step < totalSteps ? (
               <button
                 type="button"
-                onClick={() => setStep((s) => Math.max(1, s - 1))}
-                disabled={step === 1}
-                className="flex items-center gap-1 px-4 py-2 text-sm text-[#6B7280] hover:text-[#17201A] disabled:opacity-30 transition-colors"
+                onClick={() => setStep((s) => Math.min(totalSteps, s + 1))}
+                className="btn-tourism flex items-center gap-1 px-6 py-2 text-sm font-medium"
               >
-                <ChevronLeft className="w-4 h-4" /> Back
+                Next <ChevronRight className="w-4 h-4" />
               </button>
-              {step < totalSteps ? (
-                <button
-                  type="button"
-                  onClick={() => setStep((s) => Math.min(totalSteps, s + 1))}
-                  className="btn-tourism flex items-center gap-1 px-6 py-2 text-sm font-medium"
-                >
-                  Next <ChevronRight className="w-4 h-4" />
-                </button>
-              ) : (
-                <button
-                  type="submit"
-                  disabled={form.formState.isSubmitting}
-                  className="btn-tourism px-6 py-2 text-sm font-medium disabled:opacity-50"
-                >
-                  {form.formState.isSubmitting ? 'Creating...' : 'Create Account'}
-                </button>
-              )}
-            </div>
-          )}
+            ) : (
+              <button
+                type="submit"
+                disabled={form.formState.isSubmitting}
+                className="btn-tourism px-6 py-2 text-sm font-medium disabled:opacity-50"
+              >
+                {form.formState.isSubmitting ? 'Creating...' : 'Create Account'}
+              </button>
+            )}
+          </div>
 
-          {role === 'tourist' && (
-            <button
-              type="submit"
-              disabled={form.formState.isSubmitting}
-              className="btn-tourism w-full mt-6 py-3 px-4 font-medium disabled:opacity-50"
-            >
-              {form.formState.isSubmitting ? 'Creating Account...' : 'Create Account'}
-            </button>
-          )}
         </form>
       </div>
 

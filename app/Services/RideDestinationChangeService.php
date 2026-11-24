@@ -451,7 +451,7 @@ class RideDestinationChangeService
             'fare_review_status' => $review,
             'review_reasons' => $reasons,
             'fare_rule' => 'min(round(max(base + round(verified_km × per_km, 2), base), 2), max_fare)',
-            'commission_rule' => 'max(₱20, 40% of final fare)',
+            'commission_rule' => 'max(₱20, 40% of final fare), at most the fare',
         ], $locked);
 
         if ($review === RideDestinationChange::REVIEW_NEEDED) {
@@ -583,10 +583,14 @@ class RideDestinationChangeService
         return round($estimated * self::MAX_FARE_FACTOR, 2);
     }
 
-    /** Booking rule: max(₱20, 40% of the fare). */
+    /**
+     * The one ride rule (booking, destination change, time charges and the
+     * integrity check): max(₱20, 40% of the fare), never more than the fare,
+     * so the office's share can never go below zero (§R5, 2026-11-24).
+     */
     public static function commission(float $fare): float
     {
-        return round(max(20, $fare * 0.4), 2);
+        return round(min(max($fare, 0), max(20, $fare * 0.4)), 2);
     }
 
     /** @return array{base_fare: float, per_km: float} The ride's booked rates. */

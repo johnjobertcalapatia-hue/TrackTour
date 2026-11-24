@@ -166,7 +166,7 @@ export default function RiderTripStatus() {
                   stop={stop}
                   image={stopImage(stop)}
                   action={stopsData ? stopAction(stop, stopsData) : { kind: 'collected' }}
-                  conditions={stopsData ? stopConditions(stop, stopsData) : []}
+                  conditions={stopsData ? stopConditions(stop, stopsData, trip.locationRefusal, trip.deviceAccuracy) : []}
                   busy={trip.confirmStopBusy || trip.confirmArrivalBusy}
                   onArrive={() => trip.confirmArrivalStop(stop.business_id)}
                   onPickup={() => trip.confirmPickupStop(stop.business_id)}

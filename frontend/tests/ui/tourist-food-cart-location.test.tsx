@@ -20,7 +20,7 @@ const mapEventsMock = vi.hoisted(() => ({
 }))
 
 vi.mock('@/shared/services/api', () => apiMock)
-vi.mock('@/shared/services/payment', () => ({ createCheckoutSession: vi.fn() }))
+vi.mock('@/shared/services/payment', async (orig) => ({ ...(await orig<typeof import('@/shared/services/payment')>()), createCheckoutSession: vi.fn() }))
 vi.mock('@/shared/services/pending-action', () => ({ savePendingAction: vi.fn() }))
 vi.mock('react-leaflet', () => ({
   MapContainer: ({ children }: { children?: React.ReactNode }) => (

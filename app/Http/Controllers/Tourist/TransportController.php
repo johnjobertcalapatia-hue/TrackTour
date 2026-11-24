@@ -108,6 +108,8 @@ class TransportController extends Controller
             'payment_method' => $ride['payment_method'],
             'payment_status' => (string) ($trip->payment_status ?? 'pending'),
             'paid_amount' => (float) ($trip->paid_amount ?? 0),
+            // GCash or QR Ph (2026-11-18): the method actually used on PayMongo.
+            'paid_via' => $trip->payments()->where('status', 'paid')->latest('id')->first()?->paidVia(),
             // Total payable: the ride fare plus itemised additional charges.
             'fare' => round($fare + $chargesTotal, 2),
             'ride_fare' => $fare,
@@ -143,6 +145,17 @@ class TransportController extends Controller
             'completed_at' => $trip->completed_at?->toIso8601String(),
             'cancelled_at' => $trip->cancelled_at?->toIso8601String(),
             'cancellation_reason' => $trip->cancellation_reason,
+            // Trip details page (2026-11-18): each step's time, for the travel
+            // date, times and durations; and the online payment's reference.
+            'trip_times' => [
+                'booked_at' => $trip->created_at?->toIso8601String(),
+                'accepted_at' => $delivery?->assigned_at?->toIso8601String(),
+                'arrived_pickup_at' => $delivery?->arrived_pickup_at?->toIso8601String(),
+                'picked_up_at' => ($delivery?->picked_up_at ?? $delivery?->started_at)?->toIso8601String(),
+                'arrived_destination_at' => $delivery?->arrived_destination_at?->toIso8601String(),
+                'completed_at' => ($delivery?->delivered_at ?? $trip->completed_at)?->toIso8601String(),
+            ],
+            'payment_reference' => $trip->payments()->where('status', 'paid')->latest('id')->value('payment_number'),
             'cancellation_fee' => 0,
             'rider_location' => $riderLocation ? [
                 'latitude' => (float) $riderLocation->latitude,
@@ -161,6 +174,15 @@ class TransportController extends Controller
             'cancellation_penalty_preview' => in_array($ride['ride_status'], ['searching', 'arriving', 'driver_arrived'], true)
                 ? app(\App\Services\RideCancellationPenaltyService::class)->preview($delivery) : null,
             'cancellation_penalty' => \App\Models\RideCancellationPenalty::where('cancelled_order_id', $trip->id)->first()?->present(),
+            // Stage C (2026-11-18): an owed ₱50 cancellation fee from an earlier ride,
+            // which this ride's driver can collect in cash (or the tourist pays online).
+            'cancellation_fee_due' => $delivery ? (function () use ($delivery) {
+                $p = app(\App\Services\RideCancellationPenaltyService::class)->dueOnRide($delivery);
+
+                return $p ? ['penalty_id' => $p->id, 'amount' => (float) $p->penalty_amount, 'from_ride' => $p->cancelledOrder?->order_number] : null;
+            })() : null,
+            // The tourist's own SOS on this ride (status only; the driver never sees it).
+            'sos' => app(\App\Services\SosAlertService::class)->latestFor($request->user(), $delivery?->id)?->presentForSender(),
             'destination_change' => $change?->present(),
             'destination_change_allowed' => $eligibility['allowed'],
             'destination_changes_left' => $eligibility['changes_left'],
@@ -177,24 +199,6 @@ class TransportController extends Controller
             'penalties' => $rows->map->present()->values(),
             'outstanding_total' => round((float) $rows->where('status', \App\Models\RideCancellationPenalty::STATUS_OWED)->sum('penalty_amount'), 2),
         ]);
-    }
-
-    /** POST /tourist/transport/trip/{id}/penalty/dispute — dispute this ride's cancellation penalty. */
-    public function disputePenalty(Request $request, int $id): JsonResponse
-    {
-        $data = $request->validate(['reason' => ['required', 'string', 'min:5', 'max:500']]);
-        $trip = Order::where('customer_email', $request->user()->email)->where('order_type', 'transport')->findOrFail($id);
-        $penalty = \App\Models\RideCancellationPenalty::where('cancelled_order_id', $trip->id)->first();
-        if ($penalty === null) {
-            return $this->errorResponse('This ride has no cancellation penalty.', 404);
-        }
-        try {
-            $penalty = app(\App\Services\RideCancellationPenaltyService::class)->dispute($penalty, $request->user(), $data['reason']);
-        } catch (\App\Exceptions\RidePenaltyException $e) {
-            return $this->errorResponse($e->getMessage(), $e->status);
-        }
-
-        return $this->successResponse(['penalty' => $penalty->present()], 'Your dispute was sent to the Tourism Office. Nothing is collected while it is reviewed.');
     }
 
     /**
@@ -270,9 +274,14 @@ class TransportController extends Controller
             return $this->errorResponse('This trip can no longer be cancelled.', 422);
         }
 
+        // The ₱50 cancellation penalty, if this cancellation created one (2026-11-18):
+        // the app shows it straight away (the tourist is also notified).
+        $penalty = \App\Models\RideCancellationPenalty::with('cancelledOrder:id,order_number')->where('cancelled_order_id', $trip->id)->first();
+
         return $this->successResponse([
             'status' => 'cancelled',
-            'cancellation_fee' => 0,
+            'cancellation_fee' => $penalty ? (float) $penalty->penalty_amount : 0,
+            'cancellation_penalty' => $penalty ? $penalty->present() + ['notice' => $penalty->notice()] : null,
         ], 'Trip cancelled.');
     }
 

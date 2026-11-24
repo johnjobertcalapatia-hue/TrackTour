@@ -5,6 +5,7 @@ namespace App\Http\Controllers\BusinessOwner;
 use App\Http\Controllers\Controller;
 use App\Models\Booking;
 use App\Models\Order;
+use App\Support\ReportDateRange;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -30,15 +31,18 @@ class BusinessOwnerExportController extends Controller
     {
         $businessIds = $this->resolveBusinessIds($request);
         $type = $request->get('type', 'sales');
-        $period = $request->get('period', 'monthly');
-        $dates = $this->getDateRange($period);
+        // Same filters as the on-screen report: Date From / Date To override the period.
+        $range = ReportDateRange::fromRequest($request);
+        $period = $range->label();
+        $dates = $range->salesWindow();
 
         $user = $request->user();
 
         if ($type === 'sales') {
             $data = Order::whereIn('business_id', $businessIds)
                 ->where('status', 'completed')
-                ->whereBetween('completed_at', [$dates['start'], $dates['end']])
+                ->when($dates['start'], fn ($q, $d) => $q->where('completed_at', '>=', $d))
+                ->when($dates['end'], fn ($q, $d) => $q->where('completed_at', '<=', $d))
                 ->select(DB::raw('DATE(completed_at) as date'), DB::raw('COUNT(*) as total_orders'), DB::raw('SUM(total) as total_revenue'))
                 ->groupBy('date')->orderBy('date')->get();
 
@@ -49,13 +53,13 @@ class BusinessOwnerExportController extends Controller
 
             $html = view('exports.sales', compact('data', 'summary', 'period', 'user'))->render();
         } elseif ($type === 'orders') {
-            $data = Order::whereIn('business_id', $businessIds)
+            $data = $range->applyCustom(Order::whereIn('business_id', $businessIds), 'created_at')
                 ->select('status', DB::raw('COUNT(*) as count'), DB::raw('SUM(total) as revenue'))
                 ->groupBy('status')->get();
 
             $html = view('exports.orders', compact('data', 'user'))->render();
         } elseif ($type === 'bookings') {
-            $data = Booking::whereIn('business_id', $businessIds)
+            $data = $range->applyCustom(Booking::whereIn('business_id', $businessIds), 'created_at')
                 ->select('status', DB::raw('COUNT(*) as count'), DB::raw('SUM(total_amount) as revenue'))
                 ->groupBy('status')->get();
 
@@ -72,8 +76,10 @@ class BusinessOwnerExportController extends Controller
     {
         $businessIds = $this->resolveBusinessIds($request);
         $type = $request->get('type', 'sales');
-        $period = $request->get('period', 'monthly');
-        $dates = $this->getDateRange($period);
+        // Same filters as the on-screen report: Date From / Date To override the period.
+        $range = ReportDateRange::fromRequest($request);
+        $period = $range->label();
+        $dates = $range->salesWindow();
 
         $filename = "report-{$type}-{$period}.csv";
         $handle = fopen('php://temp', 'r+');
@@ -82,7 +88,8 @@ class BusinessOwnerExportController extends Controller
             fputcsv($handle, ['Date', 'Total Orders', 'Total Revenue']);
             $rows = Order::whereIn('business_id', $businessIds)
                 ->where('status', 'completed')
-                ->whereBetween('completed_at', [$dates['start'], $dates['end']])
+                ->when($dates['start'], fn ($q, $d) => $q->where('completed_at', '>=', $d))
+                ->when($dates['end'], fn ($q, $d) => $q->where('completed_at', '<=', $d))
                 ->select(DB::raw('DATE(completed_at) as date'), DB::raw('COUNT(*) as total_orders'), DB::raw('SUM(total) as total_revenue'))
                 ->groupBy('date')->orderBy('date')->get();
             foreach ($rows as $row) {
@@ -90,7 +97,7 @@ class BusinessOwnerExportController extends Controller
             }
         } elseif ($type === 'orders') {
             fputcsv($handle, ['Status', 'Count', 'Revenue']);
-            $rows = Order::whereIn('business_id', $businessIds)
+            $rows = $range->applyCustom(Order::whereIn('business_id', $businessIds), 'created_at')
                 ->select('status', DB::raw('COUNT(*) as count'), DB::raw('SUM(total) as revenue'))
                 ->groupBy('status')->get();
             foreach ($rows as $row) {
@@ -98,7 +105,7 @@ class BusinessOwnerExportController extends Controller
             }
         } elseif ($type === 'bookings') {
             fputcsv($handle, ['Status', 'Count', 'Revenue']);
-            $rows = Booking::whereIn('business_id', $businessIds)
+            $rows = $range->applyCustom(Booking::whereIn('business_id', $businessIds), 'created_at')
                 ->select('status', DB::raw('COUNT(*) as count'), DB::raw('SUM(total_amount) as revenue'))
                 ->groupBy('status')->get();
             foreach ($rows as $row) {
@@ -122,23 +129,26 @@ class BusinessOwnerExportController extends Controller
     {
         $businessIds = $this->resolveBusinessIds($request);
         $type = $request->get('type', 'sales');
-        $period = $request->get('period', 'monthly');
-        $dates = $this->getDateRange($period);
+        // Same filters as the on-screen report: Date From / Date To override the period.
+        $range = ReportDateRange::fromRequest($request);
+        $period = $range->label();
+        $dates = $range->salesWindow();
 
         $user = $request->user();
 
         if ($type === 'sales') {
             $data = Order::whereIn('business_id', $businessIds)
                 ->where('status', 'completed')
-                ->whereBetween('completed_at', [$dates['start'], $dates['end']])
+                ->when($dates['start'], fn ($q, $d) => $q->where('completed_at', '>=', $d))
+                ->when($dates['end'], fn ($q, $d) => $q->where('completed_at', '<=', $d))
                 ->select(DB::raw('DATE(completed_at) as date'), DB::raw('COUNT(*) as total_orders'), DB::raw('SUM(total) as total_revenue'))
                 ->groupBy('date')->orderBy('date')->get();
         } elseif ($type === 'orders') {
-            $data = Order::whereIn('business_id', $businessIds)
+            $data = $range->applyCustom(Order::whereIn('business_id', $businessIds), 'created_at')
                 ->select('status', DB::raw('COUNT(*) as count'), DB::raw('SUM(total) as revenue'))
                 ->groupBy('status')->get();
         } elseif ($type === 'bookings') {
-            $data = Booking::whereIn('business_id', $businessIds)
+            $data = $range->applyCustom(Booking::whereIn('business_id', $businessIds), 'created_at')
                 ->select('status', DB::raw('COUNT(*) as count'), DB::raw('SUM(total_amount) as revenue'))
                 ->groupBy('status')->get();
         } else {
@@ -153,13 +163,4 @@ class BusinessOwnerExportController extends Controller
         ]);
     }
 
-    private function getDateRange(string $period): array
-    {
-        return match ($period) {
-            'weekly' => ['start' => now()->startOfWeek(), 'end' => now()->endOfWeek()],
-            'monthly' => ['start' => now()->startOfMonth(), 'end' => now()->endOfMonth()],
-            'yearly' => ['start' => now()->startOfYear(), 'end' => now()->endOfYear()],
-            default => ['start' => now()->startOfMonth(), 'end' => now()->endOfMonth()],
-        };
-    }
 }

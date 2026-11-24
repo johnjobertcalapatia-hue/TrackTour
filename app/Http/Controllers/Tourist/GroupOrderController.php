@@ -29,6 +29,8 @@ class GroupOrderController extends Controller
             'restaurants.*.items.*.offering_id' => 'required|exists:offerings,id',
             'restaurants.*.items.*.quantity' => 'required|integer|min:1',
             'restaurants.*.items.*.notes' => 'nullable|string|max:500',
+            // The price the cart showed. Only compared, never charged (Promotions Part A).
+            'restaurants.*.items.*.expected_unit_price' => 'nullable|numeric|min:0',
             'order_type' => 'required|in:delivery,pickup',
             'delivery_speed' => 'required_if:order_type,delivery|in:standard,fast',
             'rider_tip' => 'nullable|numeric|min:0|max:100',

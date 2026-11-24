@@ -1,94 +1,78 @@
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { get, post } from '@/shared/services/api'
+import { Link } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import { MessageSquare } from 'lucide-react'
+import { get } from '@/shared/services/api'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { formatDateTime } from '@/shared/utils'
-import { MessageSquare, Send } from 'lucide-react'
 
-interface Message {
+export interface TouristConversationSummary {
   id: number
-  sender_name: string
-  sender_role: string
-  message: string
-  created_at: string
-  is_read: boolean
+  order_id: number | null
+  order_number: string | null
+  business_name: string | null
+  last_message: string | null
+  last_message_at: string | null
+  last_message_mine: boolean
+  unread: number
 }
 
+/**
+ * Messages: your conversations with restaurants about your orders (chat per
+ * order). Start one from an order's details page.
+ */
 export default function TouristMessages() {
-  const queryClient = useQueryClient()
-  const [newMessage, setNewMessage] = useState('')
-
   const { data, isLoading } = useQuery({
-    queryKey: ['tourist-messages'],
-    queryFn: () => get<{ data: Message[] }>('/tourist/messages'),
-  })
-
-  const sendMutation = useMutation({
-    mutationFn: (message: string) => post('/tourist/messages', { message }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tourist-messages'] })
-      setNewMessage('')
-    },
+    queryKey: ['tourist-chats'],
+    queryFn: () => get<TouristConversationSummary[]>('/tourist/chats'),
+    refetchInterval: 20_000,
   })
 
   if (isLoading) return <DashboardSkeleton />
 
-  const messages = data?.data ?? []
+  const rooms = (Array.isArray(data) ? data : []).filter((r) => r.last_message)
 
   return (
-    <div>
-      <div className="mb-8">
-        <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">Messages</h1>
-        <p className="mt-1 text-sm text-[#68736D]">Your conversations with businesses</p>
+    <div className="mx-auto max-w-3xl lg:mx-0">
+      <div className="mb-6">
+        <h1 className="text-2xl font-bold text-[#17201B] lg:text-3xl">Messages</h1>
+        <p className="mt-1 text-sm text-[#68736D]">Your conversations with restaurants about your orders</p>
       </div>
 
-      {messages.length === 0 ? (
-        <div className="bg-white backdrop-blur-xl rounded-2xl border border-[#E5E9E7] p-12 text-center">
-          <MessageSquare className="w-12 h-12 text-gray-600 mx-auto mb-4" />
-          <p className="text-[#68736D]">No messages yet. Start a conversation with a business.</p>
+      {rooms.length === 0 ? (
+        <div className="rounded-2xl border border-[#E5E9E7] bg-white p-12 text-center">
+          <MessageSquare className="mx-auto mb-4 h-12 w-12 text-[#9CA3AF]" aria-hidden="true" />
+          <p className="font-semibold text-[#17201B]">No messages yet</p>
+          <p className="mt-1 text-sm text-[#68736D]">Have a concern about an order? Open it in My Orders and tap “Message the restaurant”.</p>
+          <Link to="/tourist/activities?view=orders" className="mt-4 inline-flex h-10 items-center rounded-full bg-[#087F3F] px-5 text-sm font-semibold text-white">My orders</Link>
         </div>
       ) : (
-        <div className="bg-white backdrop-blur-xl rounded-2xl border border-[#E5E9E7] overflow-hidden">
-          <div className="max-h-[500px] overflow-y-auto p-4 space-y-3">
-            {messages.map((m) => (
-              <div key={m.id} className={`flex ${m.sender_role === 'tourist' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[75%] rounded-2xl px-4 py-3 ${
-                  m.sender_role === 'tourist'
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-[#F3F8F4] text-[#17201B]'
-                }`}>
-                  <p className="text-sm">{m.message}</p>
-                  <p className={`text-xs mt-1 ${m.sender_role === 'tourist' ? 'text-emerald-50' : 'text-gray-500'}`}>
-                    {m.sender_name} &bull; {formatDateTime(m.created_at)}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="border-t border-[#E5E9E7] p-4 flex items-center gap-3">
-            <input
-              type="text"
-              value={newMessage}
-              onChange={(e) => setNewMessage(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newMessage.trim()) {
-                  sendMutation.mutate(newMessage.trim())
-                }
-              }}
-              placeholder="Type a message..."
-              className="flex-1 bg-[#F3F8F4] border border-[#E5E9E7] rounded-xl px-4 py-2.5 text-sm text-[#17201B] placeholder-gray-400 focus:ring-2 focus:ring-emerald-500/40 focus:outline-none transition"
-            />
-            <button
-              onClick={() => {
-                if (newMessage.trim()) sendMutation.mutate(newMessage.trim())
-              }}
-              disabled={sendMutation.isPending || !newMessage.trim()}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white p-2.5 rounded-xl transition disabled:opacity-50"
-            >
-              <Send className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
+        <ul className="space-y-2" aria-label="Conversations">
+          {rooms.map((room) => (
+            <li key={room.id}>
+              <Link
+                to={`/tourist/messages/${room.id}`}
+                className={`flex items-start gap-3 rounded-2xl border bg-white p-4 transition hover:border-[#087F3F]/50 ${room.unread ? 'border-[#E5E9E7] border-l-4 border-l-[#087F3F]' : 'border-[#E5E9E7]'}`}
+              >
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#E9F7EF] text-sm font-bold text-[#087F3F]" aria-hidden="true">
+                  {(room.business_name ?? 'R').charAt(0).toUpperCase()}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex flex-wrap items-baseline gap-x-2">
+                    <span className={`text-sm ${room.unread ? 'font-bold text-[#17201B]' : 'font-semibold text-[#3F4A44]'}`}>{room.business_name}</span>
+                    <span className="text-xs text-[#68736D]">Order #{room.order_number}</span>
+                  </span>
+                  <span className="mt-0.5 line-clamp-1 block text-sm text-[#68736D]">
+                    {room.last_message_mine && <span className="font-medium">You: </span>}{room.last_message}
+                  </span>
+                  {room.last_message_at && <span className="mt-1 block text-xs text-[#68736D]">{formatDateTime(room.last_message_at)}</span>}
+                </span>
+                {room.unread > 0 && (
+                  <span className="shrink-0 rounded-full bg-[#087F3F] px-2 py-0.5 text-[11px] font-bold text-white">{room.unread}<span className="sr-only"> unread</span></span>
+                )}
+              </Link>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   )

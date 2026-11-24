@@ -35,11 +35,12 @@ beforeEach(() => {
 })
 
 describe('Bansud admin shell (municipal portal identity)', () => {
-  it('shows the TrackTour mark, the grouped admin navigation and the page', async () => {
+  it('shows the Bansud office logo, the grouped admin navigation and the page', async () => {
     renderAt()
 
     const nav = screen.getByRole('navigation', { name: 'Admin navigation' })
-    expect(screen.getAllByAltText('TrackTour Logo')[0]).toHaveAttribute('src', '/assets/logo/tracktour.png')
+    expect(screen.getAllByAltText('Bansud Tourism Office logo')[0]).toHaveAttribute('src', '/assets/logo/bansud-tourism-office.jpg')
+    expect(screen.queryByAltText('TrackTour Logo')).toBeNull()
     for (const label of ['Dashboard', 'Live Map', 'Users', 'Rider Onboarding', 'Reports', 'Settings']) {
       expect(within(nav).getByRole('link', { name: new RegExp(label) })).toBeInTheDocument()
     }
@@ -62,5 +63,10 @@ describe('Bansud admin shell (municipal portal identity)', () => {
     const menu = screen.getByRole('menu')
     expect(within(menu).getByRole('menuitem', { name: /Office Profile/ })).toHaveAttribute('href', '/admin/profile')
     expect(within(menu).getByRole('menuitem', { name: /Logout/ })).toBeInTheDocument()
+    // The menu lives in the sticky header, which must stack above the pages'
+    // own sticky bars (Office Profile's "Save changes" is sticky z-20).
+    const header = menu.closest('header')!
+    expect(header.className).toMatch(/(^| )sticky( |$)/)
+    expect(Number(header.className.match(/(?:^| )z-(\d+)(?: |$)/)?.[1])).toBeGreaterThan(20)
   })
 })

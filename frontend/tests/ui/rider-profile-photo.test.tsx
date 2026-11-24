@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import RiderProfile from '@/features/rider/pages/RiderProfile'
@@ -19,6 +19,8 @@ const profile = {
   phone: '09123456789',
   municipality: 'Bansud',
   barangay: 'Poblacion',
+  address_municipality_id: 1,
+  address_barangay_id: 7,
   role: 'rider',
   account_status: 'approved',
   profile_photo: 'profiles/rider.jpg',
@@ -39,7 +41,9 @@ describe('Rider profile photo', () => {
     api.get.mockReset()
     api.post.mockReset()
     api.put.mockReset()
-    api.get.mockResolvedValue(profile)
+    api.get.mockImplementation((url: string) => Promise.resolve(
+      url === '/municipalities' ? [{ id: 1, name: 'Bansud', barangays: [{ id: 7, name: 'Poblacion' }] }] : profile,
+    ))
   })
 
   it('loads the uploaded profile photo from public storage', async () => {
@@ -57,5 +61,23 @@ describe('Rider profile photo', () => {
 
     expect(screen.queryByAltText('Rider Name')).not.toBeInTheDocument()
     expect(screen.getByText('R')).toBeInTheDocument()
+  })
+
+  it('shows the registered municipality and barangay read-only and never sends them on save', async () => {
+    api.put.mockResolvedValue(profile)
+    renderProfile()
+
+    const municipality = await screen.findByLabelText('Municipality')
+    expect(municipality).toHaveAttribute('aria-readonly', 'true')
+    expect(municipality).toHaveTextContent('Bansud')
+    expect(screen.getByLabelText('Barangay')).toHaveTextContent('Poblacion')
+    expect(screen.queryByRole('combobox')).toBeNull()
+    expect(screen.getByText(/cannot be changed/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /Save Changes/ }))
+    await waitFor(() => expect(api.put).toHaveBeenCalled())
+    const [, body] = api.put.mock.calls[0]!
+    expect(body).not.toHaveProperty('municipality_id')
+    expect(body).not.toHaveProperty('barangay_id')
   })
 })

@@ -805,7 +805,8 @@ class TouristTransportContractTest extends TestCase
         $this->assertSame('Ride Fare', $attributes['line_items'][0]['name']);
         $this->assertSame((int) round($order->total * 100), $attributes['line_items'][0]['amount']);
         $this->assertCount(1, $attributes['line_items'], 'A ride is a single-fare line item.');
-        $this->assertSame(['gcash'], $attributes['payment_method_types']);
+        // Online = GCash or QR Ph on PayMongo's page (2026-11-18).
+        $this->assertSame(['gcash', 'qrph'], $attributes['payment_method_types']);
     }
 
     public function test_create_intent_rejects_payment_for_cancelled_ride(): void

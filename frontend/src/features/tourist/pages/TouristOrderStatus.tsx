@@ -797,9 +797,9 @@ export default function TouristOrderStatus() {
           )}
         </div>
 
-        {/* Cancel Modal */}
+        {/* Cancel Modal. Dialogs here sit above the map (Leaflet panes up to z-1000), 2026-11-18. */}
         {showCancelModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[2500] flex items-center justify-center p-4">
             <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6 w-full max-w-md shadow-2xl">
               <h3 className="text-lg font-semibold text-[#17201B] mb-2">Cancel Order</h3>
               <p className="text-sm text-[#6B7280] mb-4">Are you sure you want to cancel this order? Your payment will be refunded.</p>
@@ -831,7 +831,7 @@ export default function TouristOrderStatus() {
 
         {/* Rating Modal */}
         {showRatingModal && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[2500] flex items-center justify-center p-4">
             <div className="bg-white border border-[#E5E9E7] rounded-2xl p-6 w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto">
               <h3 className="text-lg font-semibold text-[#17201B] mb-2">Rate Your Order</h3>
               <p className="text-sm text-[#6B7280] mb-6">How was your experience with {restaurantName}?</p>

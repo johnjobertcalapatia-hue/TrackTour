@@ -22,6 +22,7 @@ class SendDeliveryAssignedNotification implements ShouldQueue
             'title' => 'New Delivery Assignment',
             'message' => "You have been assigned delivery for Order #{$order->order_number}. Pickup: {$delivery->pickup_address}.",
             'type' => 'delivery_assigned',
+            'data' => ['order_id' => $order->id, 'delivery_id' => $delivery->id],
         ]);
 
         // Ride-hailing: also persist an in-app Notification row for the tourist
@@ -33,6 +34,7 @@ class SendDeliveryAssignedNotification implements ShouldQueue
                 'title' => 'Ride Status Updated',
                 'message' => "Ride #{$order->order_number}: Your driver {$rider->fullName} is on the way to your pickup location.",
                 'type' => 'ride_status_changed',
+                'data' => ['order_id' => $order->id],
             ]);
         }
     }

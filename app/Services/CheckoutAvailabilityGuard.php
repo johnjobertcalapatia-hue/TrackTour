@@ -19,11 +19,18 @@ use InvalidArgumentException;
  *     future checkouts only. Accepted orders are never changed by it.
  *
  * Availability is a manual Yes/No flag; there are no stock quantities.
+ *
+ * Dish sales (Promotions Part A): the expected price of each line is worked out
+ * again here from the LOCKED dish (SalePricing). Saving, ending or archiving a
+ * sale locks the same dish rows first, so a sale change either commits before
+ * this check (and the checkout fails with "price changed") or waits until the
+ * order exists. A sale that starts or ends between the cart and this check
+ * likewise fails the checkout instead of charging a price nobody saw.
  */
 class CheckoutAvailabilityGuard
 {
     /**
-     * @param  list<array{offering_id: int, unit_price: mixed, business_id?: int|null}>  $items
+     * @param  list<array{offering_id: int, unit_price: mixed, promotion_id?: int|null, business_id?: int|null}>  $items
      * @param  int|null  $businessId  restaurant for single-restaurant checkouts (items carry their own otherwise)
      */
     public function assertOrderable(array $items, ?int $businessId = null): void
@@ -31,6 +38,8 @@ class CheckoutAvailabilityGuard
         $ids = array_values(array_unique(array_map(fn ($i) => (int) $i['offering_id'], $items)));
         sort($ids);
         $locked = Offering::query()->whereIn('id', $ids)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+
+        $quotes = app(SalePricing::class)->quoteMany($locked->values());
 
         $checkedBusinesses = [];
         foreach ($items as $item) {
@@ -42,7 +51,9 @@ class CheckoutAvailabilityGuard
             if (! $offering->is_available || in_array($offering->status, ['archived', 'hidden'], true)) {
                 throw new InvalidArgumentException($offering->name.' is no longer available. Please remove it from your cart.');
             }
-            if (round((float) $offering->price, 2) !== round((float) $item['unit_price'], 2)) {
+            $quote = $quotes[(int) $offering->id];
+            if (round((float) $quote['unit_price'], 2) !== round((float) $item['unit_price'], 2)
+                || (int) ($quote['promotion_id'] ?? 0) !== (int) ($item['promotion_id'] ?? 0)) {
                 throw new InvalidArgumentException('The price of '.$offering->name.' changed. Please review your cart before placing the order.');
             }
 

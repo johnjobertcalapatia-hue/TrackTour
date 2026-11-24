@@ -62,8 +62,10 @@ const riderSchema = z.object({
   email: z.string().email('Please enter a valid email address'),
   mobile_number: z.string().min(9, 'Mobile number is required').regex(/^((\+63|0)9\d{9}|9\d{9})$/, 'Please enter a valid Philippine mobile number'),
   otp_code: z.string().min(6, 'OTP must be 6 digits').max(6, 'OTP must be 6 digits'),
-  // Decides which Tourism Office issues the rider's COD cash advance.
+  // Decides which Tourism Office trains, interviews and manages the rider
+  // (and issues their COD cash). Set here once: not editable afterwards.
   municipality_id: z.string().refine((v) => Number(v) >= 1, 'Municipality is required'),
+  barangay_id: z.string().refine((v) => Number(v) >= 1, 'Barangay is required'),
   password: passwordRule,
   password_confirmation: z.string(),
   referral_code: z.string().optional(),
@@ -93,7 +95,7 @@ function getPasswordStrength(password: string): { level: 'weak' | 'medium' | 'st
 
 export default function RiderRegisterPage() {
   const [error, setError] = useState('')
-  const [municipalities, setMunicipalities] = useState<{ id: number; name: string }[]>([])
+  const [municipalities, setMunicipalities] = useState<{ id: number; name: string; barangays?: { id: number; name: string }[] }[]>([])
   const [showPassword, setShowPassword] = useState(false)
   const [otpSent, setOtpSent] = useState(false)
   const [otpVerified, setOtpVerified] = useState(false)
@@ -122,6 +124,7 @@ export default function RiderRegisterPage() {
       mobile_number: '',
       otp_code: '',
       municipality_id: '',
+      barangay_id: '',
       password: '',
       password_confirmation: '',
       referral_code: '',
@@ -131,8 +134,11 @@ export default function RiderRegisterPage() {
     },
   })
 
+  const selectedMunicipalityId = Number(form.watch('municipality_id')) || 0
+  const riderBarangays = municipalities.find((m) => m.id === selectedMunicipalityId)?.barangays ?? []
+
   useEffect(() => {
-    get<{ id: number; name: string }[]>('/municipalities')
+    get<{ id: number; name: string; barangays?: { id: number; name: string }[] }[]>('/municipalities')
       .then((list) => setMunicipalities(Array.isArray(list) ? list : []))
       .catch(() => {})
   }, [])
@@ -308,6 +314,7 @@ export default function RiderRegisterPage() {
       fd.append('email', data.email)
       fd.append('mobile_number', normalizeMobileNumber(data.mobile_number))
       fd.append('municipality_id', data.municipality_id)
+      fd.append('barangay_id', data.barangay_id)
       fd.append('password', data.password)
       fd.append('password_confirmation', data.password_confirmation)
       fd.append('otp_code', data.otp_code)
@@ -431,15 +438,39 @@ export default function RiderRegisterPage() {
               <label htmlFor="rider-municipality" className={labelClasses}>
                 Municipality <span className="text-red-500">*</span>
               </label>
-              <select id="rider-municipality" {...form.register('municipality_id')} className={inputClasses}>
+              <select
+                id="rider-municipality"
+                {...form.register('municipality_id', { onChange: () => form.setValue('barangay_id', '') })}
+                className={inputClasses}
+              >
                 <option value="">Select municipality</option>
                 {municipalities.map((m) => (
                   <option key={m.id} value={m.id}>{m.name}</option>
                 ))}
               </select>
-              <p className="text-xs text-[#6B7280] mt-1">Where you deliver. Its Tourism Office issues your COD cash.</p>
+              <p className="text-xs text-[#6B7280] mt-1">Its Tourism Office trains, interviews and manages you, and issues your COD cash.</p>
               {form.formState.errors.municipality_id && (
                 <p className={errorClasses}>{form.formState.errors.municipality_id.message}</p>
+              )}
+            </div>
+            <div>
+              <label htmlFor="rider-barangay" className={labelClasses}>
+                Barangay <span className="text-red-500">*</span>
+              </label>
+              <select
+                id="rider-barangay"
+                {...form.register('barangay_id')}
+                disabled={!riderBarangays.length}
+                className={`${inputClasses} disabled:opacity-60`}
+              >
+                <option value="">{form.watch('municipality_id') ? 'Select barangay' : 'Select a municipality first'}</option>
+                {riderBarangays.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+              <p className="text-xs text-[#B45309] mt-1">Your municipality and barangay cannot be changed after you register.</p>
+              {form.formState.errors.barangay_id && (
+                <p className={errorClasses}>{form.formState.errors.barangay_id.message}</p>
               )}
             </div>
           </div>

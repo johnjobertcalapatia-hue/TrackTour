@@ -61,7 +61,7 @@ describe('Rider municipality (decides which Tourism Office issues COD cash)', ()
     expect(select).toHaveValue('')
     await waitFor(() => expect(screen.getByRole('option', { name: 'Bansud' })).toBeInTheDocument())
     expect(screen.getByRole('option', { name: 'Gloria' })).toBeInTheDocument()
-    expect(screen.getByText(/Its Tourism Office issues your COD cash/)).toBeInTheDocument()
+    expect(screen.getByText(/Its Tourism Office trains, interviews and manages you, and issues your COD cash/)).toBeInTheDocument()
     expect(api.get).toHaveBeenCalledWith('/municipalities')
   })
 

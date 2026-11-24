@@ -25,8 +25,11 @@ class StaffResource extends JsonResource
             'address' => $this->address,
             'profile_picture' => $this->profile_picture_url,
             'staff_role' => new StaffRoleResource($this->whenLoaded('staffRole')),
-            'role_label' => $this->staffRole?->name,
-            'display_role' => $this->staffRole?->name ?? ucfirst($this->status),
+            // Every role held (Staff Management section 5), primary first.
+            'roles' => ($roleNames = $this->resource->roleNames()),
+            'role_ids' => $this->resource->roles()->pluck('staff_roles.id')->push($this->staff_role_id)->filter()->unique()->map(fn ($id) => (int) $id)->values(),
+            'role_label' => $roleNames !== [] ? implode(', ', $roleNames) : null,
+            'display_role' => $roleNames !== [] ? implode(', ', $roleNames) : ucfirst($this->status),
             'is_active' => $this->status === 'active',
             'status' => $this->status,
             'status_label' => $this->status_label,

@@ -6,6 +6,7 @@ import TouristSidebar from '@/features/tourist/components/layout/TouristSidebar'
 import { TOURIST_NAV_ITEMS, useActiveTouristNav } from '@/features/tourist/components/layout/tourist-nav'
 import { cn } from '@/shared/utils'
 import { useVisibleBottomInset } from '@/shared/hooks/use-visible-bottom-inset'
+import { TouristLocationSharer } from '@/features/tourist/location-sharing'
 
 export default function TouristLayout() {
   const location = useLocation()
@@ -14,8 +15,10 @@ export default function TouristLayout() {
   const bottomInset = useVisibleBottomInset()
 
   return (
-    <div className="tourist-ui clay-ui min-h-screen bg-[#F4F8F3] lg:flex">
-      {/* Desktop sidebar: full height, brand + navigation */}
+    <div className="tourist-ui clay-ui min-h-screen bg-[#F6F4EE] text-[#17201B] lg:flex">
+      {/* Opt-in only: sends nothing unless the tourist turned location sharing on. */}
+      <TouristLocationSharer />
+      {/* Desktop sidebar: full height, brand + navigation (same look as the owner portal) */}
       <div className="hidden lg:block sticky top-0 h-screen overflow-y-auto shrink-0 z-[2001]">
         <TouristSidebar />
       </div>
@@ -44,7 +47,7 @@ export default function TouristLayout() {
       {typeof document !== 'undefined' && createPortal(
       <nav
         aria-label="Tourist bottom navigation"
-        className="tourist-ui clay-ui tourist-bottom-nav fixed bottom-0 left-0 right-0 z-[2000] bg-white border-t border-[#E5E9E7] lg:hidden safe-bottom"
+        className="tourist-ui clay-ui tourist-bottom-nav fixed bottom-0 left-0 right-0 z-[2000] bg-[#fff] border-t border-[#E7E2D6] shadow-[0_-6px_18px_rgba(15,77,43,0.06)] lg:hidden safe-bottom"
         data-bottom-inset={bottomInset}
         style={bottomInset > 0 ? { transform: `translate3d(0, ${-bottomInset}px, 0)` } : undefined}
       >
@@ -59,13 +62,13 @@ export default function TouristLayout() {
                 aria-current={active ? 'page' : undefined}
                 className={cn(
                   'tourist-bottom-nav-link min-w-0 flex flex-col items-center justify-center gap-0.5 sm:gap-1 px-0.5 transition-colors',
-                  active ? 'text-[#087F3F]' : 'text-[#56615B] hover:text-[#17201B]',
+                  active ? 'text-[#0F4D2B]' : 'text-[#5E6B63] hover:text-[#17201B]',
                 )}
               >
                 <span
                   className={cn(
                     'tourist-bottom-nav-pill flex items-center justify-center rounded-full transition-colors',
-                    active && 'bg-[#E3F4E9]',
+                    active && 'bg-[#0F4D2B] text-[#F4C430]',
                   )}
                   aria-hidden="true"
                 >

@@ -8,6 +8,7 @@ use App\Models\ActivityLog;
 use App\Models\RiderEarning;
 use App\Models\RiderPayout;
 use App\Models\User;
+use App\Services\PayoutStatementService;
 use App\Services\RiderEarningVerifier;
 use App\Services\RiderPayoutService;
 use Illuminate\Http\JsonResponse;
@@ -28,6 +29,7 @@ class AdminPayoutController extends Controller
     public function __construct(
         private readonly RiderPayoutService $payoutService,
         private readonly RiderEarningVerifier $verifier,
+        private readonly PayoutStatementService $statements,
     ) {}
 
     /** Cashout requests, newest first, optionally by status. */
@@ -242,7 +244,7 @@ class AdminPayoutController extends Controller
 
     public function startReview(Request $request, RiderPayout $payout): JsonResponse
     {
-        return $this->act(fn () => $this->payoutService->startReview($payout, $request->user()), 'Review started.');
+        return $this->act(fn () => $this->statements->startReview($payout, $request->user()), 'Review started.');
     }
 
     public function approve(Request $request, RiderPayout $payout): JsonResponse
@@ -253,7 +255,7 @@ class AdminPayoutController extends Controller
         ]);
         $this->reauthenticate($request->user(), $validated['password']);
 
-        return $this->act(fn () => $this->payoutService->approve($payout, $request->user(), $validated['note'] ?? null), 'Cashout approved. Send the GCash transfer, then confirm the payment.');
+        return $this->act(fn () => $this->statements->approve($payout, $request->user(), $validated['note'] ?? null), 'Cashout approved. Send the GCash transfer, then confirm the payment.');
     }
 
     public function reject(Request $request, RiderPayout $payout): JsonResponse
@@ -263,7 +265,7 @@ class AdminPayoutController extends Controller
             'note' => ['nullable', 'string', 'max:500'],
         ]);
 
-        return $this->act(fn () => $this->payoutService->reject($payout, $request->user(), $validated['reason'] ?? $validated['note'] ?? null), 'Cashout rejected; the earnings returned to the rider.');
+        return $this->act(fn () => $this->statements->reject($payout, $request->user(), $validated['reason'] ?? $validated['note'] ?? null), 'Cashout rejected; the earnings returned to the rider.');
     }
 
     public function markPaid(Request $request, RiderPayout $payout): JsonResponse
@@ -283,7 +285,7 @@ class AdminPayoutController extends Controller
         ]);
         $this->reauthenticate($request->user(), $validated['password']);
 
-        return $this->act(fn () => $this->payoutService->markPaid($payout, $request->user(), $validated['note'] ?? null, [
+        return $this->act(fn () => $this->statements->markPaid($payout, $request->user(), $validated['note'] ?? null, [
             'reference' => $validated['reference'],
             'amount' => $validated['amount'],
             'recipient_number' => $validated['recipient_number'],
@@ -301,7 +303,7 @@ class AdminPayoutController extends Controller
         ]);
         $this->reauthenticate($request->user(), $validated['password']);
 
-        return $this->act(fn () => $this->payoutService->markFailed($payout, $request->user(), $validated['reason']), 'Marked failed; the earnings returned to the rider.');
+        return $this->act(fn () => $this->statements->markFailed($payout, $request->user(), $validated['reason']), 'Marked failed; the earnings returned to the rider.');
     }
 
     /** The GCash transfer proof (private file). */
@@ -332,7 +334,21 @@ class AdminPayoutController extends Controller
         }
     }
 
+    /**
+     * Stage D2: the cashout detail plus its linked cancellation compensation
+     * (checked by CompensationPayoutValidator) and the one transfer total.
+     */
     private function detail(RiderPayout $payout): array
+    {
+        $base = $this->earningsDetail($payout);
+        $comp = $this->statements->linkedTo($payout);
+        $base['compensation_payout'] = $comp ? $comp->present() + ['validation' => $this->statements->validate($comp)] : null;
+        $base['transfer_total'] = round((float) $payout->amount + (float) ($comp?->amount ?? 0), 2);
+
+        return $base;
+    }
+
+    private function earningsDetail(RiderPayout $payout): array
     {
         $payout->loadMissing('rider.profile', 'rider.municipality', 'earnings.order.business');
         $live = in_array($payout->status, RiderPayoutService::LOCKING_STATUSES, true);

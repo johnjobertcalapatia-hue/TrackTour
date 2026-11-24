@@ -104,6 +104,27 @@ function withinLabel(radius: number, place: string, distance: number | null, loc
   return `Within ${radius} m of ${place} (you are ${formatDistance(distance)} away)`
 }
 
+/** The server saves a fix only at this precision or better (config tracking.max_saved_accuracy_m). */
+export const MAX_SAVED_ACCURACY_M = 50
+
+/**
+ * The restaurant check uses the rider's SAVED location. When the phone's fixes
+ * keep being refused, "turn on your location" is wrong (it is on): say why it
+ * is not saved and what to do (2026-11-24: a rider on a ±100 m+ fix stood at
+ * the restaurant for days with no way to tell why Confirm Pick Up never came).
+ */
+function restaurantLocationLabel(radius: number, distance: number | null, locationKnown: boolean, refusal?: string | null, deviceAccuracy?: number | null): string {
+  if (locationKnown && distance != null) return withinLabel(radius, 'the restaurant', distance, true)
+  if (refusal === 'low_accuracy') {
+    const acc = deviceAccuracy != null && Number.isFinite(deviceAccuracy) ? ` (now ±${Math.round(deviceAccuracy)} m)` : ''
+    return `Within ${radius} m of the restaurant: your GPS is not precise enough${acc}. It needs ±${MAX_SAVED_ACCURACY_M} m or better: turn on Precise location or step outside`
+  }
+  if (refusal === 'implausible_movement') {
+    return `Within ${radius} m of the restaurant: your location jumped too far from your last saved spot. Waiting for it to settle (up to 2 minutes)`
+  }
+  return withinLabel(radius, 'the restaurant', distance, locationKnown)
+}
+
 /**
  * What a restaurant row's button waits for (2026-11-10): Confirm Arrival needs
  * the rider's turn in route order and the restaurant within the pickup radius;
@@ -111,7 +132,17 @@ function withinLabel(radius: number, place: string, distance: number | null, loc
  * only), the food ready and the rider still in the pickup area. Mirrors the
  * server gates, which stay authoritative.
  */
-export function stopConditions(stop: PickupStop, data: Pick<PickupStopsData, 'stops' | 'pickup_radius_meters'>): Condition[] {
+function phoneCheckedLine(stop: PickupStop): Condition {
+  return { label: `Location checked from your phone (±${stop.phone_accuracy_m ?? '?'} m)`, met: true }
+}
+
+export function stopConditions(
+  stop: PickupStop,
+  data: Pick<PickupStopsData, 'stops' | 'pickup_radius_meters'>,
+  /** Why the latest fix was not saved (RiderActiveTripContext.locationRefusal), and the phone's precision. */
+  refusal?: string | null,
+  deviceAccuracy?: number | null,
+): Condition[] {
   if (stop.status === 'collected') return []
   const radius = data.pickup_radius_meters ?? PICKUP_RADIUS_M
   const ordered = [...data.stops].sort((a, b) => a.sequence - b.sequence)
@@ -123,9 +154,10 @@ export function stopConditions(stop: PickupStop, data: Pick<PickupStopsData, 'st
 
   if (!stop.arrived_at) {
     conditions.push({
-      label: withinLabel(radius, 'the restaurant', stop.distance_meters, locationKnown),
+      label: restaurantLocationLabel(radius, stop.distance_meters, locationKnown && stop.distance_meters != null, refusal, deviceAccuracy),
       met: stop.arrival_can_confirm || (locationKnown && stop.distance_meters != null && stop.distance_meters <= radius),
     })
+    if (stop.location_source === 'phone') conditions.push(phoneCheckedLine(stop))
     return conditions
   }
 
@@ -135,9 +167,10 @@ export function stopConditions(stop: PickupStop, data: Pick<PickupStopsData, 'st
   }
   conditions.push({ label: 'Food is ready', met: stop.is_ready || stop.ready_label === 'ready' || stop.ready_label === 'none' })
   conditions.push({
-    label: withinLabel(radius, 'the restaurant', stop.distance_meters, locationKnown),
+    label: restaurantLocationLabel(radius, stop.distance_meters, locationKnown && stop.distance_meters != null, refusal, deviceAccuracy),
     met: stop.reason !== 'too_far' && stop.reason !== 'gps_unavailable',
   })
+  if (stop.location_source === 'phone') conditions.push(phoneCheckedLine(stop))
   return conditions
 }
 
@@ -197,6 +230,49 @@ export function withDropoffLocation(conditions: Condition[], refusal: string | n
   return acc != null
     ? [...conditions, { label: `Location checked from your phone (±${acc} m)`, met: true }]
     : [...conditions, tooCoarse]
+}
+
+/** A phone fix older than this no longer counts (server: tracking.device_fix_max_age_seconds). */
+export const DEVICE_FIX_MAX_AGE_MS = 30_000
+
+export interface PhoneFix {
+  latitude: number
+  longitude: number
+  accuracy: number | null
+  /** When the phone took the fix (ms since epoch). */
+  at: number
+}
+
+/**
+ * Restaurant arrival and Confirm Pick Up (owner decision 2026-11-24, the food
+ * drop-off rule of 2026-11-12): when the SAVED fix cannot place the rider at
+ * the current restaurant and that is the only thing missing (the server's
+ * reason is gps_unavailable / too_far), the phone's own fix stands in if it
+ * is at most 30 s old, ±200 m or better and inside the pickup radius. The
+ * fix is sent with the action and the server applies the same rule
+ * (PickupSequenceService::assertAtRestaurantByPhone), so this only lets the
+ * button and the message appear when the server will agree.
+ */
+export function withPhoneFixAtStop(data: PickupStopsData, fix: PhoneFix | null, now: number = Date.now()): PickupStopsData {
+  if (!fix || fix.accuracy == null || fix.accuracy > DROPOFF_MAX_FIX_ACCURACY_M || now - fix.at > DEVICE_FIX_MAX_AGE_MS) return data
+  if (fix.latitude === 0 || fix.longitude === 0) return data
+  const current = [...data.stops].sort((a, b) => a.sequence - b.sequence).find((s) => s.status !== 'collected')
+  if (!current || current.pickup_lat == null || current.pickup_lng == null) return data
+  const radius = data.pickup_radius_meters ?? PICKUP_RADIUS_M
+  const distance = distanceMeters([fix.latitude, fix.longitude], [current.pickup_lat, current.pickup_lng])
+  if (distance > radius) return data
+
+  const locationOnly = (reason: string | null) => reason === 'gps_unavailable' || reason === 'too_far'
+  const phone = { location_source: 'phone' as const, phone_accuracy_m: Math.round(fix.accuracy), distance_meters: Math.round(distance) }
+  let patched: PickupStop | null = null
+  if (!current.arrived_at && !current.arrival_can_confirm && locationOnly(current.arrival_reason)) {
+    patched = { ...current, ...phone, arrival_can_confirm: true, arrival_reason: null }
+  } else if (current.arrived_at && !current.can_confirm && locationOnly(current.reason)) {
+    patched = { ...current, ...phone, can_confirm: true, reason: null }
+  }
+  if (!patched) return data
+
+  return { ...data, stops: data.stops.map((s) => (s.id === current.id ? patched! : s)) }
 }
 
 /** Append the saved-location line when the latest fix was refused. */

@@ -63,7 +63,7 @@ export default function AdminDashboard() {
       <DashboardHeader
         cover={office?.cover_url}
         logo={office?.logo_url}
-        fallbackLogo="/assets/logo/tracktour.png"
+        fallbackLogo="/assets/logo/bansud-tourism-office.jpg"
         name={office?.name || 'Bansud Tourism Office'}
         title="Bansud Tourism Dashboard"
         period={data.period}

@@ -10,12 +10,17 @@ use Illuminate\Http\Request;
 
 class BusinessOwnerBusinessController extends Controller
 {
+    use \App\Http\Controllers\Concerns\ActsForBusiness;
+
     public function index(Request $request): JsonResponse
     {
-        $user = $request->user()->load('businesses.category', 'businesses.municipality', 'businesses.barangay');
+        // Owner: their businesses; active staff: their one restaurant (Staff Management section 5).
+        $businesses = $this->actingBusinesses($request)
+            ->with('category', 'municipality', 'barangay')
+            ->get();
 
         return $this->successResponse(
-            BusinessResource::collection($user->businesses)
+            BusinessResource::collection($businesses)
         );
     }
 

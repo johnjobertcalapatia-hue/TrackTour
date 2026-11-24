@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\BusinessOwner;
 
+use App\Http\Controllers\Concerns\ActsForBusiness;
 use App\Http\Controllers\Controller;
 use App\Models\Expense;
 use Illuminate\Http\JsonResponse;
@@ -9,9 +10,11 @@ use Illuminate\Http\Request;
 
 class BusinessOwnerExpenseController extends Controller
 {
+    use ActsForBusiness;
+
     public function index(Request $request): JsonResponse
     {
-        $businessIds = $request->user()->businesses()->pluck('id');
+        $businessIds = $this->actingBusinessIds($request);
 
         $query = Expense::whereIn('business_id', $businessIds)
             ->with('business')
@@ -26,7 +29,7 @@ class BusinessOwnerExpenseController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $businessIds = $request->user()->businesses()->pluck('id');
+        $businessIds = $this->actingBusinessIds($request);
 
         $validated = $request->validate([
             'business_id' => ['required', 'integer', 'in:' . $businessIds->join(',')],
@@ -44,7 +47,7 @@ class BusinessOwnerExpenseController extends Controller
 
     public function show(Request $request, Expense $expense): JsonResponse
     {
-        if ($expense->business->owner_id !== $request->user()->id) {
+        if (! $this->actsFor($request, $expense->business)) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -53,11 +56,11 @@ class BusinessOwnerExpenseController extends Controller
 
     public function update(Request $request, Expense $expense): JsonResponse
     {
-        if ($expense->business->owner_id !== $request->user()->id) {
+        if (! $this->actsFor($request, $expense->business)) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
-        $businessIds = $request->user()->businesses()->pluck('id');
+        $businessIds = $this->actingBusinessIds($request);
 
         $validated = $request->validate([
             'vendor_name' => ['sometimes', 'string', 'max:255'],
@@ -74,7 +77,7 @@ class BusinessOwnerExpenseController extends Controller
 
     public function destroy(Request $request, Expense $expense): JsonResponse
     {
-        if ($expense->business->owner_id !== $request->user()->id) {
+        if (! $this->actsFor($request, $expense->business)) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -85,7 +88,7 @@ class BusinessOwnerExpenseController extends Controller
 
     public function summary(Request $request): JsonResponse
     {
-        $businessIds = $request->user()->businesses()->pluck('id');
+        $businessIds = $this->actingBusinessIds($request);
 
         $period = $request->get('period', 'monthly');
         $dates = match ($period) {

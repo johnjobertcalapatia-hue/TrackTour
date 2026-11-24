@@ -53,6 +53,7 @@ class RiderMunicipalityTest extends TestCase
             'password_confirmation' => 'Password123!',
             'role' => 'rider',
             'municipality_id' => $this->bansud->id,
+            'barangay_id' => \App\Models\Barangay::firstOrCreate(['municipality_id' => $this->bansud->id, 'name' => 'Poblacion'])->id,
             'mobile_number' => '09171234567',
             'otp_code' => '123456',
             'confirm_age' => true,
@@ -143,10 +144,13 @@ class RiderMunicipalityTest extends TestCase
     {
         $this->signUp()->assertStatus(201);
         $rider = User::where('email', 'pedro@example.com')->firstOrFail();
+        $this->assertNotNull($rider->profile->barangay_id, 'The registered barangay is saved.');
 
         $this->actingAs($this->office, 'sanctum')
             ->putJson("/api/admin/riders/{$rider->id}/municipality", ['municipality_id' => $this->gloria->id])
             ->assertOk();
+        // The old barangay belongs to Bansud, not Gloria: it is cleared.
+        $this->assertNull($rider->profile->fresh()->barangay_id);
 
         $this->actingAs($this->office, 'sanctum')->getJson('/api/admin/cash-advances')
             ->assertOk()->assertJsonPath('data.riders', []);

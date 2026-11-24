@@ -19,6 +19,11 @@ class PromotionResource extends JsonResource
             'min_order' => $this->min_order,
             'valid_from' => $this->start_date,
             'valid_until' => $this->end_date,
+            // The names the owner/staff promotion pages read (Staff Management section 5).
+            'discount_type' => $this->type,
+            'discount_value' => $this->value,
+            'start_date' => $this->start_date ? \Illuminate\Support\Carbon::parse($this->start_date)->toDateString() : null,
+            'end_date' => $this->end_date ? \Illuminate\Support\Carbon::parse($this->end_date)->toDateString() : null,
             'is_active' => $this->is_active,
             'usage_limit' => $this->usage_limit,
             'usage_count' => $this->usage_count,

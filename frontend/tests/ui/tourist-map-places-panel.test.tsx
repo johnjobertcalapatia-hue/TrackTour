@@ -151,13 +151,13 @@ afterEach(() => {
 })
 
 describe('Ride Hailing map (/tourist/transport/map, the Transport page Map button)', () => {
-  it('shows the businesses on the map with no places panel and no List view', async () => {
+  it('shows the businesses on the map with no places panel and no Explore tabs', async () => {
     renderMap(true)
     await vi.waitFor(() => expect(markers()).toHaveLength(3))
 
     expect(screen.queryByRole('complementary', { name: 'Places' })).not.toBeInTheDocument()
     expect(screen.queryByRole('searchbox', { name: 'Search places' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('link', { name: /List view/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: 'Explore views' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Back to Ride Hailing' })).toBeInTheDocument()
     // Satellite + locate buttons sit at the bottom right.
     const controls = screen.getByTestId('map-controls')
@@ -178,11 +178,11 @@ describe('Ride Hailing map (/tourist/transport/map, the Transport page Map butto
     expect(screen.queryByRole('complementary')).not.toBeInTheDocument()
   })
 
-  it('the normal explore map keeps the panel and List view', async () => {
+  it('the normal explore map keeps the panel and the Explore tabs', async () => {
     renderMap()
     await screen.findByRole('button', { name: 'Gloria Bay Resort' })
     expect(panel()).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /List view/i })).toBeInTheDocument()
+    expect(screen.getAllByRole('navigation', { name: 'Explore views' }).length).toBeGreaterThan(0)
     expect(screen.getByTestId('map-controls')).toHaveAttribute('data-position', 'top')
     expect(screen.queryByRole('button', { name: 'Back to Ride Hailing' })).not.toBeInTheDocument()
   })
@@ -322,7 +322,7 @@ describe('Tourist map — places panel', () => {
     expect(within(panel()).getByText(/matching/)).toHaveTextContent('1 place matching “falls” in Bansud')
   })
 
-  it('the Category dropdown is the only category filter (no chip row) and drives List view', async () => {
+  it('the Category dropdown is the only category filter (no chip row) and drives the Businesses tab', async () => {
     renderMap()
     await screen.findByRole('button', { name: 'Gloria Bay Resort' })
     expect(screen.queryByTestId('map-category-chips')).not.toBeInTheDocument()
@@ -334,7 +334,7 @@ describe('Tourist map — places panel', () => {
     fireEvent.click(screen.getByRole('option', { name: 'Food' }))
     expect(category).toHaveTextContent('Food')
     expect(cards()).toEqual(['Eksklusibo Grill and Restaurant'])
-    expect(screen.getByRole('link', { name: 'List view' })).toHaveAttribute('href', '/tourist/explore?tab=food')
+    expect(screen.getAllByRole('link', { name: 'Businesses' })[0]).toHaveAttribute('href', '/tourist/explore?view=businesses&tab=food')
 
     fireEvent.click(category)
     fireEvent.click(screen.getByRole('option', { name: 'Resorts' }))
@@ -343,7 +343,7 @@ describe('Tourist map — places panel', () => {
     fireEvent.click(category)
     fireEvent.click(screen.getByRole('option', { name: 'All Categories' }))
     expect(cards()).toHaveLength(3)
-    expect(screen.getByRole('link', { name: 'List view' })).toHaveAttribute('href', '/tourist/explore')
+    expect(screen.getAllByRole('link', { name: 'Businesses' })[0]).toHaveAttribute('href', '/tourist/explore?view=businesses')
   })
 
   it('a municipality with nothing listed offers to show all places again', async () => {

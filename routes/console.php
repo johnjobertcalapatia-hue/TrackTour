@@ -26,6 +26,12 @@ Schedule::command(CleanupRiderLocations::class, ['--days' => 30])
     ->onOneServer()
     ->description('Purge old GPS checkpoint data, keeping only the encoded polyline');
 
+// Tourist location sharing: latest position only, wiped after an hour.
+Schedule::command(\App\Console\Commands\PruneTouristLocations::class)
+    ->everyFifteenMinutes()
+    ->onOneServer()
+    ->description('Clear tourist shared locations older than an hour');
+
 Schedule::command(CheckExpiredDocuments::class)
     ->everySixHours()
     ->onOneServer()

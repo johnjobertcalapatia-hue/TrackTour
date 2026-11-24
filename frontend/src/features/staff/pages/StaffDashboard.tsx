@@ -1,379 +1,184 @@
-import { useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { get } from '@/shared/services/api'
+import type { ReactNode } from 'react'
+import { apiErrorMessage, get } from '@/shared/services/api'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
+import { useStaffPermissions, type StaffPermission } from '../services/use-staff-permissions'
 import { formatCurrency, formatDateTime } from '@/shared/utils'
-import { Package, DollarSign, CalendarCheck, ClipboardList, Utensils, Megaphone, ArrowRight, ClipboardCheck, Leaf, Bed, Users, Car, MapPin, Truck, ShoppingBag } from 'lucide-react'
+import {
+  ArrowRight, BarChart3, BookOpen, CalendarCheck, CheckCircle2, ClipboardCheck, ClipboardList, CookingPot, CreditCard,
+  DoorOpen, Hourglass, LayoutDashboard, Megaphone, Package, UserRound, XCircle,
+} from 'lucide-react'
+
+interface DashboardItem { status: string; total_price?: number | string | null; unit_price?: number | string | null; quantity?: number | null }
 
 interface StaffDashboardData {
-  staff: { status: string; role: string }
+  staff: { full_name: string; role: string; employee_id?: string | null }
   business: { name: string; category: string }
-  today_summary: {
-    pending: number
-    confirmed: number
-    in_progress: number
-    completed_today: number
-    cancelled_today: number
-    revenue_today: number
-  }
-  recent_orders: {
-    id: number
-    order_number: string
-    customer_name: string
-    status: string
-    total: number
-    created_at: string
-  }[]
-  recent_bookings: {
-    id: number
-    booking_number: string
-    customer_name: string
-    booking_type: string
-    status: string
-    check_in_date: string
-    check_out_date: string
-    total_amount: number
-    created_at?: string
-  }[]
+  /** Orders (orders.view) or bookings (bookings.view) counts for today. */
+  today_summary: Partial<Record<'pending' | 'confirmed' | 'in_progress' | 'completed_today' | 'cancelled_today', number>>
+  recent_orders: { id: number; order_number: string; customer_name: string; status: string; total: number; created_at: string; items?: DashboardItem[]; shared_with_other_restaurants?: boolean }[]
+  recent_bookings: { id: number; booking_number: string; customer_name: string; status: string; total_amount: number; created_at?: string }[]
 }
 
-interface StatCard {
-  key: string
-  label: string
-  icon: typeof Package
-  labelClass: string
-  iconBg: string
-  iconText: string
-  isCurrency?: boolean
+const CARD = 'rounded-[20px] border border-[#E2E8E3] bg-[#fff] shadow-[0_6px_18px_rgba(22,101,52,0.06)]'
+
+interface Stat { key: keyof StaffDashboardData['today_summary']; label: string; hint: string; icon: ReactNode; tone: 'green' | 'gold' | 'red' }
+
+const ORDER_STATS: Stat[] = [
+  { key: 'pending', label: 'Finding a rider', hint: 'Preparation starts when a rider accepts', icon: <Hourglass />, tone: 'gold' },
+  { key: 'in_progress', label: 'Preparing or ready', hint: 'Food being made or waiting for pickup', icon: <CookingPot />, tone: 'green' },
+  { key: 'completed_today', label: 'Completed today', hint: 'Delivered or picked up', icon: <CheckCircle2 />, tone: 'green' },
+  { key: 'cancelled_today', label: 'Cancelled today', hint: 'Cancelled or rejected', icon: <XCircle />, tone: 'red' },
+]
+
+const BOOKING_STATS: Stat[] = [
+  { key: 'pending', label: 'Pending bookings', hint: 'Waiting for confirmation', icon: <Hourglass />, tone: 'gold' },
+  { key: 'confirmed', label: 'Confirmed', hint: 'Guests on the way', icon: <CalendarCheck />, tone: 'green' },
+  { key: 'in_progress', label: 'Checked in', hint: 'Guests staying now', icon: <DoorOpen />, tone: 'green' },
+  { key: 'completed_today', label: 'Completed today', hint: 'Checked out today', icon: <CheckCircle2 />, tone: 'green' },
+]
+
+const TONES: Record<Stat['tone'], string> = {
+  green: 'bg-[#EAF6ED] text-[#16803C]',
+  gold: 'bg-[#FFF6DB] text-[#B7791F]',
+  red: 'bg-[#FDECEC] text-[#B91C1C]',
 }
 
-interface Shortcut {
-  label: string
-  path: string
-  icon: typeof Package
-  count: string
+/** Every staff page, with the permission that opens it. */
+const SHORTCUTS: { to: string; label: string; description: string; icon: ReactNode; permission: StaffPermission }[] = [
+  { to: '/staff/orders', label: 'Orders', description: 'Mark food ready, confirm rider cash and handovers', icon: <ClipboardList />, permission: 'orders.view' },
+  { to: '/staff/bookings', label: 'Bookings', description: 'Confirm, check in and complete bookings', icon: <CalendarCheck />, permission: 'bookings.view' },
+  { to: '/staff/menu', label: 'Menu', description: 'Dishes, photos and availability', icon: <BookOpen />, permission: 'menu.view' },
+  { to: '/staff/promotions', label: 'Deals & Posts', description: 'Posts, dish sales and badges', icon: <Megaphone />, permission: 'promotions.manage' },
+  { to: '/staff/reports', label: 'Sales & Reports', description: 'Sales, earnings and COD settlements', icon: <BarChart3 />, permission: 'finance.view' },
+  { to: '/staff/expenses', label: 'Expenses', description: 'Record and review expenses', icon: <CreditCard />, permission: 'finance.view' },
+]
+
+/** A staff member in a shared (group) order sees only their own items: their total. */
+function orderAmount(order: StaffDashboardData['recent_orders'][number]): number {
+  if (!order.shared_with_other_restaurants || !order.items) return Number(order.total ?? 0)
+  return order.items
+    .filter((i) => !['cancelled', 'rejected'].includes(i.status))
+    .reduce((sum, i) => sum + Number(i.total_price ?? Number(i.unit_price ?? 0) * Number(i.quantity ?? 0)), 0)
 }
 
-function getStatCards(category: string): StatCard[] {
-  const base = { labelClass: 'text-[#16803C]', iconBg: 'bg-[#EAF6ED]', iconText: 'text-[#16803C]' }
-  const warn = { labelClass: 'text-[#F4B400]', iconBg: 'bg-[#FFF7D6]', iconText: 'text-[#F4B400]' }
-
-  const food: StatCard[] = [
-    { key: 'total_orders', label: 'Total Orders', icon: Package, ...base },
-    { key: 'total_revenue', label: 'Total Revenue', icon: DollarSign, ...warn, isCurrency: true },
-    { key: 'active_bookings', label: 'Active Bookings', icon: CalendarCheck, ...base },
-    { key: 'pending_orders', label: 'Pending Orders', icon: ClipboardList, ...warn },
-    { key: 'total_menu_items', label: 'Menu Items', icon: Utensils, ...base },
-    { key: 'active_promotions', label: 'Active Promos', icon: Megaphone, ...warn },
-  ]
-
-  const accommodation: StatCard[] = [
-    { key: 'active_bookings', label: 'Active Reservations', icon: CalendarCheck, ...base },
-    { key: 'total_revenue', label: 'Total Revenue', icon: DollarSign, ...warn, isCurrency: true },
-    { key: 'pending_orders', label: 'Pending Check-ins', icon: ClipboardList, ...warn },
-    { key: 'total_menu_items', label: 'Rooms', icon: Bed, ...base },
-    { key: 'total_orders', label: 'Total Bookings', icon: Package, ...base },
-    { key: 'active_promotions', label: 'Active Promos', icon: Megaphone, ...warn },
-  ]
-
-  const tours: StatCard[] = [
-    { key: 'active_bookings', label: 'Active Bookings', icon: CalendarCheck, ...base },
-    { key: 'total_revenue', label: 'Total Revenue', icon: DollarSign, ...warn, isCurrency: true },
-    { key: 'pending_orders', label: 'Pending Bookings', icon: ClipboardList, ...warn },
-    { key: 'total_menu_items', label: 'Tour Packages', icon: Package, ...base },
-    { key: 'total_orders', label: 'Total Customers', icon: Users, ...base },
-    { key: 'active_promotions', label: 'Active Promos', icon: Megaphone, ...warn },
-  ]
-
-  const shop: StatCard[] = [
-    { key: 'total_orders', label: 'Total Orders', icon: ShoppingBag, ...base },
-    { key: 'total_revenue', label: 'Total Revenue', icon: DollarSign, ...warn, isCurrency: true },
-    { key: 'pending_orders', label: 'Pending Orders', icon: ClipboardList, ...warn },
-    { key: 'total_menu_items', label: 'Products', icon: Package, ...base },
-    { key: 'active_bookings', label: 'Deliveries', icon: Truck, ...base },
-    { key: 'active_promotions', label: 'Active Promos', icon: Megaphone, ...warn },
-  ]
-
-  const transport: StatCard[] = [
-    { key: 'active_bookings', label: 'Active Bookings', icon: CalendarCheck, ...base },
-    { key: 'total_revenue', label: 'Total Revenue', icon: DollarSign, ...warn, isCurrency: true },
-    { key: 'pending_orders', label: 'Pending Bookings', icon: ClipboardList, ...warn },
-    { key: 'total_menu_items', label: 'Vehicles', icon: Car, ...base },
-    { key: 'total_orders', label: 'Total Customers', icon: Users, ...base },
-    { key: 'active_promotions', label: 'Active Promos', icon: Megaphone, ...warn },
-  ]
-
-  const facilities: StatCard[] = [
-    { key: 'active_bookings', label: 'Active Bookings', icon: CalendarCheck, ...base },
-    { key: 'total_revenue', label: 'Total Revenue', icon: DollarSign, ...warn, isCurrency: true },
-    { key: 'pending_orders', label: 'Pending Bookings', icon: ClipboardList, ...warn },
-    { key: 'total_menu_items', label: 'Gallery Items', icon: Package, ...base },
-    { key: 'total_orders', label: 'Total Customers', icon: Users, ...base },
-    { key: 'active_promotions', label: 'Active Promos', icon: Megaphone, ...warn },
-  ]
-
-  switch (category) {
-    case 'Hotel':
-    case 'Resort':
-    case 'Homestay':
-      return accommodation
-    case 'Tour Guide':
-    case 'Travel Agency':
-      return tours
-    case 'Souvenir Shop':
-      return shop
-    case 'Transport Service':
-      return transport
-    case 'Tourist Attraction':
-    case 'Camping Site':
-    case 'Event Venue':
-    case 'Farm Tourism':
-    case 'Dive Shop':
-      return facilities
-    case 'Restaurant':
-    case 'Café':
-    case 'Food Hub':
-    case 'Hotel & Restaurant Combination':
-    default:
-      return food
-  }
-}
-
-function getShortcuts(category: string, stats: Record<string, any>): Shortcut[] {
-  const pending = stats?.pending_orders ?? 0
-  const active = stats?.active_bookings ?? 0
-  const items = stats?.total_menu_items ?? 0
-
-  const food: Shortcut[] = [
-    { label: 'Manage Orders', path: '/staff/orders', icon: Package, count: `${pending} pending` },
-    { label: 'Manage Bookings', path: '/staff/bookings', icon: CalendarCheck, count: `${active} active` },
-    { label: 'Menu Items', path: '/staff/menu', icon: Utensils, count: `${items} items` },
-  ]
-
-  const accommodation: Shortcut[] = [
-    { label: 'Reservations', path: '/staff/bookings', icon: CalendarCheck, count: `${active} active` },
-    { label: 'Room Management', path: '/staff/offerings', icon: Bed, count: `${items} rooms` },
-    { label: 'Check-in / Check-out', path: '/staff/bookings/calendar', icon: ClipboardList, count: `${pending} pending` },
-  ]
-
-  const tours: Shortcut[] = [
-    { label: 'Tour Bookings', path: '/staff/bookings', icon: CalendarCheck, count: `${active} active` },
-    { label: 'Tour Packages', path: '/staff/menu', icon: Package, count: `${items} packages` },
-    { label: 'Schedules', path: '/staff/scheduling', icon: ClipboardList, count: 'Manage' },
-  ]
-
-  const shop: Shortcut[] = [
-    { label: 'Manage Orders', path: '/staff/orders', icon: ShoppingBag, count: `${pending} pending` },
-    { label: 'Products', path: '/staff/offerings', icon: Package, count: `${items} products` },
-    { label: 'Delivery', path: '/staff/dispatch', icon: Truck, count: 'Dispatch' },
-  ]
-
-  const transport: Shortcut[] = [
-    { label: 'Bookings', path: '/staff/bookings', icon: CalendarCheck, count: `${active} active` },
-    { label: 'Vehicles', path: '/staff/offerings', icon: Car, count: `${items} vehicles` },
-    { label: 'Drivers', path: '/staff/staff', icon: Users, count: 'Manage' },
-  ]
-
-  const facilities: Shortcut[] = [
-    { label: 'Bookings', path: '/staff/bookings', icon: CalendarCheck, count: `${active} active` },
-    { label: 'Gallery', path: '/staff/gallery', icon: MapPin, count: 'Manage' },
-    { label: 'Customers', path: '/staff/customers', icon: Users, count: 'View' },
-  ]
-
-  switch (category) {
-    case 'Hotel':
-    case 'Resort':
-    case 'Homestay':
-      return accommodation
-    case 'Tour Guide':
-    case 'Travel Agency':
-      return tours
-    case 'Souvenir Shop':
-      return shop
-    case 'Transport Service':
-      return transport
-    case 'Tourist Attraction':
-    case 'Camping Site':
-    case 'Event Venue':
-    case 'Farm Tourism':
-    case 'Dive Shop':
-      return facilities
-    case 'Restaurant':
-    case 'Café':
-    case 'Food Hub':
-    case 'Hotel & Restaurant Combination':
-    default:
-      return food
-  }
-}
-
-function TourismBackdrop() {
-  return (
-    <svg className="w-full h-full" viewBox="0 0 1200 240" preserveAspectRatio="xMidYMid slice" fill="none" aria-hidden>
-      <circle cx="1060" cy="52" r="24" fill="#F4B400" />
-      <path d="M0 240 L150 96 L330 240 Z" fill="#1E7A48" />
-      <path d="M260 240 L440 48 L660 240 Z" fill="#126B32" />
-      <path d="M580 240 L780 104 L1000 240 Z" fill="#16803C" />
-      <path d="M900 240 L1060 132 L1200 240 Z" fill="#0F5C33" />
-      <path d="M150 140 q9 -9 18 0 q9 -9 18 0" stroke="#126B32" strokeWidth="3" strokeLinecap="round" />
-      <path d="M210 116 q7 -7 14 0 q7 -7 14 0" stroke="#16803C" strokeWidth="2.5" strokeLinecap="round" />
-      <path d="M178 104 q7 -7 14 0" stroke="#126B32" strokeWidth="2.5" strokeLinecap="round" />
-      <g transform="translate(80 160)">
-        <path d="M12 70 q-7 -32 4 -62" stroke="#126B32" strokeWidth="4.5" strokeLinecap="round" />
-        <path d="M16 14 q-19 -7 -32 4 M16 14 q-21 2 -29 15 M16 14 q19 -7 32 4 M16 14 q21 2 29 15" stroke="#16803C" strokeWidth="4" strokeLinecap="round" />
-      </g>
-      <g transform="translate(1125 175)">
-        <path d="M10 55 q-5 -24 3 -48" stroke="#126B32" strokeWidth="4" strokeLinecap="round" />
-        <path d="M13 11 q-15 -5 -25 4 M13 11 q-16 2 -22 12 M13 11 q15 -5 25 4 M13 11 q16 2 22 12" stroke="#16803C" strokeWidth="3.5" strokeLinecap="round" />
-      </g>
-    </svg>
-  )
-}
-
+/**
+ * Staff dashboard (owner-portal look, 2026-11-24): today's counts for what the
+ * role covers (orders or bookings), shortcuts to the pages the role opens, and
+ * the latest orders/bookings. No revenue: that is not a staff permission.
+ */
 export default function StaffDashboard() {
-  const navigate = useNavigate()
-
-  const { data, isLoading } = useQuery({
+  const { can } = useStaffPermissions()
+  const { data, isLoading, error } = useQuery({
     queryKey: ['staff-dashboard'],
-    queryFn: () => get<StaffDashboardData>(`/staff/dashboard`),
+    queryFn: () => get<StaffDashboardData>('/staff/dashboard'),
   })
 
   if (isLoading) return <DashboardSkeleton />
-  if (!data) return <div className="text-center py-20 text-[#6B7280]">Unable to load dashboard data.</div>
+  if (!data) return <div className={`${CARD} p-12 text-center text-sm text-[#5E6B63]`}>{apiErrorMessage(error, "Couldn't load your dashboard.")}</div>
 
-  const { staff, business, today_summary: summary, recent_orders: orders, recent_bookings: bookings } = data
-
-  // Map staff summary to owner-style stats where possible
-  const stats = {
-    total_orders: (orders?.length ?? 0) + (bookings?.length ?? 0),
-    total_revenue: summary?.revenue_today ?? 0,
-    active_bookings: bookings?.length ?? 0,
-    pending_orders: summary?.pending ?? 0,
-    total_menu_items: 0,
-    active_promotions: 0,
-  }
-
-  const category = business?.category || 'Restaurant'
-  const activeStats = getStatCards(category)
-  const activeShortcuts = getShortcuts(category, stats)
+  const { staff, business, today_summary: summary = {}, recent_orders: orders = [], recent_bookings: bookings = [] } = data
+  const stats = can('orders.view') ? ORDER_STATS : can('bookings.view') ? BOOKING_STATS : []
+  const shortcuts = SHORTCUTS.filter((s) => can(s.permission))
+  const firstName = staff?.full_name?.split(' ')[0] || 'there'
 
   const activities = [
-    ...orders.map((o) => ({ key: `o-${o.id}`, type: 'Order' as const, ref: o.order_number, customer: o.customer_name, status: o.status, date: o.created_at, amount: o.total })),
-    ...bookings.map((b) => ({ key: `b-${b.id}`, type: 'Booking' as const, ref: b.booking_number, customer: b.customer_name, status: b.status, date: b.created_at || '', amount: b.total_amount })),
+    ...orders.map((o) => ({ key: `o-${o.id}`, type: 'Order' as const, to: `/staff/orders/${o.id}`, ref: o.order_number, customer: o.customer_name, status: o.status, date: o.created_at, amount: orderAmount(o) })),
+    ...bookings.map((b) => ({ key: `b-${b.id}`, type: 'Booking' as const, to: '/staff/bookings', ref: b.booking_number, customer: b.customer_name, status: b.status, date: b.created_at || '', amount: Number(b.total_amount ?? 0) })),
   ]
     .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
     .slice(0, 8)
+  const seeAll = can('orders.view') ? '/staff/orders' : can('bookings.view') ? '/staff/bookings' : null
 
   return (
-    <div>
-      {/* Page Header with subtle tourism backdrop */}
-      <div className="relative overflow-hidden rounded-2xl bg-white border border-[#E2E8E3] shadow-tourism mb-6">
-        <div className="pointer-events-none absolute inset-0 opacity-[0.08]" aria-hidden>
-          <TourismBackdrop />
-        </div>
-        <div className="relative px-6 py-5 lg:px-8 lg:py-6">
-          <h1 className="text-2xl lg:text-[32px] font-bold text-[#126B32] leading-tight">{business?.name || 'Staff Dashboard'}</h1>
-          <p className="mt-1 text-sm text-[#6B7280]">{business?.category || 'Business'} &bull; Staff Dashboard</p>
+    <div className="space-y-6">
+      <div className="flex items-center gap-3">
+        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#0F4D2B] text-white"><LayoutDashboard className="h-6 w-6" aria-hidden="true" /></span>
+        <div>
+          <h1 className="text-2xl font-bold text-[#17201B] lg:text-3xl">Good day, {firstName}!</h1>
+          <p className="mt-1 text-sm text-[#5E6B63]">{staff?.role ?? 'Staff'} at {business?.name}</p>
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 mb-6">
-        {activeStats.map((card) => {
-          const value = (stats as any)?.[card.key] ?? 0
-          const Icon = card.icon
-          return (
-            <div key={card.key} className="bg-white border border-[#E2E8E3] rounded-2xl p-[26px] shadow-tourism transition-all duration-200 hover:shadow-[0_10px_24px_rgba(22,101,52,0.12)] hover:-translate-y-0.5">
-              <div className="flex items-start justify-between">
-                <div>
-                  <p className={`text-[13px] font-bold uppercase tracking-[0.03em] ${card.labelClass}`}>{card.label}</p>
-                  <p className="mt-2 text-2xl lg:text-[32px] font-bold text-[#17201A] leading-tight">
-                    {card.isCurrency ? formatCurrency(Number(value)) : value}
-                  </p>
+      {stats.length > 0 && (
+        <section aria-label="Today" className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {stats.map((stat) => (
+            <div key={stat.key} className={`${CARD} p-5`} data-testid={`stat-${stat.key}`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-[#647067]">{stat.label}</p>
+                  <p className="mt-2 text-3xl font-bold tabular-nums text-[#17201B]">{Number(summary[stat.key] ?? 0)}</p>
                 </div>
-                <div className={`w-12 h-12 ${card.iconBg} rounded-xl flex items-center justify-center shrink-0`}>
-                  <Icon className={`w-6 h-6 ${card.iconText}`} />
-                </div>
+                <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl [&>svg]:h-5 [&>svg]:w-5 ${TONES[stat.tone]}`}>{stat.icon}</span>
               </div>
+              <p className="mt-2 text-xs text-[#8A948E]">{stat.hint}</p>
             </div>
-          )
-        })}
-      </div>
+          ))}
+        </section>
+      )}
 
-      {/* Management Shortcut Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 mb-6">
-        {activeShortcuts.map((s) => {
-          const Icon = s.icon
-          return (
-            <button
-              key={s.label}
-              onClick={() => navigate(s.path)}
-              className="group relative overflow-hidden rounded-[14px] px-6 py-[22px] text-left text-white bg-gradient-to-br from-[#126B32] to-[#16803C] shadow-tourism-lg transition-all duration-200 hover:shadow-[0_14px_28px_rgba(22,101,52,0.25)] hover:-translate-y-0.5"
-            >
-              <div className="flex items-center gap-4">
-                <div className="w-14 h-14 rounded-full bg-white/15 flex items-center justify-center shrink-0">
-                  <Icon className="w-7 h-7 text-white" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h3 className="font-semibold text-white text-base">{s.label}</h3>
-                  <p className="text-sm text-white/75">{s.count}</p>
-                </div>
-                <ArrowRight className="w-5 h-5 text-white/80 shrink-0 transition-transform group-hover:translate-x-0.5" />
-              </div>
-            </button>
-          )
-        })}
-      </div>
-
-      {/* Recent Activity Panel */}
-      <div className="bg-white border border-[#E2E8E3] rounded-2xl shadow-[0_6px_18px_rgba(22,101,52,0.05)] p-7 min-h-[230px]">
-        <div className="flex items-center justify-between gap-4 mb-5">
-          <h2 className="text-lg font-bold text-[#17201A]">Recent Activity</h2>
-          <button
-            onClick={() => navigate('/staff/activity-logs')}
-            className="bg-white text-[#16803C] border border-[#D7E8DB] rounded-[10px] px-4 py-[10px] text-sm font-medium transition-colors hover:bg-[#EAF6ED]"
+      <section aria-label="Your pages" className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {shortcuts.map((s) => (
+          <Link
+            key={s.to}
+            to={s.to}
+            className="group flex items-center gap-4 rounded-[20px] bg-gradient-to-br from-[#0F4D2B] to-[#16803C] px-5 py-5 text-white shadow-[0_10px_24px_rgba(15,77,43,0.18)] transition hover:-translate-y-0.5"
           >
-            View All Activity
-          </button>
-        </div>
+            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#ffffff26] [&>svg]:h-6 [&>svg]:w-6">{s.icon}</span>
+            <span className="min-w-0 flex-1">
+              <span className="block font-semibold">{s.label}</span>
+              <span className="block text-sm text-[#D7EBDD]">{s.description}</span>
+            </span>
+            <ArrowRight className="h-5 w-5 shrink-0 text-[#D7EBDD] transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
+          </Link>
+        ))}
+        <Link to="/staff/profile" className={`${CARD} group flex items-center gap-4 px-5 py-5 transition hover:-translate-y-0.5`}>
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#EAF6ED] text-[#16803C]"><UserRound className="h-6 w-6" aria-hidden="true" /></span>
+          <span className="min-w-0 flex-1">
+            <span className="block font-semibold text-[#17201B]">My Profile</span>
+            <span className="block text-sm text-[#5E6B63]">Contact details, photo and password</span>
+          </span>
+          <ArrowRight className="h-5 w-5 shrink-0 text-[#8A948E] transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
+        </Link>
+      </section>
 
-        {activities.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-10 text-center">
-            <div className="relative mb-4">
-              <div className="w-16 h-16 rounded-full bg-[#EAF6ED] flex items-center justify-center">
-                <ClipboardCheck className="w-8 h-8 text-[#16803C]" />
-              </div>
-              <Leaf className="absolute -top-1.5 -right-2 w-5 h-5 text-[#126B32]/40" />
-              <Leaf className="absolute -bottom-1.5 -left-2 w-4 h-4 text-[#16803C]/40 rotate-[-25deg]" />
-            </div>
-            <p className="text-sm font-medium text-[#17201A]">No recent activity yet.</p>
-            <p className="mt-1 text-sm text-[#6B7280]">Activity logs will appear here once there are updates.</p>
+      {seeAll && (
+        <section aria-label="Recent activity" className={`${CARD} p-5 sm:p-6`}>
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <h2 className="text-lg font-bold text-[#17201B]">Recent activity</h2>
+            <Link to={seeAll} className="rounded-xl border border-[#D7E8DB] bg-[#fff] px-4 py-2 text-sm font-semibold text-[#16803C] transition hover:bg-[#EAF6ED]">
+              See all
+            </Link>
           </div>
-        ) : (
-          <ul className="divide-y divide-[#E2E8E3]">
-            {activities.map((a) => (
-              <li key={a.key} className="flex items-center gap-4 py-3">
-                <div className="w-9 h-9 rounded-lg bg-[#EAF6ED] flex items-center justify-center shrink-0">
-                  {a.type === 'Order' ? (
-                    <Package className="w-4 h-4 text-[#16803C]" />
-                  ) : (
-                    <CalendarCheck className="w-4 h-4 text-[#16803C]" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-[#17201A] truncate">
-                    {a.type} {a.ref} <span className="text-[#6B7280]">&bull;</span> {a.customer}
-                  </p>
-                  <p className="text-xs text-[#6B7280]">{formatDateTime(a.date)}</p>
-                </div>
-                <span className="text-sm font-semibold text-[#17201A] shrink-0">{formatCurrency(a.amount)}</span>
-                <StatusBadge status={a.status} />
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+          {activities.length === 0 ? (
+            <div className="flex flex-col items-center py-10 text-center">
+              <span className="mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-[#EAF6ED]"><ClipboardCheck className="h-7 w-7 text-[#16803C]" aria-hidden="true" /></span>
+              <p className="text-sm font-medium text-[#17201B]">Nothing yet.</p>
+              <p className="mt-1 text-sm text-[#5E6B63]">New orders and bookings will appear here.</p>
+            </div>
+          ) : (
+            <ul className="divide-y divide-[#E2E8E3]">
+              {activities.map((a) => (
+                <li key={a.key}>
+                  <Link to={a.to} className="-mx-2 flex items-center gap-3 rounded-xl px-2 py-3 transition hover:bg-[#F6F8F4] sm:gap-4">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#EAF6ED] text-[#16803C]">
+                      {a.type === 'Order' ? <Package className="h-4 w-4" aria-hidden="true" /> : <CalendarCheck className="h-4 w-4" aria-hidden="true" />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-[#17201B]">{a.type} {a.ref} <span className="text-[#8A948E]">·</span> {a.customer}</span>
+                      <span className="block text-xs text-[#5E6B63]">{formatDateTime(a.date)}</span>
+                    </span>
+                    <span className="hidden shrink-0 text-sm font-semibold tabular-nums text-[#17201B] sm:block">{formatCurrency(a.amount)}</span>
+                    <StatusBadge status={a.status} />
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
     </div>
   )
 }

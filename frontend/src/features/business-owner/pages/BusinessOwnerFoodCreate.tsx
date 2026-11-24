@@ -8,6 +8,7 @@ import { post, get } from '@/shared/services/api'
 import { usePersistFormRHF } from '@/shared/hooks/use-persist-form-rhf'
 import { Alert } from '@/shared/components/Alert'
 import { ArrowLeft, Save } from 'lucide-react'
+import { useBusinessPortal } from '../services/business-portal'
 
 const schema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
@@ -32,6 +33,7 @@ interface CategoryOption {
 }
 
 export default function BusinessOwnerFoodCreate() {
+  const portal = useBusinessPortal()
   const navigate = useNavigate()
   const [error, setError] = useState('')
 
@@ -52,20 +54,20 @@ export default function BusinessOwnerFoodCreate() {
 
   const { data: businesses } = useQuery({
     queryKey: ['bo-businesses-list'],
-    queryFn: () => get<{ id: number; name: string }[]>('/business-owner/businesses'),
+    queryFn: () => get<{ id: number; name: string }[]>(`${portal.prefix}/businesses`),
   })
 
   const { data: categories } = useQuery({
     queryKey: ['bo-offering-categories-options', selectedBusinessId],
-    queryFn: () => get<{ data: CategoryOption[] }>(`/business-owner/offerings/categories?business_id=${selectedBusinessId}`),
+    queryFn: () => get<{ data: CategoryOption[] }>(`${portal.prefix}/offerings/categories?business_id=${selectedBusinessId}`),
     enabled: !!selectedBusinessId,
   })
 
   const mutation = useMutation({
-    mutationFn: (data: FormData) => post('/business-owner/food', data),
+    mutationFn: (data: FormData) => post(`${portal.prefix}/food`, data),
     onSuccess: () => {
       clearDraft()
-      navigate('/business-owner/menu')
+      navigate(`${portal.prefix}/menu`)
     },
     onError: (err: any) => setError(err.response?.data?.message || 'Failed to create food item.'),
   })
@@ -124,7 +126,7 @@ export default function BusinessOwnerFoodCreate() {
               {selectedBusinessId && categoryOptions.length === 0 && (
                 <p className="text-[#647067] text-xs mt-1">
                   No categories yet.{' '}
-                  <button type="button" onClick={() => navigate('/business-owner/offerings/categories')}
+                  <button type="button" onClick={() => navigate(`${portal.prefix}/offerings/categories`)}
                     className="text-[#16803C] font-medium underline underline-offset-2">
                     Create categories here
                   </button>

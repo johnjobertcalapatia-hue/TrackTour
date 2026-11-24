@@ -1,8 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { get, post } from '@/shared/services/api'
+import { apiErrorMessage, get, post } from '@/shared/services/api'
 import { ACTIVE_RIDE_KEY } from '@/features/tourist/services/active-ride'
-import { createCheckoutSession } from '@/shared/services/payment'
+import { createCheckoutSession, ONLINE_PAYMENT_NAME, paidViaName } from '@/shared/services/payment'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { formatCurrency, formatDateTime, cn } from '@/shared/utils'
@@ -15,9 +15,13 @@ import { riderMarkerIcon, pickupMarkerIcon, destinationMarkerIcon } from '@/shar
 import TripReceipt from '@/features/tourist/components/TripReceipt'
 import DestinationChangeCard from '@/features/tourist/components/ride/DestinationChangeCard'
 import PickupWaitingCard from '@/features/tourist/components/ride/PickupWaitingCard'
-import CancellationPenaltyCard, { cancellationFeeNote, type CancellationPenalty, type CancellationPenaltyPreview } from '@/features/tourist/components/ride/CancellationPenaltyCard'
+import CancellationPenaltyCard, { cancellationFeeNote, usePayCancellationFee, type CancellationPenalty, type CancellationPenaltyPreview } from '@/features/tourist/components/ride/CancellationPenaltyCard'
+import { CancellationFeeDueCard, PENALTIES_KEY } from '@/features/tourist/components/ride/CancellationFeeBanner'
 import type { PickupWaiting } from '@/features/rider/context/RiderActiveTripContext'
 import type { DestinationChange } from '@/features/tourist/services/destination-change'
+import SosStatusCard from '@/features/sos/SosStatusCard'
+import { deviceFix, type SenderSos } from '@/features/sos/sos'
+
 import {
   CompletedScreen, DriverCard, EtaBanner, InTripStats, RideProgress, SafetyActions, SearchingScreen, vehicleLabel,
 } from '@/features/tourist/components/ride/RidePhases'
@@ -28,7 +32,14 @@ import {
   ArrowLeft,
   ShieldCheck,
   AlertTriangle,
+  ChevronDown,
+  ChevronUp,
+  ShieldAlert,
 } from 'lucide-react'
+import HoldToSendButton from '@/shared/components/HoldToSendButton'
+
+/** While an SOS is open the tourist's position is re-sent this often (admin live map). */
+const SOS_LOCATION_REFRESH_MS = 15_000
 
 type RideStatus = 'searching' | 'arriving' | 'driver_arrived' | 'in_progress' | 'completed' | 'cancelled'
 
@@ -111,6 +122,12 @@ interface TripData {
   /** Cancellation penalty (Stage B, 2026-11-18). */
   cancellation_penalty_preview?: CancellationPenaltyPreview | null
   cancellation_penalty?: CancellationPenalty | null
+  /** Stage C: an owed fee from an earlier ride, collectable on this ride (2026-11-18). */
+  cancellation_fee_due?: { penalty_id: number; amount: number; from_ride: string | null } | null
+  /** The PayMongo method actually used: 'gcash' | 'qrph' | 'card' (2026-11-18). */
+  paid_via?: string | null
+  /** The tourist's own SOS on this ride (2026-11-18); the driver never sees it. */
+  sos?: SenderSos | null
   /** At the drop-off, waiting for the driver to confirm the payment and complete the ride (2026-11-18). */
   at_drop_off?: boolean
   ride_completed?: boolean
@@ -127,6 +144,16 @@ function num(v: number | string | null | undefined): number | null {
 }
 
 const FALLBACK_CENTER: [number, number] = [12.8667, 121.45]
+
+/** Leaflet must re-measure when the trip panel collapses or expands. */
+function ResizeOnChange({ dep }: { dep: unknown }) {
+  const map = useMap()
+  useEffect(() => {
+    const t = setTimeout(() => map.invalidateSize?.(), 320)
+    return () => clearTimeout(t)
+  }, [dep, map])
+  return null
+}
 
 function CenterMap({ anchor }: { anchor: [number, number] }) {
   const map = useMap()
@@ -250,20 +277,60 @@ export default function TouristTransportTracking() {
   const liveRouteResult = useOsrmRoute(liveWaypoints, Boolean(liveWaypoints))
   const liveRoute = liveRouteResult.points
 
+  // The ₱50 cancellation fee this cancellation created, shown right away (2026-11-18).
+  const [penaltyNotice, setPenaltyNotice] = useState<CancellationPenalty | null>(null)
+  const payPenalty = usePayCancellationFee()
   const cancelMutation = useMutation({
-    mutationFn: () => post(`/tourist/transport/trip/${id}/cancel`, { reason: cancelReason }),
-    onSuccess: () => {
+    mutationFn: () => post<{ cancellation_penalty?: CancellationPenalty | null }>(`/tourist/transport/trip/${id}/cancel`, { reason: cancelReason }),
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['tourist', 'trip-tracking', id] })
       // Cancelled: the tourist may book a new ride.
       queryClient.invalidateQueries({ queryKey: ACTIVE_RIDE_KEY })
+      queryClient.invalidateQueries({ queryKey: PENALTIES_KEY })
       setShowCancelModal(false)
       setCancelReason('')
+      if (data?.cancellation_penalty) setPenaltyNotice(data.cancellation_penalty)
     },
     onError: () => {
       setShowCancelModal(false)
       showToast('Ride already started — contact support')
     },
   })
+
+  // SOS (2026-11-18): held for 3 s → alert the Bansud Tourism Office with the
+  // phone's location (sent without one if it isn't available in 5 s).
+  const [sosError, setSosError] = useState<string | null>(null)
+  // The trip panel can be collapsed to see more of the map (SOS stays on the bar).
+  const [panelCollapsed, setPanelCollapsed] = useState(false)
+  const sosMutation = useMutation({
+    mutationFn: async () => post(`/tourist/transport/trip/${id}/sos`, (await deviceFix()) ?? {}),
+    onSuccess: () => {
+      setSosError(null)
+      queryClient.invalidateQueries({ queryKey: ['tourist', 'trip-tracking', id] })
+      setShowSafety(true)
+    },
+    onError: (e) => {
+      setSosError(apiErrorMessage(e, 'The SOS could not be sent. Call 911 if you are in danger.'))
+      setShowSafety(true)
+    },
+  })
+  const safeMutation = useMutation({
+    mutationFn: () => post(`/tourist/transport/trip/${id}/sos/safe`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tourist', 'trip-tracking', id] }),
+  })
+
+  const sosOpen = Boolean(trip?.sos?.active)
+  useEffect(() => {
+    if (!sosOpen || !id) return
+    let stopped = false
+    const share = async () => {
+      const fix = await deviceFix()
+      if (!fix || stopped) return
+      try { await post(`/tourist/transport/trip/${id}/sos`, fix) } catch { /* trip may have ended; the next tick or the card handles it */ }
+    }
+    const timer = setInterval(() => { void share() }, SOS_LOCATION_REFRESH_MS)
+    return () => { stopped = true; clearInterval(timer) }
+  }, [sosOpen, id])
 
   const rateMutation = useMutation({
     mutationFn: (payload: { rating: number; review?: string; tags: string[] }) =>
@@ -379,7 +446,10 @@ export default function TouristTransportTracking() {
     : (trip.eta_minutes ?? null)
   const remainingKm = liveRouteResult.distanceKm ?? (displayStatus === 'in_progress' ? trip.distance_km : null)
   const isPaid = trip.payment_status === 'paid'
-  const payMethodName = trip.payment_method === 'gcash' ? 'GCash' : trip.payment_method === 'card' ? 'card' : 'cash'
+  // Online rides pay on PayMongo with GCash or QR Ph (2026-11-18); once paid, the one used.
+  const payMethodName = trip.payment_method === 'cash' ? 'cash'
+    : trip.payment_method === 'card' ? 'card'
+    : isPaid ? paidViaName(trip.paid_via) : ONLINE_PAYMENT_NAME
   const paymentLabel = isPaid
     ? `Paid via ${payMethodName}`
     : trip.payment_method === 'cash' ? 'Pay your driver in cash' : `Payment due via ${payMethodName}`
@@ -465,6 +535,7 @@ export default function TouristTransportTracking() {
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
           />
           <CenterMap anchor={mapAnchor} />
+          <ResizeOnChange dep={panelCollapsed} />
           {pickupCoords && (
             <Marker position={pickupCoords} icon={pickupMarkerIcon}>
               <Popup>
@@ -537,9 +608,49 @@ export default function TouristTransportTracking() {
             </div>
           </div>
 
-          <div className="relative z-[1001] -mt-5 max-h-[52dvh] overflow-y-auto rounded-t-[28px] bg-[#fff] px-5 pb-6 pt-3 shadow-[0_-10px_30px_rgba(23,32,27,0.12)]">
-            <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-[#D7DED9]" aria-hidden="true" />
-            <div className="mx-auto max-w-xl space-y-4">
+          <div className={cn('relative z-[1001] -mt-5 rounded-t-[28px] bg-[#fff] px-5 pt-2 shadow-[0_-10px_30px_rgba(23,32,27,0.12)]', panelCollapsed ? 'pb-4' : 'max-h-[52dvh] overflow-y-auto pb-6')}>
+            <button
+              type="button"
+              onClick={() => setPanelCollapsed((v) => !v)}
+              aria-expanded={!panelCollapsed}
+              aria-controls="ride-trip-panel"
+              aria-label={panelCollapsed ? 'Show trip details' : 'Hide trip details'}
+              className="mx-auto mb-2 flex w-full max-w-xl flex-col items-center gap-0.5 rounded-xl py-1 text-[#56615B] hover:text-[#087F3F]"
+            >
+              <span className="h-1.5 w-10 rounded-full bg-[#D7DED9]" aria-hidden="true" />
+              <span className="flex items-center gap-1 text-[11px] font-semibold">
+                {panelCollapsed ? <><ChevronUp className="h-3.5 w-3.5" aria-hidden="true" /> Show trip details</> : <><ChevronDown className="h-3.5 w-3.5" aria-hidden="true" /> Hide</>}
+              </span>
+            </button>
+
+            {panelCollapsed && (
+              <div className="mx-auto flex max-w-xl items-center gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-bold text-[#17201B]">
+                    {displayStatus === 'cancelled' ? 'Ride cancelled'
+                      : displayStatus === 'in_progress' ? `${etaMinutes != null ? `${etaMinutes} min` : 'On the way'}${remainingKm != null ? ` · ${Number(remainingKm).toFixed(1)} km left` : ''}`
+                        : displayStatus === 'driver_arrived' ? 'Your driver has arrived'
+                          : 'Your driver is on the way'}
+                  </p>
+                  <p className="truncate text-xs text-[#56615B]">{trip.rider?.name ? `${trip.rider.name} · ` : ''}{formatCurrency(trip.fare)}</p>
+                </div>
+                {trip.sos?.active ? (
+                  <button type="button" onClick={() => setPanelCollapsed(false)} className="flex h-10 shrink-0 items-center gap-1.5 rounded-full bg-red-600 px-3.5 text-sm font-bold text-white">
+                    <ShieldAlert className="h-4 w-4" aria-hidden="true" /> SOS active
+                  </button>
+                ) : displayStatus === 'in_progress' && (
+                  <HoldToSendButton
+                    ariaLabel="SOS: hold for 3 seconds to alert the Tourism Office"
+                    onComplete={() => sosMutation.mutate()}
+                    disabled={sosMutation.isPending}
+                    className="h-10 shrink-0 rounded-full bg-[#DC2626] px-4 text-sm font-bold text-white shadow hover:bg-[#B91C1C] disabled:opacity-70"
+                    label={<><ShieldAlert className="h-4 w-4" aria-hidden="true" /> {sosMutation.isPending ? 'Sending…' : 'SOS'}</>}
+                  />
+                )}
+              </div>
+            )}
+
+            <div id="ride-trip-panel" hidden={panelCollapsed} className="mx-auto max-w-xl space-y-4">
               {displayStatus === 'cancelled' ? (
                 <div className="space-y-4 text-center">
                   <div className="flex items-start gap-3 rounded-2xl border border-red-200 bg-red-50 p-4 text-left">
@@ -580,7 +691,7 @@ export default function TouristTransportTracking() {
                       <span className="min-w-0"><span className="block text-xs text-[#56615B]">Drop-off</span><span className="block truncate font-medium text-[#17201B]">{trip.destination_address}</span></span>
                     </p>
                     <p className="flex items-center justify-between border-t border-[#EEF1EF] pt-2">
-                      <span className="text-xs text-[#56615B]">{vehicleLabel(trip.vehicle_type)} · {payMethodName === 'cash' ? 'Cash' : payMethodName === 'GCash' ? 'GCash' : 'Card'}</span>
+                      <span className="text-xs text-[#56615B]">{vehicleLabel(trip.vehicle_type)} · {payMethodName.charAt(0).toUpperCase() + payMethodName.slice(1)}</span>
                       <span className="font-bold text-[#17201B]">{formatCurrency(trip.fare)}</span>
                     </p>
                   </div>
@@ -599,7 +710,18 @@ export default function TouristTransportTracking() {
                     />
                   )}
 
-                  <SafetyActions showSos={displayStatus === 'in_progress'} onSos={() => setShowSafety(true)} onShare={shareTrip} />
+                  {trip.sos && (
+                    <SosStatusCard sos={trip.sos} onSafe={() => safeMutation.mutate()} safePending={safeMutation.isPending} />
+                  )}
+
+                  {trip.cancellation_fee_due && <CancellationFeeDueCard due={trip.cancellation_fee_due} />}
+
+                  <SafetyActions
+                    showSos={displayStatus === 'in_progress' && !trip.sos?.active}
+                    onSos={() => sosMutation.mutate()}
+                    sosPending={sosMutation.isPending}
+                    onShare={shareTrip}
+                  />
 
                   {canCancel && (
                     <button
@@ -617,10 +739,11 @@ export default function TouristTransportTracking() {
         </div>
       )}
 
-      {/* Cancel modal */}
+      {/* Cancel modal. Above the map (Leaflet panes up to z-1000) and the
+          bottom panel (z-1001): at z-50 it opened hidden behind them (2026-11-18). */}
       {showCancelModal && (
         <div
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[2500] flex items-center justify-center p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="cancel-ride-title"
@@ -654,10 +777,38 @@ export default function TouristTransportTracking() {
         </div>
       )}
 
+      {/* The cancellation fee this cancellation created (2026-11-18). */}
+      {penaltyNotice && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[2500] flex items-center justify-center p-4">
+          <div role="alertdialog" aria-modal="true" aria-labelledby="penalty-notice-title" aria-describedby="penalty-notice-text" className="bg-white border border-amber-200 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+            <div className="flex items-center gap-2 mb-2">
+              <AlertTriangle className="w-5 h-5 text-amber-600" aria-hidden="true" />
+              <h3 id="penalty-notice-title" className="text-lg font-semibold text-[#17201B]">
+                {penaltyNotice.notice?.title ?? `${formatCurrency(penaltyNotice.amount)} cancellation fee`}
+              </h3>
+            </div>
+            <p id="penalty-notice-text" className="text-sm text-[#3F4B43]">{penaltyNotice.notice?.message}</p>
+            <div className="mt-5 flex gap-3">
+              <button type="button" onClick={() => setPenaltyNotice(null)} className="flex-1 py-2.5 bg-[#F3F4F6] border border-[#E5E9E7] text-[#17201B] rounded-xl font-medium">OK</button>
+              {penaltyNotice.can_pay && (
+                <button
+                  type="button"
+                  onClick={() => payPenalty.mutate(penaltyNotice.id)}
+                  disabled={payPenalty.isPending}
+                  className="flex-1 py-2.5 bg-[#087F3F] text-white rounded-xl font-semibold disabled:opacity-60"
+                >
+                  {payPenalty.isPending ? 'Opening…' : 'Pay now'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Safety modal */}
       {showSafety && (
         <div
-          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[2500] flex items-center justify-center p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="safety-title"
@@ -668,6 +819,11 @@ export default function TouristTransportTracking() {
               <h3 id="safety-title" className="text-lg font-semibold text-[#17201B]">Safety</h3>
             </div>
             <p className="text-sm text-[#68736D] mb-5">Emergency contacts and ride resources.</p>
+
+            {sosError && <p role="alert" className="mb-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{sosError}</p>}
+            {trip.sos && (
+              <SosStatusCard className="mb-3" sos={trip.sos} onSafe={() => safeMutation.mutate()} safePending={safeMutation.isPending} />
+            )}
 
             <div className="space-y-2">
               <a

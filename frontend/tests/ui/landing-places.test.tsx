@@ -19,7 +19,7 @@ describe('places to discover', () => {
   it('links each card to its public page', () => {
     expect(landingCardLink(cards[0]!)).toBe('/explore/food/7')
     expect(landingCardLink(cards[1]!)).toBe('/tourist/destinations/3')
-    expect(landingCardLink(cards[2]!)).toBe('/tourist/explore/9')
+    expect(landingCardLink(cards[2]!)).toBe('/explore/place/9') // public place page (2026-11-24)
   })
 
   it('filters the cards with the tabs', () => {

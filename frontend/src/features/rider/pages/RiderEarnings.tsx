@@ -5,6 +5,8 @@ import type { LucideIcon } from 'lucide-react'
 import { get } from '@/shared/services/api'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { RiderCashoutCard } from '@/features/rider/components/RiderCashoutCard'
+import EarningsStatementView from '@/features/compensation/EarningsStatementView'
+import type { EarningsStatement } from '@/features/compensation/types'
 import { cn, formatCurrency, formatDateTime } from '@/shared/utils'
 import { ArrowLeft, ChevronLeft, ChevronRight, ChevronDown, Bike, MapPin, Store } from 'lucide-react'
 
@@ -240,6 +242,7 @@ export default function RiderEarnings() {
       </div>
 
       <RiderCashoutCard />
+      <RiderStatement />
 
       {earnings.length === 0 ? (
         <div className="bg-white rounded-2xl border border-[#E5E9E7] p-12 text-center">
@@ -273,4 +276,11 @@ export default function RiderEarnings() {
       )}
     </div>
   )
+}
+
+/** Stage D2: earnings statement with cancellation compensation (read only). */
+function RiderStatement() {
+  const { data } = useQuery({ queryKey: ['rider-earnings-statement'], queryFn: () => get<EarningsStatement>('/rider/earnings-statement') })
+  if (!data) return null
+  return <div className="mb-6"><EarningsStatementView statement={data} /></div>
 }

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
-import ExploreViewToggle from '@/features/tourist/components/ExploreViewToggle'
+import ExploreSectionTabs from '@/features/tourist/components/ExploreSectionTabs'
+import DealsAndPosts from '@/features/tourist/components/posts/DealsAndPosts'
 import MunicipalityFilter from '@/features/tourist/components/MunicipalityFilter'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
@@ -40,7 +41,25 @@ function initialTabFromParams(param: string | null): Tab {
   return param === 'places' || param === 'food' || param === 'stays' ? param : 'all'
 }
 
+/**
+ * Explore (2026-11-24): Deals & Posts is the default view; the Businesses tab
+ * shows the business cards (?view=businesses, or an older ?tab= / ?municipality=
+ * link) and Map opens the map. The same three tabs sit on the map.
+ */
 export default function TouristExplore() {
+  const [searchParams] = useSearchParams()
+  const businesses = searchParams.get('view') === 'businesses' || searchParams.has('tab') || searchParams.has('municipality')
+  const tab = initialTabFromParams(searchParams.get('tab'))
+
+  return (
+    <div className="space-y-5 px-4 pt-4 pb-4">
+      <ExploreSectionTabs current={businesses ? 'businesses' : 'posts'} category={businesses ? tab : null} />
+      {businesses ? <ExploreBusinesses /> : <DealsAndPosts />}
+    </div>
+  )
+}
+
+function ExploreBusinesses() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const [tab, setTab] = useState<Tab>(() => initialTabFromParams(searchParams.get('tab')))
@@ -55,7 +74,7 @@ export default function TouristExplore() {
   const updateParams = (next: { tab?: Tab; municipality?: string }) => {
     const t = next.tab ?? tab
     const m = next.municipality ?? municipalityParam
-    const params: Record<string, string> = {}
+    const params: Record<string, string> = { view: 'businesses' }
     if (t !== 'all') params.tab = t
     if (m) params.municipality = m
     setSearchParams(params, { replace: true })
@@ -103,11 +122,11 @@ export default function TouristExplore() {
   }
 
   return (
-    <div className="space-y-4 px-4 pt-4">
+    <div className="space-y-5">
       {/* Filters, at most 2 rows and no scrolling:
-          row 1 = the tabs (always together on one line);
-          row 2 (only when it doesn't all fit) = municipality filter + map view.
-          Wide screens: everything on one row. */}
+          row 1 = the category tabs (always together on one line);
+          row 2 (only when it doesn't all fit) = the municipality filter.
+          Wide screens: one row. (Map is in the Explore tabs above.) */}
       <div data-testid="explore-filters" className="flex flex-wrap items-center gap-2">
         <div data-testid="explore-tabs" className="flex flex-nowrap items-center gap-1.5 sm:gap-2 shrink-0">
           {TABS.map((t) => (
@@ -133,11 +152,6 @@ export default function TouristExplore() {
           onChange={(m) => updateParams({ municipality: m })}
           className="grow basis-0 min-w-[140px] sm:grow-0 sm:basis-auto"
         />
-
-        <ExploreViewToggle
-          current="list"
-          to={tab === 'all' ? '/tourist/explore/map' : `/tourist/explore/map?category=${tab}`}
-        />
       </div>
 
       {/* Grid */}
@@ -156,7 +170,7 @@ export default function TouristExplore() {
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 pb-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
           {filtered.map((item) => (
             <div
               key={`${item.type}-${item.id}`}

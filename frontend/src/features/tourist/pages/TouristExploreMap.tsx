@@ -9,7 +9,7 @@ import L from 'leaflet'
 import { beachPinIcon, businessLogoIcon, pinIcon, profilePinIcon, userPinIcon } from '@/shared/utils/pin-icon'
 import { useAuthStore } from '@/features/auth/services/auth-store'
 import MapLayerTile from '@/shared/components/MapLayerTile'
-import ExploreViewToggle from '@/features/tourist/components/ExploreViewToggle'
+import ExploreSectionTabs from '@/features/tourist/components/ExploreSectionTabs'
 import MapPlacesList, { matchesPlaceSearch, type MapPlace, type PlaceSort } from '@/features/tourist/components/MapPlacesList'
 import { requestCompassPermission, useNavigationBearing } from '@/features/tourist/hooks/use-navigation-bearing'
 import { OFF_ROUTE_METERS, routeProgress } from '@/features/tourist/utils/route-progress'
@@ -906,7 +906,11 @@ export default function TouristExploreMap({ mapOnly = false }: { mapOnly?: boole
                   </span>
                   <ChevronRight className={`ml-auto w-5 h-5 text-[#56615B] shrink-0 transition-transform ${listCollapsed ? '-rotate-90' : 'rotate-90'}`} aria-hidden="true" />
                 </button>
-                <h2 className="hidden sm:block shrink-0 px-4 pt-4 pb-2 text-base font-bold text-[#17201B]">Explore places</h2>
+                {/* Computers: Explore's views at the top of the panel, above the places list. */}
+                <div className="hidden sm:block shrink-0 px-3 pt-3">
+                  <ExploreSectionTabs current="map" category={listViewTab} fill />
+                </div>
+                <h2 className="hidden sm:block shrink-0 px-3 pt-4 pb-2 text-base font-bold text-[#17201B]">Explore places</h2>
                 <MapPlacesList
                   places={visibleBusinesses}
                   query={placeQuery}
@@ -1604,11 +1608,10 @@ export default function TouristExploreMap({ mapOnly = false }: { mapOnly?: boole
             </button>
           )}
           {!navActive && !mapOnly && (
-            <div className="absolute top-3 left-3 z-[640] rounded-full shadow-md">
-              <ExploreViewToggle
-                current="map"
-                to={listViewTab ? `/tourist/explore?tab=${listViewTab}` : '/tourist/explore'}
-              />
+            <div className="absolute top-3 left-3 z-[640] flex max-w-[calc(100%-5rem)] sm:hidden">
+              {/* Phones: Explore's views float over the map (the places list is a bottom sheet there);
+                  computers show them at the top of the places panel. The category travels back to Businesses. */}
+              <ExploreSectionTabs current="map" category={listViewTab} floating />
             </div>
           )}
           {/* Navigation card: small, travel-only (no fares or booking): time, distance left, speed. */}

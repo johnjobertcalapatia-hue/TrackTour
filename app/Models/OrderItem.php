@@ -35,6 +35,10 @@ class OrderItem extends Model
         'product_name',
         'quantity',
         'unit_price',
+        // Promotions Part A: menu price before a dish sale, and which sale applied.
+        'original_unit_price',
+        'promotion_id',
+        'sale_label',
         'subtotal',
         'preparation_time',
         'notes',
@@ -78,6 +82,12 @@ class OrderItem extends Model
 
     public function isManagedBy(User $user): bool
     {
+        // Active staff: strictly their own business's items, never another
+        // restaurant's item in a group checkout (Staff Management Stage 1).
+        if ($user->role === 'staff') {
+            return app(\App\Services\StaffAccess::class)->staffOwnsItem($user, $this);
+        }
+
         return $this->business?->owner_id === $user->id
             || $this->order?->business?->owner_id === $user->id;
     }

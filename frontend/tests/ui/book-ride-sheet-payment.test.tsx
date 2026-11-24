@@ -57,19 +57,19 @@ async function openSummary() {
 }
 
 describe('Ride booking payment', () => {
-  it('offers only Cash and GCash (online), with a note for each', async () => {
+  it('offers only Cash and GCash or QR Ph (online), with a note for each', async () => {
     const pay = await openSummary()
-    expect(within(pay).getAllByRole('radio').map((r) => r.textContent)).toEqual(['Cash', 'GCash (online)'])
+    expect(within(pay).getAllByRole('radio').map((r) => r.textContent)).toEqual(['Cash', 'GCash or QR Ph (online)'])
     expect(within(pay).getByRole('radio', { name: 'Cash' })).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByText('Pay your driver in cash at drop-off.')).toBeInTheDocument()
 
-    fireEvent.click(within(pay).getByRole('radio', { name: 'GCash (online)' }))
-    expect(screen.getByText('Pay online with GCash through PayMongo when the ride ends.')).toBeInTheDocument()
+    fireEvent.click(within(pay).getByRole('radio', { name: 'GCash or QR Ph (online)' }))
+    expect(screen.getByText('Pay online through PayMongo when the ride ends: GCash, or scan a QR Ph code with Maya or your bank app.')).toBeInTheDocument()
   })
 
   it('books the ride with the chosen method', async () => {
     const pay = await openSummary()
-    fireEvent.click(within(pay).getByRole('radio', { name: 'GCash (online)' }))
+    fireEvent.click(within(pay).getByRole('radio', { name: 'GCash or QR Ph (online)' }))
     const book = await screen.findByRole('button', { name: /Book Ride Now/ })
     await waitFor(() => expect(book).toBeEnabled())
     await act(async () => { fireEvent.click(book) })

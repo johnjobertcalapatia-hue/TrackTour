@@ -48,7 +48,7 @@ phases 1–5 + driver overview 1–4).
       `/rate` (replaces RatingSheet), receipt on demand. Screens sized with
       `.tourist-map-page` (between header and bottom bar). Fixed a crash when
       the route API returns no polyline. Tests: `tourist-ride-phases` (7).
-- [ ] SOS (backend + UI + admin list)
+- [x] SOS (backend + UI + admin list) — 2026-11-18, see PROGRESS "SOS alerts"
 - [ ] Tip after ride (backend + payment + UI)
 - [ ] Chat (backend + realtime + UI)
 - [ ] Driver flow 1–4

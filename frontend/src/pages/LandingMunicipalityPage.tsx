@@ -94,7 +94,7 @@ export default function LandingMunicipalityPage() {
   const businessCategory = (b: Biz) => categoryName(b.category) || 'Place'
   const businessRank = (b: Biz) => (b.average_rating ?? 0) > 0 ? Number(b.average_rating) : null
 
-  const bizLink = (b: Biz) => (groupOf(b) === 'dining' ? `/explore/food/${b.id}` : `/tourist/explore/${b.id}`)
+  const bizLink = (b: Biz) => (groupOf(b) === 'dining' ? `/explore/food/${b.id}` : `/explore/place/${b.id}`)
 
   const toBizItems = (list: Biz[], icon: LucideIcon): LandingItem[] =>
     list.map((b) => ({

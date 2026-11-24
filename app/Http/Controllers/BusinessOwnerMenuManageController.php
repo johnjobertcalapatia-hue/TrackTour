@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ActsForBusiness;
 use App\Models\Offering;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -10,6 +11,8 @@ use Illuminate\Validation\ValidationException;
 
 class BusinessOwnerMenuManageController extends Controller
 {
+    use ActsForBusiness;
+
     /**
      * Extra food photos and videos per menu item, besides the main `image` (8 in total).
      * Stored as storage paths in `offerings.images`; the tourist food page shows
@@ -34,7 +37,7 @@ class BusinessOwnerMenuManageController extends Controller
 
     public function show(Request $request, int $id): JsonResponse
     {
-        $offering = Offering::whereIn('business_id', $request->user()->businesses()->pluck('id'))->findOrFail($id);
+        $offering = Offering::whereIn('business_id', $this->actingBusinessIds($request))->findOrFail($id);
 
         return $this->successResponse($this->present($offering));
     }
@@ -135,7 +138,7 @@ class BusinessOwnerMenuManageController extends Controller
 
         $validated = $request->validate($rules);
 
-        $business = $request->user()->businesses()->find($validated['business_id']);
+        $business = $this->actingBusinesses($request)->find($validated['business_id']);
         if (! $business) {
             return $this->forbiddenResponse('You do not own this business.');
         }
@@ -166,7 +169,7 @@ class BusinessOwnerMenuManageController extends Controller
 
     public function update(Request $request, int $id): JsonResponse
     {
-        $offering = Offering::whereIn('business_id', $request->user()->businesses()->pluck('id'))->findOrFail($id);
+        $offering = Offering::whereIn('business_id', $this->actingBusinessIds($request))->findOrFail($id);
 
         $data = $request->only(['name', 'description', 'price', 'compare_price', 'offering_category_id', 'is_available', 'unit']);
         $data = array_filter($data, fn ($value) => $value !== null);
@@ -204,7 +207,7 @@ class BusinessOwnerMenuManageController extends Controller
 
     public function destroy(Request $request, int $id): JsonResponse
     {
-        $offering = Offering::whereIn('business_id', $request->user()->businesses()->pluck('id'))->findOrFail($id);
+        $offering = Offering::whereIn('business_id', $this->actingBusinessIds($request))->findOrFail($id);
         if ($offering->image) {
             Storage::disk('public')->delete($offering->image);
         }

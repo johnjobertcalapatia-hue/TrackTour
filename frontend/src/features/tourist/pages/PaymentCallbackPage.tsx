@@ -12,7 +12,7 @@ interface PaymentStatusData {
   amount?: number
   method?: string
   paid_at: string | null
-  payable_type?: 'order' | 'booking' | 'group_order'
+  payable_type?: 'order' | 'booking' | 'group_order' | 'ride_penalty'
   order_id?: number | null
   group_order_id?: number | null
   /** 'transport' = a ride (2026-11-18): this page returns to the ride, not a food order. */
@@ -56,12 +56,14 @@ export default function PaymentCallbackPage() {
   const isFailed = statusParam === 'failed' || paymentStatus === 'failed'
   const isCancelled = statusParam === 'cancelled' || paymentStatus === 'cancelled'
 
+  // Stage C (2026-11-18): a cancellation fee paid on its own returns to Book a ride.
+  const isPenalty = payableType === 'ride_penalty' || payment?.payable_type === 'ride_penalty'
   const type = payableType === 'group_order' ? 'group_order' : 'order'
-  const targetId = type === 'group_order' ? groupId : orderId
+  const targetId = isPenalty ? (payableId ?? 'fee') : type === 'group_order' ? groupId : orderId
   // Ride hailing: PayMongo's success page and its "Return to merchant" link
   // both come back to the ride's tracking page.
-  const isRide = type === 'order' && (searchParams.get('kind') === 'ride' || payment?.order_type === 'transport')
-  const targetUrl = type === 'group_order'
+  const isRide = !isPenalty && type === 'order' && (searchParams.get('kind') === 'ride' || payment?.order_type === 'transport')
+  const targetUrl = isPenalty ? '/tourist/transport/book' : type === 'group_order'
     ? `/tourist/food/group-order/${targetId}`
     : isRide ? `/tourist/transport/tracking/${targetId}` : `/tourist/orders/${targetId}/track`
 
@@ -91,7 +93,9 @@ export default function PaymentCallbackPage() {
             </div>
             <h1 className="text-2xl font-bold text-[#17201B] mb-2">Payment Successful!</h1>
             <p className="text-sm text-[#6B7280] mb-4">
-              {type === 'group_order'
+              {isPenalty
+                ? 'Your cancellation fee has been paid. Thank you.'
+                : type === 'group_order'
                 ? 'Your GCash payment has been processed. Each restaurant will now accept and prepare its part of your group order.'
                 : isRide
                   ? 'Your GCash payment for the ride has been received. Your driver will confirm it and complete the ride.'
@@ -115,7 +119,9 @@ export default function PaymentCallbackPage() {
             )}
             {isSuccess && targetId && (
               <p className="text-sm text-[#087F3F] font-semibold">
-                {type === 'group_order'
+                {isPenalty
+                  ? `Returning to Book a ride in ${countdown}...`
+                  : type === 'group_order'
                   ? `Redirecting to your group order in ${countdown}...`
                   : isRide ? `Returning to your ride in ${countdown}...` : `Redirecting to your order in ${countdown}...`}
               </p>
@@ -159,7 +165,14 @@ export default function PaymentCallbackPage() {
         )}
 
         <div className="space-y-3">
-          {isRide && targetId ? (
+          {isPenalty ? (
+            <button
+              onClick={() => navigate(targetUrl, { replace: true })}
+              className="w-full bg-[#087F3F] hover:bg-[#056B35] text-white py-3 rounded-xl font-semibold transition flex items-center justify-center gap-2"
+            >
+              <Car className="w-4 h-4" /> Back to Book a ride
+            </button>
+          ) : isRide && targetId ? (
             // Success, cancelled ("Return to merchant") or failed: back to the ride.
             <button
               onClick={() => navigate(targetUrl, { replace: true })}
@@ -182,7 +195,7 @@ export default function PaymentCallbackPage() {
               Browse Food
             </button>
           )}
-          {!isRide && (
+          {!isRide && !isPenalty && (
             <button
               onClick={goBack}
               className="w-full bg-[#F8FAF9] hover:bg-[#E9F7EF] text-[#17201B] py-3 rounded-xl font-semibold transition flex items-center justify-center gap-2"

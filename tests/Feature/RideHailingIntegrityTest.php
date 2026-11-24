@@ -127,7 +127,7 @@ class RideHailingIntegrityTest extends TestCase
         $this->assertEquals($this->serverFare(), $quote['fare']);
         $this->assertEquals($this->serverFare(), $quote['quoted_fare']);
         $this->assertEquals(round(max(20, $this->serverFare() * 0.4), 2), $quote['rider_commission']);
-        $this->assertSame('max(₱20, 40% of fare)', $quote['commission_rule']);
+        $this->assertSame('max(₱20, 40% of fare), at most the fare', $quote['commission_rule']);
         $this->assertSame(64, strlen($quote['fare_settings_fingerprint']));
 
         $event = $this->events($order, 'ride_quoted')->sole();

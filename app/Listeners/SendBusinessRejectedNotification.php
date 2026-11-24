@@ -30,6 +30,7 @@ class SendBusinessRejectedNotification implements ShouldQueue
                 'title' => 'Business Rejected',
                 'message' => $message,
                 'type' => 'business_rejected',
+                'data' => ['business_id' => $business->id],
             ]);
         }
     }

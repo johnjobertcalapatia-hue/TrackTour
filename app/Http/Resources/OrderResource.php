@@ -9,6 +9,14 @@ class OrderResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
+        // Staff Management Stage 1: a staff member sees only their own
+        // business's items of a (group checkout) order, never another
+        // restaurant's. The staff.active middleware sets the business id.
+        $staffBusinessId = $request->attributes->get('staff_business_id');
+        $visibleItems = $this->relationLoaded('items') && $staffBusinessId !== null
+            ? $this->items->filter(fn ($item) => (int) ($item->business_id ?: $this->business_id) === (int) $staffBusinessId)->values()
+            : null;
+
         return [
             'id' => $this->id,
             'order_number' => $this->order_number,
@@ -20,7 +28,20 @@ class OrderResource extends JsonResource
             'customer_phone' => $this->customer_phone,
             'customer_email' => $this->customer_email,
             'delivery_address' => $this->delivery_address,
-            'items' => OrderItemResource::collection($this->whenLoaded('items')),
+            'items' => OrderItemResource::collection($visibleItems ?? $this->whenLoaded('items')),
+            // Staff only: other restaurants share this order, so whole-order
+            // actions are refused and items are updated one by one.
+            'shared_with_other_restaurants' => $this->when(
+                $visibleItems !== null,
+                fn () => $visibleItems->count() !== $this->items->count()
+            ),
+            // Staff only: their own restaurant's "Handed to rider" confirmation.
+            'my_handover' => $this->when(
+                $staffBusinessId !== null && $this->relationLoaded('restaurantHandovers'),
+                fn () => ($h = $this->restaurantHandovers->firstWhere('business_id', (int) $staffBusinessId))
+                    ? ['confirmed_at' => $h->confirmed_at, 'confirmed_by' => $h->confirmed_by]
+                    : null
+            ),
             'status' => $this->status,
             'order_type' => $this->order_type,
             'delivery_speed' => $this->delivery_speed,
@@ -74,8 +95,8 @@ class OrderResource extends JsonResource
             'completed_at' => $this->completed_at,
             'created_at' => $this->created_at,
             'updated_at' => $this->updated_at,
-            'items_summary' => $this->whenLoaded('items', function () {
-                $items = $this->items;
+            'items_summary' => $this->whenLoaded('items', function () use ($visibleItems) {
+                $items = $visibleItems ?? $this->items;
                 return [
                     'total' => $items->count(),
                     'pending' => $items->where('status', 'pending')->count(),

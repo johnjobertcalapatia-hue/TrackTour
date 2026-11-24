@@ -32,6 +32,7 @@ class RiderIdentityUniquenessTest extends TestCase
             'password_confirmation' => 'Password123!',
             'role' => 'rider',
             'municipality_id' => \App\Models\Municipality::firstOrCreate(['name' => 'Bansud'], ['district' => '2nd District', 'province' => 'Oriental Mindoro'])->id,
+            'barangay_id' => \App\Models\Barangay::firstOrCreate(['municipality_id' => \App\Models\Municipality::where('name', 'Bansud')->value('id'), 'name' => 'Poblacion'])->id,
             'mobile_number' => '09171234567',
             'otp_code' => '123456',
             'referral_code' => null,

@@ -11,12 +11,25 @@ export interface PaymentStatusResponse {
   amount?: number
   method?: string
   paid_at: string | null
-  payable_type?: 'order' | 'booking' | 'group_order'
+  payable_type?: 'order' | 'booking' | 'group_order' | 'ride_penalty'
   order_id?: number | null
   group_order_id?: number | null
 }
 
-export type PayableType = 'order' | 'booking' | 'group_order'
+/** ride_penalty: an owed ₱50 ride cancellation fee, paid on its own (Stage C, 2026-11-18). */
+export type PayableType = 'order' | 'booking' | 'group_order' | 'ride_penalty'
+
+/**
+ * "Pay online" opens PayMongo with GCash and QR Ph (2026-11-18). QR Ph is
+ * scanned with GCash, Maya or most bank apps.
+ */
+export const ONLINE_PAYMENT_NAME = 'GCash or QR Ph'
+
+const PAID_VIA: Record<string, string> = { gcash: 'GCash', qrph: 'QR Ph', card: 'card', paymaya: 'Maya', grab_pay: 'GrabPay' }
+
+/** The method actually used on PayMongo; payments before QR Ph was added were all GCash. */
+export const paidViaName = (paidVia: string | null | undefined, fallback = 'GCash') =>
+  (paidVia ? PAID_VIA[paidVia.toLowerCase()] ?? paidVia : fallback)
 
 export async function createCheckoutSession(
   payableType: PayableType,

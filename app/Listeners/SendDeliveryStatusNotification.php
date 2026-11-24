@@ -56,6 +56,7 @@ class SendDeliveryStatusNotification implements ShouldQueue
                         'title' => 'Ride Status Updated',
                         'message' => "Ride #{$order->order_number}: {$rideMessage}",
                         'type' => 'ride_status_changed',
+                        'data' => ['order_id' => $order->id],
                     ]);
                 }
 
@@ -71,6 +72,7 @@ class SendDeliveryStatusNotification implements ShouldQueue
                     'title' => 'Delivery Status Updated',
                     'message' => "Order #{$order->order_number}: {$message}",
                     'type' => 'delivery_status_changed',
+                    'data' => ['order_id' => $order->id],
                 ]);
             }
 
@@ -81,6 +83,7 @@ class SendDeliveryStatusNotification implements ShouldQueue
                     'title' => 'Delivery Status Updated',
                     'message' => "Order #{$order->order_number}: {$message}",
                     'type' => 'delivery_status_changed',
+                    'data' => ['order_id' => $order->id, 'business_id' => $business->id],
                 ]);
             }
         }

@@ -23,6 +23,8 @@ return [
     // prove it, the phone's own fix sent with "I've Arrived" / "Confirm
     // Delivered" is accepted up to this precision (coarser than
     // max_saved_accuracy_m is flagged for review) and at most this old.
+    // Restaurant arrival and Confirm Pick Up follow the same rule (owner
+    // decision 2026-11-24).
     'dropoff_max_fix_accuracy_m' => env('TRACKING_DROPOFF_MAX_FIX_ACCURACY_M', 200),
     'device_fix_max_age_seconds' => env('TRACKING_DEVICE_FIX_MAX_AGE_SECONDS', 30),
     // Teleport guard: a location fix implying a speed above this ceiling is

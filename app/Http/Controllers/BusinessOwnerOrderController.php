@@ -23,27 +23,76 @@ class BusinessOwnerOrderController extends Controller
         private OrderService $orderService
     ) {}
 
+    /**
+     * The Orders page filter chips: each matches every real order status it
+     * stands for (there is no `out_for_delivery` order status, for example).
+     * An exact status value is still accepted.
+     */
+    public const STATUS_GROUPS = [
+        'pending' => ['pending_payment', 'pending', 'waiting_restaurant', 'accepted'],
+        'preparing' => ['preparing'],
+        'ready' => ['ready'],
+        'picked_up' => ['picked_up'],
+        'on_the_way' => ['in_transit', 'out_for_delivery', 'en_route_destination', 'arrived_destination'],
+        'delivered' => ['delivered'],
+        'completed' => ['completed'],
+        'cancelled' => ['cancelled', 'cancelled_by_tourist', 'rejected', 'refunded'],
+    ];
+
+    /**
+     * GET /business-owner/orders and GET /staff/orders (2026-11-24: the staff
+     * portal uses the owner's Orders page). An owner sees their businesses; an
+     * active staff member their one restaurant, and OrderResource shows them
+     * only that restaurant's items (staff_business_id).
+     */
     public function index(Request $request): JsonResponse
     {
-        $businessIds = $request->user()->businesses()->pluck('id');
-        $filters = $request->only(['status', 'business_id', 'search', 'order_type', 'perPage']);
-        $perPage = $filters['perPage'] ?? 20;
+        $businessIds = app(\App\Services\StaffAccess::class)->actingBusinessIds($request->user());
+        $validated = $request->validate([
+            'status' => ['nullable', 'string', 'max:40'],
+            'business_id' => ['nullable', 'integer'],
+            'search' => ['nullable', 'string', 'max:100'],
+            'perPage' => ['nullable', 'integer', 'min:1', 'max:50'],
+            'page' => ['nullable', 'integer', 'min:1'],
+        ]);
+        $perPage = (int) ($validated['perPage'] ?? 20);
 
-        $orders = Order::where(function ($query) use ($businessIds) {
-                $query->whereIn('business_id', $businessIds)
-                    ->orWhereHas('items', fn ($items) => $items->whereIn('business_id', $businessIds));
-            })
-            ->with('business', 'items.offering', 'delivery.rider.profile', 'groupOrder')
-            ->when($filters['status'] ?? null, fn ($q, $s) => $q->where('status', $s))
-            ->when($filters['business_id'] ?? null, fn ($q, $id) => $q->where('business_id', $id))
+        // The selected business's orders, including group checkouts where it is
+        // not the first restaurant (its items are in another restaurant's order).
+        $scopeIds = ! empty($validated['business_id'])
+            ? $businessIds->filter(fn ($id) => (int) $id === (int) $validated['business_id'])->values()
+            : $businessIds;
+
+        $base = Order::where(function ($query) use ($scopeIds) {
+            $query->whereIn('business_id', $scopeIds)
+                ->orWhereHas('items', fn ($items) => $items->whereIn('business_id', $scopeIds));
+        })->when($validated['search'] ?? null, function ($q, $term) {
+            $term = '%'.addcslashes($term, '%_\\').'%';
+            $q->where(fn ($w) => $w->where('order_number', 'like', $term)->orWhere('customer_name', 'like', $term));
+        });
+
+        $status = $validated['status'] ?? null;
+        $statuses = $status ? (self::STATUS_GROUPS[$status] ?? [$status]) : null;
+
+        $orders = (clone $base)
+            ->with('business', 'items.offering', 'delivery.rider.profile', 'groupOrder', 'restaurantHandovers')
+            ->when($statuses, fn ($q, $list) => $q->whereIn('status', $list))
             ->latest()
             ->paginate($perPage);
 
         $this->attachRestaurantPurchases($request, collect($orders->items()), $businessIds);
 
-        return $this->paginatedResponse(
-            $orders->through(fn ($o) => OrderResource::make($o))
-        );
+        // A count for every chip (same business and search, any status).
+        $byStatus = (clone $base)->selectRaw('status, COUNT(*) as n')->groupBy('status')->pluck('n', 'status');
+        $counts = ['all' => (int) $byStatus->sum()];
+        foreach (self::STATUS_GROUPS as $group => $list) {
+            $counts[$group] = (int) $byStatus->only($list)->sum();
+        }
+
+        $payload = $this->paginatedResponse($orders->through(fn ($o) => OrderResource::make($o)))->getData(true);
+        $payload['meta']['status_counts'] = $counts;
+
+        return response()->json($payload);
     }
 
     public function show(Request $request, Order $order): JsonResponse
@@ -52,8 +101,8 @@ class BusinessOwnerOrderController extends Controller
             return $this->forbiddenResponse('You do not own this business.');
         }
 
-        $businessIds = $request->user()->businesses()->pluck('id');
-        $order->load('items.offering', 'business', 'delivery.rider.profile', 'groupOrder');
+        $businessIds = app(\App\Services\StaffAccess::class)->actingBusinessIds($request->user());
+        $order->load('items.offering', 'business', 'delivery.rider.profile', 'groupOrder', 'restaurantHandovers');
         $this->attachRestaurantPurchases($request, collect([$order]), $businessIds);
 
         return $this->successResponse(OrderResource::make($order));
@@ -803,9 +852,76 @@ class BusinessOwnerOrderController extends Controller
     public function codPaymentReceived(Request $request, Order $order): JsonResponse
     {
         $user = $request->user();
+        $businessId = $this->actingRestaurantInOrder($request, $order, 'Choose which of your restaurants received the payment.');
+        if ($businessId instanceof JsonResponse) {
+            return $businessId;
+        }
+
+        try {
+            $result = app(\App\Services\CodPaymentConfirmationService::class)
+                ->confirm($order, \App\Models\Business::findOrFail($businessId), $user);
+        } catch (\InvalidArgumentException $e) {
+            return $this->errorResponse($e->getMessage(), 422);
+        }
+
+        return $this->successResponse(
+            $result + ['order' => OrderResource::make($order->fresh()->load('business', 'items.offering', 'delivery.rider.profile'))],
+            $result['already_confirmed'] ? 'Payment was already confirmed.' : 'Payment received. You can now mark the food ready.'
+        );
+    }
+
+    /**
+     * POST /business-owner/orders/{order}/handover  {business_id?}
+     * POST /staff/orders/{order}/handover
+     *
+     * "Handed to rider" (Staff Management §5): the restaurant records that it
+     * gave its ready items to the accepted rider (who, when, restaurant,
+     * rider). The rider's own pickup confirmation is unchanged and still
+     * required.
+     */
+    public function handover(Request $request, Order $order): JsonResponse
+    {
+        $businessId = $this->actingRestaurantInOrder($request, $order, 'Choose which of your restaurants handed the food over.');
+        if ($businessId instanceof JsonResponse) {
+            return $businessId;
+        }
+
+        try {
+            $result = app(\App\Services\RestaurantHandoverService::class)
+                ->confirm($order, \App\Models\Business::findOrFail($businessId), $request->user());
+        } catch (\InvalidArgumentException $e) {
+            return $this->errorResponse($e->getMessage(), 422);
+        }
+
+        $handover = $result['handover']->load('confirmer.profile', 'rider.profile');
+        // A display name, never an email address.
+        $name = fn (?\App\Models\User $u) => $u ? (trim(($u->profile?->first_name ?? '').' '.($u->profile?->last_name ?? '')) ?: ($u->name ?: null)) : null;
+
+        return $this->successResponse([
+            'already_confirmed' => $result['already_confirmed'],
+            'handover' => [
+                'business_id' => $handover->business_id,
+                'confirmed_at' => $handover->confirmed_at,
+                'confirmed_by' => $name($handover->confirmer),
+                'rider' => $name($handover->rider),
+            ],
+        ], $result['already_confirmed'] ? 'The handover was already confirmed.' : 'Handover confirmed. The rider still confirms the pickup on their side.');
+    }
+
+    /**
+     * Which of the user's restaurants in this order an action is for: an
+     * owner's businesses or an active staff member's one restaurant, among
+     * the restaurants with active items in the order. business_id is needed
+     * only when an owner runs several restaurants in the same order.
+     *
+     * @return int|JsonResponse
+     */
+    private function actingRestaurantInOrder(Request $request, Order $order, string $chooseMessage)
+    {
         $validated = $request->validate(['business_id' => ['nullable', 'integer']]);
 
-        $owned = \App\Models\Business::where('owner_id', $user->id)->pluck('id')->map(fn ($id) => (int) $id);
+        // Owner: their businesses; active staff: their one business (Staff Stage 1).
+        $owned = app(\App\Services\StaffAccess::class)->actingBusinessIds($request->user());
         $inOrder = $order->items()
             ->whereNotIn('status', ['cancelled', 'rejected'])
             ->get(['business_id'])
@@ -822,23 +938,13 @@ class BusinessOwnerOrderController extends Controller
             if (! $candidates->contains((int) $validated['business_id'])) {
                 return $this->forbiddenResponse('You do not own that restaurant in this order.');
             }
-            $businessId = (int) $validated['business_id'];
-        } elseif ($candidates->count() === 1) {
-            $businessId = $candidates->first();
-        } else {
-            return $this->errorResponse('Choose which of your restaurants received the payment.', 422);
+
+            return (int) $validated['business_id'];
+        }
+        if ($candidates->count() === 1) {
+            return (int) $candidates->first();
         }
 
-        try {
-            $result = app(\App\Services\CodPaymentConfirmationService::class)
-                ->confirm($order, \App\Models\Business::findOrFail($businessId), $user);
-        } catch (\InvalidArgumentException $e) {
-            return $this->errorResponse($e->getMessage(), 422);
-        }
-
-        return $this->successResponse(
-            $result + ['order' => OrderResource::make($order->fresh()->load('business', 'items.offering', 'delivery.rider.profile'))],
-            $result['already_confirmed'] ? 'Payment was already confirmed.' : 'Payment received. You can now mark the food ready.'
-        );
+        return $this->errorResponse($chooseMessage, 422);
     }
 }

@@ -2,23 +2,27 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ActsForBusiness;
 use App\Models\Booking;
 use App\Models\Order;
 use App\Services\BusinessService;
 use App\Services\CodSettlementService;
+use App\Support\ReportDateRange;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class BusinessOwnerReportController extends Controller
 {
+    use ActsForBusiness;
+
     public function __construct(
         private BusinessService $businessService
     ) {}
 
     private function resolveBusinessIds(Request $request): array
     {
-        $query = $request->user()->businesses();
+        $query = $this->actingBusinesses($request);
 
         $businessId = $request->get('business_id');
         if ($businessId) {
@@ -41,13 +45,15 @@ class BusinessOwnerReportController extends Controller
     public function sales(Request $request): JsonResponse
     {
         $businessIds = $this->resolveBusinessIds($request);
-        $period = $request->get('period', 'monthly');
+        // Date From / Date To override the period (ReportDateRange).
+        $range = ReportDateRange::fromRequest($request);
+        $period = $range->period;
+        $window = $range->salesWindow();
 
-        $dates = $this->getDateRange($period);
-
-        $query = Order::whereIn('business_id', $businessIds)
-            ->where('status', 'completed')
-            ->whereBetween('completed_at', [$dates['start'], $dates['end']]);
+        $query = ReportDateRange::apply(
+            Order::whereIn('business_id', $businessIds)->where('status', 'completed'),
+            'completed_at', $window['start'], $window['end']
+        );
 
         $salesData = (clone $query)
             ->select(
@@ -69,14 +75,35 @@ class BusinessOwnerReportController extends Controller
             'sales_data' => $salesData,
             'summary' => $summary,
             'period' => $period,
+            'custom_range' => $range->custom,
         ]);
+    }
+
+    /**
+     * GET reports/overview?from=Y-m-d&to=Y-m-d: Reports & Analytics page. KPIs
+     * with the change against the previous period of the same length, the sales
+     * trend, top-selling items, orders by status and revenue per week.
+     */
+    public function overview(Request $request, \App\Services\OwnerReportOverview $overview): JsonResponse
+    {
+        $validated = $request->validate([
+            'from' => ['required', 'date_format:Y-m-d'],
+            'to' => ['required', 'date_format:Y-m-d', 'after_or_equal:from'],
+        ]);
+        $days = \Illuminate\Support\Carbon::parse($validated['from'])->diffInDays(\Illuminate\Support\Carbon::parse($validated['to'])) + 1;
+        if ($days > 366) {
+            return $this->errorResponse('Choose a range of one year or less.', 422, ['to' => ['Choose a range of one year or less.']]);
+        }
+
+        return $this->successResponse($overview->build($this->resolveBusinessIds($request), $validated['from'], $validated['to']));
     }
 
     public function orders(Request $request): JsonResponse
     {
         $businessIds = $this->resolveBusinessIds($request);
 
-        $query = Order::whereIn('business_id', $businessIds);
+        // Orders placed between Date From and Date To (all time without dates).
+        $query = ReportDateRange::fromRequest($request)->applyCustom(Order::whereIn('business_id', $businessIds), 'created_at');
 
         $orders = (clone $query)
             ->select('status', DB::raw('COUNT(*) as count'), DB::raw('SUM(total) as revenue'))
@@ -97,7 +124,8 @@ class BusinessOwnerReportController extends Controller
     {
         $businessIds = $this->resolveBusinessIds($request);
 
-        $query = Booking::whereIn('business_id', $businessIds);
+        // Bookings made between Date From and Date To (all time without dates).
+        $query = ReportDateRange::fromRequest($request)->applyCustom(Booking::whereIn('business_id', $businessIds), 'created_at');
 
         $bookingsByStatus = (clone $query)
             ->select('status', DB::raw('COUNT(*) as count'), DB::raw('SUM(total_amount) as revenue'))
@@ -152,13 +180,4 @@ class BusinessOwnerReportController extends Controller
         ], 'COD settlements retrieved.');
     }
 
-    private function getDateRange(string $period): array
-    {
-        return match ($period) {
-            'weekly' => ['start' => now()->startOfWeek(), 'end' => now()->endOfWeek()],
-            'monthly' => ['start' => now()->startOfMonth(), 'end' => now()->endOfMonth()],
-            'yearly' => ['start' => now()->startOfYear(), 'end' => now()->endOfYear()],
-            default => ['start' => now()->startOfMonth(), 'end' => now()->endOfMonth()],
-        };
-    }
 }

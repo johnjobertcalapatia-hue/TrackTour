@@ -428,7 +428,7 @@ function HomeHero({ placeName, province, slides }: { placeName: string; province
       )}
 
       {/* Wavy bottom edge */}
-      <svg className="absolute bottom-0 left-0 w-full h-10 text-[#F4F8F3]" viewBox="0 0 1440 60" preserveAspectRatio="none" aria-hidden="true">
+      <svg className="absolute bottom-0 left-0 w-full h-10 text-[#F6F4EE]" viewBox="0 0 1440 60" preserveAspectRatio="none" aria-hidden="true">
         <path fill="currentColor" d="M0,40 C240,10 480,60 720,38 C960,16 1200,52 1440,22 L1440,60 L0,60 Z" />
       </svg>
     </section>

@@ -63,6 +63,22 @@ class AuthApiTest extends TestCase
         ]);
     }
 
+    public function test_rider_registration_rejects_a_barangay_from_another_municipality(): void
+    {
+        $bansud = \App\Models\Municipality::create(['name' => 'Bansud', 'district' => '1st', 'province' => 'Oriental Mindoro']);
+        $gloria = \App\Models\Municipality::create(['name' => 'Gloria', 'district' => '1st', 'province' => 'Oriental Mindoro']);
+        $gloriaBarangay = \App\Models\Barangay::create(['municipality_id' => $gloria->id, 'name' => 'Malamig']);
+        Cache::put('otp:09171234567', '123456', now()->addMinutes(5));
+
+        $this->postJson('/api/register', [
+            'first_name' => 'Pedro', 'last_name' => 'Rider', 'date_of_birth' => '2000-01-15',
+            'email' => 'rider2@example.com', 'password' => 'Password123!', 'password_confirmation' => 'Password123!',
+            'role' => 'rider', 'municipality_id' => $bansud->id, 'barangay_id' => $gloriaBarangay->id,
+            'mobile_number' => '09171234567', 'otp_code' => '123456',
+            'confirm_age' => true, 'agree_terms' => true, 'agree_privacy' => true,
+        ])->assertStatus(422)->assertJsonValidationErrors('barangay_id');
+    }
+
     public function test_user_can_register_as_rider(): void
     {
         $municipality = \App\Models\Municipality::create([
@@ -84,6 +100,7 @@ class AuthApiTest extends TestCase
             'password_confirmation' => 'Password123!',
             'role' => 'rider',
             'municipality_id' => $municipality->id,
+            'barangay_id' => \App\Models\Barangay::create(['municipality_id' => $municipality->id, 'name' => 'Poblacion'])->id,
             'mobile_number' => '09171234567',
             'otp_code' => '123456',
             'referral_code' => null,

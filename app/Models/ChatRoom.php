@@ -11,6 +11,7 @@ class ChatRoom extends Model
     protected $fillable = [
         'type',
         'business_id',
+        'order_id',
         'booking_id',
         'delivery_id',
     ];
@@ -28,5 +29,10 @@ class ChatRoom extends Model
     public function business(): BelongsTo
     {
         return $this->belongsTo(Business::class);
+    }
+
+    public function order(): BelongsTo
+    {
+        return $this->belongsTo(Order::class);
     }
 }

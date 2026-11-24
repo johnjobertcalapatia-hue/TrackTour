@@ -102,6 +102,14 @@ class RiderMapController extends Controller
                 'paid_amount' => $delivery->primaryOrder()?->paid_amount !== null ? (float) $delivery->primaryOrder()->paid_amount : null,
                 // Ride: the passenger's one destination change (new destination, fare, acknowledged?).
                 'destination_change' => $delivery->destinationChange?->present(),
+                // The customer's owed ₱50 cancellation fee from an earlier ride (owed to
+                // that ride's driver), collected in cash at the drop-off — on a ride or,
+                // since 2026-11-23, a food delivery. Online payments already carry it.
+                'cancellation_fee_due' => (function () use ($delivery) {
+                    $p = app(\App\Services\RideCancellationPenaltyService::class)->dueOnDelivery($delivery);
+
+                    return $p ? ['penalty_id' => $p->id, 'amount' => (float) $p->penalty_amount, 'from_ride' => $p->cancelledOrder?->order_number] : null;
+                })(),
                 'created_at' => $delivery->created_at,
             ]);
 
@@ -109,6 +117,8 @@ class RiderMapController extends Controller
             'rider' => [
                 'latitude' => $lastLocation?->latitude,
                 'longitude' => $lastLocation?->longitude,
+                // The app only uses a saved position while it is recent (2026-11-23).
+                'recorded_at' => $lastLocation?->recorded_at?->toIso8601String(),
             ],
             'deliveries' => $deliveries,
         ]);

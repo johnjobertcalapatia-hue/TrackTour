@@ -5,6 +5,7 @@ namespace App\Observers;
 use App\Models\Business;
 use App\Models\Review;
 use App\Services\FoodPopularityService;
+use App\Services\ReviewNotifier;
 
 class ReviewObserver
 {
@@ -12,6 +13,8 @@ class ReviewObserver
     {
         $this->updateBusinessReviewMetrics($review->business_id);
         $this->updateDishPopularity($review);
+        // Notifications module: the owner hears about new reviews.
+        app(ReviewNotifier::class)->businessReview($review);
     }
 
     public function updated(Review $review): void

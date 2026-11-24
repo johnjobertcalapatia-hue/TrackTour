@@ -28,6 +28,18 @@ class StaffRole extends Model
         return $this->hasMany(RolePermission::class);
     }
 
+    /** Staff Management Stage 1 grants: permission keys (App\Support\StaffPermissions). */
+    public function grants(): HasMany
+    {
+        return $this->hasMany(StaffRolePermission::class);
+    }
+
+    /** @return list<string> */
+    public function grantedPermissions(): array
+    {
+        return $this->grants()->pluck('permission')->all();
+    }
+
     public function hasPermission(string $moduleCode, string $action = 'can_view'): bool
     {
         $permission = $this->permissions()->where('module_code', $moduleCode)->first();

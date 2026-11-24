@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { categoryName, formatCurrency, toAssetUrl } from '@/shared/utils'
+import { SalePrice, type DishSale } from '@/shared/components/SalePrice'
+import { categoryName, toAssetUrl } from '@/shared/utils'
 import { addToFoodCart, getFoodCart, saveFoodCart } from '@/shared/services/food-cart'
 import { UtensilsCrossed, Star, ShoppingCart, Plus, Minus } from 'lucide-react'
 
@@ -11,6 +12,9 @@ export interface FoodItem {
   category: unknown
   image: string | null
   price: number
+  /** Menu price while a dish sale runs (Promotions Part A); `price` is what the tourist pays. */
+  original_price?: number | null
+  sale?: DishSale | null
   business_name: string
   business_id: number
   business_latitude: number | null
@@ -116,7 +120,7 @@ export default function FoodMenuCard({ food, onOpen }: { food: FoodItem; onOpen:
         <p className="text-[11px] font-semibold uppercase tracking-wide text-[#047332] truncate">{categoryName(food.category)}</p>
         <h3 className="mt-0.5 text-[15px] font-bold text-[#17201B] leading-snug line-clamp-1">{food.name}</h3>
         <p className="text-xs text-[#56615B] truncate">{food.business_name}</p>
-        <p className="mt-1.5 text-base font-extrabold text-[#087F3F]">{formatCurrency(Number(food.price))}</p>
+        <p className="mt-1.5 text-base"><SalePrice price={food.price} original_price={food.original_price} sale={food.sale} className="font-extrabold text-[#087F3F]" /></p>
 
         <div className="mt-auto pt-2.5" onClick={stop} onKeyDown={stop}>
           {!accepting ? (

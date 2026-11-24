@@ -5,6 +5,7 @@ import { BadgeCheck, ChevronRight, Clock, HandCoins, Hourglass } from 'lucide-re
 import { get } from '@/shared/services/api'
 import { formatCurrency, formatDateTime } from '@/shared/utils'
 import { CashoutStatusChip, type CashoutStatus } from './AdminCashoutInvestigation'
+import type { CompensationPayout } from '@/features/compensation/types'
 
 export type { CashoutDetail } from './AdminCashoutInvestigation'
 
@@ -76,6 +77,8 @@ export default function AdminRiderCashouts() {
           No verified transaction, no earnings. No verified earnings, no cashout. No Tourism Office approval, no payout.
         </p>
       </div>
+
+      <CompensationOnlyQueue />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Cashout summary" role="group">
         <Tile label="Pending requests" value={s ? String(s.pending_count) : '—'} hint={s ? `${s.under_review_count} under review` : ''} icon={<Clock className="h-5 w-5" />} accent="gold" testId="tile-pending" />
@@ -163,5 +166,35 @@ function Tile({ label, value, hint, icon, accent, testId }: { label: string; val
       <p className="mt-1 text-2xl font-bold text-[#17201B]">{value}</p>
       <p className="text-[11px] text-[#6B7280]">{hint}</p>
     </div>
+  )
+}
+
+/**
+ * Stage D2/D3 (2026-11-18): cancellation compensation requested on its own
+ * (no earnings cashout). Compensation linked to a cashout shows on that
+ * cashout's page instead.
+ */
+function CompensationOnlyQueue() {
+  const navigate = useNavigate()
+  const { data } = useQuery({
+    queryKey: ['admin-compensation-payouts', 'open'],
+    queryFn: () => get<CompensationPayout[]>('/admin/compensation-payouts', { params: { status: 'open' } }),
+  })
+  const rows = (Array.isArray(data) ? data : []).filter((p) => p.standalone)
+  if (rows.length === 0) return null
+  return (
+    <section aria-label="Cancellation compensation payouts" className="rounded-2xl border border-[#E7E3D4] bg-white p-4">
+      <h2 className="text-sm font-bold text-[#17201B]">Cancellation compensation requested on its own</h2>
+      <ul className="mt-2 divide-y divide-[#EEF1EF]">
+        {rows.map((p) => (
+          <li key={p.id}>
+            <button type="button" onClick={() => navigate(`/admin/cashouts/compensation/${p.id}`)} className="flex w-full items-center justify-between gap-2 py-2 text-left text-sm hover:bg-[#FAF7F0]">
+              <span>{p.payout_number} · {p.rider_name ?? `Rider #${p.rider_id}`} · {p.items.length} {p.items.length === 1 ? 'booking' : 'bookings'}</span>
+              <span className="flex items-center gap-2 font-semibold">{formatCurrency(p.amount)} <span className="text-xs font-normal text-[#6B7280]">{p.status.replace('_', ' ')}</span><ChevronRight className="h-4 w-4" aria-hidden="true" /></span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }

@@ -7,12 +7,13 @@ import { Modal } from '@/shared/components/Modal'
 import { formatCurrency } from '@/shared/utils'
 import { useDebounce } from '@/shared/hooks/use-debounce'
 import { useClickOutside } from '@/shared/hooks/use-click-outside'
-import { useBusinessOwnerStore } from '../services/business-owner-store'
 import {
   Plus, Search, Download, Upload, MoreVertical, Pencil, Copy, Archive,
   Star, Eye, EyeOff, ChevronDown, CheckSquare, Square, CheckCircle2, AlertTriangle,
   Boxes, Image as ImageIcon, Filter,
+  UtensilsCrossed,
 } from 'lucide-react'
+import { useBusinessPortal } from '../services/business-portal'
 
 interface MenuCategory {
   id: number
@@ -90,9 +91,10 @@ const getCategoryLabel = (category: MenuCategory | string | null): string => {
 }
 
 export default function BusinessOwnerMenu() {
+  const portal = useBusinessPortal()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const selectedBusinessId = useBusinessOwnerStore((s) => s.selectedBusinessId)
+  const selectedBusinessId = portal.businessId
 
   // Filter / toolbar state
   const [searchInput, setSearchInput] = useState('')
@@ -146,7 +148,7 @@ export default function BusinessOwnerMenu() {
       params.append('sort', sortBy)
       params.append('per_page', '24')
       params.append('page', String(page))
-      return get<MenuResponse>(`/business-owner/menu?${params.toString()}`)
+      return get<MenuResponse>(`${portal.prefix}/menu?${params.toString()}`)
     },
     enabled: !!selectedBusinessId,
     placeholderData: (prev) => prev,
@@ -159,7 +161,7 @@ export default function BusinessOwnerMenu() {
 
   // ── Mutations ────────────────────────────────────────────────────────
   const toggleAvailabilityMutation = useMutation({
-    mutationFn: (item: MenuItem) => put(`/business-owner/menu/${item.id}`, { is_available: !item.is_available }),
+    mutationFn: (item: MenuItem) => put(`${portal.prefix}/menu/${item.id}`, { is_available: !item.is_available }),
     onMutate: (item) => setTogglingId(item.id),
     onSettled: () => setTogglingId(null),
     onSuccess: () => { invalidate(); showToast('Availability updated') },
@@ -167,19 +169,19 @@ export default function BusinessOwnerMenu() {
   })
 
   const toggleFeaturedMutation = useMutation({
-    mutationFn: (item: MenuItem) => patch(`/business-owner/offerings/${item.id}/featured`),
+    mutationFn: (item: MenuItem) => patch(`${portal.prefix}/offerings/${item.id}/featured`),
     onSuccess: () => { invalidate(); showToast('Featured status updated') },
     onError: () => showToast('Failed to update featured status', 'error'),
   })
 
   const duplicateMutation = useMutation({
-    mutationFn: (item: MenuItem) => post(`/business-owner/offerings/${item.id}/duplicate`),
+    mutationFn: (item: MenuItem) => post(`${portal.prefix}/offerings/${item.id}/duplicate`),
     onSuccess: () => { invalidate(); showToast('Item duplicated') },
     onError: () => showToast('Failed to duplicate item', 'error'),
   })
 
   const archiveMutation = useMutation({
-    mutationFn: (id: number) => post('/business-owner/offerings/bulk-action', {
+    mutationFn: (id: number) => post(`${portal.prefix}/offerings/bulk-action`, {
       action: 'archive', offering_ids: [id], business_id: selectedBusinessId,
     }),
     onSuccess: () => { invalidate(); setConfirmArchive(null); showToast('Item archived') },
@@ -188,14 +190,14 @@ export default function BusinessOwnerMenu() {
 
   const inventoryMutation = useMutation({
     mutationFn: ({ id, unit }: { id: number; unit: string }) =>
-      put(`/business-owner/menu/${id}`, { unit }),
+      put(`${portal.prefix}/menu/${id}`, { unit }),
     onSuccess: () => { invalidate(); setInventoryItem(null); showToast('Unit updated') },
     onError: () => showToast('Failed to update the unit', 'error'),
   })
 
   const bulkActionMutation = useMutation({
     mutationFn: ({ action, offering_ids }: { action: string; offering_ids: number[] }) =>
-      post('/business-owner/offerings/bulk-action', { action, offering_ids, business_id: selectedBusinessId }),
+      post(`${portal.prefix}/offerings/bulk-action`, { action, offering_ids, business_id: selectedBusinessId }),
     onSuccess: () => {
       invalidate(); setSelectedIds([]); setSelectMode(false); setBulkOpen(false)
       showToast('Bulk action completed')
@@ -205,7 +207,7 @@ export default function BusinessOwnerMenu() {
 
   const bulkCategoryMutation = useMutation({
     mutationFn: async (ids: number[]) => {
-      await Promise.all(ids.map((id) => put(`/business-owner/menu/${id}`, { offering_category_id: bulkCategory })))
+      await Promise.all(ids.map((id) => put(`${portal.prefix}/menu/${id}`, { offering_category_id: bulkCategory })))
     },
     onSuccess: () => {
       invalidate(); setCategoryModal(false); setSelectedIds([]); setSelectMode(false)
@@ -268,7 +270,7 @@ export default function BusinessOwnerMenu() {
         try {
           const categoryName = category.trim()
           const matched = categoryName ? categories.find((c) => c.name.toLowerCase() === categoryName.toLowerCase()) : undefined
-          await post('/business-owner/menu', {
+          await post(`${portal.prefix}/menu`, {
             business_id: selectedBusinessId,
             name: name.trim(),
             offering_category_id: matched ? Number(matched.id) : undefined,
@@ -322,10 +324,11 @@ export default function BusinessOwnerMenu() {
   }
 
   const statsCards = useMemo(() => [
-    { label: 'Total Items', value: stats?.total ?? 0, icon: <Boxes className="w-5 h-5" />, iconBg: 'bg-[#EAF6ED]', iconText: 'text-[#16803C]' },
-    { label: 'Available', value: stats?.available ?? 0, icon: <CheckCircle2 className="w-5 h-5" />, iconBg: 'bg-[#EAF6ED]', iconText: 'text-[#16803C]' },
-    { label: 'Unavailable', value: stats?.unavailable ?? 0, icon: <EyeOff className="w-5 h-5" />, iconBg: 'bg-[#FEF2F2]', iconText: 'text-[#B91C1C]' },
-    { label: 'Featured', value: stats?.featured ?? 0, icon: <Star className="w-5 h-5" />, iconBg: 'bg-[#FFF7D6]', iconText: 'text-[#A66F00]' },
+    // Round, filled icons as on the redesigned owner dashboard.
+    { label: 'Total Items', value: stats?.total ?? 0, icon: <Boxes className="w-6 h-6" />, iconBg: 'bg-[#16803C]', iconText: 'text-white' },
+    { label: 'Available', value: stats?.available ?? 0, icon: <CheckCircle2 className="w-6 h-6" />, iconBg: 'bg-[#0F4D2B]', iconText: 'text-white' },
+    { label: 'Unavailable', value: stats?.unavailable ?? 0, icon: <EyeOff className="w-6 h-6" />, iconBg: 'bg-[#DC2626]', iconText: 'text-white' },
+    { label: 'Featured', value: stats?.featured ?? 0, icon: <Star className="w-6 h-6" />, iconBg: 'bg-[#E9A100]', iconText: 'text-white' },
   ], [stats])
 
   const availabilityBadge = (item: MenuItem) => {
@@ -358,9 +361,12 @@ export default function BusinessOwnerMenu() {
 
       {/* Header */}
       <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
-        <div>
-          <h1 className="text-2xl lg:text-3xl font-bold text-[#126B32]">Menu Items</h1>
-          <p className="mt-1 text-sm text-[#647067]">Manage your menu offerings.</p>
+        <div className="flex items-center gap-3">
+          <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#0F4D2B] text-white"><UtensilsCrossed className="h-6 w-6" aria-hidden="true" /></span>
+          <div>
+            <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">Menu Items</h1>
+            <p className="mt-1 text-sm text-[#5E6B63]">Manage your menu offerings.</p>
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button onClick={() => importRef?.click()} disabled={importing}
@@ -372,7 +378,7 @@ export default function BusinessOwnerMenu() {
             className="inline-flex items-center gap-2 bg-white hover:bg-[#F3F8F4] text-[#16803C] border border-[#D7E8DB] px-4 py-2.5 rounded-xl text-sm font-medium transition">
             <Download className="w-4 h-4" /> Export Menu
           </button>
-          <button onClick={() => navigate('/business-owner/menu/create')}
+          <button onClick={() => navigate(`${portal.prefix}/menu/create`)}
             className="inline-flex items-center gap-2 bg-[#16803C] hover:bg-[#126B32] text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition">
             <Plus className="w-4 h-4" /> Create Menu Item
           </button>
@@ -383,7 +389,7 @@ export default function BusinessOwnerMenu() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
         {statsCards.map((card) => (
           <div key={card.label} className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-4 flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${card.iconBg} ${card.iconText}`}>
+            <div className={`w-12 h-12 rounded-full flex items-center justify-center flex-shrink-0 ${card.iconBg} ${card.iconText}`}>
               {card.icon}
             </div>
             <div className="min-w-0">
@@ -516,7 +522,7 @@ export default function BusinessOwnerMenu() {
           </div>
           <h3 className="text-lg font-semibold text-[#17201A] mb-1">No Menu Items Found</h3>
           <p className="text-sm text-[#647067] mb-6">Create your first food item to start building your menu.</p>
-          <button onClick={() => navigate('/business-owner/food/create')}
+          <button onClick={() => navigate(`${portal.prefix}/food/create`)}
             className="inline-flex items-center gap-2 bg-[#16803C] hover:bg-[#126B32] text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition">
             <Plus className="w-4 h-4" /> Create Food
           </button>
@@ -559,7 +565,7 @@ export default function BusinessOwnerMenu() {
                       </button>
                       {openMenuId === item.id && (
                         <div className="absolute right-0 mt-1 w-48 bg-white rounded-xl border border-[#E2E8E3] shadow-lg py-1 z-30">
-                          <button onClick={() => { setOpenMenuId(null); navigate(`/business-owner/menu/${item.id}/edit`) }}
+                          <button onClick={() => { setOpenMenuId(null); navigate(`${portal.prefix}/menu/${item.id}/edit`) }}
                             className="w-full text-left px-3 py-2 text-xs text-[#4B5563] hover:bg-[#F3F8F4] flex items-center gap-2 transition">
                             <Pencil className="w-3.5 h-3.5" /> Edit
                           </button>
@@ -643,7 +649,7 @@ export default function BusinessOwnerMenu() {
 
                 {/* Footer actions */}
                 <div className="flex items-center border-t border-[#E2E8E3] divide-x divide-[#E2E8E3]">
-                  <button onClick={(e) => { e.stopPropagation(); navigate(`/business-owner/menu/${item.id}/edit`) }}
+                  <button onClick={(e) => { e.stopPropagation(); navigate(`${portal.prefix}/menu/${item.id}/edit`) }}
                     className="flex-1 py-2.5 flex items-center justify-center gap-1 text-[11px] font-medium text-[#16803C] hover:bg-[#EAF6ED] transition">
                     <Pencil className="w-3 h-3" /> Edit
                   </button>
@@ -807,7 +813,7 @@ export default function BusinessOwnerMenu() {
                 </div>
               )}
               <div className="flex items-center justify-end gap-3 mt-6">
-                <button onClick={() => navigate(`/business-owner/menu/${previewItem.id}/edit`)}
+                <button onClick={() => navigate(`${portal.prefix}/menu/${previewItem.id}/edit`)}
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#16803C] hover:bg-[#126B32] text-white text-sm font-semibold transition">
                   <Pencil className="w-3.5 h-3.5" /> Edit Item
                 </button>

@@ -137,6 +137,7 @@ class AuthController extends Controller
                     'date_of_birth' => $request->date_of_birth,
                     'mobile_number' => $request->mobile_number,
                     'municipality_id' => (int) $request->municipality_id,
+                    'barangay_id' => (int) $request->barangay_id,
                 ]);
 
                 $user->riderDetail()->create([
@@ -209,6 +210,16 @@ class AuthController extends Controller
 
         if (! $user) {
             return $this->unauthorizedResponse('The provided credentials are incorrect.');
+        }
+
+        // Staff Management Stage 1: a pending, suspended, deactivated or
+        // removed staff account gets no token, even with the right password.
+        $staffAccess = app(\App\Services\StaffAccess::class);
+        if ($reason = $staffAccess->loginBlockReason($user)) {
+            return $this->forbiddenResponse($reason);
+        }
+        if ($staff = $staffAccess->activeStaff($user)) {
+            $staff->forceFill(['last_login_at' => now(), 'last_login_ip' => $request->ip()])->save();
         }
 
         $token = $user->createToken('api-token')->plainTextToken;

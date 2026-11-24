@@ -455,7 +455,9 @@ class PaymentRefundProcessor
         $rows = $this->providerRefunds($payment)->get(['status', 'amount']);
         $sum = fn (array $statuses) => round((float) $rows->whereIn('status', $statuses)->sum(fn (Refund $r) => (float) $r->amount), 2);
 
-        $paid = round((float) $payment->amount, 2);
+        // 2026-11-23: a cancellation fee carried by this payment is not order
+        // money, so it is never part of what the order can refund.
+        $paid = round((float) $payment->amount - app(RideCancellationPenaltyService::class)->feePortion($payment), 2);
         $succeeded = $sum(['succeeded']);
         $inFlight = $sum(['requested', 'pending']);
 

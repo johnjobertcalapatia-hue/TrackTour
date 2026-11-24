@@ -113,8 +113,15 @@ class RegisterRequest extends FormRequest
                     ],
                     'otp_code' => ['required', 'string', 'size:6'],
                     // The rider's municipality decides which Tourism Office
-                    // issues their COD cash advance and receives remittance.
+                    // trains and interviews them, issues their COD cash
+                    // advance and receives remittance. Set once, here: the
+                    // rider cannot change it (or the barangay) afterwards.
                     'municipality_id' => ['required', 'integer', 'exists:municipalities,id'],
+                    'barangay_id' => [
+                        'required',
+                        'integer',
+                        Rule::exists('barangays', 'id')->where('municipality_id', (int) $this->municipality_id),
+                    ],
                     'referral_code' => ['nullable', 'string', 'max:50'],
                     'confirm_age' => ['required', 'boolean', 'accepted'],
                     'agree_terms' => ['required', 'boolean', 'accepted'],

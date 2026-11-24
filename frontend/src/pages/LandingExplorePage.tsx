@@ -108,7 +108,7 @@ export default function LandingExplorePage() {
     if ('type' in item) {
       return {
         key: `${item.type}-${item.id}`,
-        to: item.type === 'place' ? `/tourist/destinations/${item.id}` : item.type === 'food' ? `/explore/food/${item.id}` : `/tourist/explore/${item.id}`,
+        to: item.type === 'place' ? `/tourist/destinations/${item.id}` : item.type === 'food' ? `/explore/food/${item.id}` : `/explore/place/${item.id}`,
         title: item.name,
         image: item.cover_photo ? toAssetUrl(item.cover_photo) : null,
         category: TYPE_LABEL[item.type],
@@ -120,7 +120,7 @@ export default function LandingExplorePage() {
     }
     return {
       key: `business-${item.id}`,
-      to: `/tourist/explore/${item.id}`,
+      to: `/explore/place/${item.id}`,
       title: item.name,
       image: item.cover_photo ? toAssetUrl(item.cover_photo) : null,
       category: item.category ?? 'Business',

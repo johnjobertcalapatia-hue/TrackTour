@@ -95,6 +95,9 @@ Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 Route::post('/auth/send-otp', [OtpController::class, 'sendOtp'])->middleware('throttle:5,1');
 Route::post('/auth/verify-otp', [OtpController::class, 'verifyOtp'])->middleware('throttle:10,1');
 Route::post('/auth/check-email', [AuthController::class, 'checkEmail'])->middleware('throttle:30,1');
+// Staff activation (Staff Management Stage 1): single-use, 72-hour invitation link.
+Route::get('/staff-invitations/{token}', [\App\Http\Controllers\StaffInvitationController::class, 'show'])->middleware('throttle:30,1');
+Route::post('/staff-invitations/{token}/accept', [\App\Http\Controllers\StaffInvitationController::class, 'accept'])->middleware('throttle:10,1');
 
 // PayMongo Webhook (public — verified by signature)
 Route::post('/payments/webhook', [PaymentController::class, 'webhook']);
@@ -123,7 +126,20 @@ Route::get('/municipalities', function () {
     $municipalities = Municipality::with('barangays:id,municipality_id,name')
         ->withCount(['destinations', 'businesses'])
         ->orderBy('name')
-        ->get(['id', 'name']);
+        ->get(['id', 'name', 'logo', 'cover_photo']);
+
+    // Each municipal Tourism Office's logo and cover photo (landing "Where to
+    // Next?" cards). Bansud's office is the Bansud Tourism Office, whose logo
+    // and cover live in the office profile settings when the municipality has
+    // none of its own.
+    $bansudOffice = \Illuminate\Support\Facades\DB::table('tourism_settings')
+        ->whereNull('municipality_id')->whereIn('key', ['office_logo', 'office_cover'])->pluck('value', 'key');
+    $municipalities->each(function (Municipality $m) use ($bansudOffice) {
+        $isBansud = strcasecmp($m->name, 'Bansud') === 0;
+        $m->setAttribute('logo_url', $m->logo ?: ($isBansud ? ($bansudOffice['office_logo'] ?? null) : null));
+        $m->setAttribute('cover_url', $m->cover_photo ?: ($isBansud ? ($bansudOffice['office_cover'] ?? null) : null));
+        $m->makeHidden(['logo', 'cover_photo']);
+    });
 
     return response()->json([
         'success' => true,
@@ -163,6 +179,16 @@ Route::prefix('tourist')->group(function () {
     Route::get('/food', [FoodController::class, 'index']);
     Route::get('/food/{offering}', [FoodController::class, 'show']);
 
+    // Business posts feed (Promotions Part B): published posts of approved businesses only.
+    Route::get('/posts', [\App\Http\Controllers\Tourist\PostFeedController::class, 'index']);
+    Route::get('/posts/{id}', [\App\Http\Controllers\Tourist\PostFeedController::class, 'show'])->whereNumber('id');
+    Route::get('/posts/{id}/comments', [\App\Http\Controllers\Tourist\PostFeedController::class, 'comments'])->whereNumber('id');
+    // Views and shares are counted server-side, once per viewer per window (PostEngagement).
+    Route::middleware('throttle:120,1')->group(function () {
+        Route::post('/posts/{id}/view', [\App\Http\Controllers\Tourist\PostFeedController::class, 'view'])->whereNumber('id');
+        Route::post('/posts/{id}/share', [\App\Http\Controllers\Tourist\PostFeedController::class, 'share'])->whereNumber('id');
+    });
+
     // Stays listing & Events
     Route::get('/booking', [BookingController::class, 'index']);
     // Stays & Deals browse page (all approved accommodations + attraction/resort promotions)
@@ -195,6 +221,9 @@ Route::middleware('token.only')->group(function () {
     Route::get('/drafts/{draftKey}', [FormDraftController::class, 'show']);
     Route::post('/drafts', [FormDraftController::class, 'store']);
     Route::delete('/drafts/{draftKey}', [FormDraftController::class, 'destroy']);
+
+    // System maintenance notices for the signed-in user's role (portal banner)
+    Route::get('/system-notices/active', [\App\Http\Controllers\Admin\AdminSystemNoticeController::class, 'active']);
 
     // Document OCR
     Route::post('/documents/extract', [DocumentOcrController::class, 'extract']);
@@ -238,6 +267,17 @@ Route::middleware('token.only')->group(function () {
 
         // Multi-restaurant group checkout
         Route::post('/food/group-order', [GroupOrderController::class, 'store']);
+        // Likes on business posts: one per tourist per post (Promotions Part B).
+        Route::middleware('throttle:60,1')->group(function () {
+            Route::post('/posts/{id}/like', [\App\Http\Controllers\Tourist\PostFeedController::class, 'like'])->whereNumber('id');
+            Route::delete('/posts/{id}/like', [\App\Http\Controllers\Tourist\PostFeedController::class, 'unlike'])->whereNumber('id');
+            Route::post('/posts/{id}/save', [\App\Http\Controllers\Tourist\PostFeedController::class, 'save'])->whereNumber('id');
+            Route::delete('/posts/{id}/save', [\App\Http\Controllers\Tourist\PostFeedController::class, 'unsave'])->whereNumber('id');
+            Route::delete('/posts/{id}/comments/{comment}', [\App\Http\Controllers\Tourist\PostFeedController::class, 'deleteComment'])->whereNumber('id')->whereNumber('comment');
+            Route::post('/businesses/{id}/follow', [\App\Http\Controllers\Tourist\PostFeedController::class, 'follow'])->whereNumber('id');
+            Route::delete('/businesses/{id}/follow', [\App\Http\Controllers\Tourist\PostFeedController::class, 'unfollow'])->whereNumber('id');
+        });
+        Route::post('/posts/{id}/comments', [\App\Http\Controllers\Tourist\PostFeedController::class, 'comment'])->whereNumber('id')->middleware('throttle:10,1');
         Route::get('/food/group-order/{id}', [GroupOrderController::class, 'show']);
 
         // Bookings (index is public; show requires auth — business detail)
@@ -256,10 +296,12 @@ Route::middleware('token.only')->group(function () {
         Route::post('/transport/book', [TransportController::class, 'book']);
         Route::get('/transport/trip/{id}/status', [TransportController::class, 'tripStatus']);
         Route::post('/transport/trip/{id}/cancel', [TransportController::class, 'cancelTrip']);
-        Route::post('/transport/trip/{id}/penalty/dispute', [TransportController::class, 'disputePenalty'])->middleware('throttle:10,1');
         Route::post('/transport/trip/{id}/destination-change/preview', [TransportController::class, 'previewDestinationChange'])->middleware('throttle:20,1');
         Route::post('/transport/trip/{id}/destination-change', [TransportController::class, 'confirmDestinationChange'])->middleware('throttle:10,1');
         Route::post('/transport/trip/{id}/rate', [TransportController::class, 'rateTrip']);
+        // SOS (2026-11-18): alerts the Bansud Tourism Office; the driver is never told.
+        Route::post('/transport/trip/{id}/sos', [\App\Http\Controllers\SosController::class, 'touristRaise'])->middleware('throttle:20,1');
+        Route::post('/transport/trip/{id}/sos/safe', [\App\Http\Controllers\SosController::class, 'touristSafe'])->middleware('throttle:10,1');
 
         // Transport — pickup & destination selection (local registry search)
         Route::get('/transport/locations/search', [TransportLocationController::class, 'search']);
@@ -278,6 +320,13 @@ Route::middleware('token.only')->group(function () {
         Route::get('/messages', [MessageController::class, 'index']);
         Route::post('/messages', [MessageController::class, 'store']);
 
+        // Chat per order: message a restaurant about one of your orders
+        Route::get('/orders/{order}/chats', [\App\Http\Controllers\Tourist\OrderChatController::class, 'forOrder'])->whereNumber('order');
+        Route::post('/orders/{order}/chats', [\App\Http\Controllers\Tourist\OrderChatController::class, 'open'])->whereNumber('order')->middleware('throttle:20,1');
+        Route::get('/chats', [\App\Http\Controllers\Tourist\OrderChatController::class, 'index']);
+        Route::get('/chats/{room}', [\App\Http\Controllers\Tourist\OrderChatController::class, 'show'])->whereNumber('room');
+        Route::post('/chats/{room}/messages', [\App\Http\Controllers\Tourist\OrderChatController::class, 'send'])->whereNumber('room')->middleware('throttle:30,1');
+
         // Notifications
         Route::get('/notifications', [NotificationController::class, 'index']);
         Route::get('/notifications/unread-count', [NotificationController::class, 'unreadCount']);
@@ -293,6 +342,10 @@ Route::middleware('token.only')->group(function () {
 
         // Profile
         Route::get('/profile', [TouristProfileController::class, 'show']);
+        // Opt-in: share my live location with the tourism office (admin live map).
+        Route::get('/location-sharing', [\App\Http\Controllers\Tourist\TouristLocationShareController::class, 'show']);
+        Route::put('/location-sharing', [\App\Http\Controllers\Tourist\TouristLocationShareController::class, 'update']);
+        Route::post('/location-sharing/ping', [\App\Http\Controllers\Tourist\TouristLocationShareController::class, 'ping'])->middleware('throttle:12,1');
         Route::put('/profile', [TouristProfileController::class, 'update']);
         Route::post('/profile/photo', [TouristProfileController::class, 'uploadPhoto']);
         Route::delete('/profile/photo', [TouristProfileController::class, 'deletePhoto']);
@@ -316,8 +369,15 @@ Route::middleware('token.only')->group(function () {
 
             // Notifications
             Route::get('/notifications', [BusinessOwnerNotificationController::class, 'index']);
+            Route::get('/notifications/{id}', [BusinessOwnerNotificationController::class, 'show'])->whereNumber('id');
             Route::patch('/notifications/{id}/read', [BusinessOwnerNotificationController::class, 'markRead']);
             Route::patch('/notifications/read-all', [BusinessOwnerNotificationController::class, 'markAllRead']);
+
+            // Notifications → Messages & Concerns (chat per order) and Reviews & Ratings
+            Route::get('/conversations', [\App\Http\Controllers\BusinessOwner\BusinessOwnerConversationController::class, 'index']);
+            Route::get('/conversations/{room}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerConversationController::class, 'show'])->whereNumber('room');
+            Route::post('/conversations/{room}/messages', [\App\Http\Controllers\BusinessOwner\BusinessOwnerConversationController::class, 'send'])->whereNumber('room')->middleware('throttle:30,1');
+            Route::get('/reviews', [\App\Http\Controllers\BusinessOwner\BusinessOwnerReviewController::class, 'index']);
 
             // Businesses
             Route::get('/businesses', [BusinessOwnerBusinessController::class, 'index'])->name('business-owner.businesses');
@@ -394,6 +454,8 @@ Route::middleware('token.only')->group(function () {
             Route::post('/orders/{order}/start-preparation', [BusinessOwnerOrderController::class, 'startPreparation']);
             Route::post('/orders/{order}/mark-ready', [BusinessOwnerOrderController::class, 'markReady']);
             Route::post('/orders/{order}/cod-payment-received', [BusinessOwnerOrderController::class, 'codPaymentReceived']);
+            // "Handed to rider" (Staff Management section 5): owner or staff record it; the rider still confirms pickup.
+            Route::post('/orders/{order}/handover', [BusinessOwnerOrderController::class, 'handover']);
             Route::patch('/orders/{order}/items/{item}/status', [BusinessOwnerOrderController::class, 'updateItemStatus']);
 
             // Realtime socket room token (business:{id}) for the Zero-DB socket engine.
@@ -419,10 +481,37 @@ Route::middleware('token.only')->group(function () {
             Route::put('/promotions/{promotion}', [BusinessOwnerPromotionController::class, 'update']);
             Route::delete('/promotions/{promotion}', [BusinessOwnerPromotionController::class, 'destroy']);
 
+            // Dish sales (Promotions Part A): lower dish prices at checkout while they run.
+            Route::get('/dish-sales', [\App\Http\Controllers\BusinessOwner\BusinessOwnerSaleController::class, 'index']);
+            Route::get('/dish-sales/dishes', [\App\Http\Controllers\BusinessOwner\BusinessOwnerSaleController::class, 'dishes']);
+            Route::get('/dish-sales/{id}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerSaleController::class, 'show'])->whereNumber('id');
+            Route::middleware('throttle:30,1')->group(function () {
+                Route::post('/dish-sales', [\App\Http\Controllers\BusinessOwner\BusinessOwnerSaleController::class, 'store']);
+                Route::put('/dish-sales/{id}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerSaleController::class, 'update'])->whereNumber('id');
+                Route::post('/dish-sales/{id}/end', [\App\Http\Controllers\BusinessOwner\BusinessOwnerSaleController::class, 'end'])->whereNumber('id');
+                Route::delete('/dish-sales/{id}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerSaleController::class, 'destroy'])->whereNumber('id');
+            });
+
+            // Business posts (Promotions Part B): photos or one video, optionally linked to a sale.
+            Route::get('/posts', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'index']);
+            Route::get('/posts/{id}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'show'])->whereNumber('id');
+            Route::get('/posts/followers', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'followers']);
+            Route::get('/posts/{id}/insights', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'insights'])->whereNumber('id');
+            Route::get('/posts/{id}/comments', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'comments'])->whereNumber('id');
+            Route::post('/posts/{id}/comments', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'comment'])->whereNumber('id')->middleware('throttle:20,1');
+            Route::patch('/posts/{id}/comments/{comment}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'moderateComment'])->whereNumber('id')->whereNumber('comment');
+            Route::delete('/posts/{id}/comments/{comment}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'destroyComment'])->whereNumber('id')->whereNumber('comment');
+            Route::middleware('throttle:20,1')->group(function () {
+                Route::post('/posts', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'store']);
+                Route::post('/posts/{id}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'update'])->whereNumber('id');
+                Route::patch('/posts/{id}/status', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'status'])->whereNumber('id');
+                Route::delete('/posts/{id}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'destroy'])->whereNumber('id');
+            });
+
             // Staff
             Route::get('/staff', [BusinessOwnerStaffController::class, 'index']);
             Route::get('/staff/roles', function (\Illuminate\Http\Request $request) {
-                $query = \App\Models\StaffRole::select('id', 'name');
+                $query = \App\Models\StaffRole::select('id', 'name', 'description');
 
                 if ($businessId = $request->query('business_id')) {
                     $business = \App\Models\Business::with('category.staffRoles')->find($businessId);
@@ -441,14 +530,22 @@ Route::middleware('token.only')->group(function () {
                 ]);
             });
             Route::get('/staff/riders/{business}', [BusinessOwnerStaffController::class, 'getRiders']);
-            Route::post('/staff', [BusinessOwnerStaffController::class, 'store']);
-            Route::get('/staff/{staff}', [BusinessOwnerStaffController::class, 'show']);
-            Route::put('/staff/{staff}', [BusinessOwnerStaffController::class, 'update']);
-            Route::delete('/staff/{staff}', [BusinessOwnerStaffController::class, 'destroy']);
+            // Staff Management Stage 1: overview, invitations, status, password reset link.
+            Route::get('/staff/overview', [BusinessOwnerStaffController::class, 'overview']);
+            Route::get('/staff/invitations', [BusinessOwnerStaffController::class, 'invitations']);
+            Route::delete('/staff/invitations/{invitation}', [BusinessOwnerStaffController::class, 'revokeInvitation'])->whereNumber('invitation');
+            Route::post('/staff', [BusinessOwnerStaffController::class, 'store'])->middleware('throttle:30,1');
+            Route::get('/staff/{staff}', [BusinessOwnerStaffController::class, 'show'])->whereNumber('staff');
+            Route::put('/staff/{staff}', [BusinessOwnerStaffController::class, 'update'])->whereNumber('staff');
+            Route::patch('/staff/{staff}/status', [BusinessOwnerStaffController::class, 'updateStatus'])->whereNumber('staff');
+            Route::post('/staff/{staff}/resend-invitation', [BusinessOwnerStaffController::class, 'resendInvitation'])->whereNumber('staff')->middleware('throttle:10,1');
+            Route::post('/staff/{staff}/send-password-reset', [BusinessOwnerStaffController::class, 'sendPasswordReset'])->whereNumber('staff')->middleware('throttle:10,1');
+            Route::delete('/staff/{staff}', [BusinessOwnerStaffController::class, 'destroy'])->whereNumber('staff');
 
             // Reports
             Route::get('/reports', [BusinessOwnerReportController::class, 'sales']);
             Route::get('/reports/sales', [BusinessOwnerReportController::class, 'sales']);
+            Route::get('/reports/overview', [BusinessOwnerReportController::class, 'overview']);
             Route::get('/reports/orders', [BusinessOwnerReportController::class, 'orders']);
             Route::get('/reports/bookings', [BusinessOwnerReportController::class, 'bookings']);
             Route::get('/reports/cod-settlements', [BusinessOwnerReportController::class, 'codSettlements']);
@@ -491,19 +588,114 @@ Route::middleware('token.only')->group(function () {
     // ═══════════════════════════════════════════════════════════════════
     // Staff API
     // ═══════════════════════════════════════════════════════════════════
-    Route::middleware('role:staff')->prefix('staff')->group(function () {
+    // Staff Management Stage 1 (docs/staff-management-plan.md): every route
+    // needs an ACTIVE staff record (staff.active) and a permission
+    // (staff.can). Order actions run the owner's canonical actions (rider
+    // acceptance gate, accepted-order policy, unpaid checks) limited to the
+    // staff member's own restaurant (staff.order).
+    Route::middleware(['role:staff', 'staff.active'])->prefix('staff')->group(function () {
         $ctrl = StaffDashboardApiController::class;
+        $orders = BusinessOwnerOrderController::class;
+        Route::get('/me', [$ctrl, 'me']);
         Route::get('/dashboard', [$ctrl, 'dashboard']);
-        Route::get('/orders', [$ctrl, 'orders']);
-        Route::patch('/orders/{order}/status', [$ctrl, 'updateOrderStatus']);
-        Route::post('/orders/{order}/cod-payment-received', [$ctrl, 'codPaymentReceived']);
-        Route::get('/bookings', [$ctrl, 'bookings']);
-        Route::patch('/bookings/{booking}/status', [$ctrl, 'updateBookingStatus']);
-        Route::get('/menu', [\App\Http\Controllers\Staff\StaffMenuController::class, 'index']);
-        Route::get('/menu/{id}', [\App\Http\Controllers\Staff\StaffMenuController::class, 'show']);
-        Route::post('/menu', [\App\Http\Controllers\Staff\StaffMenuController::class, 'store']);
-        Route::put('/menu/{id}', [\App\Http\Controllers\Staff\StaffMenuController::class, 'update']);
-        Route::delete('/menu/{id}', [\App\Http\Controllers\Staff\StaffMenuController::class, 'destroy']);
+
+        // Their own profile: contact details, photo and password only (2026-11-24).
+        $profile = \App\Http\Controllers\Api\StaffProfileController::class;
+        Route::get('/profile', [$profile, 'show']);
+        Route::put('/profile', [$profile, 'update'])->middleware('throttle:20,1');
+        Route::post('/profile/photo', [$profile, 'uploadPhoto'])->middleware('throttle:10,1');
+        Route::delete('/profile/photo', [$profile, 'deletePhoto'])->middleware('throttle:10,1');
+        Route::put('/profile/password', [$profile, 'updatePassword'])->middleware('throttle:5,1');
+
+        // The owner's Orders list and detail (2026-11-24), scoped to their restaurant.
+        Route::get('/orders', [$orders, 'index'])->middleware('staff.can:orders.view');
+        Route::get('/orders/{order}', [$orders, 'show'])->whereNumber('order')->middleware(['staff.can:orders.view', 'staff.order:shared']);
+        // Whole-order actions (the owner's routed ones): only when every item
+        // is this restaurant's. Cancelling also needs orders.reject.
+        Route::middleware(['staff.can:orders.update', 'staff.order:whole'])->group(function () use ($orders) {
+            Route::patch('/orders/{order}/status', [$orders, 'updateStatus'])->middleware('staff.can:orders.reject,status=cancelled');
+            Route::post('/orders/{order}/start-preparation', [$orders, 'startPreparation']);
+            Route::post('/orders/{order}/mark-ready', [$orders, 'markReady']);
+        });
+        // Item status: only this restaurant's items, also inside group checkouts.
+        Route::patch('/orders/{order}/items/{item}/status', [$orders, 'updateItemStatus'])->middleware(['staff.can:orders.update', 'staff.order:item']);
+        // Cash the restaurant received from the rider for the food (never the tourist's COD, never GCash).
+        Route::post('/orders/{order}/cod-payment-received', [$orders, 'codPaymentReceived'])->middleware(['staff.can:payments.confirm_rider_cash', 'staff.order:shared']);
+        // "Handed to rider" (Staff §5): a record only; the rider still confirms pickup.
+        Route::post('/orders/{order}/handover', [$orders, 'handover'])->middleware(['staff.can:handover.confirm', 'staff.order:shared']);
+
+        Route::get('/bookings', [$ctrl, 'bookings'])->middleware('staff.can:bookings.view');
+        Route::patch('/bookings/{booking}/status', [$ctrl, 'updateBookingStatus'])->middleware('staff.can:bookings.update');
+
+        // Staff §5: the owner's own controllers, scoped to the staff member's
+        // restaurant (ActsForBusiness). Their one business, for the pages' selectors.
+        Route::get('/businesses', [BusinessOwnerBusinessController::class, 'index']);
+
+        // Menu manager (incl. photos and availability) — Menu & Promotions Staff.
+        Route::get('/menu', [BusinessOwnerMenuController::class, 'index'])->middleware('staff.can:menu.view');
+        Route::get('/menu/{id}', [BusinessOwnerMenuManageController::class, 'show'])->middleware('staff.can:menu.view');
+        Route::post('/menu', [BusinessOwnerMenuManageController::class, 'store'])->middleware('staff.can:menu.manage');
+        Route::put('/menu/{id}', [BusinessOwnerMenuManageController::class, 'update'])->middleware('staff.can:menu.manage');
+        Route::delete('/menu/{id}', [BusinessOwnerMenuManageController::class, 'destroy'])->middleware('staff.can:menu.manage');
+        Route::post('/food', [BusinessOwnerFoodController::class, 'store'])->middleware('staff.can:menu.manage');
+        Route::get('/offerings/categories', [BusinessOwnerOfferingCategoryController::class, 'index'])->middleware('staff.can:menu.view');
+        Route::post('/offerings/categories', [BusinessOwnerOfferingCategoryController::class, 'store'])->middleware('staff.can:menu.manage');
+
+        // Promotions and discounts — Menu & Promotions Staff.
+        Route::middleware('staff.can:promotions.manage')->group(function () {
+            Route::get('/promotions', [BusinessOwnerPromotionController::class, 'index']);
+            Route::get('/promotions/featured', [BusinessOwnerPromotionController::class, 'featured']);
+            Route::get('/promotions/{id}', [BusinessOwnerPromotionManageController::class, 'show'])->whereNumber('id');
+            Route::post('/promotions', [BusinessOwnerPromotionController::class, 'store']);
+            Route::put('/promotions/{promotion}', [BusinessOwnerPromotionController::class, 'update']);
+            Route::delete('/promotions/{promotion}', [BusinessOwnerPromotionController::class, 'destroy']);
+
+            // Dish sales (Promotions Part A): lower dish prices at checkout while they run.
+            Route::get('/dish-sales', [\App\Http\Controllers\BusinessOwner\BusinessOwnerSaleController::class, 'index']);
+            Route::get('/dish-sales/dishes', [\App\Http\Controllers\BusinessOwner\BusinessOwnerSaleController::class, 'dishes']);
+            Route::get('/dish-sales/{id}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerSaleController::class, 'show'])->whereNumber('id');
+            Route::middleware('throttle:30,1')->group(function () {
+                Route::post('/dish-sales', [\App\Http\Controllers\BusinessOwner\BusinessOwnerSaleController::class, 'store']);
+                Route::put('/dish-sales/{id}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerSaleController::class, 'update'])->whereNumber('id');
+                Route::post('/dish-sales/{id}/end', [\App\Http\Controllers\BusinessOwner\BusinessOwnerSaleController::class, 'end'])->whereNumber('id');
+                Route::delete('/dish-sales/{id}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerSaleController::class, 'destroy'])->whereNumber('id');
+            });
+
+            // Business posts (Promotions Part B): photos or one video, optionally linked to a sale.
+            Route::get('/posts', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'index']);
+            Route::get('/posts/{id}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'show'])->whereNumber('id');
+            Route::get('/posts/followers', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'followers']);
+            Route::get('/posts/{id}/insights', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'insights'])->whereNumber('id');
+            Route::get('/posts/{id}/comments', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'comments'])->whereNumber('id');
+            Route::post('/posts/{id}/comments', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'comment'])->whereNumber('id')->middleware('throttle:20,1');
+            Route::patch('/posts/{id}/comments/{comment}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'moderateComment'])->whereNumber('id')->whereNumber('comment');
+            Route::delete('/posts/{id}/comments/{comment}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'destroyComment'])->whereNumber('id')->whereNumber('comment');
+            Route::middleware('throttle:20,1')->group(function () {
+                Route::post('/posts', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'store']);
+                Route::post('/posts/{id}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'update'])->whereNumber('id');
+                Route::patch('/posts/{id}/status', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'status'])->whereNumber('id');
+                Route::delete('/posts/{id}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerPostController::class, 'destroy'])->whereNumber('id');
+            });
+        });
+
+        // Sales, earnings, reports, COD settlements, expenses — Finance Staff.
+        // Expense deletion, payouts and bank details have no staff route (owner only).
+        Route::middleware('staff.can:finance.view')->group(function () {
+            Route::get('/reports', [BusinessOwnerReportController::class, 'sales']);
+            Route::get('/reports/sales', [BusinessOwnerReportController::class, 'sales']);
+            Route::get('/reports/overview', [BusinessOwnerReportController::class, 'overview']);
+            Route::get('/reports/orders', [BusinessOwnerReportController::class, 'orders']);
+            Route::get('/reports/bookings', [BusinessOwnerReportController::class, 'bookings']);
+            Route::get('/reports/cod-settlements', [BusinessOwnerReportController::class, 'codSettlements']);
+            Route::get('/sales', [BusinessOwnerSalesController::class, 'index']);
+            Route::get('/sales/payments', [BusinessOwnerSalesController::class, 'payments']);
+            Route::get('/sales/summary', [BusinessOwnerSalesController::class, 'summary']);
+            Route::get('/expenses', [\App\Http\Controllers\BusinessOwner\BusinessOwnerExpenseController::class, 'index']);
+            Route::get('/expenses/summary', [\App\Http\Controllers\BusinessOwner\BusinessOwnerExpenseController::class, 'summary']);
+            Route::get('/expenses/{expense}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerExpenseController::class, 'show']);
+        });
+        Route::post('/expenses', [\App\Http\Controllers\BusinessOwner\BusinessOwnerExpenseController::class, 'store'])->middleware('staff.can:expenses.manage');
+        Route::put('/expenses/{expense}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerExpenseController::class, 'update'])->middleware('staff.can:expenses.manage');
     });
 
     // ═══════════════════════════════════════════════════════════════════
@@ -537,6 +729,12 @@ Route::middleware('token.only')->group(function () {
         Route::get('/deliveries/completed', [RiderDeliveryController::class, 'completed']);
         Route::patch('/deliveries/{delivery}/status', [RiderDeliveryController::class, 'updateStatus']);
         Route::post('/deliveries/{delivery}/cancel-ride', [RiderDeliveryController::class, 'cancelRide']);
+        // SOS (2026-11-18): alerts the Bansud Tourism Office; the customer is never told.
+        Route::get('/deliveries/{delivery}/sos', [\App\Http\Controllers\SosController::class, 'riderShow']);
+        Route::post('/deliveries/{delivery}/sos', [\App\Http\Controllers\SosController::class, 'riderRaise'])->middleware('throttle:20,1');
+        Route::post('/deliveries/{delivery}/sos/safe', [\App\Http\Controllers\SosController::class, 'riderSafe'])->middleware('throttle:10,1');
+        // Stage C (2026-11-18): the passenger's owed ₱50 cancellation fee, collected in cash at the drop-off.
+        Route::post('/deliveries/{delivery}/cancellation-fee/collect', [\App\Http\Controllers\Rider\RiderCancellationFeeController::class, 'collect'])->middleware('throttle:20,1');
         Route::post('/deliveries/{delivery}/settle-cod', [RiderDeliveryController::class, 'settleCod']);
         Route::post('/deliveries/{delivery}/complete', [RiderDeliveryController::class, 'complete']);
         Route::get('/deliveries/{delivery}/purchases', [RiderPurchasingController::class, 'purchases']);
@@ -574,6 +772,11 @@ Route::middleware('token.only')->group(function () {
         Route::post('/payouts/request', [RiderPayoutController::class, 'request']);
         Route::get('/payouts/{payout}', [RiderPayoutController::class, 'show']);
         Route::post('/payouts/{payout}/cancel', [RiderPayoutController::class, 'cancel']);
+        // Stage D2 (§P.5/§P.6): earnings statement and cancellation compensation payouts.
+        // (not /earnings/statement: the earlier /earnings/{delivery} route would capture it)
+        Route::get('/earnings-statement', [RiderPayoutController::class, 'statement']);
+        Route::get('/compensation-payouts', [RiderPayoutController::class, 'compensationPayouts']);
+        Route::post('/compensation-payouts/{payout}/cancel', [RiderPayoutController::class, 'cancelCompensationPayout'])->whereNumber('payout');
     });
 
     // ═══════════════════════════════════════════════════════════════════
@@ -655,6 +858,10 @@ Route::middleware('token.only')->group(function () {
         Route::put('/riders/fares', [AdminRiderController::class, 'updateFareSettings']);
         Route::get('/riders/ride-fares', [AdminRiderController::class, 'rideFareSettings']);
         Route::put('/riders/ride-fares', [AdminRiderController::class, 'updateRideFareSettings']);
+        // Earnings Stage 1 (2026-11-24, §R2): district defaults, Bansud's own rates, view every town.
+        Route::get('/commission-rates', [\App\Http\Controllers\Admin\AdminCommissionRateController::class, 'index']);
+        Route::put('/commission-rates', [\App\Http\Controllers\Admin\AdminCommissionRateController::class, 'updateDistrict'])->middleware('throttle:30,1');
+        Route::put('/commission-rates/municipalities/{municipality}', [\App\Http\Controllers\Admin\AdminCommissionRateController::class, 'updateTown'])->whereNumber('municipality')->middleware('throttle:30,1');
         Route::get('/riders/{rider}', [AdminRiderController::class, 'show']);
         Route::put('/riders/{rider}/municipality', [AdminRiderController::class, 'updateMunicipality']);
         Route::put('/riders/{rider}/vehicle', [AdminRiderController::class, 'updateVehicle']);
@@ -678,6 +885,15 @@ Route::middleware('token.only')->group(function () {
         Route::post('/payouts/{payout}/mark-failed', [AdminPayoutController::class, 'markFailed']);
         Route::get('/payouts/{payout}/proof', [AdminPayoutController::class, 'proof']);
         Route::get('/payouts/{payout}/earnings/{earning}', [AdminPayoutController::class, 'investigate']);
+        // Stage D2: cancellation compensation paid on its own; rider statements.
+        Route::get('/compensation-payouts', [\App\Http\Controllers\Admin\AdminCompensationPayoutController::class, 'index']);
+        Route::get('/compensation-payouts/{payout}', [\App\Http\Controllers\Admin\AdminCompensationPayoutController::class, 'show'])->whereNumber('payout');
+        Route::post('/compensation-payouts/{payout}/start-review', [\App\Http\Controllers\Admin\AdminCompensationPayoutController::class, 'startReview'])->whereNumber('payout');
+        Route::post('/compensation-payouts/{payout}/approve', [\App\Http\Controllers\Admin\AdminCompensationPayoutController::class, 'approve'])->whereNumber('payout');
+        Route::post('/compensation-payouts/{payout}/reject', [\App\Http\Controllers\Admin\AdminCompensationPayoutController::class, 'reject'])->whereNumber('payout');
+        Route::post('/compensation-payouts/{payout}/mark-paid', [\App\Http\Controllers\Admin\AdminCompensationPayoutController::class, 'markPaid'])->whereNumber('payout');
+        Route::post('/compensation-payouts/{payout}/mark-failed', [\App\Http\Controllers\Admin\AdminCompensationPayoutController::class, 'markFailed'])->whereNumber('payout');
+        Route::get('/riders/{rider}/statement', [\App\Http\Controllers\Admin\AdminCompensationPayoutController::class, 'riderStatement'])->whereNumber('rider');
 
         // Purchasing-cash (COD)
         Route::post('/deliveries/{delivery}/issue-purchasing-cash', [AdminPurchasingCashController::class, 'issue']);
@@ -722,6 +938,11 @@ Route::middleware('token.only')->group(function () {
         Route::get('/notifications', [AdminNotificationController::class, 'index']);
         Route::post('/notifications/mark-all-read', [AdminNotificationController::class, 'markAllRead']);
 
+        // System maintenance notices (sent to business owners, riders, tourists or everyone)
+        Route::get('/system-notices', [\App\Http\Controllers\Admin\AdminSystemNoticeController::class, 'index']);
+        Route::post('/system-notices', [\App\Http\Controllers\Admin\AdminSystemNoticeController::class, 'store'])->middleware('throttle:10,1');
+        Route::post('/system-notices/{notice}/cancel', [\App\Http\Controllers\Admin\AdminSystemNoticeController::class, 'cancel'])->whereNumber('notice');
+
         // System
         Route::get('/system/config', [AdminSystemController::class, 'config']);
         Route::get('/system/backup', [AdminSystemController::class, 'backup']);
@@ -748,10 +969,22 @@ Route::middleware('token.only')->group(function () {
 
         // Live Monitoring
         Route::get('/live/deliveries', [AdminLiveController::class, 'deliveries']);
+        Route::get('/live/riders', [AdminLiveController::class, 'riders']);
+        Route::get('/live/tourists', [AdminLiveController::class, 'tourists']);
         Route::get('/live/sos', [AdminLiveController::class, 'sos']);
-        Route::post('/live/sos/{id}/acknowledge', [AdminLiveController::class, 'acknowledgeSos']);
-        Route::post('/live/sos/{id}/respond', [AdminLiveController::class, 'respondSos']);
-        Route::post('/live/sos/{id}/resolve', [AdminLiveController::class, 'resolveSos']);
+        Route::get('/live/sos/summary', [AdminLiveController::class, 'sosSummary']);
+        // Ride cancellation penalties (Stage C2, 2026-11-18): list; waive with a reason.
+        Route::get('/ride-penalties', [\App\Http\Controllers\Admin\AdminRidePenaltyController::class, 'index']);
+        Route::post('/ride-penalties/{penalty}/waive', [\App\Http\Controllers\Admin\AdminRidePenaltyController::class, 'waive'])->whereNumber('penalty')->middleware('throttle:30,1');
+        // Stage D1 (§P): cash receipts, advances (two-person over the threshold), refunds.
+        Route::get('/ride-penalties/cash-to-receive', [\App\Http\Controllers\Admin\AdminRidePenaltyController::class, 'cashToReceive']);
+        Route::post('/ride-penalties/cash-receipts', [\App\Http\Controllers\Admin\AdminRidePenaltyController::class, 'recordCashReceipt'])->middleware('throttle:30,1');
+        Route::post('/ride-penalties/{penalty}/advance', [\App\Http\Controllers\Admin\AdminRidePenaltyController::class, 'advance'])->whereNumber('penalty')->middleware('throttle:30,1');
+        Route::post('/ride-penalties/{penalty}/refund', [\App\Http\Controllers\Admin\AdminRidePenaltyController::class, 'refund'])->whereNumber('penalty')->middleware('throttle:30,1');
+        Route::post('/ride-compensations/{compensation}/approve-advance', [\App\Http\Controllers\Admin\AdminRidePenaltyController::class, 'approveAdvance'])->whereNumber('compensation')->middleware('throttle:30,1');
+        Route::post('/live/sos/{id}/acknowledge', [AdminLiveController::class, 'acknowledgeSos'])->whereNumber('id');
+        Route::post('/live/sos/{id}/respond', [AdminLiveController::class, 'respondSos'])->whereNumber('id');
+        Route::post('/live/sos/{id}/resolve', [AdminLiveController::class, 'resolveSos'])->whereNumber('id');
     });
 
     // ═══════════════════════════════════════════════════════════════════
@@ -816,6 +1049,9 @@ Route::middleware('token.only')->group(function () {
         Route::get('/profile', [\App\Http\Controllers\Municipal\MunicipalProfileController::class, 'show']);
         // POST because the payload is multipart (image uploads).
         Route::post('/profile', [\App\Http\Controllers\Municipal\MunicipalProfileController::class, 'update'])->middleware('throttle:30,1');
+        // Earnings Stage 1 (2026-11-24, §R2): this town's own commission rates.
+        Route::get('/commission-rates', [\App\Http\Controllers\Municipal\MunicipalCommissionRateController::class, 'show']);
+        Route::put('/commission-rates', [\App\Http\Controllers\Municipal\MunicipalCommissionRateController::class, 'update'])->middleware('throttle:30,1');
     });
 
     // ═══════════════════════════════════════════════════════════════════

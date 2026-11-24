@@ -6,9 +6,9 @@ import { StatusBadge } from '@/shared/components/StatusBadge'
 import { PreparationCountdown } from '@/shared/components/PreparationCountdown'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { deriveReadyAt, formatCurrency, formatDateTime } from '@/shared/utils'
-import { useBusinessOwnerStore } from '../services/business-owner-store'
+import { useBusinessPortal } from '../services/business-portal'
 import { useBusinessSocketNotifier } from '@/shared/hooks/useBusinessSocketNotifier'
-import { ArrowLeft, User, Mail, Phone, Building2, Truck, Clock, MapPin, FileText, CheckCircle, XCircle } from 'lucide-react'
+import { ArrowLeft, User, Mail, Phone, Building2, Truck, Clock, MapPin, FileText, CheckCircle, XCircle, PackageCheck, Store } from 'lucide-react'
 
 interface OrderItem {
   id: number
@@ -63,8 +63,13 @@ interface OrderDetail {
   predicted_ready_at?: string | null
   food_ready_at?: string | null
   items: OrderItem[]
+  /** Staff only: other restaurants share this order; their items are not listed. */
+  shared_with_other_restaurants?: boolean
+  /** Staff only: their restaurant's "Handed to rider" record. */
+  my_handover?: { confirmed_at: string; confirmed_by: number } | null
   delivery?: {
     id: number
+    rider?: { name?: string | null; first_name?: string | null; phone?: string | null } | null
     rider_name: string | null
     rider_phone: string | null
     status: string
@@ -96,14 +101,16 @@ function itemPredictedReadyAt(item: OrderItem): string | null {
 export default function BusinessOwnerOrderShow() {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
-  const selectedBusinessId = useBusinessOwnerStore((s) => s.selectedBusinessId)
+  // The owner's page, also in the staff portal (2026-11-24): /staff prefix,
+  // their one restaurant, and only the buttons their roles allow.
+  const { prefix, isStaff, can, businessId: selectedBusinessId } = useBusinessPortal()
 
   // P11.8 — live updates on the order detail page: rider acceptance (→
   // preparing + countdown) and the timer reaching 00:00 (→ ready, items →
   // ready) arrive on the authorized business room and trigger an immediate
   // refetch. HTTP remains the fallback when no socket/token is available.
   const { connection } = useBusinessSocketNotifier({
-    businessId: selectedBusinessId ?? null,
+    businessId: isStaff ? null : (selectedBusinessId ?? null),
     onStatusEvent: useCallback(() => {
       queryClient.invalidateQueries({ queryKey: ['bo-order', id] })
       queryClient.invalidateQueries({ queryKey: ['bo-orders'] })
@@ -112,11 +119,13 @@ export default function BusinessOwnerOrderShow() {
 
   const { data: order, isLoading } = useQuery({
     queryKey: ['bo-order', id],
-    queryFn: () => get<OrderDetail>(`/business-owner/orders/${id}`),
+    queryFn: () => get<OrderDetail>(`${prefix}/orders/${id}`),
+    // Staff have no business socket token: refresh every 30 s instead.
+    refetchInterval: isStaff ? 30_000 : false,
   })
 
   const statusMutation = useMutation({
-    mutationFn: (status: string) => patch(`/business-owner/orders/${id}/status`, { status }),
+    mutationFn: (status: string) => patch(`${prefix}/orders/${id}/status`, { status }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['bo-order', id] })
       queryClient.invalidateQueries({ queryKey: ['bo-orders'] })
@@ -126,7 +135,7 @@ export default function BusinessOwnerOrderShow() {
   // COD "paid before ready": the restaurant confirms it received the rider's payment.
   const codPaymentMutation = useMutation({
     mutationFn: (businessId: number | null) =>
-      post(`/business-owner/orders/${id}/cod-payment-received`, businessId ? { business_id: businessId } : {}),
+      post(`${prefix}/orders/${id}/cod-payment-received`, businessId ? { business_id: businessId } : {}),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['bo-order', id] })
       queryClient.invalidateQueries({ queryKey: ['bo-orders'] })
@@ -135,7 +144,16 @@ export default function BusinessOwnerOrderShow() {
 
   const updateItemStatusMutation = useMutation({
     mutationFn: ({ itemId, status }: { itemId: number; status: string }) =>
-      patch(`/business-owner/orders/${id}/items/${itemId}/status`, { status }),
+      patch(`${prefix}/orders/${id}/items/${itemId}/status`, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['bo-order', id] })
+      queryClient.invalidateQueries({ queryKey: ['bo-orders'] })
+    },
+  })
+
+  // Staff: "Handed to rider" (a record only; the rider still confirms pickup).
+  const handoverMutation = useMutation({
+    mutationFn: () => post(`${prefix}/orders/${id}/handover`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['bo-order', id] })
       queryClient.invalidateQueries({ queryKey: ['bo-orders'] })
@@ -145,7 +163,18 @@ export default function BusinessOwnerOrderShow() {
   if (isLoading) return <DashboardSkeleton />
   if (!order) return <div className="text-center py-20 text-[#647067]">Order not found.</div>
 
-  const transitions = ORDER_TRANSITIONS[order.status] || []
+  // A shared (group) order is updated item by item; whole-order steps would
+  // touch another restaurant's food.
+  const shared = Boolean(order.shared_with_other_restaurants)
+  const canUpdate = can('orders.update')
+  const transitions = canUpdate && !shared ? (ORDER_TRANSITIONS[order.status] || []) : []
+  const showItemActions = canUpdate && ['accepted', 'preparing'].includes(order.status)
+  const activeItems = (order.items ?? []).filter((item) => !['cancelled', 'rejected'].includes(item.status ?? ''))
+  const myItemsTotal = activeItems.reduce((sum, item) => sum + Number(item.total_price ?? item.subtotal ?? item.unit_price * item.quantity), 0)
+  const rider = order.delivery?.rider
+  const riderName = rider?.first_name || rider?.name || order.delivery?.rider_name || null
+  const allMineReady = activeItems.length > 0 && activeItems.every((item) => ['ready', 'picked_up', 'in_transit', 'delivered', 'completed'].includes(item.status ?? ''))
+  const canHandover = isStaff && can('handover.confirm') && order.order_type === 'delivery' && !!riderName && allMineReady && !order.my_handover
 
   const readyAt = deriveReadyAt(order)
   const postPrep = ['ready', 'picked_up', 'in_transit', 'out_for_delivery', 'arrived_destination', 'delivered', 'completed', 'cancelled', 'cancelled_by_tourist', 'rejected']
@@ -164,11 +193,12 @@ export default function BusinessOwnerOrderShow() {
     (statusMutation.isError && apiErrorMessage(statusMutation.error)) ||
     (updateItemStatusMutation.isError && apiErrorMessage(updateItemStatusMutation.error)) ||
     (codPaymentMutation.isError && apiErrorMessage(codPaymentMutation.error)) ||
+    (handoverMutation.isError && apiErrorMessage(handoverMutation.error)) ||
     null
 
   return (
     <div>
-      <Link to="/business-owner/orders" className="inline-flex items-center gap-2 text-sm text-[#647067] hover:text-[#17201A] mb-6 transition">
+      <Link to={`${prefix}/orders`} className="inline-flex items-center gap-2 text-sm text-[#647067] hover:text-[#17201A] mb-6 transition">
         <ArrowLeft className="w-4 h-4" /> Back to Orders
       </Link>
 
@@ -189,6 +219,11 @@ export default function BusinessOwnerOrderShow() {
           )}
         </div>
         <p className="text-sm text-[#647067]">Order Details</p>
+        {shared && (
+          <p className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-[#B45309]">
+            <Store className="h-3.5 w-3.5" aria-hidden="true" /> Shared order: other restaurants prepare their own items. Only yours are listed.
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -272,7 +307,7 @@ export default function BusinessOwnerOrderShow() {
                     <th className="text-center px-6 py-3 text-xs font-semibold uppercase tracking-wider text-[#647067]">Qty</th>
                     <th className="text-right px-6 py-3 text-xs font-semibold uppercase tracking-wider text-[#647067]">Unit Price</th>
                     <th className="text-right px-6 py-3 text-xs font-semibold uppercase tracking-wider text-[#647067]">Subtotal</th>
-                    {['accepted', 'preparing'].includes(order.status) && (
+                    {showItemActions && (
                       <th className="text-center px-6 py-3 text-xs font-semibold uppercase tracking-wider text-[#647067]">Action</th>
                     )}
                   </tr>
@@ -316,7 +351,7 @@ export default function BusinessOwnerOrderShow() {
                         <td className="px-6 py-3 text-center text-[#4B5563]">{item.quantity}</td>
                         <td className="px-6 py-3 text-right text-[#4B5563]">{formatCurrency(item.unit_price)}</td>
                         <td className="px-6 py-3 text-right font-medium text-[#17201A]">{formatCurrency(item.total_price ?? item.subtotal)}</td>
-                        {['accepted', 'preparing'].includes(order.status) && (
+                        {showItemActions && (
                           <td className="px-6 py-3 text-center">
                             {!isReady ? (
                               <button
@@ -337,24 +372,31 @@ export default function BusinessOwnerOrderShow() {
                   })}
                 </tbody>
                 <tfoot className="border-t border-[#E2E8E3]">
+                  {shared ? (
+                    <tr>
+                      <td colSpan={showItemActions ? 5 : 4} className="px-6 py-3 text-right text-sm font-semibold text-[#17201A]">Your items</td>
+                      <td className="px-6 py-3 text-right text-lg font-bold text-[#16803C]">{formatCurrency(myItemsTotal)}</td>
+                    </tr>
+                  ) : (<>
                   <tr>
-                    <td colSpan={['accepted', 'preparing'].includes(order.status) ? 5 : 4} className="px-6 py-2 text-right text-xs text-[#647067] uppercase tracking-wider">Subtotal</td>
+                    <td colSpan={showItemActions ? 5 : 4} className="px-6 py-2 text-right text-xs text-[#647067] uppercase tracking-wider">Subtotal</td>
                     <td className="px-6 py-2 text-right text-sm text-[#17201A]">{formatCurrency(order.subtotal)}</td>
                   </tr>
                   <tr>
-                    <td colSpan={['accepted', 'preparing'].includes(order.status) ? 5 : 4} className="px-6 py-2 text-right text-xs text-[#647067] uppercase tracking-wider">Delivery Fee</td>
+                    <td colSpan={showItemActions ? 5 : 4} className="px-6 py-2 text-right text-xs text-[#647067] uppercase tracking-wider">Delivery Fee</td>
                     <td className="px-6 py-2 text-right text-sm text-[#17201A]">{formatCurrency(order.delivery_fee)}</td>
                   </tr>
                   {order.discount > 0 && (
                     <tr>
-                      <td colSpan={['accepted', 'preparing'].includes(order.status) ? 5 : 4} className="px-6 py-2 text-right text-xs text-[#647067] uppercase tracking-wider">Discount</td>
+                      <td colSpan={showItemActions ? 5 : 4} className="px-6 py-2 text-right text-xs text-[#647067] uppercase tracking-wider">Discount</td>
                       <td className="px-6 py-2 text-right text-sm text-[#B91C1C]">-{formatCurrency(order.discount)}</td>
                     </tr>
                   )}
                   <tr className="border-t border-[#E2E8E3]">
-                    <td colSpan={['accepted', 'preparing'].includes(order.status) ? 5 : 4} className="px-6 py-3 text-right text-sm font-semibold text-[#17201A]">Total</td>
+                    <td colSpan={showItemActions ? 5 : 4} className="px-6 py-3 text-right text-sm font-semibold text-[#17201A]">Total</td>
                     <td className="px-6 py-3 text-right text-lg font-bold text-[#16803C]">{formatCurrency(order.total)}</td>
                   </tr>
+                  </>)}
                 </tfoot>
               </table>
             </div>
@@ -368,9 +410,9 @@ export default function BusinessOwnerOrderShow() {
                   <Truck className="w-4 h-4 text-[#647067] mt-0.5" />
                   <div>
                     <p className="text-xs font-medium text-[#647067] uppercase tracking-wider">Rider</p>
-                    <p className="text-sm text-[#17201A] mt-1">{order.delivery.rider_name || 'Unassigned'}</p>
-                    {order.delivery.rider_phone && (
-                      <p className="text-xs text-[#647067] mt-0.5">{order.delivery.rider_phone}</p>
+                    <p className="text-sm text-[#17201A] mt-1">{riderName || 'Unassigned'}</p>
+                    {(order.delivery.rider_phone || rider?.phone) && (
+                      <p className="text-xs text-[#647067] mt-0.5">{order.delivery.rider_phone || rider?.phone}</p>
                     )}
                   </div>
                 </div>
@@ -515,9 +557,34 @@ export default function BusinessOwnerOrderShow() {
                     </button>
                   ))}
                 </div>
-              ) : (
-                <p className="text-sm text-[#647067]">No actions available for this status.</p>
-              )
+              ) : !canHandover && !order.my_handover ? (
+                <p className="text-sm text-[#647067]">
+                  {shared && canUpdate ? 'Mark your items ready one by one in Order Items.' : 'No actions available for this status.'}
+                </p>
+              ) : null
+            )}
+            {(canHandover || order.my_handover) && (
+              <div className="mt-3 space-y-2">
+                {actionError && transitions.length === 0 && (
+                  <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{actionError}</p>
+                )}
+                {order.my_handover ? (
+                  <p className="inline-flex items-center gap-1.5 text-sm font-semibold text-[#16803C]">
+                    <PackageCheck className="h-4 w-4" aria-hidden="true" /> Handed to the rider {formatDateTime(order.my_handover.confirmed_at)}
+                  </p>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handoverMutation.mutate()}
+                    disabled={handoverMutation.isPending}
+                    className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl bg-[#16803C] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#126B32] disabled:opacity-50"
+                  >
+                    <PackageCheck className="h-4 w-4" aria-hidden="true" />
+                    {handoverMutation.isPending ? 'Saving…' : 'Handed to rider'}
+                  </button>
+                )}
+                <p className="text-[11px] text-[#8A948E]">The rider still confirms the pickup on their side.</p>
+              </div>
             )}
           </div>
 
@@ -533,8 +600,8 @@ export default function BusinessOwnerOrderShow() {
                 <span className="text-[#17201A] capitalize">{order.order_type?.replace(/_/g, ' ')}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-[#647067]">Total</span>
-                <span className="text-[#16803C] font-bold">{formatCurrency(order.total)}</span>
+                <span className="text-[#647067]">{shared ? 'Your items' : 'Total'}</span>
+                <span className="text-[#16803C] font-bold">{formatCurrency(shared ? myItemsTotal : order.total)}</span>
               </div>
               {order.payment_method && (
                 <div className="flex justify-between">
@@ -558,6 +625,8 @@ export default function BusinessOwnerOrderShow() {
                   </div>
                   {restaurantPurchase?.payment_confirmed_at ? (
                     <p className="mt-1 text-[11px] text-[#16803C]">Confirmed {formatDateTime(restaurantPurchase.payment_confirmed_at)} — you can mark the food ready.</p>
+                  ) : restaurantPurchase?.can_confirm_payment && !can('payments.confirm_rider_cash') ? (
+                    <p className="mt-1 text-[11px] text-[#4B5563]">The rider is at your restaurant. A teammate who handles cash confirms the payment.</p>
                   ) : restaurantPurchase?.can_confirm_payment ? (
                     <div className="mt-2 space-y-1.5">
                       <p className="text-[11px] text-[#4B5563]">

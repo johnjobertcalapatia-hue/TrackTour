@@ -57,7 +57,12 @@ class GroupOrderService
                 }
 
                 $qty = (int) $item['quantity'];
-                $itemSubtotal = round($offering->price * $qty, 2);
+                // Server price only: the menu price, or the running dish sale's price (Promotions Part A).
+                $quote = app(SalePricing::class)->quote($offering);
+                if (isset($item['expected_unit_price']) && round((float) $item['expected_unit_price'], 2) !== $quote['unit_price']) {
+                    throw new InvalidArgumentException('The price of '.$offering->name.' changed to ₱'.number_format($quote['unit_price'], 2).'. Please review your cart before placing the order.');
+                }
+                $itemSubtotal = round($quote['unit_price'] * $qty, 2);
 
                 $subtotalTotal += $itemSubtotal;
                 $orderItems[] = [
@@ -65,7 +70,10 @@ class GroupOrderService
                     'offering_id' => $offering->id,
                     'product_name' => $offering->name,
                     'quantity' => $qty,
-                    'unit_price' => $offering->price,
+                    'unit_price' => $quote['unit_price'],
+                    'original_unit_price' => $quote['original_unit_price'],
+                    'promotion_id' => $quote['promotion_id'],
+                    'sale_label' => $quote['sale_label'],
                     'subtotal' => $itemSubtotal,
                     // Snapshot the menu's preparation time so later menu edits
                     // never change this order's countdown (spec §16).
@@ -79,6 +87,7 @@ class GroupOrderService
             throw new InvalidArgumentException('No valid restaurant items were provided.');
         }
 
+        $subtotalTotal = round($subtotalTotal, 2);
         $riderTip = round((float) ($payload['rider_tip'] ?? 0), 2);
         $firstBusiness = array_values($businesses)[0];
         $fee = $orderType === 'delivery'
@@ -154,6 +163,9 @@ class GroupOrderService
             foreach ($orderItems as $item) {
                 $order->items()->create($item);
             }
+
+            // Earnings Stage 1 (§R2): keep each restaurant town's commission rates with the order.
+            app(CommissionRateSettings::class)->captureFoodOrder($order);
 
             // One group checkout => ONE physical delivery with ONE rider trip
             // (step 4/5). COD group deliveries are dispatched immediately at

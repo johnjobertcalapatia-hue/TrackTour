@@ -8,6 +8,7 @@ import { get, put } from '@/shared/services/api'
 import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { ArrowLeft, Save, Image, X, Plus, Trash2, GripVertical, Play } from 'lucide-react'
+import { useBusinessPortal } from '../services/business-portal'
 
 /**
  * Matches the backend: up to 7 extra photos or videos (8 with the main image).
@@ -73,6 +74,7 @@ function formatCurrency(amount: number): string {
 }
 
 export default function BusinessOwnerMenuEdit() {
+  const portal = useBusinessPortal()
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -91,12 +93,12 @@ export default function BusinessOwnerMenuEdit() {
 
   const { data: item, isLoading } = useQuery({
     queryKey: ['bo-menu-item', id],
-    queryFn: () => get<MenuItemDetail>(`/business-owner/menu/${id}`),
+    queryFn: () => get<MenuItemDetail>(`${portal.prefix}/menu/${id}`),
   })
 
   const { data: categories } = useQuery({
     queryKey: ['bo-menu-categories-options'],
-    queryFn: () => get<{ data: CategoryOption[] }>(`/business-owner/offerings/categories`),
+    queryFn: () => get<{ data: CategoryOption[] }>(`${portal.prefix}/offerings/categories`),
   })
 
   const categoryOptions = categories?.data ?? []
@@ -135,7 +137,7 @@ export default function BusinessOwnerMenuEdit() {
   }, [item])
 
   const mutation = useMutation({
-    mutationFn: (data: any) => put(`/business-owner/menu/${id}`, data),
+    mutationFn: (data: any) => put(`${portal.prefix}/menu/${id}`, data),
     onSuccess: () => {
       setSuccess('Menu item updated successfully.')
       newGallery.forEach((g) => URL.revokeObjectURL(g.preview))

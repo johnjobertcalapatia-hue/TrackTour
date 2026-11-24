@@ -40,6 +40,7 @@ class SendOrderStatusNotification implements ShouldQueue
                     'title' => 'Ride Status Updated',
                     'message' => "Ride #{$order->order_number}: Your ride has been cancelled.",
                     'type' => 'ride_status_changed',
+                    'data' => ['order_id' => $order->id],
                 ]);
 
                 return;
@@ -50,6 +51,7 @@ class SendOrderStatusNotification implements ShouldQueue
                 'title' => 'Order Status Updated',
                 'message' => "Order #{$order->order_number}: {$message}",
                 'type' => 'order_status_changed',
+                'data' => ['order_id' => $order->id],
             ]);
         }
     }

@@ -13,8 +13,8 @@ import TouristTransportTracking from '@/features/tourist/pages/TouristTransportT
  */
 
 const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }))
-vi.mock('@/shared/services/api', () => ({ get: api.get, post: api.post, default: { get: api.get, post: api.post } }))
-vi.mock('@/shared/services/payment', () => ({ createCheckoutSession: vi.fn() }))
+vi.mock('@/shared/services/api', () => ({ get: api.get, post: api.post, apiErrorMessage: (_e: unknown, f: string) => f, default: { get: api.get, post: api.post } }))
+vi.mock('@/shared/services/payment', async (orig) => ({ ...(await orig<typeof import('@/shared/services/payment')>()), createCheckoutSession: vi.fn() }))
 vi.mock('@/shared/hooks/useCustomerMapSocket', () => ({
   useCustomerMapSocket: () => ({ connection: 'connected', telemetry: null, tripCompleted: false, tripCancelled: false, isStale: false }),
 }))
@@ -97,6 +97,18 @@ describe('Ride screens after booking', () => {
     expect(screen.getByRole('button', { name: /Share trip/ })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'SOS' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Cancel ride' })).toBeInTheDocument()
+
+    // Cancel ride opens its dialog ABOVE the map and the bottom panel (2026-11-18:
+    // at z-50 it opened hidden behind them, so the button seemed to do nothing).
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel ride' }))
+    const dialog = screen.getByRole('dialog', { name: 'Cancel Ride' })
+    const zOf = (el: Element | null) => Number(/(?:^|\s)z-\[(\d+)\]/.exec(el?.className ?? '')?.[1] ?? 0)
+    const panel = screen.getByRole('button', { name: 'Cancel ride' }).closest('[class*="z-["]')
+    expect(zOf(dialog)).toBeGreaterThan(zOf(panel))
+    expect(zOf(dialog)).toBeGreaterThan(1000) // Leaflet panes and controls
+
+    await act(async () => { fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm Cancel' })) })
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/tourist/transport/trip/31/cancel', { reason: '' }))
   })
 
   // Decision 2026-11-11: no passenger pickup PIN in TrackTour ride hailing.
@@ -107,14 +119,71 @@ describe('Ride screens after booking', () => {
     expect(screen.queryByText(/PIN/)).toBeNull()
   })
 
-  it('4 · in trip: ETA and distance, SOS opens the safety options', async () => {
+  it('4 · in trip: ETA and distance; holding SOS for 3 s alerts the Tourism Office and opens the safety options', async () => {
     renderTrip({ status: 'in_progress', rider: DRIVER })
     const stats = await screen.findByTestId('ride-trip-stats')
     expect(stats).toHaveTextContent('8 min')
     expect(stats).toHaveTextContent('2.8 km')
     expect(screen.getByTestId('ride-eta-banner')).toHaveTextContent('Heading to your destination')
-    fireEvent.click(screen.getByRole('button', { name: 'SOS' }))
-    expect(screen.getByRole('dialog', { name: 'Safety' })).toBeInTheDocument()
+
+    // The phone's GPS answers with a position.
+    vi.mocked(navigator.geolocation.getCurrentPosition).mockImplementation((ok) => ok({ coords: { latitude: 12.861, longitude: 121.452, accuracy: 15 } } as GeolocationPosition))
+
+    // SOS (2026-11-18): a tap or a short press sends nothing.
+    const sos = screen.getByRole('button', { name: /^SOS: hold for 3 seconds/ })
+    vi.useFakeTimers()
+    try {
+      fireEvent.click(sos)
+      fireEvent.pointerDown(sos)
+      act(() => { vi.advanceTimersByTime(2000) })
+      expect(sos).toHaveTextContent(/Keep holding… 1/)
+      fireEvent.pointerUp(sos)
+      act(() => { vi.advanceTimersByTime(3000) })
+      expect(api.post).not.toHaveBeenCalledWith('/tourist/transport/trip/31/sos', expect.anything())
+
+      // Held for 3 seconds: sent with the phone's location.
+      // Once sent, the trip status carries the tourist's SOS.
+      api.post.mockImplementation(async (url: string) => {
+        if (url === '/tourist/transport/trip/31/sos') {
+          api.get.mockResolvedValue({
+            ...TRIP, status: 'in_progress', rider: DRIVER,
+            sos: { id: 1, reference: 'SOS-261118-AB12', status: 'pending', active: true, raised_at: new Date().toISOString(), acknowledged_at: null, responding_at: null, responder: null, sender_safe_at: null, resolved_at: null },
+          })
+          return { sos: { id: 1, reference: 'SOS-261118-AB12', status: 'pending', active: true } }
+        }
+        return {}
+      })
+      const sosAgain = screen.getByRole('button', { name: /^SOS: hold for 3 seconds/ })
+      fireEvent.pointerDown(sosAgain)
+      // Past the hold, and let the queued request start before real timers return.
+      await act(async () => { await vi.advanceTimersByTimeAsync(3100) })
+    } finally {
+      vi.useRealTimers()
+    }
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/tourist/transport/trip/31/sos', { latitude: 12.861, longitude: 121.452, accuracy: 15 }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Safety' })
+    const card = await within(dialog).findByRole('status', { name: 'Your SOS' })
+    expect(card).toHaveTextContent('SOS sent')
+    expect(card).toHaveTextContent('SOS-261118-AB12')
+    expect(within(card).getByRole('link', { name: /Call 911/ })).toHaveAttribute('href', 'tel:911')
+
+    // "I'm safe now" tells the office; the SOS stays open until they close it.
+    await act(async () => { fireEvent.click(within(card).getByRole('button', { name: "I'm safe now" })) })
+    await waitFor(() => expect(api.post).toHaveBeenCalledWith('/tourist/transport/trip/31/sos/safe'))
+  })
+
+  it('the trip panel collapses to a bar that still has the SOS hold button, and expands again', async () => {
+    renderTrip({ status: 'in_progress', rider: DRIVER })
+    await screen.findByTestId('ride-trip-stats')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Hide trip details' }))
+    expect(screen.queryByTestId('ride-trip-stats')).not.toBeVisible()
+    expect(screen.getByRole('button', { name: 'Show trip details' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByRole('button', { name: /^SOS: hold for 3 seconds/ })).toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show trip details' }))
+    expect(screen.getByTestId('ride-trip-stats')).toBeVisible()
   })
 
   it('5 · completed: fare, payment, stars + feedback sent to the rate endpoint', async () => {
@@ -147,5 +216,43 @@ describe('Ride screens after booking', () => {
     expect(await screen.findByText('Ride cancelled')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Book another ride' }))
     expect(await screen.findByText('Transport home')).toBeInTheDocument()
+  })
+})
+
+describe('QR Ph (2026-11-18)', () => {
+  it('a ride paid on PayMongo with QR Ph says so; before paying it offers GCash or QR Ph', async () => {
+    const { unmount } = renderTrip({ status: 'completed', rider: DRIVER, payment_status: 'paid', paid_amount: 120, paid_via: 'qrph' })
+    const done = await screen.findByRole('region', { name: 'Ride completed' })
+    expect(within(done).getByText('Paid via QR Ph')).toBeInTheDocument()
+    unmount()
+
+    renderTrip({ status: 'in_progress', rider: DRIVER, payment_method: 'gcash', payment_status: 'pending' })
+    expect(await screen.findByText(/· GCash or QR Ph$/)).toBeInTheDocument()
+  })
+})
+
+describe('Cancellation fee alert (2026-11-18)', () => {
+  it('right after cancelling, the tourist is told about the ₱50 fee and why', async () => {
+    renderTrip({ status: 'arriving', rider: DRIVER })
+    api.post.mockImplementation(async (url: string) => url === '/tourist/transport/trip/31/cancel'
+      ? {
+          status: 'cancelled', cancellation_fee: 50,
+          cancellation_penalty: {
+            id: 7, amount: 50, status: 'under_review', rider_name: 'Juan Dela Cruz', seconds_after_acceptance: 1018, review_reasons: [],
+            disputed_at: null, dispute_reason: null, can_dispute: true, can_pay: false,
+            notice: { title: '₱50.00 cancellation fee under review', message: 'You cancelled ride TRP-31 17 min after your driver accepted (cancelling is free for the first 5 minutes). A ₱50.00 cancellation fee may apply. The Tourism Office will review it first; nothing is charged until then.' },
+          },
+        }
+      : {})
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel ride' }))
+    await act(async () => { fireEvent.click(within(screen.getByRole('dialog', { name: 'Cancel Ride' })).getByRole('button', { name: 'Confirm Cancel' })) })
+
+    const alert = await screen.findByRole('alertdialog', { name: '₱50.00 cancellation fee under review' })
+    expect(alert).toHaveTextContent('17 min after your driver accepted')
+    expect(alert).toHaveTextContent('nothing is charged until then')
+    expect(within(alert).queryByRole('button', { name: 'Pay now' })).toBeNull() // under review: nothing to pay
+    fireEvent.click(within(alert).getByRole('button', { name: 'OK' }))
+    expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 })

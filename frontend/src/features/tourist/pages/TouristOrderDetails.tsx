@@ -1,10 +1,12 @@
 import { Link, useParams } from 'react-router-dom'
+import { paidViaName } from '@/shared/services/payment'
 import { useBackOr } from '@/shared/hooks/use-back-or'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, CalendarCheck, CreditCard, MapPin, Phone, User } from 'lucide-react'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { formatCurrency, formatDateTime } from '@/shared/utils'
 import OrderItemRow from '@/features/tourist/components/OrderItemRow'
+import OrderMessageRestaurant from '@/features/tourist/components/OrderMessageRestaurant'
 import { fetchMyOrders, findSection, myOrdersKey } from '@/features/tourist/services/my-orders'
 
 const PAYMENT_LABEL: Record<string, string> = { cash: 'Cash on delivery', cod: 'Cash on delivery', gcash: 'GCash', paymongo: 'Online payment' }
@@ -36,7 +38,8 @@ export default function TouristOrderDetails() {
   }
 
   const delivered = section.tab === 'to_review' || section.tab === 'completed'
-  const payment = section.payment_method ? PAYMENT_LABEL[section.payment_method.toLowerCase()] ?? section.payment_method : null
+  // Paid online: the PayMongo method actually used (GCash or QR Ph, 2026-11-18).
+  const payment = section.paid_via ? paidViaName(section.paid_via) : section.payment_method ? PAYMENT_LABEL[section.payment_method.toLowerCase()] ?? section.payment_method : null
 
   return (
     <main aria-label="Order details" className="mx-auto lg:mx-0 w-full max-w-3xl space-y-4">
@@ -122,6 +125,9 @@ export default function TouristOrderDetails() {
           )}
         </dl>
       </section>
+
+      {/* Chat per order: concerns and questions go to the restaurant. */}
+      <OrderMessageRestaurant orderId={section.primary_order_id ?? orderId} />
     </main>
   )
 }

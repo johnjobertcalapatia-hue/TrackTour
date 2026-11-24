@@ -407,6 +407,11 @@ export default function RiderOrderInfoSheet() {
                             {pickupReadyLabel(stop.ready_label)}
                           </span>
                         )}
+                        {!stopConfirmed && stop.restaurant_handover && (
+                          <span className="ml-1 inline-flex mt-1 text-[10px] font-semibold rounded-md px-1.5 py-0.5 bg-[#EAF6ED] text-[#087F3F]" data-testid={`restaurant-handover-${stop.business_id}`}>
+                            Restaurant handed it over{stop.restaurant_handover.confirmed_by ? ` (${stop.restaurant_handover.confirmed_by})` : ''} · confirm your pickup
+                          </span>
+                        )}
                         {stop.items && stop.items.length > 0 && (
                           <div className="mt-1.5 space-y-0.5 border-t border-[#E4E9E6]/70 pt-1.5">
                             {stop.items.map((item) => (

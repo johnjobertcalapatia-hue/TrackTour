@@ -22,6 +22,7 @@ class SendBusinessApprovedNotification implements ShouldQueue
                 'title' => 'Business Approved',
                 'message' => "Your business \"{$business->business_name}\" has been approved and is now live on the platform.",
                 'type' => 'business_approved',
+                'data' => ['business_id' => $business->id],
             ]);
         }
     }

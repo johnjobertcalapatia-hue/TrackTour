@@ -17,6 +17,9 @@ class OrderItemResource extends JsonResource
             'product_name' => $this->product_name,
             'quantity' => $this->quantity,
             'unit_price' => $this->unit_price,
+            // Promotions Part A: menu price before a dish sale, and the sale's label (null when none).
+            'original_unit_price' => $this->original_unit_price,
+            'sale_label' => $this->sale_label,
             'total_price' => $this->subtotal,
             'preparation_time' => $this->preparation_time,
             'special_notes' => $this->notes,

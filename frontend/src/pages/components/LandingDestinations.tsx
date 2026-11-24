@@ -7,6 +7,8 @@ interface MunicipalityLite {
   name: string
   destinations_count?: number
   businesses_count?: number
+  logo_url?: string | null
+  cover_url?: string | null
 }
 
 /** "Where to Next?" — scrollable municipality cards with arrow controls. */

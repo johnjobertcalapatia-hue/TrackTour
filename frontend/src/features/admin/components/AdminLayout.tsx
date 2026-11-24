@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   Bell, Bike, Building2, CircleAlert, ClipboardCheck, FileBarChart, HandCoins, IdCard, LayoutDashboard, LogOut, Map,
   MapPin, Menu, Package, ScrollText, Settings, Users, Wallet, X, type LucideIcon,
+  Percent, Wrench,
 } from 'lucide-react'
 import { get } from '@/shared/services/api'
 import { API_ENDPOINTS } from '@/shared/constants'
@@ -12,15 +13,21 @@ import { useAuthStore } from '@/features/auth/services/auth-store'
 import { useOfficeProfile } from '@/features/admin/hooks/use-office-profile'
 import { cn, toAssetUrl } from '@/shared/utils'
 import { POPPINS } from '@/features/municipal/theme'
+import AdminSosAlarm, { useSosSummary } from '@/features/admin/components/AdminSosAlarm'
 
 interface NavEntry {
   to: string
   label: string
   icon: LucideIcon
   badge?: number
+  /** Red badge (SOS) instead of gold. */
+  alertBadge?: boolean
   /** Path prefixes that make this entry active (defaults to NavLink matching). */
   match?: string[]
 }
+
+/** Bundled Bansud Tourism Office logo, used until the office uploads one in Office Profile. */
+const BANSUD_OFFICE_LOGO = '/assets/logo/bansud-tourism-office.jpg'
 
 interface DashboardStats {
   stats: { pending_verifications: number; pending_review: number; total_municipalities: number }
@@ -29,8 +36,8 @@ interface DashboardStats {
 /**
  * Shell of the Bansud Tourism Office (super admin) portal. Same visual
  * identity as the Municipal portal — dark forest-green sidebar with Banana
- * Gold accents, warm white workspace, Poppins — with the TrackTour mark in the
- * sidebar header and the full admin navigation.
+ * Gold accents, warm white workspace, Poppins — with the Bansud Tourism Office
+ * logo in the sidebar header and the full admin navigation.
  */
 export default function AdminLayout() {
   const navigate = useNavigate()
@@ -53,6 +60,7 @@ export default function AdminLayout() {
   }, [location.pathname])
 
   const stats = dashboard?.stats
+  const { data: sos } = useSosSummary()
   // Tourism-focused navigation. Related screens live as tabs inside their
   // module (Users → Tourists, Businesses → Categories, Municipalities →
   // Accounts, Settings → Access Control / Document Verification / …).
@@ -64,7 +72,7 @@ export default function AdminLayout() {
         { to: '/admin/live/map', label: 'Live Map', icon: Map },
         { to: '/admin/live/deliveries', label: 'Deliveries', icon: Package },
         { to: '/admin/rider-cash', label: 'Rider Cash', icon: Wallet },
-        { to: '/admin/live/sos', label: 'SOS Alerts', icon: CircleAlert },
+        { to: '/admin/live/sos', label: 'SOS Alerts', icon: CircleAlert, badge: sos?.active, alertBadge: true },
       ],
     },
     {
@@ -76,6 +84,11 @@ export default function AdminLayout() {
         { to: '/admin/rider-onboarding', label: 'Rider Onboarding', icon: ClipboardCheck },
         { to: '/admin/cashouts', label: 'Cashouts', icon: HandCoins },
       ],
+    },
+    {
+      // Earnings Stage 1 (2026-11-24): commission rates; the earnings page joins in Stage 4.
+      label: 'Financial management',
+      items: [{ to: '/admin/finance/commission-rates', label: 'Commission Rates', icon: Percent }],
     },
     {
       label: 'Municipality management',
@@ -93,8 +106,9 @@ export default function AdminLayout() {
       label: 'System',
       items: [
         { to: '/admin/profile', label: 'Office Profile', icon: IdCard },
+        { to: '/admin/system-notices', label: 'System Notices', icon: Wrench },
         // One entry: Security, Backup, Diagnostics and Incident History are tabs inside Settings.
-        // /admin/settings opens Platform Configuration; the link stays current on every tab.
+        // /admin/settings is a page of buttons; the link stays current on every settings page.
         { to: '/admin/settings', label: 'Settings', icon: Settings },
       ],
     },
@@ -104,6 +118,9 @@ export default function AdminLayout() {
   const officeName = office?.name || 'Bansud Tourism Office'
   const displayName = user?.name || officeName
   const avatar = office?.logo_url ?? null
+  const officeLogo = avatar ? toAssetUrl(avatar) : BANSUD_OFFICE_LOGO
+  const [logoFailed, setLogoFailed] = useState(false)
+  useEffect(() => setLogoFailed(false), [officeLogo])
   const today = new Intl.DateTimeFormat('en-PH', { timeZone: 'Asia/Manila', weekday: 'long', month: 'long', day: 'numeric' }).format(new Date())
 
   const handleLogout = async () => {
@@ -118,7 +135,12 @@ export default function AdminLayout() {
         <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#FFD700]">TrackTour · Tourism Admin</p>
         <div className="mt-3 flex items-center gap-3">
           <span className="w-11 h-11 rounded-xl bg-white ring-2 ring-[#FFD700]/70 overflow-hidden flex items-center justify-center shrink-0 p-1">
-            <img src="/assets/logo/tracktour.png" alt="TrackTour Logo" className="w-full h-full object-contain" />
+            <img
+              src={logoFailed ? BANSUD_OFFICE_LOGO : officeLogo}
+              alt={`${officeName} logo`}
+              onError={() => setLogoFailed(true)}
+              className="w-full h-full object-contain"
+            />
           </span>
           <span className="min-w-0">
             <span className="block text-base font-semibold leading-tight truncate">Bansud</span>
@@ -153,7 +175,7 @@ export default function AdminLayout() {
                         <item.icon className={cn('w-[18px] h-[18px]', isActive ? 'text-[#FFD700]' : 'text-white/60 group-hover:text-white')} aria-hidden="true" />
                         <span className="flex-1">{item.label}</span>
                         {!!item.badge && (
-                          <span className="min-w-5 h-5 px-1.5 rounded-full bg-[#FFD700] text-[#5C4A00] text-[11px] font-bold flex items-center justify-center" aria-label={`${item.badge} waiting`}>
+                          <span className={cn('min-w-5 h-5 px-1.5 rounded-full text-[11px] font-bold flex items-center justify-center', item.alertBadge ? 'bg-red-600 text-white' : 'bg-[#FFD700] text-[#5C4A00]')} aria-label={item.alertBadge ? `${item.badge} active` : `${item.badge} waiting`}>
                             {item.badge}
                           </span>
                         )}
@@ -197,7 +219,9 @@ export default function AdminLayout() {
       )}
 
       <div className="lg:pl-64">
-        <header className="sticky top-0 z-20 bg-[#FAF7F0]/90 backdrop-blur border-b border-[#E7E2D6]">
+        {/* z-40: above the pages' own sticky bars (z-20, e.g. Office Profile's Save changes),
+            so the account menu that opens from this header is never covered. */}
+        <header className="sticky top-0 z-40 bg-[#FAF7F0]/90 backdrop-blur border-b border-[#E7E2D6]">
           <div className="flex items-center gap-3 px-4 sm:px-6 lg:px-8 h-16">
             <button
               type="button"
@@ -243,6 +267,7 @@ export default function AdminLayout() {
         </header>
 
         <main className="px-4 sm:px-6 lg:px-8 py-6 max-w-[1440px]">
+          <AdminSosAlarm />
           <Suspense
             fallback={
               <div className="space-y-4" role="status" aria-label="Loading page">

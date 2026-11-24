@@ -76,3 +76,13 @@ export function resolveStopArrival(input: ResolveStopArrivalInput): StopArrivalR
 
   return { activeStop, distanceMeters, arrived }
 }
+/**
+ * Whether to show the "Confirm Arrival" prompt for the current stop
+ * (2026-11-23): the phone's LIVE GPS must be inside the pickup radius (and
+ * the stop measurable) AND the server must agree. The server's flag alone
+ * could rest on an old saved position (e.g. from before the rider logged
+ * out) and showed the prompt while the rider was still far away.
+ */
+export function shouldPromptStopArrival(result: StopArrivalResult, serverCanConfirm: boolean | null | undefined): boolean {
+  return Boolean(result.activeStop && result.arrived && result.distanceMeters != null && serverCanConfirm)
+}
