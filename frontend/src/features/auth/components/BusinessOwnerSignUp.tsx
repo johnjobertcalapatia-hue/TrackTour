@@ -58,7 +58,7 @@ const ID_ACCEPT = 'image/jpeg,image/png,application/pdf'
 const ID_TYPES_OK = ['image/jpeg', 'image/png', 'application/pdf']
 const ID_MAX_BYTES = 5 * 1024 * 1024
 
-const PASSWORD_RULES: { label: string; test: (v: string) => boolean }[] = [
+export const PASSWORD_RULES: { label: string; test: (v: string) => boolean }[] = [
   { label: 'At least 8 characters', test: (v) => v.length >= 8 },
   { label: 'An uppercase letter', test: (v) => /[A-Z]/.test(v) },
   { label: 'A lowercase letter', test: (v) => /[a-z]/.test(v) },
@@ -378,7 +378,7 @@ export default function BusinessOwnerSignUp(props: Props) {
   )
 }
 
-function Field({ label, htmlFor, error, children }: { label: ReactNode; htmlFor: string; error?: ReactNode; children: ReactNode }) {
+export function Field({ label, htmlFor, error, children }: { label: ReactNode; htmlFor: string; error?: ReactNode; children: ReactNode }) {
   return (
     <div className="min-w-0">
       <label className="mb-1.5 block text-sm font-semibold text-[#14351F]" htmlFor={htmlFor}>{label}</label>
@@ -436,7 +436,7 @@ function IdFileField({ kind, title, required = false, file, error, onPick }: {
   )
 }
 
-function ReviewGroup({ title, rows, onEdit }: { title: string; rows: [string, unknown][]; onEdit: () => void }) {
+export function ReviewGroup({ title, rows, onEdit }: { title: string; rows: [string, unknown][]; onEdit: () => void }) {
   return (
     <section className="rounded-2xl border border-[#E7E2D6] p-4" aria-label={title}>
       <div className="mb-2 flex items-center justify-between">

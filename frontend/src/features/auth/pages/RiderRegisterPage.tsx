@@ -1,14 +1,18 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { useForm } from 'react-hook-form'
+import { useForm, type FieldErrors } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
+import {
+  ArrowLeft, ArrowRight, Bike, Calendar, Check, CheckCircle2, Circle, ClipboardList, Eye, EyeOff, FileText, GraduationCap, KeyRound,
+  Loader2, Lock, Mail, Phone, Send, Ticket, TriangleAlert, User,
+} from 'lucide-react'
 import { useAuthStore } from '@/features/auth/services/auth-store'
-import { ApplicationLogo } from '@/shared/components/ApplicationLogo'
 import { Alert } from '@/shared/components/Alert'
 import { getRoleDashboardPath } from '@/shared/utils'
 import { get, post } from '@/shared/services/api'
-import { Eye, EyeOff, Send, CheckCircle, Loader2 } from 'lucide-react'
+import AuthBrandPanel, { AUTH_FONT, type AuthHighlight } from '@/features/auth/components/AuthBrandPanel'
+import { Field, PASSWORD_RULES, ReviewGroup } from '@/features/auth/components/BusinessOwnerSignUp'
 
 const SUFFIX_OPTIONS = ['Jr.', 'Sr.', 'II', 'III', 'IV', 'V']
 
@@ -40,6 +44,8 @@ function todayISO(): string {
   return `${now.getFullYear()}-${month}-${day}`
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
 const passwordRule = z
   .string()
   .min(8, 'Password must be at least 8 characters')
@@ -61,7 +67,7 @@ const riderSchema = z.object({
     .refine((val) => ageFromDateOfBirth(val) >= 18, 'You must be at least 18 years old'),
   email: z.string().email('Please enter a valid email address'),
   mobile_number: z.string().min(9, 'Mobile number is required').regex(/^((\+63|0)9\d{9}|9\d{9})$/, 'Please enter a valid Philippine mobile number'),
-  otp_code: z.string().min(6, 'OTP must be 6 digits').max(6, 'OTP must be 6 digits'),
+  otp_code: z.string().min(6, 'The code must be 6 digits').max(6, 'The code must be 6 digits'),
   // Decides which Tourism Office trains, interviews and manages the rider
   // (and issues their COD cash). Set here once: not editable afterwards.
   municipality_id: z.string().refine((v) => Number(v) >= 1, 'Municipality is required'),
@@ -78,22 +84,38 @@ const riderSchema = z.object({
 })
 
 type RiderForm = z.infer<typeof riderSchema>
+type RiderField = keyof RiderForm
 
-function getPasswordStrength(password: string): { level: 'weak' | 'medium' | 'strong'; percent: number; color: string } {
-  let score = 0
-  if (password.length >= 8) score++
-  if (/[a-z]/.test(password)) score++
-  if (/[A-Z]/.test(password)) score++
-  if (/[0-9]/.test(password)) score++
-  if (/[^A-Za-z0-9]/.test(password)) score++
-  if (password.length >= 12) score++
+/** The account part of the rider application, in four short steps. */
+const STEPS: { title: string; fields: RiderField[] }[] = [
+  { title: 'About you', fields: ['first_name', 'middle_name', 'last_name', 'suffix', 'date_of_birth', 'municipality_id', 'barangay_id'] },
+  { title: 'Contact', fields: ['email', 'mobile_number'] },
+  { title: 'Password', fields: ['password', 'password_confirmation', 'referral_code'] },
+  { title: 'Review', fields: ['confirm_age', 'agree_terms', 'agree_privacy'] },
+]
 
-  if (score <= 3) return { level: 'weak', percent: 33, color: 'bg-red-500' }
-  if (score <= 5) return { level: 'medium', percent: 66, color: 'bg-amber-500' }
-  return { level: 'strong', percent: 100, color: 'bg-[#16803C]' }
-}
+/** Which step shows a field, so an error found later sends the rider back to it. */
+const FIELD_STEP: Record<string, number> = Object.fromEntries([
+  ...STEPS.flatMap((s, i) => s.fields.map((f) => [f, i + 1] as const)),
+  ['otp_code', 2],
+])
 
+/** The whole rider application (left panel): this page is the first of four steps. */
+const APPLICATION_STEPS: AuthHighlight[] = [
+  { icon: ClipboardList, text: '1. Create your account' },
+  { icon: Bike, text: '2. Add your vehicle' },
+  { icon: FileText, text: '3. Upload your requirements' },
+  { icon: GraduationCap, text: '4. Interview and training' },
+]
+
+/**
+ * Rider sign-up (/register/rider): step 1 of the rider application, in the
+ * same look as the other sign-up pages (brand panel, step indicator, short
+ * steps). Next checks the current step first; the email must be verified with
+ * the emailed code before the rider can go past Contact.
+ */
 export default function RiderRegisterPage() {
+  const [step, setStep] = useState(1)
   const [error, setError] = useState('')
   const [municipalities, setMunicipalities] = useState<{ id: number; name: string; barangays?: { id: number; name: string }[] }[]>([])
   const [showPassword, setShowPassword] = useState(false)
@@ -101,6 +123,7 @@ export default function RiderRegisterPage() {
   const [otpVerified, setOtpVerified] = useState(false)
   const [otpSending, setOtpSending] = useState(false)
   const [otpVerifying, setOtpVerifying] = useState(false)
+  const [otpNeeded, setOtpNeeded] = useState(false)
   const [countdown, setCountdown] = useState(0)
   const [lockoutSeconds, setLockoutSeconds] = useState(0)
   const [emailChecking, setEmailChecking] = useState(false)
@@ -111,6 +134,7 @@ export default function RiderRegisterPage() {
   const emailCheckSeq = useRef(0)
   const { register: registerUser } = useAuthStore()
   const navigate = useNavigate()
+  const last = STEPS.length
 
   const form = useForm<RiderForm>({
     resolver: zodResolver(riderSchema),
@@ -133,9 +157,11 @@ export default function RiderRegisterPage() {
       agree_privacy: false,
     },
   })
+  const { register, watch, trigger, formState: { errors, isSubmitting } } = form
 
-  const selectedMunicipalityId = Number(form.watch('municipality_id')) || 0
-  const riderBarangays = municipalities.find((m) => m.id === selectedMunicipalityId)?.barangays ?? []
+  const selectedMunicipalityId = Number(watch('municipality_id')) || 0
+  const selectedMunicipality = municipalities.find((m) => m.id === selectedMunicipalityId)
+  const riderBarangays = selectedMunicipality?.barangays ?? []
 
   useEffect(() => {
     get<{ id: number; name: string; barangays?: { id: number; name: string }[] }[]>('/municipalities')
@@ -143,11 +169,10 @@ export default function RiderRegisterPage() {
       .catch(() => {})
   }, [])
 
-  const watchedPassword = form.watch('password')
-  const watchedMobile = form.watch('mobile_number')
-  const watchedEmail = form.watch('email')
-  const watchedDateOfBirth = form.watch('date_of_birth')
-  const passwordStrength = getPasswordStrength(watchedPassword || '')
+  const watchedPassword = watch('password') || ''
+  const watchedEmail = watch('email')
+  const watchedDateOfBirth = watch('date_of_birth')
+  const age = watchedDateOfBirth ? ageFromDateOfBirth(watchedDateOfBirth) : 0
 
   useEffect(() => {
     return () => {
@@ -162,7 +187,7 @@ export default function RiderRegisterPage() {
   useEffect(() => {
     const email = (watchedEmail || '').trim().toLowerCase()
 
-    if (otpVerified || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (otpVerified || !EMAIL_RE.test(email)) {
       setEmailExists(false)
       setEmailChecking(false)
       if (emailCheckRef.current) clearTimeout(emailCheckRef.current)
@@ -246,16 +271,22 @@ export default function RiderRegisterPage() {
   const handleSendOtp = async () => {
     const mobile = normalizeMobileNumber(form.getValues('mobile_number'))
     const email = form.getValues('email')
+    let ok = true
+    if (!email || !EMAIL_RE.test(email)) {
+      form.setError('email', { message: 'Enter a valid email address first' })
+      ok = false
+    } else if (emailExists) {
+      form.setError('email', { type: 'manual', message: 'This email is already registered.' })
+      ok = false
+    }
     if (!/^09\d{9}$/.test(mobile)) {
-      form.setError('mobile_number', { message: 'Please enter a valid mobile number first' })
-      return
+      form.setError('mobile_number', { message: 'Enter a valid mobile number first' })
+      ok = false
     }
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      form.setError('email', { message: 'Enter a valid email address before requesting OTP' })
-      return
-    }
+    if (!ok) return
 
     setOtpSending(true)
+    setOtpNeeded(false)
     setError('')
     try {
       await post('/auth/send-otp', { mobile_number: mobile, email, type: 'registration' })
@@ -264,7 +295,7 @@ export default function RiderRegisterPage() {
       form.setValue('otp_code', '')
       startCountdown()
     } catch (err: unknown) {
-      handleOtpError(err, 'Failed to send OTP')
+      handleOtpError(err, 'Failed to send the code')
     } finally {
       setOtpSending(false)
     }
@@ -274,7 +305,7 @@ export default function RiderRegisterPage() {
     const otp = form.getValues('otp_code')
     const mobile = normalizeMobileNumber(form.getValues('mobile_number'))
     if (!otp || otp.length < 6) {
-      form.setError('otp_code', { message: 'Please enter the 6-digit OTP' })
+      form.setError('otp_code', { message: 'Enter the 6-digit code' })
       return
     }
 
@@ -282,23 +313,63 @@ export default function RiderRegisterPage() {
     setError('')
     try {
       await post('/auth/verify-otp', { mobile_number: mobile, otp_code: otp, type: 'registration' })
+      form.clearErrors('otp_code')
       setOtpVerified(true)
+      setOtpNeeded(false)
     } catch (err: unknown) {
-      handleOtpError(err, 'Invalid or expired OTP')
+      handleOtpError(err, 'Invalid or expired code')
       setOtpVerified(false)
     } finally {
       setOtpVerifying(false)
     }
   }
 
+  /** Unlock the email and number to use different ones (needs a new code). */
+  const changeContact = () => {
+    setOtpVerified(false)
+    setOtpSent(false)
+    form.setValue('otp_code', '')
+  }
+
+  const goTo = (n: number) => {
+    setError('')
+    setStep(n)
+  }
+
+  const next = async () => {
+    setError('')
+    const ok = await trigger(STEPS[step - 1]!.fields)
+    if (step === 2) {
+      if (emailExists) {
+        form.setError('email', { type: 'manual', message: 'This email is already registered.' })
+        return
+      }
+      if (ok && !otpVerified) {
+        setOtpNeeded(true)
+        return
+      }
+    }
+    if (ok) setStep(Math.min(last, step + 1))
+  }
+
+  // Errors found on submit (or by the server) send the rider back to their step.
+  const goToFirstError = (fields: string[]) => {
+    const target = fields.map((f) => FIELD_STEP[f]).filter((n): n is number => !!n).sort((a, b) => a - b)[0]
+    if (target && target !== step) setStep(target)
+  }
+
+  const onInvalid = (formErrors: FieldErrors<RiderForm>) => goToFirstError(Object.keys(formErrors))
+
   const onSubmit = async (data: RiderForm) => {
     if (!otpVerified) {
-      setError('Please verify your mobile number first')
+      setOtpNeeded(true)
+      setStep(2)
       return
     }
 
     if (emailExists) {
       form.setError('email', { type: 'manual', message: 'This email is already registered.' })
+      setStep(2)
       return
     }
 
@@ -336,17 +407,12 @@ export default function RiderRegisterPage() {
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { message?: string; errors?: Record<string, string[]> } } }
       const fieldErrors = axiosErr.response?.data?.errors
-      if (fieldErrors?.email) {
-        setEmailExists(true)
-        form.setError('email', { type: 'manual', message: fieldErrors.email[0] })
-      }
-      if (fieldErrors?.last_name) {
-        form.setError('last_name', { type: 'manual', message: fieldErrors.last_name[0] })
-      }
-      if (fieldErrors?.date_of_birth) {
-        form.setError('date_of_birth', { type: 'manual', message: fieldErrors.date_of_birth[0] })
-      }
       if (fieldErrors) {
+        if (fieldErrors.email) setEmailExists(true)
+        for (const [field, messages] of Object.entries(fieldErrors)) {
+          if (field in FIELD_STEP && messages[0]) form.setError(field as RiderField, { type: 'server', message: messages[0] })
+        }
+        goToFirstError(Object.keys(fieldErrors))
         const firstError = Object.values(fieldErrors)[0]
         setError(firstError?.[0] || 'Registration failed')
       } else {
@@ -355,319 +421,349 @@ export default function RiderRegisterPage() {
     }
   }
 
-  const inputClasses = 'tourism-input w-full px-4 py-3 text-sm'
-  const labelClasses = 'block text-sm font-medium text-[#17201A] mb-1'
-  const errorClasses = 'text-red-500 text-xs mt-1'
+  // Shared look with the other sign-up pages.
+  const err = (name: RiderField) => errors[name]?.message
+  const fieldError = (name: RiderField) => (err(name) ? <p id={`${name}-error`} className="mt-1.5 text-xs text-red-600">{err(name)}</p> : null)
+  const a11y = (name: RiderField, hint?: string) => ({
+    'aria-invalid': Boolean(err(name)),
+    'aria-describedby': [err(name) ? `${name}-error` : null, hint].filter(Boolean).join(' ') || undefined,
+  })
+  const inputClass = (name: RiderField, withIcon = true) =>
+    `w-full rounded-2xl border bg-white py-3 ${withIcon ? 'pl-11' : 'pl-4'} pr-4 text-sm text-[#14351F] placeholder-[#9AA5A0] shadow-sm outline-none transition focus:border-[#2E8B57] focus:ring-4 focus:ring-[#2E8B57]/15 disabled:cursor-not-allowed disabled:bg-[#F4F6F4] ${
+      err(name) ? 'border-red-300' : 'border-[#E2E8E3]'
+    }`
+  const icon = 'pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#2E8B57]'
+  const smallButton =
+    'inline-flex shrink-0 items-center justify-center gap-1.5 rounded-full bg-[#0B5D2E] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#094A25] disabled:cursor-not-allowed disabled:opacity-50'
+  const checkbox = 'mt-0.5 h-4 w-4 shrink-0 rounded border-[#D7E8DB] text-[#0B5D2E] focus:ring-[#2E8B57]'
+
+  const fullName = [watch('first_name'), watch('middle_name'), watch('last_name'), watch('suffix')].filter(Boolean).join(' ')
+  const barangayName = riderBarangays.find((b) => b.id === Number(watch('barangay_id')))?.name ?? ''
 
   return (
-    <div className="min-h-screen tourism-bg tourism-bg-orbs flex flex-col items-center justify-center px-6 py-12">
-      <div className="mb-6">
-        <Link to="/">
-          <ApplicationLogo className="w-30 h-30" />
-        </Link>
-      </div>
+    <div className="min-h-screen bg-[#FAFAF5] lg:grid lg:grid-cols-[1.05fr_1fr]" style={AUTH_FONT}>
+      <AuthBrandPanel
+        eyebrow="For riders"
+        headline="Ride and deliver around"
+        highlight="Bansud"
+        description="Sign up online, then train with your municipality's Tourism Office. Once approved, you take trips and food deliveries on TrackTour."
+        highlights={APPLICATION_STEPS}
+      />
 
-      <div className="w-full max-w-md px-6 py-8 tourism-card rounded-2xl">
-        <p className="text-center text-xs font-bold uppercase tracking-wide text-[#B8860B] mb-1">Rider application · Step 1 of 4</p>
-        <h1 className="text-2xl font-bold text-center text-[#126B32] mb-1">
-          Tell us about yourself
-        </h1>
-        <p className="text-center text-sm text-[#6B7280] mb-6">
-          Create your rider account. Next you&apos;ll add your vehicle, upload your requirements and book your onboarding.
-        </p>
+      <main className="flex items-center justify-center px-5 py-10 sm:px-10 lg:min-h-screen">
+        <div className="w-full max-w-lg">
+          <p className="flex items-center gap-3 text-sm font-bold uppercase tracking-wide text-[#E0A800]">
+            <span className="h-1.5 w-7 rounded-full bg-[#FFD000]" aria-hidden="true" /> Rider application · Step 1 of 4
+          </p>
+          <h1 className="mt-2 text-3xl font-bold text-[#0B5D2E] sm:text-4xl">Create your rider account</h1>
+          <p className="mt-2 text-sm text-[#5B6A60]">Next you&apos;ll add your vehicle, upload your requirements and book your onboarding.</p>
 
-        {error && <Alert type="error" message={error} onDismiss={() => setError('')} />}
-
-        <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-5">
-          {/* Name Section */}
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className={labelClasses}>First Name <span className="text-red-500">*</span></label>
-                <input {...form.register('first_name')} className={inputClasses} placeholder="Juan" />
-                {form.formState.errors.first_name && (
-                  <p className={errorClasses}>{form.formState.errors.first_name.message}</p>
-                )}
-              </div>
-              <div>
-                <label className={labelClasses}>Middle Name</label>
-                <input {...form.register('middle_name')} className={inputClasses} placeholder="Optional" />
-                {form.formState.errors.middle_name && (
-                  <p className={errorClasses}>{form.formState.errors.middle_name.message}</p>
-                )}
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="col-span-2">
-                <label className={labelClasses}>Last Name <span className="text-red-500">*</span></label>
-                <input {...form.register('last_name')} className={inputClasses} placeholder="Dela Cruz" />
-                {form.formState.errors.last_name && (
-                  <p className={errorClasses}>{form.formState.errors.last_name.message}</p>
-                )}
-              </div>
-              <div>
-                <label className={labelClasses}>Suffix</label>
-                <select {...form.register('suffix')} className={inputClasses}>
-                  <option value="">Select</option>
-                  {SUFFIX_OPTIONS.map((s) => (
-                    <option key={s} value={s}>{s}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            <div>
-              <label className={labelClasses}>Date of Birth <span className="text-red-500">*</span></label>
-              <div className="flex items-center gap-3">
-                <input
-                  {...form.register('date_of_birth')}
-                  type="date"
-                  className={inputClasses}
-                  max={todayISO()}
-                />
-                {watchedDateOfBirth && ageFromDateOfBirth(watchedDateOfBirth) > 0 && (
-                  <span className="text-xs text-[#6B7280] whitespace-nowrap">
-                    {ageFromDateOfBirth(watchedDateOfBirth)} yrs old
+          {/* Step indicator */}
+          <ol className="mt-6 flex items-center gap-1.5" aria-label="Account steps">
+            {STEPS.map((s, i) => {
+              const n = i + 1
+              const done = n < step
+              const current = n === step
+              return (
+                <li key={s.title} className="flex min-w-0 flex-1 flex-col gap-1.5" aria-current={current ? 'step' : undefined}>
+                  <span className={`h-1.5 rounded-full ${done || current ? 'bg-[#0B5D2E]' : 'bg-[#E2E8E3]'}`} aria-hidden="true" />
+                  <span className={`truncate text-[11px] font-semibold ${current ? 'text-[#0B5D2E]' : done ? 'text-[#2E8B57]' : 'text-[#9AA5A0]'}`}>
+                    {done && <Check className="mr-0.5 inline h-3 w-3" aria-hidden="true" />}{s.title}
+                    <span className="sr-only">{done ? ' (done)' : current ? ' (current step)' : ''}</span>
                   </span>
-                )}
-              </div>
-              {form.formState.errors.date_of_birth && (
-                <p className={errorClasses}>{form.formState.errors.date_of_birth.message}</p>
-              )}
-            </div>
-            <div>
-              <label htmlFor="rider-municipality" className={labelClasses}>
-                Municipality <span className="text-red-500">*</span>
-              </label>
-              <select
-                id="rider-municipality"
-                {...form.register('municipality_id', { onChange: () => form.setValue('barangay_id', '') })}
-                className={inputClasses}
-              >
-                <option value="">Select municipality</option>
-                {municipalities.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </select>
-              <p className="text-xs text-[#6B7280] mt-1">Its Tourism Office trains, interviews and manages you, and issues your COD cash.</p>
-              {form.formState.errors.municipality_id && (
-                <p className={errorClasses}>{form.formState.errors.municipality_id.message}</p>
-              )}
-            </div>
-            <div>
-              <label htmlFor="rider-barangay" className={labelClasses}>
-                Barangay <span className="text-red-500">*</span>
-              </label>
-              <select
-                id="rider-barangay"
-                {...form.register('barangay_id')}
-                disabled={!riderBarangays.length}
-                className={`${inputClasses} disabled:opacity-60`}
-              >
-                <option value="">{form.watch('municipality_id') ? 'Select barangay' : 'Select a municipality first'}</option>
-                {riderBarangays.map((b) => (
-                  <option key={b.id} value={b.id}>{b.name}</option>
-                ))}
-              </select>
-              <p className="text-xs text-[#B45309] mt-1">Your municipality and barangay cannot be changed after you register.</p>
-              {form.formState.errors.barangay_id && (
-                <p className={errorClasses}>{form.formState.errors.barangay_id.message}</p>
-              )}
-            </div>
-          </div>
+                </li>
+              )
+            })}
+          </ol>
 
-          {/* Contact Section */}
-          <div className="space-y-4">
-            <div>
-              <label className={labelClasses}>Email Address <span className="text-red-500">*</span></label>
-              <input {...form.register('email')} type="email" className={inputClasses} placeholder="you@example.com" disabled={otpVerified} />
-              {emailChecking && !form.formState.errors.email && (
-                <p className="text-xs text-[#6B7280] mt-1 flex items-center gap-1">
-                  <Loader2 className="w-3 h-3 animate-spin" /> Checking availability...
-                </p>
-              )}
-              {form.formState.errors.email && (
-                <p className={errorClasses}>{form.formState.errors.email.message}</p>
-              )}
-            </div>
-            <div>
-              <label className={labelClasses}>Mobile Number <span className="text-red-500">*</span></label>
-              <div className="flex gap-2">
-                <div className="flex-1 relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-[#6B7280]">+63</span>
-                  <input
-                    {...form.register('mobile_number')}
-                    className={`${inputClasses} pl-12`}
-                    placeholder="9XXXXXXXXX"
-                    disabled={otpVerified}
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={handleSendOtp}
-                  disabled={otpSending || countdown > 0 || otpVerified || lockoutSeconds > 0 || !/^((\+63|0)?9\d{9})$/.test(watchedMobile.replace(/[\s-]/g, ''))}
-                  className="px-4 py-2 bg-[#16803C] hover:bg-[#126B32] text-white rounded-xl text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap"
-                >
-                  {otpSending ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Send className="w-4 h-4" />
-                  )}
-                  {countdown > 0 ? `Resend in ${countdown}s` : otpSent ? 'Resend OTP' : 'Send OTP'}
-                </button>
-              </div>
-              {form.formState.errors.mobile_number && (
-                <p className={errorClasses}>{form.formState.errors.mobile_number.message}</p>
-              )}
-              {otpVerified && (
-                <p className="text-xs text-[#16803C] mt-1 flex items-center gap-1">
-                  <CheckCircle className="w-3 h-3" /> Mobile number verified successfully
-                </p>
-              )}
-            </div>
+          <div className="mt-6 rounded-3xl bg-white p-6 shadow-[0_18px_44px_rgba(6,40,20,0.10)] ring-1 ring-[#E7E2D6] sm:p-8">
+            {error && <Alert type="error" message={error} onDismiss={() => setError('')} />}
 
-            {otpSent && !otpVerified && (
-              <div>
-                <label className={labelClasses}>OTP Verification <span className="text-red-500">*</span></label>
-                <div className="flex gap-2">
-                  <input
-                    {...form.register('otp_code')}
-                    className={`${inputClasses} flex-1`}
-                    placeholder="Enter 6-digit OTP"
-                    maxLength={6}
-                    disabled={lockoutSeconds > 0}
-                  />
-                  <button
-                    type="button"
-                    onClick={handleVerifyOtp}
-                    disabled={otpVerifying || lockoutSeconds > 0}
-                    className="px-4 py-2 bg-[#16803C] hover:bg-[#126B32] text-white rounded-xl text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            <form onSubmit={form.handleSubmit(onSubmit, onInvalid)} noValidate className="space-y-6">
+              {step === 1 && (
+                <fieldset className="space-y-4">
+                  <legend className="sr-only">About you</legend>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="First name" htmlFor="first_name" error={fieldError('first_name')}>
+                      <div className="relative"><User className={icon} aria-hidden="true" />
+                        <input id="first_name" autoComplete="given-name" {...register('first_name')} className={inputClass('first_name')} placeholder="Juan" {...a11y('first_name')} /></div>
+                    </Field>
+                    <Field label={<>Middle name <span className="font-normal text-[#7A867F]">(optional)</span></>} htmlFor="middle_name" error={fieldError('middle_name')}>
+                      <input id="middle_name" autoComplete="additional-name" {...register('middle_name')} className={inputClass('middle_name', false)} placeholder="Santos" {...a11y('middle_name')} />
+                    </Field>
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
+                    <Field label="Last name" htmlFor="last_name" error={fieldError('last_name')}>
+                      <div className="relative"><User className={icon} aria-hidden="true" />
+                        <input id="last_name" autoComplete="family-name" {...register('last_name')} className={inputClass('last_name')} placeholder="Dela Cruz" {...a11y('last_name')} /></div>
+                    </Field>
+                    <Field label={<>Suffix <span className="font-normal text-[#7A867F]">(optional)</span></>} htmlFor="suffix">
+                      <select id="suffix" autoComplete="honorific-suffix" {...register('suffix')} className={inputClass('suffix', false)}>
+                        <option value="">None</option>
+                        {SUFFIX_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </Field>
+                  </div>
+                  <Field
+                    label="Birthdate"
+                    htmlFor="date_of_birth"
+                    error={fieldError('date_of_birth') ?? <p id="dob-hint" className="mt-1.5 text-xs text-[#7A867F]">{age > 0 ? `${age} years old. ` : ''}Riders must be 18 or older.</p>}
                   >
-                    {otpVerifying ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : null}
-                    Verify
+                    <div className="relative"><Calendar className={icon} aria-hidden="true" />
+                      <input id="date_of_birth" type="date" max={todayISO()} autoComplete="bday" {...register('date_of_birth')} className={inputClass('date_of_birth')} {...a11y('date_of_birth', 'dob-hint')} /></div>
+                  </Field>
+
+                  <div className="space-y-4 rounded-2xl border border-[#E7E2D6] p-4">
+                    <div>
+                      <p className="text-sm font-semibold text-[#14351F]">Where you live</p>
+                      <p id="rider-municipality-hint" className="mt-0.5 text-xs text-[#5B6A60]">Its Tourism Office trains, interviews and manages you, and issues your COD cash.</p>
+                    </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <Field label="Municipality" htmlFor="rider-municipality" error={fieldError('municipality_id')}>
+                        <select
+                          id="rider-municipality"
+                          {...register('municipality_id', { onChange: () => form.setValue('barangay_id', '') })}
+                          className={inputClass('municipality_id', false)}
+                          {...a11y('municipality_id', 'rider-municipality-hint')}
+                        >
+                          <option value="">Select</option>
+                          {municipalities.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                        </select>
+                      </Field>
+                      <Field label="Barangay" htmlFor="rider-barangay" error={fieldError('barangay_id')}>
+                        <select
+                          id="rider-barangay"
+                          {...register('barangay_id')}
+                          disabled={!riderBarangays.length}
+                          className={inputClass('barangay_id', false)}
+                          {...a11y('barangay_id')}
+                        >
+                          <option value="">{selectedMunicipalityId ? 'Select' : 'Choose a municipality first'}</option>
+                          {riderBarangays.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                        </select>
+                      </Field>
+                    </div>
+                    <p className="flex items-start gap-2 rounded-xl bg-[#FFF6CC] px-3 py-2 text-xs font-medium text-[#7A5A00]">
+                      <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      Your municipality and barangay cannot be changed after you register.
+                    </p>
+                  </div>
+                </fieldset>
+              )}
+
+              {step === 2 && (
+                <fieldset className="space-y-4">
+                  <legend className="sr-only">Contact</legend>
+                  <Field
+                    label="Email"
+                    htmlFor="email"
+                    error={
+                      fieldError('email') ??
+                      (emailChecking ? (
+                        <p className="mt-1.5 flex items-center gap-1 text-xs text-[#7A867F]"><Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" /> Checking availability...</p>
+                      ) : (
+                        <p id="email-hint" className="mt-1.5 text-xs text-[#7A867F]">We&apos;ll email you a code to confirm it&apos;s yours.</p>
+                      ))
+                    }
+                  >
+                    <div className="relative"><Mail className={icon} aria-hidden="true" />
+                      <input id="email" type="email" autoComplete="email" {...register('email')} disabled={otpVerified} className={inputClass('email')} placeholder="you@example.com" {...a11y('email', 'email-hint')} /></div>
+                  </Field>
+                  <Field label="Mobile number" htmlFor="mobile_number" error={fieldError('mobile_number')}>
+                    <div className="relative"><Phone className={icon} aria-hidden="true" />
+                      <input id="mobile_number" type="tel" inputMode="tel" autoComplete="tel" {...register('mobile_number')} disabled={otpVerified} className={inputClass('mobile_number')} placeholder="09XX XXX XXXX" {...a11y('mobile_number')} /></div>
+                  </Field>
+
+                  {otpVerified ? (
+                    <div className="flex items-center gap-3 rounded-2xl border border-[#CFE5D7] bg-[#EEF7F0] p-4 text-sm" role="status">
+                      <CheckCircle2 className="h-5 w-5 shrink-0 text-[#0B5D2E]" aria-hidden="true" />
+                      <p className="flex-1 font-semibold text-[#0B5D2E]">Email verified</p>
+                      <button type="button" onClick={changeContact} className="text-xs font-semibold text-[#0B5D2E] underline-offset-2 hover:text-[#E0A800] hover:underline">
+                        Change
+                      </button>
+                    </div>
+                  ) : (
+                    <div className={`space-y-3 rounded-2xl p-4 ${otpNeeded ? 'bg-red-50 ring-1 ring-red-200' : 'bg-[#F6F8F4]'}`}>
+                      <div className="flex items-center gap-3">
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-[#0B5D2E] ring-1 ring-[#E2E8E3]">
+                          <KeyRound className="h-4 w-4" aria-hidden="true" />
+                        </span>
+                        <p className="flex-1 text-xs text-[#3B4A40]">
+                          {otpSent
+                            ? <>We sent a 6-digit code to <span className="font-semibold text-[#0B5D2E]">{watchedEmail}</span>.</>
+                            : 'Verify your email to continue.'}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => void handleSendOtp()}
+                          disabled={otpSending || countdown > 0 || lockoutSeconds > 0}
+                          className={smallButton}
+                        >
+                          {otpSending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Send className="h-4 w-4" aria-hidden="true" />}
+                          {countdown > 0 ? `Resend in ${countdown}s` : otpSent ? 'Resend' : 'Send code'}
+                        </button>
+                      </div>
+
+                      {otpSent && (
+                        <Field label="Verification code" htmlFor="otp_code" error={fieldError('otp_code')}>
+                          <div className="flex gap-2">
+                            <input
+                              id="otp_code"
+                              inputMode="numeric"
+                              autoComplete="one-time-code"
+                              maxLength={6}
+                              {...register('otp_code')}
+                              disabled={lockoutSeconds > 0}
+                              className={`${inputClass('otp_code', false)} text-center font-semibold tracking-[0.4em]`}
+                              placeholder="••••••"
+                              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void handleVerifyOtp() } }}
+                              {...a11y('otp_code')}
+                            />
+                            <button type="button" onClick={() => void handleVerifyOtp()} disabled={otpVerifying || lockoutSeconds > 0} className={smallButton}>
+                              {otpVerifying && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />} Verify
+                            </button>
+                          </div>
+                        </Field>
+                      )}
+
+                      {lockoutSeconds > 0 && (
+                        <p className="text-xs text-red-600">Too many failed attempts. Try again in {formatCountdown(lockoutSeconds)}.</p>
+                      )}
+                      {otpNeeded && <p className="text-xs font-medium text-red-600" role="alert">Verify your email with the code before you continue.</p>}
+                    </div>
+                  )}
+                </fieldset>
+              )}
+
+              {step === 3 && (
+                <fieldset className="space-y-4">
+                  <legend className="sr-only">Password</legend>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="Password" htmlFor="password">
+                      <div className="relative"><Lock className={icon} aria-hidden="true" />
+                        <input id="password" type={showPassword ? 'text' : 'password'} autoComplete="new-password" {...register('password')} className={`${inputClass('password')} !pr-12`} placeholder="••••••••" {...a11y('password', 'password-rules')} />
+                        <button type="button" onClick={() => setShowPassword((v) => !v)} aria-label={showPassword ? 'Hide password' : 'Show password'}
+                          className="absolute right-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-[#6B7280] transition-colors hover:bg-[#EAF6ED] hover:text-[#0B5D2E]">
+                          {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                        </button>
+                      </div>
+                    </Field>
+                    <Field label="Confirm password" htmlFor="password_confirmation" error={fieldError('password_confirmation')}>
+                      <div className="relative"><Lock className={icon} aria-hidden="true" />
+                        <input id="password_confirmation" type={showPassword ? 'text' : 'password'} autoComplete="new-password" {...register('password_confirmation')} className={inputClass('password_confirmation')} placeholder="••••••••" {...a11y('password_confirmation')} /></div>
+                    </Field>
+                  </div>
+                  <ul id="password-rules" aria-label="Password requirements" className="grid gap-x-4 gap-y-1.5 rounded-2xl bg-[#F6F8F4] p-3 text-xs sm:grid-cols-2">
+                    {PASSWORD_RULES.map((rule) => {
+                      const ok = rule.test(watchedPassword)
+                      const missed = !ok && (Boolean(err('password')) || watchedPassword.length > 0)
+                      return (
+                        <li key={rule.label} className={`flex items-center gap-2 ${ok ? 'text-[#0B5D2E]' : missed ? 'text-red-600' : 'text-[#5B6A60]'}`}>
+                          {ok ? <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" /> : <Circle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}
+                          {rule.label}<span className="sr-only">{ok ? ' (done)' : ' (not yet)'}</span>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                  <Field label={<>Referral code <span className="font-normal text-[#7A867F]">(optional)</span></>} htmlFor="referral_code">
+                    <div className="relative"><Ticket className={icon} aria-hidden="true" />
+                      <input id="referral_code" autoComplete="off" {...register('referral_code')} className={inputClass('referral_code')} placeholder="From a rider who invited you" /></div>
+                  </Field>
+                </fieldset>
+              )}
+
+              {step === 4 && (
+                <div className="space-y-4">
+                  <ReviewGroup title="About you" onEdit={() => goTo(1)}
+                    rows={[
+                      ['Name', fullName],
+                      ['Birthdate', age > 0 ? `${watchedDateOfBirth} (${age} years old)` : watchedDateOfBirth],
+                      ['Municipality', selectedMunicipality?.name ?? ''],
+                      ['Barangay', barangayName],
+                    ]} />
+                  <ReviewGroup title="Contact" onEdit={() => goTo(2)}
+                    rows={[
+                      ['Email', watchedEmail],
+                      ['Mobile', watch('mobile_number')],
+                      ['Referral code', watch('referral_code') || 'None'],
+                    ]} />
+
+                  <fieldset className="space-y-3">
+                    <legend className="sr-only">Agreements</legend>
+                    <Agreement id="confirm_age" error={fieldError('confirm_age')}>
+                      <input id="confirm_age" type="checkbox" {...register('confirm_age')} className={checkbox} {...a11y('confirm_age')} />
+                      I confirm that I am at least 18 years old.
+                    </Agreement>
+                    <Agreement id="agree_terms" error={fieldError('agree_terms')}>
+                      <input id="agree_terms" type="checkbox" {...register('agree_terms')} className={checkbox} {...a11y('agree_terms')} />
+                      <span>I agree to the <Link to="/terms" target="_blank" className="font-semibold text-[#0B5D2E] hover:underline">Terms and Conditions</Link>.</span>
+                    </Agreement>
+                    <Agreement id="agree_privacy" error={fieldError('agree_privacy')}>
+                      <input id="agree_privacy" type="checkbox" {...register('agree_privacy')} className={checkbox} {...a11y('agree_privacy')} />
+                      <span>I agree to the <Link to="/privacy" target="_blank" className="font-semibold text-[#0B5D2E] hover:underline">Privacy Policy</Link>.</span>
+                    </Agreement>
+                  </fieldset>
+
+                  <div className="rounded-2xl border border-[#CFE5D7] bg-[#EEF7F0] p-4 text-sm">
+                    <p className="font-semibold text-[#0B5D2E]">What happens next</p>
+                    <ol className="mt-2 list-decimal space-y-1 pl-5 text-[#3B4A40]">
+                      <li>Add your vehicle and upload your license and OR/CR.</li>
+                      <li>Your Tourism Office verifies them and schedules your interview and training.</li>
+                      <li>Attend with your original documents, pass, and start earning.</li>
+                    </ol>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center gap-3">
+                {step > 1 && (
+                  <button type="button" onClick={() => goTo(step - 1)}
+                    className="inline-flex items-center gap-1.5 rounded-full border-2 border-[#E2E8E3] px-5 py-3 text-sm font-bold text-[#14351F] transition hover:border-[#0B5D2E] hover:text-[#0B5D2E]">
+                    <ArrowLeft className="h-4 w-4" /> Back
                   </button>
-                </div>
-                {lockoutSeconds > 0 && (
-                  <p className="text-xs text-red-500 mt-1">
-                    Too many failed attempts. Try again in {formatCountdown(lockoutSeconds)}.
-                  </p>
                 )}
-                {form.formState.errors.otp_code && (
-                  <p className={errorClasses}>{form.formState.errors.otp_code.message}</p>
+                {step < last ? (
+                  <button type="button" onClick={() => void next()}
+                    className="ml-auto flex flex-1 items-center justify-center gap-2 rounded-full bg-[#0B5D2E] px-4 py-3.5 text-sm font-bold text-white shadow-[0_10px_24px_rgba(11,93,46,0.30)] transition hover:bg-[#094A25]">
+                    Next: {STEPS[step]!.title} <ArrowRight className="h-4 w-4" />
+                  </button>
+                ) : (
+                  <button type="submit" disabled={isSubmitting}
+                    className="ml-auto flex flex-1 items-center justify-center gap-2 rounded-full bg-[#0B5D2E] px-4 py-3.5 text-sm font-bold text-white shadow-[0_10px_24px_rgba(11,93,46,0.30)] transition hover:bg-[#094A25] disabled:opacity-50">
+                    {isSubmitting ? <><Loader2 className="h-4 w-4 animate-spin" /> Creating account...</> : <>Create rider account <ArrowRight className="h-4 w-4" /></>}
+                  </button>
                 )}
               </div>
-            )}
-          </div>
+            </form>
 
-          {/* Password Section */}
-          <div className="space-y-4">
-            <div>
-              <label className={labelClasses}>Password <span className="text-red-500">*</span></label>
-              <div className="relative">
-                <input
-                  {...form.register('password')}
-                  type={showPassword ? 'text' : 'password'}
-                  className={inputClasses}
-                  placeholder="Min 8 characters"
-                />
-                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#6B7280]">
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-              {watchedPassword && (
-                <div className="mt-2">
-                  <div className="flex items-center justify-between text-xs mb-1">
-                    <span className="text-[#6B7280]">Password Strength</span>
-                    <span className={`font-medium ${passwordStrength.level === 'strong' ? 'text-[#16803C]' : passwordStrength.level === 'medium' ? 'text-amber-500' : 'text-red-500'}`}>
-                      {passwordStrength.level.charAt(0).toUpperCase() + passwordStrength.level.slice(1)}
-                    </span>
-                  </div>
-                  <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                    <div className={`h-full ${passwordStrength.color} transition-all duration-300`} style={{ width: `${passwordStrength.percent}%` }} />
-                  </div>
-                </div>
-              )}
-              {form.formState.errors.password && (
-                <p className={errorClasses}>{form.formState.errors.password.message}</p>
-              )}
+            <div className="my-6 flex items-center gap-3 text-xs font-semibold uppercase tracking-wide text-[#9AA5A0]">
+              <span className="h-px flex-1 bg-[#E7E2D6]" /> Already have an account? <span className="h-px flex-1 bg-[#E7E2D6]" />
             </div>
-            <div>
-              <label className={labelClasses}>Confirm Password <span className="text-red-500">*</span></label>
-              <input
-                {...form.register('password_confirmation')}
-                type={showPassword ? 'text' : 'password'}
-                className={inputClasses}
-                placeholder="••••••••"
-              />
-              {form.formState.errors.password_confirmation && (
-                <p className={errorClasses}>{form.formState.errors.password_confirmation.message}</p>
-              )}
-            </div>
+            <Link to="/login" className="flex w-full items-center justify-center rounded-full border-2 border-[#0B5D2E] px-4 py-3 text-sm font-bold text-[#0B5D2E] transition hover:bg-[#EAF6ED]">
+              Sign in
+            </Link>
           </div>
 
-          {/* Referral Section */}
-          <div>
-            <label className={labelClasses}>Referral Code</label>
-            <input {...form.register('referral_code')} className={inputClasses} placeholder="Optional" />
+          <div className="mt-6 flex items-center justify-between gap-4 text-xs text-[#7A867F]">
+            <Link to="/become-a-rider" className="inline-flex items-center gap-1 font-semibold text-[#0B5D2E] hover:text-[#E0A800]">
+              <ArrowLeft className="h-3.5 w-3.5" /> About the rider program
+            </Link>
+            <span>&copy; {new Date().getFullYear()} TrackTour — Bansud Tourism Office</span>
           </div>
+        </div>
+      </main>
+    </div>
+  )
+}
 
-          {/* Agreements */}
-          <div className="space-y-3">
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                {...form.register('confirm_age')}
-                className="mt-1 h-4 w-4 rounded border-[#D7E8DB] text-[#16803C] focus:ring-[#16803C]"
-              />
-              <span className="text-sm text-[#17201A]">I confirm that I am at least 18 years old.</span>
-            </label>
-            {form.formState.errors.confirm_age && (
-              <p className={errorClasses}>{form.formState.errors.confirm_age.message}</p>
-            )}
-
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                {...form.register('agree_terms')}
-                className="mt-1 h-4 w-4 rounded border-[#D7E8DB] text-[#16803C] focus:ring-[#16803C]"
-              />
-              <span className="text-sm text-[#17201A]">I agree to the <Link to="/terms" className="text-[#16803C] hover:underline" target="_blank">Terms and Conditions</Link>.</span>
-            </label>
-            {form.formState.errors.agree_terms && (
-              <p className={errorClasses}>{form.formState.errors.agree_terms.message}</p>
-            )}
-
-            <label className="flex items-start gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                {...form.register('agree_privacy')}
-                className="mt-1 h-4 w-4 rounded border-[#D7E8DB] text-[#16803C] focus:ring-[#16803C]"
-              />
-              <span className="text-sm text-[#17201A]">I agree to the <Link to="/privacy" className="text-[#16803C] hover:underline" target="_blank">Privacy Policy</Link>.</span>
-            </label>
-            {form.formState.errors.agree_privacy && (
-              <p className={errorClasses}>{form.formState.errors.agree_privacy.message}</p>
-            )}
-          </div>
-
-          {/* Submit Button */}
-          <button
-            type="submit"
-            disabled={form.formState.isSubmitting || !otpVerified}
-            className="btn-tourism w-full py-3 px-4 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {form.formState.isSubmitting ? 'Creating Account...' : 'Create Rider Account'}
-          </button>
-        </form>
-
-        <p className="mt-6 text-sm text-center text-[#6B7280]">
-          Already have an account?{' '}
-          <Link to="/login" className="font-medium text-[#16803C] hover:text-[#126B32]">
-            Sign In
-          </Link>
-        </p>
-      </div>
+/** One agreement checkbox: the whole row is the label. */
+function Agreement({ id, error, children }: { id: string; error?: ReactNode; children: ReactNode }) {
+  return (
+    <div>
+      <label htmlFor={id} className="flex cursor-pointer items-start gap-3 rounded-2xl border border-[#E7E2D6] p-3 text-sm text-[#14351F] transition hover:border-[#2E8B57]">
+        {children}
+      </label>
+      {error}
     </div>
   )
 }
