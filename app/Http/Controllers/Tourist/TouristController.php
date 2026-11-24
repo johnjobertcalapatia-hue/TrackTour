@@ -75,10 +75,10 @@ class TouristController extends Controller
         $featured = $this->loadAvgRating($featured);
 
         $trending = $this->filteredBusinesses($categoryId, $search)
-            ->whereHas('reviews', fn ($q) => $q->where('status', 'approved'))
+            ->whereHas('reviews', fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES))
             ->with('category', 'municipality')
-            ->withCount(['reviews' => fn ($q) => $q->where('status', 'approved')])
-            ->withAvg(['reviews' => fn ($q) => $q->where('status', 'approved')], 'rating')
+            ->withCount(['reviews' => fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)])
+            ->withAvg(['reviews' => fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)], 'rating')
             ->orderByDesc('reviews_count')
             ->orderByDesc('reviews_avg_rating')
             ->take(10)
@@ -281,9 +281,9 @@ class TouristController extends Controller
             ->get()
             ->map(function ($business) use ($lat, $lng) {
                 $business->is_open = $this->isBusinessOpen($business);
-                $business->avg_rating = Review::where('business_id', $business->id)
-                    ->where('status', 'approved')
-                    ->avg('rating') ?? 0;
+                $business->avg_rating = (float) (Review::where('business_id', $business->id)
+                    ->whereIn('status', Review::PUBLIC_STATUSES)
+                    ->avg('rating') ?? 0);
                 if ($lat && $lng && $business->latitude && $business->longitude && ! isset($business->distance_km)) {
                     $business->distance_km = $this->calculateDistance($lat, $lng, (float) $business->latitude, (float) $business->longitude);
                 }
@@ -331,15 +331,15 @@ class TouristController extends Controller
     {
         return $businesses->map(function ($business) {
             if (isset($business->reviews_avg_rating)) {
-                $business->avg_rating = $business->reviews_avg_rating ?? 0;
+                $business->avg_rating = (float) ($business->reviews_avg_rating ?? 0);
             } else {
-                $business->avg_rating = Review::where('business_id', $business->id)
-                    ->where('status', 'approved')
-                    ->avg('rating') ?? 0;
+                $business->avg_rating = (float) (Review::where('business_id', $business->id)
+                    ->whereIn('status', Review::PUBLIC_STATUSES)
+                    ->avg('rating') ?? 0);
             }
             if (! isset($business->reviews_count)) {
                 $business->reviews_count = Review::where('business_id', $business->id)
-                    ->where('status', 'approved')
+                    ->whereIn('status', Review::PUBLIC_STATUSES)
                     ->count();
             }
 

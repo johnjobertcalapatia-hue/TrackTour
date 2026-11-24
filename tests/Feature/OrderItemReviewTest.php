@@ -159,18 +159,19 @@ class OrderItemReviewTest extends TestCase
         $this->assertSame(0, OrderItemReview::count());
     }
 
-    public function test_dish_reviews_drive_that_dishs_food_rating_once_approved(): void
+    public function test_dish_reviews_drive_that_dishs_food_rating_at_once(): void
     {
         [$order, $sisig, $bbq] = $this->deliveredOrder();
         $this->review($order, $sisig, ['rating' => 5])->assertOk();
         $this->review($order, $bbq, ['rating' => 3])->assertOk();
 
+        // Shown as soon as posted (2026-11-24); a rejected review stops counting.
         $byName = fn () => collect($this->getJson('/api/tourist/food')->json('data.data'))->keyBy('name');
-        $this->assertNull($byName()['Sisig']['food_rating'], 'pending moderation');
-
-        Review::where('order_id', $order->id)->update(['status' => 'approved']);
         $this->assertEquals(5, $byName()['Sisig']['food_rating']);
         $this->assertEquals(3, $byName()['Chicken BBQ']['food_rating']);
         $this->assertSame(1, $byName()['Sisig']['food_rating_count']);
+
+        Review::where('order_id', $order->id)->update(['status' => 'rejected']);
+        $this->assertNull($byName()['Sisig']['food_rating'], 'rejected');
     }
 }

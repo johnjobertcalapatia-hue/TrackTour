@@ -558,16 +558,16 @@
     "semantic_hash": ""
   },
   "app/Http/Controllers/BusinessOwnerBusinessManageController.php": {
-    "mtime": 1794306124.772224,
-    "seen": 1794910470.2712927,
-    "ast_hash": "9c053087ac2eb641fb6ba2b81dcda4ae",
-    "semantic_hash": "9c053087ac2eb641fb6ba2b81dcda4ae"
+    "mtime": 1795487167.556292,
+    "seen": 1795487699.1265855,
+    "ast_hash": "ff8fed614f60c2e65cd19c6e01ff20fc",
+    "semantic_hash": ""
   },
   "app/Http/Controllers/BusinessOwnerDashboardController.php": {
-    "mtime": 1787721970.0,
-    "seen": 1794910470.2712927,
-    "ast_hash": "21ec53f5658c563e1d8e43938448de11",
-    "semantic_hash": "21ec53f5658c563e1d8e43938448de11"
+    "mtime": 1795488928.9833064,
+    "seen": 1795500639.1557853,
+    "ast_hash": "3a17e3652e3a1cb6cac27d04e3b388d4",
+    "semantic_hash": ""
   },
   "app/Http/Controllers/BusinessOwnerFoodController.php": {
     "mtime": 1795423060.7382576,
@@ -882,10 +882,10 @@
     "semantic_hash": "f16a72b21e89026b0b02ece8fc6d1e21"
   },
   "app/Http/Controllers/TourismOffice/ReportsController.php": {
-    "mtime": 1784778398.0,
-    "seen": 1794910470.2712927,
-    "ast_hash": "abd258d288390787affaf702486b7370",
-    "semantic_hash": "abd258d288390787affaf702486b7370"
+    "mtime": 1795487167.556292,
+    "seen": 1795487699.1265855,
+    "ast_hash": "11977d3dce39a50e36051eca48542cf0",
+    "semantic_hash": ""
   },
   "app/Http/Controllers/TourismOffice/TourismManagementController.php": {
     "mtime": 1784791554.0,
@@ -930,9 +930,9 @@
     "semantic_hash": "01a03734e378e3f52c47114ec0645ae6"
   },
   "app/Http/Controllers/Tourist/ExploreController.php": {
-    "mtime": 1795450373.3055906,
-    "seen": 1795457664.433282,
-    "ast_hash": "379ae47c4871726aa61e148859044c43",
+    "mtime": 1795501770.6988206,
+    "seen": 1795502219.3710072,
+    "ast_hash": "e92a6c3636571765d238f7be8956c1ef",
     "semantic_hash": ""
   },
   "app/Http/Controllers/Tourist/FavoriteController.php": {
@@ -942,9 +942,9 @@
     "semantic_hash": "cd65af273a4965015872a0647300b922"
   },
   "app/Http/Controllers/Tourist/FoodController.php": {
-    "mtime": 1795450703.9405556,
-    "seen": 1795457664.433282,
-    "ast_hash": "fc2bace670404e8b15734423d6d23e34",
+    "mtime": 1795487253.279389,
+    "seen": 1795487699.1265855,
+    "ast_hash": "a8925c6122f6e817c4e9c3f235b60496",
     "semantic_hash": ""
   },
   "app/Http/Controllers/Tourist/GroupOrderController.php": {
@@ -984,16 +984,16 @@
     "semantic_hash": ""
   },
   "app/Http/Controllers/Tourist/StaysController.php": {
-    "mtime": 1794306124.7940307,
-    "seen": 1794910470.2712927,
-    "ast_hash": "77241e2654448ee5765d5b786ddedf1e",
-    "semantic_hash": "77241e2654448ee5765d5b786ddedf1e"
+    "mtime": 1795487253.279389,
+    "seen": 1795487699.1285894,
+    "ast_hash": "f854e02c0225a5e8d697f1900bd63786",
+    "semantic_hash": ""
   },
   "app/Http/Controllers/Tourist/TouristController.php": {
-    "mtime": 1793062951.1324909,
-    "seen": 1794910470.2712927,
-    "ast_hash": "17f60da3913fa81df7e58bb83912acc2",
-    "semantic_hash": "17f60da3913fa81df7e58bb83912acc2"
+    "mtime": 1795501770.6988206,
+    "seen": 1795502219.3710072,
+    "ast_hash": "adea1b2a1e080dff2890ec9408e3f925",
+    "semantic_hash": ""
   },
   "app/Http/Controllers/Tourist/TouristDestinationController.php": {
     "mtime": 1794306124.7940307,
@@ -1524,10 +1524,10 @@
     "semantic_hash": "7684858cf959d354db0977e34ea32fc9"
   },
   "app/Listeners/UpdateBusinessRating.php": {
-    "mtime": 1784358594.0,
-    "seen": 1794910470.2712927,
-    "ast_hash": "e24ba216ecc17e5d1837ed897de56483",
-    "semantic_hash": "e24ba216ecc17e5d1837ed897de56483"
+    "mtime": 1795487422.1005573,
+    "seen": 1795487699.1285894,
+    "ast_hash": "61a0d57f067b04a75c8760a8b2e3af7c",
+    "semantic_hash": ""
   },
   "app/Mail/EmailVerificationOtpMail.php": {
     "mtime": 1794306124.8037076,
@@ -1584,9 +1584,9 @@
     "semantic_hash": "5cc38d4c7e6d8348baf6fe68fd14f245"
   },
   "app/Models/Business.php": {
-    "mtime": 1795361133.3063407,
-    "seen": 1795361435.8086016,
-    "ast_hash": "3405bde22a79a01b2c237b68a92ca046",
+    "mtime": 1795501758.370895,
+    "seen": 1795502219.3710072,
+    "ast_hash": "e25550b4785a7ab7ce269a6132685753",
     "semantic_hash": ""
   },
   "app/Models/BusinessCategory.php": {
@@ -1932,10 +1932,10 @@
     "semantic_hash": "fd54de8c39250868fbb5861f2f1e9bfc"
   },
   "app/Models/Review.php": {
-    "mtime": 1794306124.8143585,
-    "seen": 1794910470.272406,
-    "ast_hash": "5b7a87c35d62bb3498d415f36c78df46",
-    "semantic_hash": "5b7a87c35d62bb3498d415f36c78df46"
+    "mtime": 1795488182.803889,
+    "seen": 1795488605.004313,
+    "ast_hash": "c66bc3ab60f3df0ba0723c02bc9d1032",
+    "semantic_hash": ""
   },
   "app/Models/RiderAppointment.php": {
     "mtime": 1794751776.9375157,
@@ -2226,9 +2226,9 @@
     "semantic_hash": "eb25c9280514ba1b95ba053ee41507a3"
   },
   "app/Observers/ReviewObserver.php": {
-    "mtime": 1795440915.4996204,
-    "seen": 1795441826.9476516,
-    "ast_hash": "44d2a5f0b8c8afe9cec4fceb36660aba",
+    "mtime": 1795487422.1005573,
+    "seen": 1795487699.1285894,
+    "ast_hash": "3fec2660ba95ad626ca1229cfe728d65",
     "semantic_hash": ""
   },
   "app/Observers/TransactionLedgerObserver.php": {
@@ -2412,10 +2412,10 @@
     "semantic_hash": "cce726efb1a621191a0e5e315257ec18"
   },
   "app/Repositories/Eloquent/ReviewRepository.php": {
-    "mtime": 1784358118.0,
-    "seen": 1794910470.272406,
-    "ast_hash": "208aaaa16f1fd437cc05151b9820d1b3",
-    "semantic_hash": "208aaaa16f1fd437cc05151b9820d1b3"
+    "mtime": 1795487167.5602968,
+    "seen": 1795487699.1285894,
+    "ast_hash": "60faeaea90e3878a3decd0eed3834f1b",
+    "semantic_hash": ""
   },
   "app/Repositories/Eloquent/StaffRepository.php": {
     "mtime": 1784358692.0,
@@ -2544,10 +2544,10 @@
     "semantic_hash": "86a7a2c83b3a702cf4d028faa178b9cc"
   },
   "app/Services/FoodPopularityService.php": {
-    "mtime": 1794306124.8264008,
-    "seen": 1794910470.272406,
-    "ast_hash": "dc768a02d0fd7712995cbd47d40cb196",
-    "semantic_hash": "dc768a02d0fd7712995cbd47d40cb196"
+    "mtime": 1795487167.5602968,
+    "seen": 1795487699.1285894,
+    "ast_hash": "fdd97e1075ad7745cfa04decd59f90ca",
+    "semantic_hash": ""
   },
   "app/Services/GpsService.php": {
     "mtime": 1783756694.0,
@@ -4932,9 +4932,9 @@
     "semantic_hash": "d150e284314794afd981ea2828522aa7"
   },
   "frontend/src/features/auth/pages/RiderRegisterPage.tsx": {
-    "mtime": 1795363570.2315803,
-    "seen": 1795364355.4930701,
-    "ast_hash": "7b09809cf97f34fd92c45d5b42e753e0",
+    "mtime": 1795505042.2079153,
+    "seen": 1795505181.464643,
+    "ast_hash": "7a4555b3ec3bf15bf6ce9b556dc889fb",
     "semantic_hash": ""
   },
   "frontend/src/features/auth/pages/VerifyEmailPage.tsx": {
@@ -5100,9 +5100,9 @@
     "semantic_hash": "f632942c1aa05f9af5c0aa7544ef72a7"
   },
   "frontend/src/features/business-owner/pages/BusinessOwnerDashboard.tsx": {
-    "mtime": 1795425997.3072493,
-    "seen": 1795441826.9476516,
-    "ast_hash": "fad0691a9757b9d003735df89a20e4d3",
+    "mtime": 1795500283.5145621,
+    "seen": 1795500639.1577866,
+    "ast_hash": "8b50c4412c929c0c60e04f7623291975",
     "semantic_hash": ""
   },
   "frontend/src/features/business-owner/pages/BusinessOwnerExpenses.tsx": {
@@ -5418,14 +5418,14 @@
     "semantic_hash": "32c4f2cbddb7abbcf7f78b9564ebc862"
   },
   "frontend/src/features/business-owner/pages/Dashboard/index.tsx": {
-    "mtime": 1787122374.0,
-    "seen": 1794910470.2734168,
+    "mtime": 1795500275.213739,
+    "seen": 1795500639.1577866,
     "ast_hash": "cb6a765f25adbf370e79e052ce3e4aad",
     "semantic_hash": "cb6a765f25adbf370e79e052ce3e4aad"
   },
   "frontend/src/features/business-owner/pages/Dashboard/registry.ts": {
-    "mtime": 1786710068.0,
-    "seen": 1794910470.2734168,
+    "mtime": 1795500275.213739,
+    "seen": 1795500639.1577866,
     "ast_hash": "715f1b3c5b3cc9c302575db3aa12e8dc",
     "semantic_hash": "715f1b3c5b3cc9c302575db3aa12e8dc"
   },
@@ -6192,15 +6192,15 @@
     "semantic_hash": ""
   },
   "frontend/src/features/tourist/pages/TouristExploreMap.tsx": {
-    "mtime": 1795464371.773178,
-    "seen": 1795464588.7150812,
-    "ast_hash": "527bacfd689c53926ac7624540a049c4",
+    "mtime": 1795487396.642541,
+    "seen": 1795487699.1285894,
+    "ast_hash": "46f5ebe0582335ab2e2a2d36fb426978",
     "semantic_hash": ""
   },
   "frontend/src/features/tourist/pages/TouristExploreShow.tsx": {
-    "mtime": 1795457280.3632977,
-    "seen": 1795457664.4357903,
-    "ast_hash": "2d867f7764bc4b09ac94065e59def176",
+    "mtime": 1795487332.9278312,
+    "seen": 1795487699.1285894,
+    "ast_hash": "92c092672af1c07b17722bbe6ce2ab83",
     "semantic_hash": ""
   },
   "frontend/src/features/tourist/pages/TouristFavorites.tsx": {
@@ -6390,9 +6390,9 @@
     "semantic_hash": ""
   },
   "frontend/src/pages/LandingPage.tsx": {
-    "mtime": 1795484190.4659474,
-    "seen": 1795484380.3597627,
-    "ast_hash": "e28571ff835155cb5f56a85630668537",
+    "mtime": 1795487396.6445405,
+    "seen": 1795487699.1305926,
+    "ast_hash": "3839cdd9ab8470907bddd21ad65c6117",
     "semantic_hash": ""
   },
   "frontend/src/pages/LandingRestaurantPage.tsx": {
@@ -6426,10 +6426,10 @@
     "semantic_hash": "989afd56ed589537716b0a28b14590c7"
   },
   "frontend/src/pages/components/LandingItemCard.tsx": {
-    "mtime": 1794750721.6880703,
-    "seen": 1794910470.2747486,
-    "ast_hash": "8032d046a33828a6923960f3abf43b17",
-    "semantic_hash": "8032d046a33828a6923960f3abf43b17"
+    "mtime": 1795501758.372415,
+    "seen": 1795502219.3730073,
+    "ast_hash": "9e2f0c985852a4668f8ff9cdcd632679",
+    "semantic_hash": ""
   },
   "frontend/src/pages/components/LandingMapFilters.tsx": {
     "mtime": 1794893205.1738646,
@@ -6456,9 +6456,9 @@
     "semantic_hash": "ca00e4b6cb4b38c9d0ca1cd606f2e599"
   },
   "frontend/src/pages/components/LandingPlaces.tsx": {
-    "mtime": 1795484190.4659474,
-    "seen": 1795484380.3597627,
-    "ast_hash": "72ed3f6329bffd6f391a0c05fe8af6c5",
+    "mtime": 1795501758.372415,
+    "seen": 1795502219.3730073,
+    "ast_hash": "82561e8e430b298e5079389a619857d2",
     "semantic_hash": ""
   },
   "frontend/src/pages/components/LandingPopular.tsx": {
@@ -7440,9 +7440,9 @@
     "semantic_hash": "93ef1e53cf9a2eb56e1befddc986f438"
   },
   "frontend/tests/ui/tourist-map-places-panel.test.tsx": {
-    "mtime": 1795464404.4988122,
-    "seen": 1795464588.7162144,
-    "ast_hash": "aede205fea1e2e58c68a870e658712be",
+    "mtime": 1795487480.7857916,
+    "seen": 1795487699.1305926,
+    "ast_hash": "8c8e604e2d7e9df665d05a0f1afe1517",
     "semantic_hash": ""
   },
   "frontend/tests/ui/tourist-map-route-ux.test.tsx": {
@@ -7506,10 +7506,10 @@
     "semantic_hash": "176be20046a7b5aa3df3721334519429"
   },
   "frontend/tests/ui/tourist-restaurant-page-routing.test.tsx": {
-    "mtime": 1794306125.0777707,
-    "seen": 1794910470.2747486,
-    "ast_hash": "b45ea67dd9ebfab2dcae414bb9c3ca5d",
-    "semantic_hash": "b45ea67dd9ebfab2dcae414bb9c3ca5d"
+    "mtime": 1795487505.10218,
+    "seen": 1795487699.1305926,
+    "ast_hash": "af896c4af3111c2ea9f48f14850db385",
+    "semantic_hash": ""
   },
   "frontend/tests/ui/tourist-restaurant-route-map.test.tsx": {
     "mtime": 1794306125.0787716,
@@ -7746,9 +7746,9 @@
     "semantic_hash": "9bded1c8541d68de3939dbf76e45f14a"
   },
   "routes/api.php": {
-    "mtime": 1795485186.5885222,
-    "seen": 1795486221.4071975,
-    "ast_hash": "d883d0824b94848ea8745e64dd8cf75c",
+    "mtime": 1795488928.9833064,
+    "seen": 1795500639.1587853,
+    "ast_hash": "ca06433e6cf9458e9c49add61ca9471f",
     "semantic_hash": ""
   },
   "routes/auth.php": {
@@ -8136,10 +8136,10 @@
     "semantic_hash": "935d08319fc07e0613e065d45af703ba"
   },
   "tests/Feature/FoodPopularityRankingTest.php": {
-    "mtime": 1794306125.1107714,
-    "seen": 1794910470.2747486,
-    "ast_hash": "070a47dfc6beba172283c227f9c1f794",
-    "semantic_hash": "070a47dfc6beba172283c227f9c1f794"
+    "mtime": 1795488161.0326939,
+    "seen": 1795488605.004313,
+    "ast_hash": "41850c5382f132a27c4f7f225f40584e",
+    "semantic_hash": ""
   },
   "tests/Feature/GcashOrderSettlementTest.php": {
     "mtime": 1789880123.4754133,
@@ -8244,10 +8244,10 @@
     "semantic_hash": "0c292fafe306c27fd67a62dc91ccd150"
   },
   "tests/Feature/OrderItemReviewTest.php": {
-    "mtime": 1794306125.1157715,
-    "seen": 1794910470.2747486,
-    "ast_hash": "030929b3955688e44dcef8136c90330c",
-    "semantic_hash": "030929b3955688e44dcef8136c90330c"
+    "mtime": 1795488161.0662067,
+    "seen": 1795488605.004313,
+    "ast_hash": "1911552d868d5aeeada6f7443f12abfc",
+    "semantic_hash": ""
   },
   "tests/Feature/OrderReadyCarriesItemsTest.php": {
     "mtime": 1794453643.3766072,
@@ -8562,10 +8562,10 @@
     "semantic_hash": "61d9245cc904472f23ddaaec0d5a7e46"
   },
   "tests/Feature/TouristApiTest.php": {
-    "mtime": 1794579074.5421398,
-    "seen": 1794910470.2757537,
-    "ast_hash": "462779568dc54dd0f479151ae4f4174d",
-    "semantic_hash": "462779568dc54dd0f479151ae4f4174d"
+    "mtime": 1795488161.0672076,
+    "seen": 1795488605.004313,
+    "ast_hash": "329854210acda02fa7be74045d828fe1",
+    "semantic_hash": ""
   },
   "tests/Feature/TouristConfirmDeliveryTest.php": {
     "mtime": 1794932017.9135876,
@@ -8592,16 +8592,16 @@
     "semantic_hash": "d2b1a1a71b53e42438ca5cbc89692053"
   },
   "tests/Feature/TouristFoodDetailTest.php": {
-    "mtime": 1794306125.1307764,
-    "seen": 1794910470.2757537,
-    "ast_hash": "0090c5d2f1e8913e64494f554e4ec61e",
-    "semantic_hash": "0090c5d2f1e8913e64494f554e4ec61e"
+    "mtime": 1795488182.803889,
+    "seen": 1795488605.004313,
+    "ast_hash": "be256971e9c9c392718a7f0c161d41ca",
+    "semantic_hash": ""
   },
   "tests/Feature/TouristFoodStatsTest.php": {
-    "mtime": 1794306125.1317768,
-    "seen": 1794910470.2757537,
-    "ast_hash": "6614a6b79bb263b325a628388690badc",
-    "semantic_hash": "6614a6b79bb263b325a628388690badc"
+    "mtime": 1795488161.0692084,
+    "seen": 1795488605.004313,
+    "ast_hash": "7c77456d8ca02292211fe3a5c273aad1",
+    "semantic_hash": ""
   },
   "tests/Feature/TouristMunicipalityScopeTest.php": {
     "mtime": 1794306125.1317768,
@@ -8628,10 +8628,10 @@
     "semantic_hash": "4db8b255d41c6a17e5e644be7bb3d8c4"
   },
   "tests/Feature/TouristStaysTest.php": {
-    "mtime": 1794306125.1347797,
-    "seen": 1794910470.2757537,
-    "ast_hash": "08a1548c8bdfa40b262e9fb58e69788a",
-    "semantic_hash": "08a1548c8bdfa40b262e9fb58e69788a"
+    "mtime": 1795488161.0702069,
+    "seen": 1795488605.004313,
+    "ast_hash": "87b8d624fd150f02f1e1a208f0e8d9f4",
+    "semantic_hash": ""
   },
   "tests/Feature/TouristTransportContractTest.php": {
     "mtime": 1794985119.6238167,
@@ -9858,15 +9858,15 @@
     "semantic_hash": ""
   },
   "frontend/src/features/tourist/location-sharing.ts": {
-    "mtime": 1795359929.1938994,
-    "seen": 1795360278.0677915,
-    "ast_hash": "69cc0af9a217732a7ff91f4e936c5c51",
+    "mtime": 1795487786.071954,
+    "seen": 1795487984.8435905,
+    "ast_hash": "4ecbddd4e235072ab7630105603322a3",
     "semantic_hash": ""
   },
   "frontend/tests/ui/tourist-location-sharing.test.tsx": {
-    "mtime": 1795360084.2858734,
-    "seen": 1795360278.0677915,
-    "ast_hash": "7b7971fe93ab54fa99ae79c6c7962da4",
+    "mtime": 1795487796.9627047,
+    "seen": 1795487984.8435905,
+    "ast_hash": "c1d3b6ef9da12dfdea3d0d8a004f13d0",
     "semantic_hash": ""
   },
   "tests/Feature/TouristLocationSharingTest.php": {
@@ -10656,9 +10656,9 @@
     "semantic_hash": ""
   },
   "frontend/src/features/auth/components/BusinessOwnerSignUp.tsx": {
-    "mtime": 1795465549.6293266,
-    "seen": 1795465681.281819,
-    "ast_hash": "a9b3d19019794dc5fd3c2a913086bd86",
+    "mtime": 1795504930.2506843,
+    "seen": 1795505181.464643,
+    "ast_hash": "d08e24a091a067b42f4f8f6d2f38de2d",
     "semantic_hash": ""
   },
   "frontend/tests/ui/business-owner-signup.test.tsx": {
@@ -10680,15 +10680,15 @@
     "semantic_hash": ""
   },
   "frontend/src/pages/LandingPlacePage.tsx": {
-    "mtime": 1795484190.4659474,
-    "seen": 1795484380.3597627,
-    "ast_hash": "e894d8cf4e6383737cc2a8cadaf9136d",
+    "mtime": 1795487332.9288309,
+    "seen": 1795487699.1305926,
+    "ast_hash": "34f69b3800d5b458e6c562449a437d99",
     "semantic_hash": ""
   },
   "frontend/tests/ui/landing-place-page.test.tsx": {
-    "mtime": 1795484236.5626786,
-    "seen": 1795484380.3597627,
-    "ast_hash": "f48cc8248ea01d12ffce1e46aa557340",
+    "mtime": 1795487460.2966075,
+    "seen": 1795487699.1305926,
+    "ast_hash": "74d676ecf69d136de50da489e99abf99",
     "semantic_hash": ""
   },
   "app/Http/Controllers/Api/StaffProfileController.php": {
@@ -10713,6 +10713,54 @@
     "mtime": 1795485078.5409875,
     "seen": 1795486221.4071975,
     "ast_hash": "62d8df065b91f704522c26342068cc26",
+    "semantic_hash": ""
+  },
+  "frontend/src/features/tourist/map-directions.ts": {
+    "mtime": 1795487307.8707516,
+    "seen": 1795487699.1285894,
+    "ast_hash": "10ca49eb523ed928d17689d5d4551651",
+    "semantic_hash": ""
+  },
+  "frontend/src/shared/components/BusinessReviews.tsx": {
+    "mtime": 1795487396.2369225,
+    "seen": 1795487699.1305926,
+    "ast_hash": "30c38dda199d038c855c423f214a6828",
+    "semantic_hash": ""
+  },
+  "tests/Feature/PublicBusinessReviewsTest.php": {
+    "mtime": 1795501787.8544192,
+    "seen": 1795502219.3740082,
+    "ast_hash": "a2fb6deb59bfe6f0fce2c177e1864ca0",
+    "semantic_hash": ""
+  },
+  "frontend/src/features/business-owner/pages/Dashboard/AttractionDashboard.tsx": {
+    "mtime": 1795500357.0380192,
+    "seen": 1795500639.1577866,
+    "ast_hash": "d2a8a64b7f88321a1bf45067ed406d4b",
+    "semantic_hash": ""
+  },
+  "frontend/tests/ui/attraction-owner-dashboard.test.tsx": {
+    "mtime": 1795500357.0493107,
+    "seen": 1795500639.1587853,
+    "ast_hash": "ef4d73f08522cb0cd9b586f7c33a6c41",
+    "semantic_hash": ""
+  },
+  "tests/Feature/AttractionOwnerDashboardTest.php": {
+    "mtime": 1795489032.3130403,
+    "seen": 1795500639.1587853,
+    "ast_hash": "0a7541f2829a459aede2c63ce821f523",
+    "semantic_hash": ""
+  },
+  "frontend/tests/ui/landing-item-card-rating.test.tsx": {
+    "mtime": 1795501787.8003626,
+    "seen": 1795502219.3730073,
+    "ast_hash": "55beca73232ca6451482c0d7c567ddf2",
+    "semantic_hash": ""
+  },
+  "frontend/tests/ui/rider-register-steps.test.tsx": {
+    "mtime": 1795505129.2037554,
+    "seen": 1795505181.464643,
+    "ast_hash": "879609e55c6f388f2691516030107297",
     "semantic_hash": ""
   },
   "frontend/package-lock.json": {

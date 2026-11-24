@@ -672,8 +672,8 @@ class BusinessOwnerBusinessManageController extends Controller
 
         return $this->successResponse([
             'reviews' => $reviews,
-            'average_rating' => round((float) $business->reviews()->where('status', 'approved')->avg('rating'), 1),
-            'review_count' => (int) $business->reviews()->where('status', 'approved')->count(),
+            'average_rating' => round((float) $business->reviews()->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)->avg('rating'), 1),
+            'review_count' => (int) $business->reviews()->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)->count(),
         ]);
     }
 

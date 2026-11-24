@@ -79,7 +79,7 @@ class TouristFoodStatsTest extends TestCase
         $this->sell($sisig, 4, 'cancelled');
         $this->review($a, 5);
         $this->review($b, 4);
-        $this->review($this->sell($sisig, 1, 'delivered'), 1, 'pending'); // unapproved review: ignored (but 1 more sold)
+        $this->review($this->sell($sisig, 1, 'delivered'), 1, 'rejected'); // rejected review: ignored (but 1 more sold)
 
         $byName = collect($this->getJson('/api/tourist/food')->assertOk()->json('data.data'))->keyBy('name');
 

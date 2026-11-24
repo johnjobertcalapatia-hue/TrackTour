@@ -168,18 +168,12 @@ class FoodController extends Controller
         // are returned strictly as restaurant context — never as an item rating.
         $reviews = Review::query()
             ->where('business_id', $business->id)
-            ->where('status', 'approved')
-            ->with('user')
+            ->whereIn('status', Review::PUBLIC_STATUSES)
+            ->with('user.profile')
             ->latest()
             ->take(3)
             ->get()
-            ->map(fn (Review $review) => [
-                'id' => $review->id,
-                'rating' => $review->rating,
-                'review' => $review->review,
-                'user_name' => $review->user?->name,
-                'created_at' => $review->created_at,
-            ])
+            ->map(fn (Review $review) => $review->publicCard()) // first name + initial only
             ->values();
 
         return $this->successResponse([

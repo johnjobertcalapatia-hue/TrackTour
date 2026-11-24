@@ -169,7 +169,7 @@ class TouristApiTest extends TestCase
             'user_id' => $this->tourist->id,
             'rating' => 1,
             'review' => 'Pending',
-            'status' => 'pending',
+            'status' => 'rejected', // hidden
         ]);
 
         $response = $this->actingAs($this->tourist, 'sanctum')

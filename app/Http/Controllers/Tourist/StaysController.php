@@ -62,8 +62,8 @@ class StaysController extends Controller
             ->whereIn('business_category_id', $accommodationCategoryIds)
             ->with(['category', 'municipality', 'resortTypes', 'resortFacilities', 'resortCustomFacilities',
                 'resortOfferings' => fn ($q) => $q->where('is_published', true)])
-            ->withAvg(['reviews' => fn ($q) => $q->where('status', 'approved')], 'rating')
-            ->withCount(['reviews' => fn ($q) => $q->where('status', 'approved')]);
+            ->withAvg(['reviews' => fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)], 'rating')
+            ->withCount(['reviews' => fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)]);
 
         if (filled($validated['search'] ?? null)) {
             $term = '%'.$validated['search'].'%';
@@ -96,7 +96,7 @@ class StaysController extends Controller
         // Minimum rating from approved reviews only (unrated stays never match).
         if (filled($validated['min_rating'] ?? null)) {
             $query->whereRaw(
-                "(select avg(rating) from reviews where reviews.business_id = businesses.id and reviews.status = 'approved') >= (? + 0.0)",
+                "(select avg(rating) from reviews where reviews.business_id = businesses.id and reviews.status in ('approved', 'pending')) >= (? + 0.0)",
                 [(float) $validated['min_rating']],
             );
         }
@@ -223,7 +223,7 @@ class StaysController extends Controller
                 ->map(fn ($m) => ['id' => $m->id, 'name' => $m->name, 'count' => (int) $m->businesses_count])
                 ->values(),
             'rating_available' => Review::query()
-                ->where('status', 'approved')
+                ->whereIn('status', Review::PUBLIC_STATUSES)
                 ->whereHas('business', $listed)
                 ->exists(),
         ];

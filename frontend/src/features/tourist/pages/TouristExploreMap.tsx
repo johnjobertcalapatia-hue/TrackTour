@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import api from '@/shared/services/api'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import BusinessReviews from '@/shared/components/BusinessReviews'
 import { getInitials, toAssetUrl } from '@/shared/utils'
 import { MapContainer, TileLayer, Marker, Polyline, useMap, useMapEvents } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
@@ -801,6 +802,20 @@ export default function TouristExploreMap({ mapOnly = false }: { mapOnly?: boole
     }
   }, [])
 
+  // "Get Directions" from a place page (?directions=<id>, map-directions.ts):
+  // open that place and draw the route, once.
+  const directionsParam = Number(searchParams.get('directions'))
+  const handledDirectionsRef = useRef<number | null>(null)
+  useEffect(() => {
+    if (!businesses.length || !directionsParam || handledDirectionsRef.current === directionsParam) return
+    const target = businesses.find((business) => business.id === directionsParam)
+    if (!target) return
+    handledDirectionsRef.current = directionsParam
+    handleBusinessSelect(target)
+    handleDirections(target)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [businesses, directionsParam])
+
   useEffect(() => {
     if (!businesses.length) return
     const stored = sessionStorage.getItem(PENDING_MAP_DESTINATION_KEY)
@@ -1397,24 +1412,7 @@ export default function TouristExploreMap({ mapOnly = false }: { mapOnly?: boole
                       </div>
                     )}
 
-                    {panelTab === 'Reviews' && (
-                      <div className="pt-10 pb-6 text-center">
-                        <p className="text-3xl font-bold text-gray-900">{Number(displayBusiness.reviews_avg_rating ?? 0) > 0 ? Number(displayBusiness.reviews_avg_rating).toFixed(1) : "No ratings yet"}</p>
-                        <p className="mt-1 inline-flex items-center gap-1 text-sm text-gray-600">
-                          {Array.from({ length: 5 }, (_, i) => (
-                            <Star
-                              key={i}
-                              className={`w-4 h-4 ${
-                                i < Math.round(displayBusiness.reviews_avg_rating ?? 0) ? 'fill-[#F4B400] text-[#F4B400]' : 'fill-gray-200 text-gray-200'
-                              }`}
-                            />
-                          ))}
-                        </p>
-                        <p className="mt-1 text-sm text-gray-500">
-                          Based on {displayBusiness.reviews_count ?? 0} review{(displayBusiness.reviews_count ?? 0) === 1 ? '' : 's'}
-                        </p>
-                      </div>
-                    )}
+                    {panelTab === 'Reviews' && <BusinessReviews businessId={displayBusiness.id} />}
 
                     {panelTab === 'About' && (
                       <div className="pt-10 pb-6 text-center">

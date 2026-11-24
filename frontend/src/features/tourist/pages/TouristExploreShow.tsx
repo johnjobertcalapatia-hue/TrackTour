@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { SalePrice, type DishSale } from '@/shared/components/SalePrice'
 import ResortDetail, { type ResortBusiness, type ResortInfo, type ResortReview } from '@/features/tourist/components/resort/ResortDetail'
 import { Navigate, useNavigate, useParams } from 'react-router-dom'
+import { canRouteTo, trackTourDirectionsPath } from '@/features/tourist/map-directions'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { get, post } from '@/shared/services/api'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
@@ -307,10 +308,8 @@ export default function TouristExploreShow() {
   const visitDuration = detailsMap.estimated_visit_duration
   const guidedTour = detailsMap.guided_tour_available
 
-  const hasCoords = Boolean(business.latitude && business.longitude)
-  const directionsUrl = hasCoords
-    ? `https://www.google.com/maps/dir/?api=1&destination=${business.latitude},${business.longitude}`
-    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(bizName + ' Bansud')}`
+  // Directions open the TrackTour map with the route drawn (not Google Maps).
+  const hasCoords = canRouteTo(business)
 
   return (
     <div className="pb-24 max-w-6xl mx-auto px-4 sm:px-6">
@@ -624,35 +623,18 @@ export default function TouristExploreShow() {
               </div>
             )}
 
-            {/* Action Button: Get Directions */}
-            <a
-              href={directionsUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="w-full flex items-center justify-center gap-2 py-3 bg-[#087F3F] hover:bg-[#056B35] text-white rounded-xl text-sm font-semibold transition shadow-sm mt-3"
-            >
-              <Navigation className="w-4 h-4" /> Get Directions
-            </a>
-
-            {/* View on interactive tourist map */}
-            <button
-              onClick={() => {
-                // Open the tourist map on THIS place (selected, with directions),
-                // like an attraction's "View on Map".
-                if (business.latitude != null && business.longitude != null) {
-                  sessionStorage.setItem('tracktour_pending_map_destination', JSON.stringify({
-                    id: business.id,
-                    name: business.name,
-                    latitude: Number(business.latitude),
-                    longitude: Number(business.longitude),
-                  }))
-                }
-                navigate('/tourist/explore/map')
-              }}
-              className="w-full flex items-center justify-center gap-2 py-2.5 bg-white border border-[#D7E8DB] hover:bg-[#F3F8F4] text-[#087F3F] rounded-xl text-xs font-semibold transition"
-            >
-              <Compass className="w-4 h-4" /> View on Map
-            </button>
+            {/* Get Directions: the route on the TrackTour map */}
+            {hasCoords ? (
+              <button
+                type="button"
+                onClick={() => navigate(trackTourDirectionsPath(business.id))}
+                className="w-full flex items-center justify-center gap-2 py-3 bg-[#087F3F] hover:bg-[#056B35] text-white rounded-xl text-sm font-semibold transition shadow-sm mt-3"
+              >
+                <Navigation className="w-4 h-4" /> Get Directions
+              </button>
+            ) : (
+              <p className="mt-3 text-center text-xs text-[#647067]">This place has no map pin yet.</p>
+            )}
           </div>
         </div>
       </div>

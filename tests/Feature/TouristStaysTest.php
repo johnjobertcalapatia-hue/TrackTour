@@ -103,7 +103,7 @@ class TouristStaysTest extends TestCase
         $reviewer = User::create(['email' => 'r@example.com', 'password' => Hash::make('Password123!'), 'role' => 'tourist', 'account_status' => 'approved']);
         Review::create(['business_id' => $rated->id, 'user_id' => $reviewer->id, 'rating' => 5, 'review' => 'a', 'status' => 'approved']);
         Review::create(['business_id' => $rated->id, 'user_id' => $reviewer->id, 'rating' => 4, 'review' => 'b', 'status' => 'approved']);
-        Review::create(['business_id' => $rated->id, 'user_id' => $reviewer->id, 'rating' => 1, 'review' => 'c', 'status' => 'pending']);
+        Review::create(['business_id' => $rated->id, 'user_id' => $reviewer->id, 'rating' => 1, 'review' => 'c', 'status' => 'rejected']);
 
         $byName = collect($this->getJson('/api/tourist/stays')->json('data.accommodations'))->keyBy('name');
 

@@ -135,6 +135,11 @@ class Business extends Model
             'favorite_count' => 'integer',
             'review_count' => 'integer',
             'average_rating' => 'float',
+            // withAvg()/withCount() results: MySQL returns the average as a
+            // string ("5.0000"), which broke rating.toFixed() in the browser
+            // once reviews were shown (2026-11-24).
+            'reviews_avg_rating' => 'float',
+            'reviews_count' => 'integer',
         ];
     }
 

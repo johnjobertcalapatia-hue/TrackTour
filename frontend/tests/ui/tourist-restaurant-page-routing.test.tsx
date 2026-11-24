@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TouristExploreShow from '@/features/tourist/pages/TouristExploreShow'
@@ -59,6 +59,7 @@ function business(id: number, name: string, category: string) {
 const payloads: Record<string, unknown> = {
   '/tourist/explore/7': { business: business(7, 'Eksklusibo Grill', 'Restaurant'), reviews: [], menu_items: [], gallery: [], promotions: [] },
   '/tourist/explore/9': { business: business(9, 'Bansud Bay Resort', 'Beach Resort'), reviews: [], menu_items: [], gallery: [], promotions: [] },
+  '/tourist/explore/11': { business: { ...business(11, 'Tambangan Falls', 'Tourist Attraction'), latitude: 12.8, longitude: 121.4 }, reviews: [], menu_items: [], gallery: [], promotions: [] },
 }
 
 function CurrentPath() {
@@ -74,6 +75,7 @@ function renderAt(path: string) {
           <Route path="/tourist/dashboard" element={<TouristHome />} />
           <Route path="/tourist/explore/:id" element={<TouristExploreShow />} />
           <Route path="/tourist/food/:id" element={<TouristFoodShow />} />
+          <Route path="/tourist/explore/map" element={<p>TrackTour map</p>} />
         </Routes>
         <CurrentPath />
       </MemoryRouter>
@@ -87,6 +89,17 @@ beforeEach(() => {
   api.get.mockImplementation((url: string) =>
     url in payloads ? Promise.resolve(payloads[url]) : Promise.resolve({ data: [], items: [], places: [], food: [], stays: [] }),
   )
+})
+
+describe('Tourist attraction: Get Directions (2026-11-24)', () => {
+  it('opens the TrackTour map with the route, not Google Maps', async () => {
+    const open = vi.spyOn(window, 'open')
+    renderAt('/tourist/explore/11')
+    fireEvent.click(await screen.findByRole('button', { name: /Get Directions/ }))
+    expect(await screen.findByText('TrackTour map')).toBeInTheDocument()
+    expect(screen.getByTestId('path')).toHaveTextContent('/tourist/explore/map')
+    expect(open).not.toHaveBeenCalled()
+  })
 })
 
 describe('one restaurant page everywhere', () => {

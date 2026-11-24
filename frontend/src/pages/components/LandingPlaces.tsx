@@ -104,7 +104,7 @@ export default function LandingPlaces({ cards, pending }: { cards: LandingCard[]
                   {card.rating != null && (
                     <span className="absolute right-3 top-3 flex items-center gap-1 rounded-full bg-[#14351F]/80 px-2.5 py-1 text-[11px] font-bold text-white backdrop-blur">
                       <Star className="h-3 w-3 fill-[#FFD000] text-[#FFD000]" aria-hidden="true" />
-                      {card.rating.toFixed(1)}
+                      {Number(card.rating).toFixed(1)}
                     </span>
                   )}
                 </div>

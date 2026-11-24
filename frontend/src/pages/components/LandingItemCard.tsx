@@ -39,10 +39,10 @@ export default function LandingItemCard({ item, index = 0 }: { item: LandingItem
         {item.category && (
           <span className="absolute left-3 top-3 max-w-[70%] truncate rounded-full bg-white/95 px-3 py-1 text-[11px] font-bold text-[#0B5D2E] shadow">{item.category}</span>
         )}
-        {item.rating != null && item.rating > 0 && (
+        {item.rating != null && Number(item.rating) > 0 && (
           <span className="absolute right-3 top-3 flex items-center gap-1 rounded-full bg-[#14351F]/80 px-2.5 py-1 text-[11px] font-bold text-white backdrop-blur">
             <Star className="h-3 w-3 fill-[#FFD000] text-[#FFD000]" aria-hidden="true" />
-            {item.rating.toFixed(1)}
+            {Number(item.rating).toFixed(1)}
           </span>
         )}
       </div>

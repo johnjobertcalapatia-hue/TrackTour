@@ -6,6 +6,8 @@ import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { formatCurrency, formatDateTime } from '@/shared/utils'
 import { useBusinessOwnerStore } from '../services/business-owner-store'
 import RestaurantOwnerDashboard from './Dashboard/RestaurantOwnerDashboard'
+import AttractionDashboard from './Dashboard/AttractionDashboard'
+import { getDiscoveryGroup } from '@/shared/utils/category'
 import { Package, DollarSign, CalendarCheck, ClipboardList, Utensils, Megaphone, ArrowRight, ClipboardCheck, Leaf, Bed, Users, Car, MapPin, Truck, ShoppingBag } from 'lucide-react'
 
 interface DashboardData {
@@ -254,6 +256,14 @@ export default function BusinessOwnerDashboard() {
   // Redesigned restaurant dashboard (TrackTour owner mockup) for one selected food business.
   if (selectedBusinessId && ['Restaurant', 'Café', 'Food Hub', 'Hotel & Restaurant Combination'].includes(category)) {
     return <RestaurantOwnerDashboard data={{ ...data, business: { ...business, category } }} businessId={selectedBusinessId} />
+  }
+
+  // One tourist attraction (any name in the attraction group, e.g. "Attractions"
+  // in production): views, saves, reviews and visitor info instead of orders,
+  // revenue and menu cards (2026-11-24).
+  const shownBusinessId = selectedBusinessId ?? (data.businesses?.length === 1 ? data.businesses[0]!.id : null)
+  if (shownBusinessId && getDiscoveryGroup(category) === 'spot') {
+    return <AttractionDashboard businessId={shownBusinessId} />
   }
 
   const categoryLabel: Record<string, string> = {

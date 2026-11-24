@@ -124,23 +124,24 @@ class FoodPopularityRankingTest extends TestCase
         $this->assertEqualsWithDelta(25 * ((5 + 3 * 3.5) / 4) + 10 * log(2), $s->score(5.0, 1, 1), 0.001);
     }
 
-    public function test_pending_reviews_do_not_count_until_approved_and_approval_rescores_immediately(): void
+    public function test_a_new_review_counts_at_once_and_rejecting_it_rescores_immediately(): void
     {
+        // Reviews show as soon as they are posted (2026-11-24); only rejected ones are hidden.
         $dish = $this->dish('Sizzling Tofu');
         $other = $this->dish('Plain Rice');
         $this->sell($other, 2);
         $review = $this->review($this->sell($dish, 1), 5, 'pending');
 
-        $pendingScore = (float) $dish->fresh()->popularity_score;
-        $this->assertEqualsWithDelta(app(FoodPopularityService::class)->score(null, 0, 1), $pendingScore, 0.001);
+        $shownScore = (float) $dish->fresh()->popularity_score;
+        $this->assertEqualsWithDelta(app(FoodPopularityService::class)->score(5.0, 1, 1), $shownScore, 0.001);
 
-        $review->update(['status' => 'approved']);   // moderation approval
-        $approvedScore = (float) $dish->fresh()->popularity_score;
-        $this->assertGreaterThan($pendingScore, $approvedScore);
-        $this->assertEqualsWithDelta(app(FoodPopularityService::class)->score(5.0, 1, 1), $approvedScore, 0.001);
+        $review->update(['status' => 'rejected']);   // moderation removes it
+        $rejectedScore = (float) $dish->fresh()->popularity_score;
+        $this->assertLessThan($shownScore, $rejectedScore);
+        $this->assertEqualsWithDelta(app(FoodPopularityService::class)->score(null, 0, 1), $rejectedScore, 0.001);
 
         $review->delete();
-        $this->assertEqualsWithDelta($pendingScore, (float) $dish->fresh()->popularity_score, 0.001);
+        $this->assertEqualsWithDelta($rejectedScore, (float) $dish->fresh()->popularity_score, 0.001);
     }
 
     public function test_the_scheduled_refresh_picks_up_new_sales(): void

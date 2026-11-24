@@ -16,7 +16,7 @@ class ReviewRepository implements ReviewRepositoryInterface
     {
         return $this->model->with(['user.profile'])
             ->where('business_id', $businessId)
-            ->where('status', 'approved')
+            ->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)
             ->latest()
             ->paginate($perPage);
     }
@@ -32,14 +32,14 @@ class ReviewRepository implements ReviewRepositoryInterface
     public function getAverageRating(int $businessId): float
     {
         return (float) $this->model->where('business_id', $businessId)
-            ->where('status', 'approved')
+            ->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)
             ->avg('rating');
     }
 
     public function getCount(int $businessId): int
     {
         return $this->model->where('business_id', $businessId)
-            ->where('status', 'approved')
+            ->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)
             ->count();
     }
 }

@@ -149,7 +149,7 @@ class TouristFoodDetailTest extends TestCase
 
         Review::create(['business_id' => $business->id, 'user_id' => $reviewer->id, 'rating' => 5, 'review' => 'Great food!', 'status' => 'approved']);
         Review::create(['business_id' => $business->id, 'user_id' => $reviewer->id, 'rating' => 4, 'review' => 'Nice place.', 'status' => 'approved']);
-        Review::create(['business_id' => $business->id, 'user_id' => $reviewer->id, 'rating' => 1, 'review' => 'Hidden pending review.', 'status' => 'pending']);
+        Review::create(['business_id' => $business->id, 'user_id' => $reviewer->id, 'rating' => 1, 'review' => 'Hidden pending review.', 'status' => 'rejected']);
 
         $response = $this->getJson('/api/tourist/food/'.$offering->id);
 
@@ -162,7 +162,8 @@ class TouristFoodDetailTest extends TestCase
         $this->assertContains('Great food!', $comments);
         $this->assertContains('Nice place.', $comments);
         $this->assertNotContains('Hidden pending review.', $comments);
-        $this->assertSame('Test User', $reviews[0]['user_name'] ?? null);
+        // First name + last initial only on a public page (2026-11-24).
+        $this->assertSame('Test U.', $reviews[0]['user_name'] ?? null);
 
         // The stored counter is the business-level metric maintained by ReviewObserver.
         $this->assertEquals($business->fresh()->review_count, $response->json('data.business_review_count'));
@@ -211,7 +212,7 @@ class TouristFoodDetailTest extends TestCase
         foreach ([5, 5, 4, 3, 1] as $rating) {
             Review::create(['business_id' => $business->id, 'user_id' => $reviewer->id, 'rating' => $rating, 'review' => 'r', 'status' => 'approved']);
         }
-        Review::create(['business_id' => $business->id, 'user_id' => $reviewer->id, 'rating' => 1, 'review' => 'p', 'status' => 'pending']);
+        Review::create(['business_id' => $business->id, 'user_id' => $reviewer->id, 'rating' => 1, 'review' => 'p', 'status' => 'rejected']);
 
         $response = $this->getJson('/api/tourist/food/'.$offering->id);
 

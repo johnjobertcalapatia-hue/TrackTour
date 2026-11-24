@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import axios from 'axios'
 import { get, post, put } from '@/shared/services/api'
+import { useAuthStore } from '@/features/auth/services/auth-store'
 
 /**
  * Opt-in sharing of the tourist's live location with the Bansud Tourism
@@ -87,7 +88,11 @@ export function useShareLocationHeartbeat(on: boolean) {
 
 /** Mounted once in the tourist layout: shares the location while the tourist has it switched on. */
 export function TouristLocationSharer() {
-  const { data } = useLocationSharing()
-  useShareLocationHeartbeat(Boolean(data?.enabled))
+  // Signed-in tourists only. The tourist layout also wraps the public pages
+  // (Explore, place pages, the map): a guest's 401 here logged them out and
+  // sent them to /login (2026-11-24).
+  const isTourist = useAuthStore((s) => s.user?.role === 'tourist')
+  const { data } = useLocationSharing(isTourist)
+  useShareLocationHeartbeat(isTourist && Boolean(data?.enabled))
   return null
 }

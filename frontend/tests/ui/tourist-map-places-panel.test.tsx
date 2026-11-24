@@ -119,10 +119,10 @@ const FALLS = {
 
 const MUNIS = [{ id: 3, name: 'Roxas' }, { id: 1, name: 'Bansud' }, { id: 2, name: 'Gloria' }]
 
-function renderMap(mapOnly = false) {
+function renderMap(mapOnly = false, path?: string) {
   return render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <MemoryRouter initialEntries={[mapOnly ? '/tourist/transport/map' : '/tourist/explore/map']}>
+      <MemoryRouter initialEntries={[path ?? (mapOnly ? '/tourist/transport/map' : '/tourist/explore/map')]}>
         <TouristExploreMap mapOnly={mapOnly} />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -447,5 +447,41 @@ describe('matchesPlaceSearch', () => {
   })
   it('accepts a municipality sent as a plain name', () => {
     expect(matchesPlaceSearch({ ...place, municipality: 'Roxas' as unknown as MapPlace['municipality'] }, 'roxas')).toBe(true)
+  })
+})
+
+describe('Place details: reviews and TrackTour directions (2026-11-24)', () => {
+  const REVIEWS = {
+    average: 4.5, count: 2, breakdown: { 5: 1, 4: 1, 3: 0, 2: 0, 1: 0 },
+    reviews: [
+      { id: 1, rating: 5, review: 'Sobrang sarap', created_at: '2026-11-18T07:52:26Z', user_name: 'Jayvie D.', user: { name: 'Jayvie D.', avatar: null } },
+      { id: 2, rating: 4, review: 'Nice view', created_at: '2026-11-17T07:52:26Z', user_name: 'Ana R.', user: { name: 'Ana R.', avatar: null } },
+    ],
+  }
+  beforeEach(() => {
+    api.get.mockImplementation(async (url: string) => (url.includes('/reviews')
+      ? REVIEWS
+      : { data: { businesses: [RESTAURANT, RESORT, FALLS], categories: [], municipalities: MUNIS } }))
+  })
+
+  it.each([['Explore map', false], ['Ride Hailing map', true]])('%s: the Reviews tab lists the reviews', async (_name, mapOnly) => {
+    renderMap(mapOnly)
+    await vi.waitFor(() => expect(markers()).toHaveLength(3))
+    fireEvent.click(screen.getAllByTestId('map-marker').find((m) => m.dataset.pos === '12.97,121.47')!)
+    const details = await screen.findByRole('complementary', { name: 'Place details' })
+    fireEvent.click(within(details).getByRole('button', { name: 'Reviews' }))
+
+    const list = await within(details).findByTestId('business-reviews')
+    expect(api.get).toHaveBeenCalledWith('/tourist/explore/8/reviews?limit=10')
+    expect(list).toHaveTextContent('Jayvie D.')
+    expect(list).toHaveTextContent('Sobrang sarap')
+    expect(list).toHaveTextContent('Nice view')
+    expect(list).toHaveTextContent('2 reviews')
+  })
+
+  it('?directions=<id> opens that place with its route (Get Directions from a place page)', async () => {
+    renderMap(false, '/tourist/explore/map?directions=9')
+    const details = await screen.findByRole('complementary', { name: 'Place details' })
+    expect(details).toHaveTextContent('Tambangan Falls')
   })
 })
