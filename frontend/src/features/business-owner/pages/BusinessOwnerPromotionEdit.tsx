@@ -9,6 +9,7 @@ import { usePersistFormRHF } from '@/shared/hooks/use-persist-form-rhf'
 import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { ArrowLeft, Save } from 'lucide-react'
+import { useBusinessPortal } from '../services/business-portal'
 
 const schema = z.object({
   title: z.string().min(2, 'Title must be at least 2 characters'),
@@ -34,6 +35,7 @@ interface Promotion {
 }
 
 export default function BusinessOwnerPromotionEdit() {
+  const portal = useBusinessPortal()
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -42,12 +44,12 @@ export default function BusinessOwnerPromotionEdit() {
 
   const { data: promo, isLoading } = useQuery({
     queryKey: ['bo-promotion', id],
-    queryFn: () => get<Promotion>(`/business-owner/promotions/${id}`),
+    queryFn: () => get<Promotion>(`${portal.prefix}/promotions/${id}`),
   })
 
   const { data: businesses } = useQuery({
     queryKey: ['bo-businesses-list'],
-    queryFn: () => get<{ id: number; name: string }[]>('/business-owner/businesses'),
+    queryFn: () => get<{ id: number; name: string }[]>(`${portal.prefix}/businesses`),
   })
 
   const form = useForm<FormData>({
@@ -78,7 +80,7 @@ export default function BusinessOwnerPromotionEdit() {
   }, [promo])
 
   const mutation = useMutation({
-    mutationFn: (data: FormData) => put(`/business-owner/promotions/${id}`, data),
+    mutationFn: (data: FormData) => put(`${portal.prefix}/promotions/${id}`, data),
     onSuccess: () => {
       clearDraft()
       queryClient.invalidateQueries({ queryKey: ['bo-promotions'] })
@@ -91,19 +93,21 @@ export default function BusinessOwnerPromotionEdit() {
   if (!promo) return <div className="text-center py-20 text-[#647067]">Promotion not found.</div>
 
   return (
-    <div className="max-w-2xl mx-auto">
-      <Link to="/business-owner/promotions" className="inline-flex items-center gap-2 text-sm text-[#647067] hover:text-[#17201A] mb-6 transition">
-        <ArrowLeft className="w-4 h-4" /> Back to Promotions
+    <div className="mx-auto w-full max-w-4xl space-y-5 [&>[role=alert]]:mb-0">
+      <Link to={`${portal.prefix}/promotions?tab=badges`} className="inline-flex items-center gap-2 text-sm text-[#647067] hover:text-[#17201A] transition">
+        <ArrowLeft className="w-4 h-4" aria-hidden="true" /> Back to Deals &amp; Posts
       </Link>
 
-      <h1 className="text-2xl lg:text-3xl font-bold text-[#126B32] mb-2">Edit Promotion</h1>
-      <p className="text-sm text-[#647067] mb-8">{promo.title}</p>
+      <div>
+        <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">Edit Promotion</h1>
+        <p className="mt-1 text-sm text-[#647067]">{promo.title}</p>
+      </div>
 
       {error && <Alert type="error" message={error} onDismiss={() => setError('')} />}
       {success && <Alert type="success" message={success} onDismiss={() => setSuccess('')} />}
 
-      <form onSubmit={handleSubmit((data) => mutation.mutate(data))} className="space-y-6">
-        <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-6 lg:p-8 space-y-5">
+      <form onSubmit={handleSubmit((data) => mutation.mutate(data))} className="space-y-5">
+        <div className="rounded-[20px] border border-[#E2E8E3] bg-[#fff] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-5 space-y-4">
           <h2 className="text-lg font-semibold text-[#17201A]">Promotion Details</h2>
 
           <div>

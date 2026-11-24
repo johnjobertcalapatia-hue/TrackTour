@@ -145,40 +145,55 @@ class RideCancellationPenaltyTest extends TestCase
             ->assertJsonPath('data.outstanding_total', 50);
     }
 
-    public function test_without_a_confirmed_arrival_the_penalty_is_under_review_not_owed(): void
+    public function test_without_a_confirmed_arrival_the_penalty_is_still_owed_with_the_gps_kept_as_evidence(): void
     {
+        // Stage C2 (2026-11-18): no arrival confirmation or GPS progress is required.
         $order = $this->ride();
-        // Moving toward the pickup with recent GPS — but movement is not judged automatically.
         $this->fix(12.52, 121.31, $this->t0->addSeconds(60));
         $this->fix(12.515, 121.31, $this->t0->addSeconds(380));
         $this->cancelAt($order, 400)->assertOk();
 
         $penalty = RideCancellationPenalty::sole();
-        $this->assertSame(RideCancellationPenalty::STATUS_UNDER_REVIEW, $penalty->status);
-        $this->assertStringContainsString('had not confirmed arrival', implode(' ', $penalty->review_reasons));
+        $this->assertSame(RideCancellationPenalty::STATUS_OWED, $penalty->status);
+        $this->assertSame([], $penalty->review_reasons);
+        // Recorded for reference only.
         $this->assertSame(2, $penalty->evidence['fixes_since_acceptance']);
+        $this->assertNull($penalty->evidence['pickup_arrival_confirmed_at']);
         $this->assertGreaterThan($penalty->evidence['latest_fix_distance_to_pickup_m'], $penalty->evidence['first_fix_distance_to_pickup_m']);
         $this->actingAs($this->tourist, 'sanctum')->getJson('/api/tourist/transport/penalties')->assertOk()
-            ->assertJsonPath('data.outstanding_total', 0);
+            ->assertJsonPath('data.outstanding_total', 50);
     }
 
-    public function test_missing_or_stale_gps_is_under_review_even_after_a_confirmed_arrival(): void
+    public function test_missing_or_stale_gps_still_owes_and_is_recorded_as_evidence(): void
     {
         // Confirmed arrival, then nothing for 10 minutes.
         $order = $this->ride();
         $this->arriveAtPickup($order, 200);
         $this->cancelAt($order, 800)->assertOk();
         $penalty = RideCancellationPenalty::sole();
-        $this->assertSame(RideCancellationPenalty::STATUS_UNDER_REVIEW, $penalty->status);
-        $this->assertStringContainsString('more than 3 minutes', implode(' ', $penalty->review_reasons));
+        $this->assertSame(RideCancellationPenalty::STATUS_OWED, $penalty->status);
+        $this->assertSame(601, $penalty->evidence['latest_fix_age_s']);
 
         // No GPS at all since acceptance.
         RideCancellationPenalty::query()->delete();
         RiderLocation::query()->delete();
         $other = $this->ride();
         $this->cancelAt($other, 1200)->assertOk();
-        $this->assertSame(RideCancellationPenalty::STATUS_UNDER_REVIEW, RideCancellationPenalty::sole()->status);
-        $this->assertStringContainsString('No saved rider location', implode(' ', RideCancellationPenalty::sole()->review_reasons));
+        $this->assertSame(RideCancellationPenalty::STATUS_OWED, RideCancellationPenalty::sole()->status);
+        $this->assertSame(0, RideCancellationPenalty::sole()->evidence['fixes_since_acceptance']);
+    }
+
+    public function test_the_database_allows_only_one_penalty_per_cancelled_ride(): void
+    {
+        $order = $this->ride();
+        $this->cancelAt($order, 600)->assertOk();
+        $existing = RideCancellationPenalty::sole();
+
+        $this->expectException(\Illuminate\Database\UniqueConstraintViolationException::class);
+        RideCancellationPenalty::create([
+            'cancelled_order_id' => $existing->cancelled_order_id, 'delivery_id' => $existing->delivery_id, 'tourist_id' => $existing->tourist_id,
+            'compensated_rider_id' => $existing->compensated_rider_id, 'penalty_amount' => 50, 'seconds_after_acceptance' => 600, 'status' => 'owed',
+        ]);
     }
 
     public function test_a_rider_cancellation_is_never_penalised(): void
@@ -211,28 +226,25 @@ class RideCancellationPenaltyTest extends TestCase
             ->assertJsonPath('data.cancellation_penalty_preview.amount', 50);
     }
 
-    public function test_the_tourist_can_dispute_and_only_their_own_penalty(): void
+    public function test_there_is_no_dispute_and_reviewed_penalties_become_owed(): void
     {
         $order = $this->ride();
         $this->arriveAtPickup($order, 240);
         $this->fix(self::PICKUP[0], self::PICKUP[1], $this->t0->addSeconds(410));
         $this->cancelAt($order, 420)->assertOk();
 
-        $other = User::create(['name' => 'Other', 'email' => 'other@pen.test', 'password' => Hash::make('x'), 'role' => 'tourist', 'account_status' => 'approved']);
-        $this->actingAs($other, 'sanctum')->postJson("/api/tourist/transport/trip/{$order->id}/penalty/dispute", ['reason' => 'Not my ride'])->assertNotFound();
-
+        // Owner decision 2026-11-23: no dispute endpoint, no Tourism Office review.
         $this->actingAs($this->tourist, 'sanctum')->postJson("/api/tourist/transport/trip/{$order->id}/penalty/dispute", ['reason' => 'The driver was going the wrong way.'])
-            ->assertOk()->assertJsonPath('data.penalty.status', 'disputed');
-        $this->actingAs($this->tourist, 'sanctum')->postJson("/api/tourist/transport/trip/{$order->id}/penalty/dispute", ['reason' => 'Again, the driver was lost.'])
-            ->assertOk(); // idempotent
-        $penalty = RideCancellationPenalty::sole();
-        $this->assertSame(RideCancellationPenalty::STATUS_DISPUTED, $penalty->status);
-        $this->assertSame('The driver was going the wrong way.', $penalty->dispute_reason);
-        $this->assertCount(1, $this->events($order, 'ride_cancellation_penalty_disputed'));
-        // A disputed penalty is not outstanding.
-        $this->actingAs($this->tourist, 'sanctum')->getJson('/api/tourist/transport/penalties')->assertOk()->assertJsonPath('data.outstanding_total', 0);
-    }
+            ->assertNotFound();
 
+        // Older penalties left under review / disputed are made owed, once, in the ledger.
+        RideCancellationPenalty::query()->update(['status' => RideCancellationPenalty::STATUS_DISPUTED]);
+        $this->assertSame(1, app(\App\Services\RideCancellationPenaltyService::class)->oweReviewed());
+        $this->assertSame(0, app(\App\Services\RideCancellationPenaltyService::class)->oweReviewed());
+        $this->assertSame(RideCancellationPenalty::STATUS_OWED, RideCancellationPenalty::sole()->status);
+        $this->assertCount(1, $this->events($order, 'ride_cancellation_penalty_now_owed'));
+        $this->actingAs($this->tourist, 'sanctum')->getJson('/api/tourist/transport/penalties')->assertOk()->assertJsonPath('data.outstanding_total', 50);
+    }
     public function test_an_outstanding_penalty_never_blocks_food_ordering_or_a_new_ride(): void
     {
         $order = $this->ride();

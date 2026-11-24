@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
  */
 
 const pay = vi.hoisted(() => ({ check: vi.fn() }))
-vi.mock('@/shared/services/payment', () => ({ checkAndConfirmPayment: pay.check, createCheckoutSession: vi.fn() }))
+vi.mock('@/shared/services/payment', async (orig) => ({ ...(await orig<typeof import('@/shared/services/payment')>()), checkAndConfirmPayment: pay.check, createCheckoutSession: vi.fn() }))
 
 import PaymentCallbackPage from '@/features/tourist/pages/PaymentCallbackPage'
 import { CompletedScreen } from '@/features/tourist/components/ride/RidePhases'

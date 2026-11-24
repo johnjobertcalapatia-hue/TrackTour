@@ -494,6 +494,38 @@ class RiderCashFundService
             'cash_return_recorded' => $recordedCashReturnMovements->isNotEmpty(),
             'fund_balance_is_carried_forward' => true,
             'cash_movement_reference_namespaces' => $this->cashMovementReferenceNamespaces(),
+            // Stage C (2026-11-18): ₱50 ride cancellation fees this rider collected in cash
+            // that day, owed to OTHER drivers. Their own line: handed in with the
+            // remittance, never the rider's earnings or platform revenue, and kept out of
+            // the COD remittance and reconciliation figures above.
+            'cancellation_fees' => $this->cancellationFeesCollected($rider, $start, $end),
+        ];
+    }
+
+    /** @return array{count: int, total: float, items: list<array<string, mixed>>} */
+    private function cancellationFeesCollected(User $rider, CarbonImmutable $start, CarbonImmutable $end): array
+    {
+        $rows = \App\Models\RideCancellationPenalty::query()
+            ->with(['cancelledOrder:id,order_number'])
+            ->where('collected_by', $rider->id)
+            ->where('collection_method', 'cash')
+            ->where('status', \App\Models\RideCancellationPenalty::STATUS_COLLECTED)
+            ->where('collected_at', '>=', $start->utc())
+            ->where('collected_at', '<', $end->utc())
+            ->orderBy('collected_at')
+            ->get();
+
+        return [
+            'count' => $rows->count(),
+            'total' => round((float) $rows->sum('penalty_amount'), 2),
+            'items' => $rows->map(fn ($p) => [
+                'penalty_id' => $p->id,
+                'amount' => (float) $p->penalty_amount,
+                'from_ride' => $p->cancelledOrder?->order_number,
+                'collected_on_order_id' => $p->collection_order_id,
+                'collected_at' => $p->collected_at?->toIso8601String(),
+                'owed_to_rider_id' => $p->compensated_rider_id,
+            ])->values()->all(),
         ];
     }
 

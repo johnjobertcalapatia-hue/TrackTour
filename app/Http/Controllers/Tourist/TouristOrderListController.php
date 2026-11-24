@@ -174,6 +174,8 @@ class TouristOrderListController extends Controller
             'status_label' => $this->label($tab, $primary->status),
             'payment_method' => $paymentMethod,
             'payment_status' => $paymentStatus,
+            // GCash or QR Ph (2026-11-18): the method actually used on PayMongo.
+            'paid_via' => ($group ? $group->payments() : $primary->payments())->where('status', 'paid')->latest('id')->first()?->paidVia(),
             'items' => $items,
             'subtotal' => $subtotal,
             'delivery_fee' => $deliveryFee,

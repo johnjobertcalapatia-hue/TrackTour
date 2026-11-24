@@ -44,6 +44,8 @@ export interface OrderSection {
   status_label: string
   payment_method: string | null
   payment_status: string | null
+  /** The PayMongo method actually used: gcash | qrph | card (2026-11-18). */
+  paid_via?: string | null
   items: OrderLine[]
   subtotal: number
   delivery_fee: number

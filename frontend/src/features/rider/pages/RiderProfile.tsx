@@ -8,7 +8,7 @@ import { useAuthStore } from '@/features/auth/services/auth-store'
 import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Camera, ChevronRight, FileText, History, Map as MapIcon, MessageSquare, Save, User } from 'lucide-react'
+import { ArrowLeft, Camera, ChevronRight, FileText, History, Lock, Map as MapIcon, MessageSquare, Save, User } from 'lucide-react'
 import { toAssetUrl, getInitials } from '@/shared/utils'
 
 function PesoIcon({ className }: { className?: string }) {
@@ -28,8 +28,6 @@ const schema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
   email: z.string().email('Invalid email'),
   phone: z.string().min(1, 'Phone is required'),
-  municipality: z.string().min(1, 'Municipality is required'),
-  barangay: z.string().min(1, 'Barangay is required'),
 })
 
 type ProfileFormValues = z.infer<typeof schema>
@@ -39,8 +37,10 @@ interface RiderProfile {
   name: string
   email: string
   phone: string
-  municipality: string
-  barangay: string
+  municipality: string | null
+  barangay: string | null
+  address_municipality_id: number | null
+  address_barangay_id: number | null
   role: string
   account_status: string
   current_service?: 'food' | 'transport' | null
@@ -75,15 +75,23 @@ export default function RiderProfile() {
       name: profile.name,
       email: profile.email,
       phone: profile.phone ?? '',
-      municipality: profile.municipality ?? '',
-      barangay: profile.barangay ?? '',
     } : undefined,
   })
 
   const mutation = useMutation({
-    mutationFn: (data: ProfileFormValues) => put('/rider/profile', data),
-    onSuccess: () => setSuccess('Profile updated successfully.'),
-    onError: (err: any) => setError(err.response?.data?.message || 'Failed to update profile.'),
+    mutationFn: (data: ProfileFormValues) => put<RiderProfile>('/rider/profile', data),
+    onSuccess: (updated) => {
+      setError('')
+      setSuccess('Profile updated successfully.')
+      queryClient.setQueryData(['rider-profile'], updated)
+      void fetchUser()
+    },
+    onError: (err: any) => {
+      setSuccess('')
+      const fieldErrors = err.response?.data?.errors as Record<string, string[]> | undefined
+      const first = fieldErrors ? Object.values(fieldErrors)[0]?.[0] : undefined
+      setError(first || err.response?.data?.message || 'Failed to update profile.')
+    },
   })
 
   const photoMutation = useMutation({
@@ -205,18 +213,16 @@ export default function RiderProfile() {
             </div>
           </div>
 
+          {/* Set at registration: the municipality's Tourism Office trains, interviews and
+              manages the rider. Shown here, never editable. */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-[#4B5563] mb-1">Municipality</label>
-              <input {...register('municipality')} className="w-full bg-[#F3F8F5] border border-[#D7E2DC] rounded-xl px-4 py-2.5 text-sm text-[#17201B] focus:ring-2 focus:ring-emerald-500/40 focus:outline-none" />
-              {errors.municipality && <p className="text-red-400 text-xs mt-1">{errors.municipality.message}</p>}
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-[#4B5563] mb-1">Barangay</label>
-              <input {...register('barangay')} className="w-full bg-[#F3F8F5] border border-[#D7E2DC] rounded-xl px-4 py-2.5 text-sm text-[#17201B] focus:ring-2 focus:ring-emerald-500/40 focus:outline-none" />
-              {errors.barangay && <p className="text-red-400 text-xs mt-1">{errors.barangay.message}</p>}
-            </div>
+            <ReadOnlyField label="Municipality" value={profile?.municipality} />
+            <ReadOnlyField label="Barangay" value={profile?.barangay} />
           </div>
+          <p className="-mt-2 flex items-start gap-1.5 text-xs text-[#6B7280]">
+            <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            Your municipality and barangay were set when you registered and cannot be changed. Your municipality's Tourism Office manages your training and interview.
+          </p>
 
           {profile && (
             <div className="pt-2 flex items-center gap-3 text-sm text-[#6B7280]">
@@ -283,6 +289,22 @@ export default function RiderProfile() {
         </div>}
       </form>
 
+    </div>
+  )
+}
+
+function ReadOnlyField({ label, value }: { label: string; value?: string | null }) {
+  return (
+    <div>
+      <p className="block text-sm font-medium text-[#4B5563] mb-1">{label}</p>
+      <div
+        aria-readonly="true"
+        aria-label={label}
+        className="flex w-full items-center justify-between gap-2 rounded-xl border border-[#E5E9E7] bg-[#F3F4F6] px-4 py-2.5 text-sm text-[#17201B]"
+      >
+        <span className="truncate">{value || 'Not set'}</span>
+        <Lock className="h-3.5 w-3.5 shrink-0 text-[#9CA3AF]" aria-hidden="true" />
+      </div>
     </div>
   )
 }

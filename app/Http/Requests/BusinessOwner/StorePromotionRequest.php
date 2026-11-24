@@ -4,6 +4,14 @@ namespace App\Http\Requests\BusinessOwner;
 
 use Illuminate\Foundation\Http\FormRequest;
 
+/**
+ * Create a promotion (owner or Menu & Promotions staff).
+ *
+ * The owner page sends discount_type / discount_value / start_date / end_date /
+ * business_id, while the API originally expected discount_percentage /
+ * valid_from / valid_until and had no business_id rule, so creating a
+ * promotion failed. Both shapes are accepted (Staff Management §5).
+ */
 class StorePromotionRequest extends FormRequest
 {
     public function authorize(): bool
@@ -11,32 +19,22 @@ class StorePromotionRequest extends FormRequest
         return true;
     }
 
+    protected function prepareForValidation(): void
+    {
+        $this->merge(PromotionInput::normalize($this->all()));
+    }
+
     public function rules(): array
     {
         return [
+            'business_id' => ['required', 'integer', 'exists:businesses,id'],
             'title' => ['required', 'string', 'max:255'],
-            'description' => ['nullable', 'string', 'max:1000'],
-            'discount_percentage' => ['required', 'numeric', 'min:1', 'max:100'],
-            'valid_from' => ['required', 'date'],
-            'valid_until' => ['required', 'date', 'after_or_equal:valid_from'],
+            ...PromotionInput::rules(),
         ];
     }
 
     public function messages(): array
     {
-        return [
-            'title.required' => '促销标题为必填项。',
-            'title.max' => '促销标题不能超过255个字符。',
-            'description.max' => '促销描述不能超过1000个字符。',
-            'discount_percentage.required' => '折扣百分比为必填项。',
-            'discount_percentage.numeric' => '折扣百分比必须是数字。',
-            'discount_percentage.min' => '折扣百分比不能低于1%。',
-            'discount_percentage.max' => '折扣百分比不能超过100%。',
-            'valid_from.required' => '有效期开始日期为必填项。',
-            'valid_from.date' => '有效期开始日期必须是有效日期。',
-            'valid_until.required' => '有效期结束日期为必填项。',
-            'valid_until.date' => '有效期结束日期必须是有效日期。',
-            'valid_until.after_or_equal' => '有效期结束日期必须等于或晚于开始日期。',
-        ];
+        return PromotionInput::messages();
     }
 }

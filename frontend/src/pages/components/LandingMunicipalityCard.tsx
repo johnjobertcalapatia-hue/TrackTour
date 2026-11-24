@@ -1,20 +1,19 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { ArrowRight, MapPin, Sparkles } from 'lucide-react'
-import { get } from '@/shared/services/api'
 import { toAssetUrl } from '@/shared/utils'
-import type { MunicipalityPhoto } from '@/shared/hooks/use-current-municipality'
 
 interface MunicipalityLite {
   id: number
   name: string
   destinations_count?: number
   businesses_count?: number
+  /** The municipal Tourism Office logo and cover photo (GET /municipalities). */
+  logo_url?: string | null
+  cover_url?: string | null
 }
 
-// Brand-toned fallbacks (forest → heritage green, teal, gold) used until a
-// municipality has a real photo.
+// Brand-toned card backgrounds (forest → heritage green, teal, gold).
 const PLACEHOLDER_COLORS = [
   'from-[#0B5D2E] via-[#1F7A45] to-[#2E8B57]',
   'from-[#0F4C3A] via-[#0E6B5C] to-[#0E7490]',
@@ -24,6 +23,15 @@ const PLACEHOLDER_COLORS = [
   'from-[#064E3B] via-[#0B6E68] to-[#0891B2]',
 ]
 
+/** Bundled Bansud Tourism Office seal, used until the office uploads one. */
+const BANSUD_OFFICE_LOGO = '/assets/logo/bansud-tourism-office.jpg'
+
+/**
+ * "Where to Next?" card: the municipality's Tourism Office logo (never a
+ * business photo) over the office's cover photo, its name and how many places
+ * it has. Without a cover the card is brand green; without a logo it shows the
+ * municipality's initial.
+ */
 export default function LandingMunicipalityCard({
   municipality,
   index,
@@ -31,16 +39,14 @@ export default function LandingMunicipalityCard({
   municipality: MunicipalityLite
   index: number
 }) {
-  const [failedImage, setFailedImage] = useState<string | null>(null)
-  const { data: photos = [] } = useQuery({
-    queryKey: ['municipality-photos', municipality.id],
-    queryFn: () => get<MunicipalityPhoto[]>(`/municipalities/${municipality.id}/photos`),
-    staleTime: 10 * 60 * 1000,
-  })
-  const image = photos[0]?.src
-  const showImage = Boolean(image && image !== failedImage)
-  const places = (municipality.destinations_count ?? 0) + (municipality.businesses_count ?? 0)
   const isHome = municipality.name.toLowerCase() === 'bansud'
+  const logo = municipality.logo_url ? toAssetUrl(municipality.logo_url) : isHome ? BANSUD_OFFICE_LOGO : ''
+  const [failedLogo, setFailedLogo] = useState<string | null>(null)
+  const showLogo = Boolean(logo && logo !== failedLogo)
+  const cover = municipality.cover_url ? toAssetUrl(municipality.cover_url) : ''
+  const [failedCover, setFailedCover] = useState<string | null>(null)
+  const showCover = Boolean(cover && cover !== failedCover)
+  const places = (municipality.destinations_count ?? 0) + (municipality.businesses_count ?? 0)
 
   return (
     <Link
@@ -51,22 +57,40 @@ export default function LandingMunicipalityCard({
         data-testid="municipality-card-background"
         className={`absolute inset-0 bg-gradient-to-br ${PLACEHOLDER_COLORS[(index + 2) % PLACEHOLDER_COLORS.length]}`}
       >
-        {!showImage && (
+        {!showLogo && !showCover && (
           <span className="absolute -right-3 -top-6 select-none text-[150px] font-extrabold leading-none text-white/10" aria-hidden="true">
             {municipality.name.charAt(0)}
           </span>
         )}
       </div>
-      {showImage && (
-        <img
-          src={toAssetUrl(image)}
-          alt={`${municipality.name} tourism`}
-          loading="lazy"
-          onError={() => setFailedImage(image ?? null)}
-          className="absolute inset-0 h-full w-full object-cover transition-transform duration-700 group-hover:scale-110"
-        />
+      {showCover && (
+        <>
+          <img
+            src={cover}
+            alt=""
+            data-testid="municipality-card-cover"
+            loading="lazy"
+            onError={() => setFailedCover(cover)}
+            className="absolute inset-0 h-full w-full object-cover transition-transform duration-700 group-hover:scale-110"
+          />
+          <div className="absolute inset-0 bg-[#04190C]/25" aria-hidden="true" />
+        </>
       )}
-      <div className="absolute inset-0 bg-gradient-to-t from-[#04190C]/90 via-[#04190C]/25 to-transparent" />
+
+      {showLogo && (
+        <div className="absolute inset-x-0 top-14 flex justify-center">
+          <span className="flex h-32 w-32 items-center justify-center overflow-hidden rounded-full bg-white p-2 shadow-[0_10px_28px_rgba(0,0,0,0.25)] ring-4 ring-white/30 transition-transform duration-500 group-hover:scale-105">
+            <img
+              src={logo}
+              alt={`${municipality.name} Tourism Office logo`}
+              loading="lazy"
+              onError={() => setFailedLogo(logo)}
+              className="h-full w-full rounded-full object-contain"
+            />
+          </span>
+        </div>
+      )}
+      <div className="absolute inset-0 bg-gradient-to-t from-[#04190C]/85 via-transparent to-transparent" />
 
       {isHome && (
         <span className="absolute left-4 top-4 inline-flex items-center gap-1 rounded-full bg-[#FFD000] px-2.5 py-1 text-[11px] font-bold text-[#14351F] shadow">

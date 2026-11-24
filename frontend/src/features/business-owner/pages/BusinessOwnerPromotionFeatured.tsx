@@ -3,6 +3,7 @@ import { get, put } from '@/shared/services/api'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { formatCurrency, formatDateTime } from '@/shared/utils'
 import { Star, StarOff } from 'lucide-react'
+import { useBusinessPortal } from '../services/business-portal'
 
 interface Promotion {
   id: number
@@ -18,16 +19,17 @@ interface Promotion {
 }
 
 export default function BusinessOwnerPromotionFeatured() {
+  const portal = useBusinessPortal()
   const queryClient = useQueryClient()
 
   const { data, isLoading } = useQuery({
     queryKey: ['bo-promotions-featured'],
-    queryFn: () => get<{ data: Promotion[] }>('/business-owner/promotions/featured'),
+    queryFn: () => get<{ data: Promotion[] }>(`${portal.prefix}/promotions/featured`),
   })
 
   const toggleFeatured = useMutation({
     mutationFn: ({ id, is_featured }: { id: number; is_featured: boolean }) =>
-      put(`/business-owner/promotions/${id}`, { is_featured: !is_featured }),
+      put(`${portal.prefix}/promotions/${id}`, { is_featured: !is_featured }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['bo-promotions-featured'] })
       queryClient.invalidateQueries({ queryKey: ['bo-promotions'] })

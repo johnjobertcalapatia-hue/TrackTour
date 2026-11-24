@@ -1,113 +1,292 @@
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { get, del } from '@/shared/services/api'
-import { StatusBadge } from '@/shared/components/StatusBadge'
+import { useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { apiErrorMessage, del, get, post } from '@/shared/services/api'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { Modal } from '@/shared/components/Modal'
-import { formatDate } from '@/shared/utils'
+import { formatDate, formatDateTime } from '@/shared/utils'
 import { useBusinessOwnerStore } from '../services/business-owner-store'
-import { User, Archive, ChevronLeft, ChevronRight, Plus, Eye, Pencil } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { StaffStatusBadge } from '../components/staff/StaffStatusBadge'
+import { CopyActivationLink } from '../components/staff/CopyActivationLink'
+import {
+  Activity,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Mail,
+  Plus,
+  Search,
+  ShieldCheck,
+  UserCheck,
+  UserX,
+  Users,
+  type LucideIcon,
+} from 'lucide-react'
 
 interface StaffMember {
   id: number
   name: string
   email: string
-  role_label: string
+  role_label: string | null
   status: string
-  mobile_number: string | null
+  employee_id: string
+  last_login_at: string | null
   created_at: string
 }
 
-const ITEMS_PER_PAGE = 8
+interface ActivityRow {
+  id: number
+  action: string
+  description: string
+  actor_type: 'owner' | 'staff' | 'system'
+  actor_name: string | null
+  staff_name: string | null
+  created_at: string
+}
 
+interface Overview {
+  counts: { total: number; active: number; pending: number; suspended: number; inactive: number }
+  recent_activity: ActivityRow[]
+}
+
+interface Invitation {
+  id: number
+  staff_id: number
+  name: string | null
+  email: string
+  role: string | null
+  business: string | null
+  state: 'pending' | 'accepted' | 'expired' | 'revoked'
+  sent_at: string
+  expires_at: string
+}
+
+type Tab = 'overview' | 'staff' | 'invitations'
+const TABS: { key: Tab; label: string }[] = [
+  { key: 'overview', label: 'Overview' },
+  { key: 'staff', label: 'All Staff' },
+  { key: 'invitations', label: 'Invitations' },
+]
+const STATUS_FILTERS = [
+  { key: 'all', label: 'All' },
+  { key: 'active', label: 'Active' },
+  { key: 'pending', label: 'Pending' },
+  { key: 'suspended', label: 'Suspended' },
+  { key: 'inactive', label: 'Deactivated' },
+]
+const ITEMS_PER_PAGE = 8
+const card = 'bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)]'
+
+/**
+ * Business owner — Staff Management (Stage 1, docs/staff-management-plan.md):
+ * Overview (counts + recent activity), All Staff, Invitations. Staff are
+ * invited and set their own password; roles & permissions and full activity
+ * logs come in later stages.
+ */
 export default function BusinessOwnerStaff() {
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
-  const [page, setPage] = useState(1)
-  const [archiveId, setArchiveId] = useState<number | null>(null)
-  const selectedBusinessId = useBusinessOwnerStore((s) => s.selectedBusinessId)
-
-  const { data, isLoading } = useQuery({
-    queryKey: ['bo-staff', selectedBusinessId],
-    queryFn: () => {
-      const params = selectedBusinessId ? `?business_id=${selectedBusinessId}` : ''
-      return get<{ staff: StaffMember[] }>(`/business-owner/staff${params}`)
-    },
-  })
-
-  const archiveMutation = useMutation({
-    mutationFn: (id: number) => del(`/business-owner/staff/${id}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['bo-staff'] })
-      setArchiveId(null)
-    },
-  })
-
-  if (isLoading) return <DashboardSkeleton />
-
-  const staff = data?.staff ?? []
-  const totalPages = Math.ceil(staff.length / ITEMS_PER_PAGE)
-  const paginated = staff.slice((page - 1) * ITEMS_PER_PAGE, page * ITEMS_PER_PAGE)
+  const [params, setParams] = useSearchParams()
+  const tab: Tab = (TABS.find((t) => t.key === params.get('tab'))?.key) ?? 'overview'
+  const setTab = (next: Tab) => setParams(next === 'overview' ? {} : { tab: next }, { replace: true })
 
   return (
     <div>
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
+      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl lg:text-3xl font-bold text-[#126B32]">Staff</h1>
-          <p className="mt-1 text-sm text-[#647067]">Manage your staff members</p>
+          <h1 className="text-2xl font-bold text-[#126B32] lg:text-3xl">Staff Management</h1>
+          <p className="mt-1 text-sm text-[#647067]">Manage your employees, their accounts and what they can access.</p>
         </div>
-        <button onClick={() => navigate('/business-owner/staff/create')} className="inline-flex items-center gap-2 bg-[#16803C] hover:bg-[#126B32] text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition">
-          <Plus className="w-4 h-4" /> Add Staff
+        <button
+          onClick={() => navigate('/business-owner/staff/create')}
+          className="inline-flex items-center gap-2 rounded-xl bg-[#16803C] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#126B32]"
+        >
+          <Plus className="h-4 w-4" /> Add Staff
         </button>
       </div>
 
-      {staff.length === 0 ? (
-        <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-12 text-center">
-          <User className="w-12 h-12 text-[#647067] mx-auto mb-4" />
-          <p className="text-[#647067]">No staff members yet.</p>
+      <div role="tablist" aria-label="Staff management sections" className="mb-6 flex gap-2 overflow-x-auto pb-1">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            role="tab"
+            aria-selected={tab === t.key}
+            onClick={() => setTab(t.key)}
+            className={`shrink-0 rounded-xl px-4 py-2 text-sm font-medium transition ${
+              tab === t.key ? 'bg-[#16803C] text-white' : 'border border-[#D7E8DB] bg-[#fff] text-[#16803C] hover:bg-[#F3F8F4]'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'overview' && <OverviewTab onOpenStaff={() => setTab('staff')} />}
+      {tab === 'staff' && <StaffTab />}
+      {tab === 'invitations' && <InvitationsTab />}
+    </div>
+  )
+}
+
+function OverviewTab({ onOpenStaff }: { onOpenStaff: () => void }) {
+  const { data, isLoading } = useQuery({ queryKey: ['bo-staff-overview'], queryFn: () => get<Overview>('/business-owner/staff/overview') })
+  if (isLoading) return <DashboardSkeleton />
+  const counts = data?.counts ?? { total: 0, active: 0, pending: 0, suspended: 0, inactive: 0 }
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-4">
+        <StatCard icon={Users} label="Total staff" value={counts.total} hint="Registered accounts" />
+        <StatCard icon={UserCheck} label="Active staff" value={counts.active} hint="Can sign in now" />
+        <StatCard icon={Mail} label="Pending invitations" value={counts.pending} hint="Not activated yet" tone="amber" />
+        <StatCard icon={UserX} label="Suspended" value={counts.suspended} hint={counts.inactive ? `${counts.inactive} deactivated` : 'No access'} tone="red" />
+      </div>
+
+      <section aria-label="Recent activity" className={card}>
+        <div className="flex items-center justify-between border-b border-[#E2E8E3] px-5 py-4">
+          <h2 className="flex items-center gap-2 text-base font-semibold text-[#17201A]"><Activity className="h-4 w-4 text-[#16803C]" /> Recent activity</h2>
+          <button onClick={onOpenStaff} className="text-sm font-medium text-[#16803C] hover:underline">View all staff</button>
+        </div>
+        {(data?.recent_activity ?? []).length === 0 ? (
+          <p className="px-5 py-8 text-center text-sm text-[#647067]">No staff activity yet. Add your first staff member to get started.</p>
+        ) : (
+          <ul className="divide-y divide-[#E2E8E3]">
+            {data!.recent_activity.map((a) => (
+              <li key={a.id} className="flex items-start justify-between gap-4 px-5 py-3">
+                <div className="min-w-0">
+                  <p className="text-sm text-[#17201A]">{a.description}</p>
+                  <p className="mt-0.5 text-xs text-[#647067]">{a.actor_type === 'owner' ? 'By you' : a.actor_type === 'staff' ? `By ${a.actor_name ?? 'staff'}` : 'System'}</p>
+                </div>
+                <span className="shrink-0 text-xs text-[#647067]">{formatDateTime(a.created_at)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <div className={`${card} flex items-start gap-3 p-5`}>
+        <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-[#16803C]" />
+        <p className="text-sm text-[#4B5563]">
+          Staff set their own password through an invitation link that works once and expires after 72 hours. Suspending or removing a staff
+          member signs them out at once. Each staff member only sees what their role allows, for your business only.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function StatCard({ icon: Icon, label, value, hint, tone = 'emerald' }: { icon: LucideIcon; label: string; value: number; hint: string; tone?: 'emerald' | 'amber' | 'red' }) {
+  // Round, filled icons as on the redesigned owner dashboard.
+  const tint = tone === 'amber' ? 'bg-[#E9A100] text-white' : tone === 'red' ? 'bg-[#DC2626] text-white' : 'bg-[#16803C] text-white'
+  return (
+    <div className={`${card} p-5`}>
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium text-[#647067]">{label}</p>
+        <span className={`flex h-11 w-11 items-center justify-center rounded-full ${tint}`}><Icon className="h-5 w-5" /></span>
+      </div>
+      <p className="mt-2 text-3xl font-bold text-[#17201A]" data-testid={`stat-${label}`}>{value}</p>
+      <p className="mt-1 text-xs text-[#647067]">{hint}</p>
+    </div>
+  )
+}
+
+function StaffTab() {
+  const navigate = useNavigate()
+  const selectedBusinessId = useBusinessOwnerStore((s) => s.selectedBusinessId)
+  const [status, setStatus] = useState('all')
+  const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['bo-staff', selectedBusinessId],
+    queryFn: () => get<{ staff: StaffMember[]; status_counts: Record<string, number> }>(
+      `/business-owner/staff${selectedBusinessId ? `?business_id=${selectedBusinessId}` : ''}`,
+    ),
+  })
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return (data?.staff ?? []).filter((s) => (status === 'all' || s.status === status)
+      && (!q || s.name.toLowerCase().includes(q) || s.email?.toLowerCase().includes(q) || s.employee_id?.toLowerCase().includes(q)))
+  }, [data, status, search])
+
+  if (isLoading) return <DashboardSkeleton />
+
+  const counts = data?.status_counts ?? {}
+  const total = (data?.staff ?? []).length
+  const totalPages = Math.max(1, Math.ceil(filtered.length / ITEMS_PER_PAGE))
+  const current = Math.min(page, totalPages)
+  const paginated = filtered.slice((current - 1) * ITEMS_PER_PAGE, current * ITEMS_PER_PAGE)
+
+  return (
+    <div>
+      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex flex-wrap gap-2">
+          {STATUS_FILTERS.map((f) => {
+            const n = f.key === 'all' ? total : (counts[f.key] ?? 0)
+            return (
+              <button
+                key={f.key}
+                onClick={() => { setStatus(f.key); setPage(1) }}
+                aria-pressed={status === f.key}
+                className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${status === f.key ? 'bg-[#16803C] text-white' : 'border border-[#D7E8DB] bg-[#fff] text-[#4B5563] hover:bg-[#F3F8F4]'}`}
+              >
+                {f.label} · {n}
+              </button>
+            )
+          })}
+        </div>
+        <label className="relative block w-full lg:w-72">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[#9CA3AF]" />
+          <input
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setPage(1) }}
+            placeholder="Search staff…"
+            aria-label="Search staff"
+            className="w-full rounded-xl border border-[#E2E8E3] bg-white py-2.5 pl-9 pr-3 text-sm focus:border-[#16803C] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25"
+          />
+        </label>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className={`${card} p-12 text-center`}>
+          <Users className="mx-auto mb-4 h-12 w-12 text-[#647067]" />
+          <p className="text-[#647067]">{total === 0 ? 'No staff members yet.' : 'No staff match this filter.'}</p>
         </div>
       ) : (
         <>
-          <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] overflow-hidden">
+          <div className={`${card} overflow-hidden`}>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-[#E2E8E3] bg-[#F6F8F4]">
-                    <th className="text-left px-5 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wider text-[#647067]">Name</th>
-                    <th className="text-left px-5 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wider text-[#647067]">Email</th>
-                    <th className="text-left px-5 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wider text-[#647067]">Role</th>
-                    <th className="text-left px-5 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wider text-[#647067]">Status</th>
-                    <th className="text-left px-5 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wider text-[#647067]">Joined</th>
-                    <th className="text-right px-5 lg:px-6 py-3 text-xs font-semibold uppercase tracking-wider text-[#647067]">Actions</th>
+                    {['Employee', 'Role', 'Status', 'Last sign-in', 'Added'].map((h) => (
+                      <th key={h} className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[#647067] lg:px-6">{h}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#E2E8E3]">
                   {paginated.map((s) => (
-                    <tr key={s.id} className="hover:bg-[#F6F8F4] transition-colors">
-                      <td className="px-5 lg:px-6 py-3 whitespace-nowrap">
+                    <tr
+                      key={s.id}
+                      onClick={() => navigate(`/business-owner/staff/${s.id}`)}
+                      className="cursor-pointer transition-colors hover:bg-[#F6F8F4]"
+                      data-testid={`staff-row-${s.id}`}
+                    >
+                      <td className="whitespace-nowrap px-5 py-3 lg:px-6">
                         <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 bg-[#F3F8F4] rounded-full flex items-center justify-center text-[#647067] text-xs font-bold">
-                            {s.name.charAt(0).toUpperCase()}
+                          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#EAF6ED] text-xs font-bold text-[#16803C]">
+                            {s.name.split(' ').map((p) => p[0]).slice(0, 2).join('').toUpperCase()}
                           </div>
-                          <span className="font-medium text-[#17201A]">{s.name}</span>
+                          <div>
+                            <p className="font-medium text-[#17201A]">{s.name}</p>
+                            <p className="text-xs text-[#647067]">{s.email}</p>
+                          </div>
                         </div>
                       </td>
-                      <td className="px-5 lg:px-6 py-3 text-[#4B5563] whitespace-nowrap">{s.email}</td>
-                      <td className="px-5 lg:px-6 py-3 text-[#4B5563] whitespace-nowrap capitalize">{s.role_label}</td>
-                      <td className="px-5 lg:px-6 py-3 whitespace-nowrap"><StatusBadge status={s.status} /></td>
-                      <td className="px-5 lg:px-6 py-3 text-[#647067] whitespace-nowrap">{formatDate(s.created_at)}</td>
-                      <td className="px-5 lg:px-6 py-3 text-right whitespace-nowrap">
-                        <button onClick={() => navigate(`/business-owner/staff/${s.id}`)} className="p-1.5 rounded-lg text-[#647067] hover:text-[#16803C] hover:bg-[#EAF6ED] transition">
-                          <Eye className="w-4 h-4" />
-                        </button>
-                        <button onClick={() => navigate(`/business-owner/staff/${s.id}/edit`)} className="p-1.5 rounded-lg text-[#647067] hover:text-[#16803C] hover:bg-[#EAF6ED] transition ml-1">
-                          <Pencil className="w-4 h-4" />
-                        </button>
-                        <button onClick={() => setArchiveId(s.id)} className="p-1.5 rounded-lg text-[#647067] hover:text-[#A66F00] hover:bg-[#FFF7D6] transition ml-1">
-                          <Archive className="w-4 h-4" />
-                        </button>
-                      </td>
+                      <td className="whitespace-nowrap px-5 py-3 text-[#4B5563] lg:px-6">{s.role_label ?? '—'}</td>
+                      <td className="whitespace-nowrap px-5 py-3 lg:px-6"><StaffStatusBadge status={s.status} /></td>
+                      <td className="whitespace-nowrap px-5 py-3 text-[#647067] lg:px-6">{s.last_login_at ? formatDateTime(s.last_login_at) : 'Never'}</td>
+                      <td className="whitespace-nowrap px-5 py-3 text-[#647067] lg:px-6">{formatDate(s.created_at)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -115,40 +294,107 @@ export default function BusinessOwnerStaff() {
             </div>
           </div>
 
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between mt-4">
-              <p className="text-sm text-[#647067]">
-                Showing {(page - 1) * ITEMS_PER_PAGE + 1}–{Math.min(page * ITEMS_PER_PAGE, staff.length)} of {staff.length}
-              </p>
+          <div className="mt-4 flex items-center justify-between">
+            <p className="text-sm text-[#647067]">
+              Showing {(current - 1) * ITEMS_PER_PAGE + 1}–{Math.min(current * ITEMS_PER_PAGE, filtered.length)} of {filtered.length}
+            </p>
+            {totalPages > 1 && (
               <div className="flex items-center gap-2">
-                <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="p-2 rounded-lg bg-white border border-[#D7E8DB] text-[#16803C] hover:bg-[#F3F8F4] disabled:opacity-40 transition">
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-                <span className="text-sm text-[#647067]">Page {page} of {totalPages}</span>
-                <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages} className="p-2 rounded-lg bg-white border border-[#D7E8DB] text-[#16803C] hover:bg-[#F3F8F4] disabled:opacity-40 transition">
-                  <ChevronRight className="w-4 h-4" />
-                </button>
+                <button aria-label="Previous page" onClick={() => setPage(current - 1)} disabled={current === 1} className="rounded-lg border border-[#D7E8DB] bg-white p-2 text-[#16803C] transition hover:bg-[#F3F8F4] disabled:opacity-40"><ChevronLeft className="h-4 w-4" /></button>
+                <span className="text-sm text-[#647067]">Page {current} of {totalPages}</span>
+                <button aria-label="Next page" onClick={() => setPage(current + 1)} disabled={current === totalPages} className="rounded-lg border border-[#D7E8DB] bg-white p-2 text-[#16803C] transition hover:bg-[#F3F8F4] disabled:opacity-40"><ChevronRight className="h-4 w-4" /></button>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </>
       )}
+    </div>
+  )
+}
 
-      <Modal show={archiveId !== null} onClose={() => setArchiveId(null)} maxWidth="sm">
+function InvitationsTab() {
+  const queryClient = useQueryClient()
+  const [notice, setNotice] = useState<{ type: 'ok' | 'error'; text: string; link?: string | null } | null>(null)
+  const [revokeId, setRevokeId] = useState<number | null>(null)
+  const { data, isLoading } = useQuery({ queryKey: ['bo-staff-invitations'], queryFn: () => get<{ invitations: Invitation[] }>('/business-owner/staff/invitations') })
+
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ['bo-staff-invitations'] })
+    queryClient.invalidateQueries({ queryKey: ['bo-staff-overview'] })
+  }
+  const resend = useMutation({
+    mutationFn: (staffId: number) => post<{ mail_sent: boolean; activation_url: string | null }>(`/business-owner/staff/${staffId}/resend-invitation`),
+    onSuccess: (res) => {
+      setNotice(res.mail_sent
+        ? { type: 'ok', text: 'A new invitation was sent. The previous link no longer works.' }
+        : { type: 'error', text: 'The email could not be sent. Share this activation link with them:', link: res.activation_url })
+      refresh()
+    },
+    onError: (e) => setNotice({ type: 'error', text: apiErrorMessage(e, 'Could not resend the invitation.') }),
+  })
+  const revoke = useMutation({
+    mutationFn: (id: number) => del(`/business-owner/staff/invitations/${id}`),
+    onSuccess: () => { setNotice({ type: 'ok', text: 'Invitation cancelled. The link no longer works.' }); setRevokeId(null); refresh() },
+    onError: (e) => { setNotice({ type: 'error', text: apiErrorMessage(e, 'Could not cancel the invitation.') }); setRevokeId(null) },
+  })
+
+  if (isLoading) return <DashboardSkeleton />
+  const invitations = data?.invitations ?? []
+
+  return (
+    <div className="space-y-4">
+      {notice && (
+        <div role="status" className={`rounded-xl border px-4 py-3 text-sm ${notice.type === 'ok' ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+          {notice.text}
+          {notice.link && <CopyActivationLink url={notice.link} />}
+        </div>
+      )}
+
+      {invitations.length === 0 ? (
+        <div className={`${card} p-12 text-center`}>
+          <Mail className="mx-auto mb-4 h-12 w-12 text-[#647067]" />
+          <p className="text-[#647067]">No invitations yet.</p>
+        </div>
+      ) : (
+        <div className={`${card} overflow-hidden`}>
+          <ul className="divide-y divide-[#E2E8E3]">
+            {invitations.map((i) => (
+              <li key={i.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between" data-testid={`invitation-${i.id}`}>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-medium text-[#17201A]">{i.name ?? i.email}</p>
+                    <StaffStatusBadge status={i.state} />
+                  </div>
+                  <p className="mt-0.5 text-xs text-[#647067]">{i.email} · {i.role ?? 'Staff'}{i.business ? ` · ${i.business}` : ''}</p>
+                  <p className="mt-0.5 flex items-center gap-1 text-xs text-[#647067]">
+                    <Clock className="h-3 w-3" /> Sent {formatDateTime(i.sent_at)}{i.state === 'pending' ? ` · expires ${formatDateTime(i.expires_at)}` : ''}
+                  </p>
+                </div>
+                {(i.state === 'pending' || i.state === 'expired') && (
+                  <div className="flex shrink-0 gap-2">
+                    <button onClick={() => resend.mutate(i.staff_id)} disabled={resend.isPending} className="rounded-xl border border-[#D7E8DB] bg-white px-3 py-2 text-xs font-semibold text-[#16803C] transition hover:bg-[#F3F8F4] disabled:opacity-50">
+                      Resend
+                    </button>
+                    {i.state === 'pending' && (
+                      <button onClick={() => setRevokeId(i.id)} className="rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 transition hover:bg-red-50">
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <Modal show={revokeId !== null} onClose={() => setRevokeId(null)} maxWidth="sm">
         <div className="p-6">
-          <h3 className="text-lg font-semibold text-[#17201A] mb-2">Archive Staff Member</h3>
-          <p className="text-sm text-[#647067] mb-6">Are you sure you want to archive this staff member?</p>
-          <div className="flex items-center justify-end gap-3">
-            <button onClick={() => setArchiveId(null)} className="px-4 py-2 rounded-xl bg-white text-[#16803C] border border-[#D7E8DB] text-sm font-medium hover:bg-[#F3F8F4] transition">
-              Cancel
-            </button>
-            <button
-              onClick={() => archiveId && archiveMutation.mutate(archiveId)}
-              disabled={archiveMutation.isPending}
-              className="px-4 py-2 rounded-xl bg-[#B91C1C] hover:bg-[#991B1B] disabled:opacity-50 text-white text-sm font-semibold transition"
-            >
-              {archiveMutation.isPending ? 'Archiving...' : 'Archive'}
-            </button>
+          <h3 className="mb-2 text-lg font-semibold text-[#17201A]">Cancel invitation?</h3>
+          <p className="mb-6 text-sm text-[#647067]">The activation link will stop working. You can send a new invitation later.</p>
+          <div className="flex justify-end gap-3">
+            <button onClick={() => setRevokeId(null)} className="rounded-xl border border-[#D7E8DB] bg-white px-4 py-2 text-sm font-medium text-[#16803C] hover:bg-[#F3F8F4]">Keep</button>
+            <button onClick={() => revokeId && revoke.mutate(revokeId)} disabled={revoke.isPending} className="rounded-xl bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white hover:bg-[#991B1B] disabled:opacity-50">Cancel invitation</button>
           </div>
         </div>
       </Modal>

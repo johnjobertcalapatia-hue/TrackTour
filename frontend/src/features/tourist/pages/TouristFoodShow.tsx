@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { SalePrice, type DishSale } from '@/shared/components/SalePrice'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { get, post } from '@/shared/services/api'
@@ -8,13 +9,16 @@ import { forgetBrowsedPlace, recordBrowsedPlace } from '@/shared/services/browsi
 import { PlaceUnavailable, isNotFoundError } from '@/shared/components/PlaceUnavailable'
 import {
   ArrowLeft, Star, StarHalf, MapPin, Heart, Clock, ShoppingCart, Plus, Minus, UtensilsCrossed,
-  Info, Image as ImageIcon, Phone, Bike, Search, Flame,
+  Info, Image as ImageIcon, Phone, Bike, Search, Flame, Megaphone,
 } from 'lucide-react'
+import PostFeed from '@/features/tourist/components/posts/PostFeed'
 
 interface FoodItem {
   id: number
   name: string
   price: number
+  original_price?: number | null
+  sale?: DishSale | null
   image: string | null
   is_available: boolean
   category: string | null
@@ -86,10 +90,11 @@ type CartLine = {
   business_latitude?: number | null; business_longitude?: number | null; quantity: number
 }
 
-type DetailTab = 'menu' | 'about' | 'photos' | 'reviews' | 'location'
+type DetailTab = 'menu' | 'posts' | 'about' | 'photos' | 'reviews' | 'location'
 
 const DETAIL_TABS: { key: DetailTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: 'menu', label: 'Menu', icon: UtensilsCrossed },
+  { key: 'posts', label: 'Posts', icon: Megaphone },
   { key: 'about', label: 'About', icon: Info },
   { key: 'photos', label: 'Photos', icon: ImageIcon },
   { key: 'reviews', label: 'Reviews', icon: Star },
@@ -477,7 +482,7 @@ export default function TouristFoodShow() {
                       <div className="min-h-0 px-3 py-2 flex flex-col justify-between">
                         <div className="min-w-0">
                           <h3 className="text-[15px] font-bold leading-tight text-[#17201B] truncate" title={item.name}>{item.name}</h3>
-                          <p className="text-base font-extrabold leading-tight text-[#087F3F]">{formatCurrency(item.price)}</p>
+                          <p className="text-base leading-tight"><SalePrice price={item.price} original_price={item.original_price} sale={item.sale} className="font-extrabold text-[#087F3F]" compact /></p>
                         </div>
                         {item.is_available && accepting && (
                           <div className="flex items-center gap-3">
@@ -506,6 +511,13 @@ export default function TouristFoodShow() {
                   ))}
                 </div>
               )}
+            </section>
+          )}
+
+          {detailTab === 'posts' && (
+            <section aria-labelledby="posts-heading">
+              <h2 id="posts-heading" className="mb-4 text-2xl font-extrabold text-[#17201B]">Posts</h2>
+              <PostFeed businessId={Number(id)} />
             </section>
           )}
 
@@ -679,7 +691,7 @@ export default function TouristFoodShow() {
                 )}
               </div>
               <h3 className="text-lg font-bold text-[#17201B]">{selectedItem.name}</h3>
-              <p className="text-xl font-extrabold text-[#087F3F] mt-1">{formatCurrency(selectedItem.price)}</p>
+              <p className="text-xl mt-1"><SalePrice price={selectedItem.price} original_price={selectedItem.original_price} sale={selectedItem.sale} className="font-extrabold text-[#087F3F]" /></p>
               {selectedItem.description && <p className="text-sm text-[#56615B] mt-2">{selectedItem.description}</p>}
 
               <div className="flex items-center justify-between mt-6">

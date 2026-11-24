@@ -151,7 +151,7 @@ class RideTimeChargeService
     }
 
     /**
-     * orders.total = subtotal + approved charges; commission max(₱20, 40% × total).
+     * orders.total = subtotal + approved charges; commission max(₱20, 40% × total), at most the total.
      * Idempotent; a no-op while there is no charged amount.
      */
     public function applyCharges(Delivery $locked): void
@@ -182,7 +182,7 @@ class RideTimeChargeService
             'charges_total' => $chargesTotal,
             'total' => $total,
             'rider_commission' => $commission,
-            'commission_rule' => 'max(₱20, 40% of total)',
+            'commission_rule' => 'max(₱20, 40% of total), at most the total',
         ], $locked);
     }
 

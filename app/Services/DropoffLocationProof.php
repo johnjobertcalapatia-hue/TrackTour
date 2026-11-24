@@ -21,6 +21,10 @@ use Carbon\CarbonImmutable;
  *     Accepted fixes coarser than ±50 m are flagged for the Tourism Office.
  *
  * Coarser than ±200 m is still refused, with what to do about it.
+ *
+ * Restaurant pickups use the same rules (owner decision 2026-11-24): arrival
+ * and Confirm Pick Up at the restaurant pass the stop's point, the pickup
+ * radius, "the restaurant" and their own escalation action.
  */
 class DropoffLocationProof
 {
@@ -33,7 +37,8 @@ class DropoffLocationProof
      */
     public function evaluate(Delivery $delivery, int $riderId, ?array $deviceFix, string $action,
         string $farFormat = 'You must be within %d m of the delivery address (you are %s away).',
-        ?array $target = null, ?float $radiusMeters = null): array
+        ?array $target = null, ?float $radiusMeters = null,
+        string $targetLabel = 'the drop-off', string $escalationAction = 'escalation.dropoff_low_precision_gps'): array
     {
         // Default target: the drop-off. A ride's pickup arrival passes its own
         // point and radius (2026-11-18), with the same saved / device-fix rules.
@@ -65,8 +70,8 @@ class DropoffLocationProof
                 $flagged = $device['accuracy'] > (float) config('tracking.max_saved_accuracy_m', 50);
                 if ($flagged) {
                     ActivityLog::record(
-                        'escalation.dropoff_low_precision_gps',
-                        "Delivery #{$delivery->id} ({$action}) was confirmed from the rider's phone GPS at ±".((int) round($device['accuracy']))." m precision, {$this->away($distance)} from the drop-off. Review if anything looks wrong.",
+                        $escalationAction,
+                        "Delivery #{$delivery->id} ({$action}) was confirmed from the rider's phone GPS at ±".((int) round($device['accuracy']))." m precision, {$this->away($distance)} from {$targetLabel}. Review if anything looks wrong.",
                         $delivery,
                         'delivery',
                     );

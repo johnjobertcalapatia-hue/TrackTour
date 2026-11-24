@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ActsForBusiness;
 use App\Http\Resources\OfferingResource;
 use App\Models\Business;
 use App\Models\Offering;
@@ -12,16 +13,18 @@ use Illuminate\Support\Facades\DB;
 
 class BusinessOwnerMenuController extends Controller
 {
+    use ActsForBusiness;
+
     private function getActiveBusiness(Request $request): ?Business
     {
-        return $request->user()->businesses()->first();
+        return $this->actingBusinesses($request)->first();
     }
 
     public function index(Request $request): JsonResponse
     {
         $businessId = $request->get('business_id');
         $business = $businessId
-            ? $request->user()->businesses()->find($businessId)
+            ? $this->actingBusinesses($request)->find($businessId)
             : $this->getActiveBusiness($request);
 
         if (! $business) {
@@ -125,7 +128,7 @@ class BusinessOwnerMenuController extends Controller
         if (! $business) {
             return $this->notFoundResponse('No active business found.');
         }
-        if ($business->owner_id !== $request->user()->id) {
+        if (! $this->actsFor($request, $business)) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -180,7 +183,7 @@ class BusinessOwnerMenuController extends Controller
 
     public function update(Request $request, Offering $offering): JsonResponse
     {
-        if ($offering->business->owner_id !== $request->user()->id) {
+        if (! $this->actsFor($request, $offering->business)) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -243,7 +246,7 @@ class BusinessOwnerMenuController extends Controller
 
     public function destroy(Request $request, Offering $offering): JsonResponse
     {
-        if ($offering->business->owner_id !== $request->user()->id) {
+        if (! $this->actsFor($request, $offering->business)) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -254,7 +257,7 @@ class BusinessOwnerMenuController extends Controller
 
     public function restore(Request $request, Offering $offering): JsonResponse
     {
-        if ($offering->business->owner_id !== $request->user()->id) {
+        if (! $this->actsFor($request, $offering->business)) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -268,7 +271,7 @@ class BusinessOwnerMenuController extends Controller
 
     public function toggleStatus(Request $request, Offering $offering): JsonResponse
     {
-        if ($offering->business->owner_id !== $request->user()->id) {
+        if (! $this->actsFor($request, $offering->business)) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -287,7 +290,7 @@ class BusinessOwnerMenuController extends Controller
 
     public function toggleFeatured(Request $request, Offering $offering): JsonResponse
     {
-        if ($offering->business->owner_id !== $request->user()->id) {
+        if (! $this->actsFor($request, $offering->business)) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 

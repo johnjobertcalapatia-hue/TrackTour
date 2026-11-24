@@ -3,12 +3,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { get, post, patch, apiErrorMessage } from '@/shared/services/api'
 import { useAuthStore } from '@/features/auth/services/auth-store'
 import { resolvePickupGate, isArrivalDismissed, markArrivalDismissed } from '@/features/rider/gating'
-import { resolveStopArrival, STOP_ARRIVAL_THRESHOLD_METERS } from '@/features/rider/stop-arrival'
+import { resolveStopArrival, shouldPromptStopArrival, STOP_ARRIVAL_THRESHOLD_METERS } from '@/features/rider/stop-arrival'
 import type { PickupStopsData } from '@/features/rider/pickup-stops'
 import type { Delivery } from '@/shared/types'
 import type { DestinationChange } from '@/features/tourist/services/destination-change'
 import { useUserSocketNotifier } from '@/shared/hooks/useUserSocketNotifier'
 import { isUsableGpsFix, markLocationSent } from '@/features/rider/gps'
+import { withPhoneFixAtStop } from '@/features/rider/trip-steps'
 
 export type TripState =
   | 'EN_ROUTE_TO_PICKUP'
@@ -43,6 +44,8 @@ export interface TripDelivery {
   destination_change?: DestinationChange | null
   /** Ride: pickup waiting (started by the rider's confirmed arrival) — 2026-11-18. */
   pickup_waiting?: PickupWaiting | null
+  /** Stage C: the passenger's owed ₱50 cancellation fee from an earlier ride (2026-11-18). */
+  cancellation_fee_due?: { penalty_id: number; amount: number; from_ride: string | null } | null
   additional_charges?: { id: number; type: string; label: string; amount: number; duration_seconds: number }[]
   created_at?: string | null
 }
@@ -447,7 +450,17 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
     refetchInterval: 10000,
     staleTime: 5000,
   })
-  const { data: pickupStopsData } = pickupStopsQuery
+  // Restaurant stops as the server will judge them when the phone's own fix
+  // is sent with the action (owner decision 2026-11-24: ±200 m, 30 s): the
+  // pickup button and message appear even when the saved fix is missing.
+  const pickupStopsData = useMemo(() => {
+    const data = pickupStopsQuery.data
+    if (!data) return data
+    const fix = freshFixMeta.current
+    return withPhoneFixAtStop(data, positionKnown && fix ? fix : null)
+    // riderPosition / deviceAccuracy change with every new fix (freshFixMeta is a ref).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pickupStopsQuery.data, riderPosition, deviceAccuracy, positionKnown])
 
   const pickupGate = resolvePickupGate({
     isPickupStage,
@@ -500,7 +513,7 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
     const stops = pickupStopsData.stops ?? []
     if (stops.length === 0 || pickupStopsData.fully_collected) return null
 
-    const { activeStop, distanceMeters } = resolveStopArrival({
+    const arrival = resolveStopArrival({
       riderLatitude: riderPosition[0],
       riderLongitude: riderPosition[1],
       stops: stops.map((stop) => ({
@@ -514,9 +527,10 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
       thresholdMeters: pickupStopsData.pickup_radius_meters ?? STOP_ARRIVAL_THRESHOLD_METERS,
     })
 
-    if (!activeStop) return null
-    const current = stops.find((stop) => stop.id === activeStop.id)
-    if (!current?.arrival_can_confirm) return null
+    const { activeStop, distanceMeters } = arrival
+    const current = activeStop ? stops.find((stop) => stop.id === activeStop.id) : undefined
+    // 2026-11-23: live GPS inside the radius AND the server agrees.
+    if (!activeStop || !current || !shouldPromptStopArrival(arrival, current.arrival_can_confirm)) return null
 
     return {
       deliveryId: activeDelivery.id,
@@ -651,7 +665,14 @@ export function RiderActiveTripProvider({ children }: { children: ReactNode }) {
   //   the rider's location is within the 50m drop-off geofence. Anything else
   //   keeps the drop-off alert hidden.
   useEffect(() => {
-    if (!activeDelivery) return
+    if (!activeDelivery) {
+      // The trip ended without the rider (2026-11-18: the passenger cancelled,
+      // or it was completed or reassigned elsewhere): it leaves the active
+      // list, so close any arrival alert still showing for it.
+      lastAlertStatus.current = null
+      setArrivalAlert(null)
+      return
+    }
     const status = activeDelivery.status
     const pickupConfirmed = ['picked_up', 'in_transit'].includes(status)
 

@@ -47,6 +47,10 @@ return Application::configure(basePath: dirname(__DIR__))
             'business.approved' => CheckBusinessOwnerApproval::class,
             'business.context' => SetBusinessContext::class,
             'staff' => StaffMiddleware::class,
+            // Staff Management Stage 1: active staff, permission, own-restaurant order scope.
+            'staff.active' => StaffMiddleware::class,
+            'staff.can' => \App\Http\Middleware\StaffPermissionMiddleware::class,
+            'staff.order' => \App\Http\Middleware\StaffOrderScopeMiddleware::class,
             'token.only' => \App\Http\Middleware\TokenOnlyAuth::class,
             'municipal.scope' => \App\Http\Middleware\EnsureMunicipalScope::class,
         ]);

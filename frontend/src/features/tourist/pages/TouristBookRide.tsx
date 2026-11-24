@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useLocation } from 'react-router-dom'
 import { ArrowLeft, ArrowRight, Car } from 'lucide-react'
 import BookRideSheet from '@/features/tourist/components/BookRideSheet'
+import CancellationFeeBanner from '@/features/tourist/components/ride/CancellationFeeBanner'
 import { ACTIVE_RIDE_KEY, fetchActiveRide } from '@/features/tourist/services/active-ride'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { useBackOr } from '@/shared/hooks/use-back-or'
@@ -83,7 +84,10 @@ export default function TouristBookRide() {
   }
 
   return (
-    <BookRideSheet
+    <>
+      {/* Stage C (2026-11-18): an owed or under-review ₱50 cancellation fee. */}
+      <div className="mx-auto lg:mx-0 w-full max-w-3xl"><CancellationFeeBanner /></div>
+      <BookRideSheet
       onClose={leave}
       destination={seed.destination}
       destinationAddress={seed.destinationAddress}
@@ -93,5 +97,6 @@ export default function TouristBookRide() {
       pickupPoint={seed.pickupPoint}
       onBooked={markDraftBooked}
     />
+    </>
   )
 }

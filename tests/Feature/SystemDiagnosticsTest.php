@@ -97,6 +97,31 @@ class SystemDiagnosticsTest extends TestCase
         $this->assertSame(0, $event->exitCode);
     }
 
+    public function test_every_scheduled_task_runs_on_one_server_only(): void
+    {
+        // Two containers running the scheduler at once (deploy overlap or more
+        // than one replica) must not run any task twice in the same minute.
+        $events = app(\Illuminate\Console\Scheduling\Schedule::class)->events();
+        $this->assertNotEmpty($events);
+        foreach ($events as $event) {
+            $this->assertTrue($event->onOneServer, "Not single-server: {$event->getSummaryForDisplay()}");
+        }
+
+        $dispatch = collect($events)->first(fn ($e) => str_contains((string) $e->command, 'schedule:dispatch'));
+        $this->assertNotNull($dispatch);
+
+        // Each Schedule instance stands for one container; the lock is in the shared cache.
+        $serverA = new \Illuminate\Console\Scheduling\Schedule;
+        $serverB = new \Illuminate\Console\Scheduling\Schedule;
+        $minute = now()->startOfMinute();
+
+        $this->assertTrue($serverA->serverShouldRun($dispatch, $minute), 'The first scheduler claims the minute.');
+        $this->assertFalse($serverB->serverShouldRun($dispatch, $minute), 'The second scheduler skips that minute.');
+        // Every minute is a new `schedule:run` process (a fresh Schedule).
+        $serverBNextMinute = new \Illuminate\Console\Scheduling\Schedule;
+        $this->assertTrue($serverBNextMinute->serverShouldRun($dispatch, $minute->copy()->addMinute()), 'The next minute is free again.');
+    }
+
     public function test_stale_busy_rider_is_detected_and_released_through_rider_diagnostics(): void
     {
         $stuck = $this->user('rider', 'Stuck Rider');

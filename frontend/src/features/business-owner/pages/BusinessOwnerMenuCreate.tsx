@@ -6,9 +6,9 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { post, get } from '@/shared/services/api'
 import { usePersistFormRHF } from '@/shared/hooks/use-persist-form-rhf'
-import { useBusinessOwnerStore } from '../services/business-owner-store'
 import { Alert } from '@/shared/components/Alert'
 import { ArrowLeft, Save, Image, X, Star, Tag } from 'lucide-react'
+import { useBusinessPortal } from '../services/business-portal'
 
 const schema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
@@ -40,14 +40,15 @@ function getDiscountPercent(price: number, comparePrice: number): number {
 }
 
 export default function BusinessOwnerMenuCreate() {
+  const portal = useBusinessPortal()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [error, setError] = useState('')
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const selectedBusinessId = useBusinessOwnerStore((s) => s.selectedBusinessId)
-  const businesses = useBusinessOwnerStore((s) => s.businesses)
+  const selectedBusinessId = portal.businessId
+  const businesses = portal.businesses
 
   const form = useForm<FormData>({
     resolver: zodResolver(schema as any),
@@ -73,7 +74,7 @@ export default function BusinessOwnerMenuCreate() {
 
   const { data: categories } = useQuery({
     queryKey: ['bo-menu-categories-options', businessId],
-    queryFn: () => get<{ data: CategoryOption[] }>(`/business-owner/offerings/categories?business_id=${businessId}`),
+    queryFn: () => get<{ data: CategoryOption[] }>(`${portal.prefix}/offerings/categories?business_id=${businessId}`),
     enabled: !!businessId,
   })
 
@@ -93,12 +94,12 @@ export default function BusinessOwnerMenuCreate() {
       payload.append('is_featured', formData.is_featured ? '1' : '0')
       if (imageFile) payload.append('image', imageFile)
 
-      return post('/business-owner/menu', payload)
+      return post(`${portal.prefix}/menu`, payload)
     },
     onSuccess: () => {
       clearDraft()
       queryClient.invalidateQueries({ queryKey: ['bo-menu-categories-options'] })
-      navigate('/business-owner/menu')
+      navigate(`${portal.prefix}/menu`)
     },
     onError: (err: any) => setError(err.response?.data?.message || 'Failed to create menu item.'),
   })

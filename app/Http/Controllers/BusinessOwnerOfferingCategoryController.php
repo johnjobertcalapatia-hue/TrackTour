@@ -2,15 +2,18 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ActsForBusiness;
 use App\Models\OfferingCategory;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 class BusinessOwnerOfferingCategoryController extends Controller
 {
+    use ActsForBusiness;
+
     public function index(Request $request): JsonResponse
     {
-        $businessIds = $request->user()->businesses()->pluck('id');
+        $businessIds = $this->actingBusinessIds($request);
 
         $query = OfferingCategory::query()->whereIn('business_id', $businessIds);
 
@@ -54,7 +57,7 @@ class BusinessOwnerOfferingCategoryController extends Controller
 
     public function store(Request $request): JsonResponse
     {
-        $businessIds = $request->user()->businesses()->pluck('id');
+        $businessIds = $this->actingBusinessIds($request);
 
         $validated = $request->validate([
             'business_id' => 'sometimes|integer|exists:businesses,id',
@@ -83,7 +86,7 @@ class BusinessOwnerOfferingCategoryController extends Controller
 
     public function update(Request $request, int $id): JsonResponse
     {
-        $businessIds = $request->user()->businesses()->pluck('id');
+        $businessIds = $this->actingBusinessIds($request);
         $category = OfferingCategory::findOrFail($id);
 
         if (! $businessIds->contains($category->business_id)) {

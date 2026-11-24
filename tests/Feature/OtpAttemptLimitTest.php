@@ -48,6 +48,19 @@ class OtpAttemptLimitTest extends TestCase
         ]);
     }
 
+    public function test_a_code_that_cannot_be_emailed_answers_503_and_is_not_kept(): void
+    {
+        // e.g. Resend refusing an unverified sender domain (production, 2026-11-22).
+        Mail::shouldReceive('to')->andThrow(new \Symfony\Component\Mailer\Exception\TransportException('You can only send testing emails to your own email address'));
+
+        $this->sendOtp()
+            ->assertStatus(503)
+            ->assertJsonPath('success', false)
+            ->assertJsonPath('message', fn ($m) => str_contains($m, "couldn't email the verification code"));
+
+        $this->assertNull(Cache::get('otp:'.self::MOBILE), 'An undelivered code must not stay valid.');
+    }
+
     public function test_verify_reports_remaining_attempts_before_lockout(): void
     {
         $this->seedCode();
@@ -156,6 +169,7 @@ class OtpAttemptLimitTest extends TestCase
             'password_confirmation' => 'Password123!',
             'role' => 'rider',
             'municipality_id' => \App\Models\Municipality::firstOrCreate(['name' => 'Bansud'], ['district' => '2nd District', 'province' => 'Oriental Mindoro'])->id,
+            'barangay_id' => \App\Models\Barangay::firstOrCreate(['municipality_id' => \App\Models\Municipality::where('name', 'Bansud')->value('id'), 'name' => 'Poblacion'])->id,
             'mobile_number' => self::MOBILE,
             'otp_code' => '123456',
             'confirm_age' => true,

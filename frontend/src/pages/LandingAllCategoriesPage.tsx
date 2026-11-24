@@ -78,7 +78,7 @@ export default function LandingAllCategoriesPage() {
   const fromExplore = (list: ExploreItem[], category: string, icon: LucideIcon): LandingItem[] =>
     list.map((item) => ({
       key: `${item.type}-${item.id}`,
-      to: item.type === 'place' ? `/tourist/destinations/${item.id}` : item.type === 'food' ? `/explore/food/${item.id}` : `/tourist/explore/${item.id}`,
+      to: item.type === 'place' ? `/tourist/destinations/${item.id}` : item.type === 'food' ? `/explore/food/${item.id}` : `/explore/place/${item.id}`,
       title: item.name,
       image: item.cover_photo ? toAssetUrl(item.cover_photo) : null,
       category,
@@ -90,7 +90,7 @@ export default function LandingAllCategoriesPage() {
 
   const businessItems: LandingItem[] = (businessData ?? []).filter((b) => !municipalityName || b.municipality === municipalityName).map((b) => ({
     key: `business-${b.id}`,
-    to: `/tourist/explore/${b.id}`,
+    to: `/explore/place/${b.id}`,
     title: b.name,
     image: b.cover_photo ? toAssetUrl(b.cover_photo) : null,
     category: b.category ?? 'Business',

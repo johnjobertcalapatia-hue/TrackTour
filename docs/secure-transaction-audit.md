@@ -762,3 +762,614 @@ Movement toward the pickup is recorded but not judged automatically until real a
 **Waiting overlap:** cancelling while the rider waits owes no waiting fee (Stage A), but this penalty may still apply. The two charges are separate.
 
 **Not yet:** collection (Stage C), rider compensation and cashout (Stage D), Tourism Office review, waiver and dashboard (Stage E). Until Stage C, an owed penalty is shown but not collected, and booking is not blocked.
+
+
+## M. Ride hailing — Stage C: collecting an owed cancellation penalty (owner decisions 2026-11-18)
+
+**Rule**
+- Only an **owed** penalty is collected. Under review, disputed and waived penalties are never collected or shown to a driver, and online payment is refused (422).
+- It is never added to any order's amounts.
+
+**Two ways to collect**
+- **Cash:** the passenger's next driver collects it at the drop-off and confirms it separately from the fare.
+  - Endpoint: `POST /rider/deliveries/{delivery}/cancellation-fee/collect {penalty_id}`.
+  - Allowed only for the assigned driver, on a ride, at `arrived_destination` / `delivered` / `completed`.
+  - The delivery and the penalty are locked. A repeat by the same driver on the same ride is a no-op; collecting a fee paid another way is refused (409).
+  - Recorded: `collected_by`, `collection_order_id`, `collection_delivery_id`.
+- **Online:** its own PayMongo payment (GCash or QR Ph).
+  - `create-intent` with `payable_type=ride_penalty`: the tourist's own penalty only (otherwise 404), one line "Cancellation fee (ride …)", reference `CXL-{id}`.
+  - `markPayablePaid` → `collectOnline()` inside the webhook or verify transaction, recording `collection_payment_id`.
+  - A payment landing after the fee was already collected (e.g. in cash) is **never applied twice**. It raises a `penalty_double_payment` system incident and an activity-log entry for a manual refund.
+
+**Linking (lazy)**
+- An owed penalty is offered on the tourist's current ride and recorded against that ride only when collected (`dueOnRide`).
+- A ride that is cancelled or completed without collecting it leaves the penalty owed for the next one. No attach or detach state can go stale.
+
+**Records:** status becomes `collected`, with `collected_at` and `collection_method` (cash | online). Ledger `ride_cancellation_penalty_collected` on the cancelled order, plus an activity-log entry (financial).
+
+**Cash remittance**
+- The rider's daily receipt gains `cancellation_fees` (count, total, items with `owed_to_rider_id`).
+- It is its own line, handed in with the remittance. It is not the rider's earnings, and it is kept **out of** the COD remittance and reconciliation figures, which are unchanged.
+- Folding it into the expected remittance is a later decision.
+
+**Tourist is told**
+- An in-app notification when the penalty is created: owed ("applies… pay online or your next driver collects it in cash") or under review ("may apply… nothing is charged until then").
+- Another when it is paid.
+- The cancel response carries the penalty and its `notice`, and the ride page shows it as an alert straight away.
+
+**Not yet:** paying the compensated rider (Stage D); the Tourism Office review, waiver and dashboard (Stage E).
+
+**Migration:** `2026_11_18_000004_add_collection_to_ride_cancellation_penalties` (columns + foreign keys; applied to dev by path).
+
+
+## N. Audit — Ride cancellation debt, waiting fees and destination change policy (2026-11-18)
+
+Read-only audit of the policy pasted on 2026-11-18, checked against the code, migrations and tests (not earlier notes). **No code was changed for this audit.**
+
+### N.1 What exists, what conflicts, what is missing
+
+| # | Requirement | Status in the code | Notes |
+|---|---|---|---|
+| 1 | ₱50 after > 300 s; free before acceptance, within and at exactly 300 s; none for rider cancels | **Built** (Stage B): `RideCancellationPenaltyService::assess`, called only from `TransportationService::cancelRide` (tourist) | `cancelRideByDriver` and dispatch failure never assess. |
+| 1 | "Do not auto-mark ordinary qualifying cancellations `under_review`" | **Conflict** | `judge()` returns `owed` only with a confirmed pickup arrival **and** recent GPS; everything else is `under_review` (owner decision earlier on 2026-11-18). Dev data: 1 penalty, `under_review` (no rider GPS since acceptance). |
+| 1 | No penalty for an authorized Tourism Office cancellation | **N/A today** | There is no admin/office ride-cancel endpoint, so nothing to exempt yet. Any future one must not call `assess`. |
+| 2 | One unique ₱50 tourist debt with the original rider | **Built**: `ride_cancellation_penalties` (`cancelled_order_id` unique, `compensated_rider_id`) | |
+| 2 | Rider compensation obligation; office advance; recovery; never paid twice | **Missing** (planned Stage D) | No compensation, advance or recovery records. Rider earnings (`rider_earnings` + `rider_earning_entries` ledger) and cashouts (`RiderPayout`, `CashoutValidator`) exist. A compensation earning on a **cancelled** order would fail the validator's `source` / `integrity` checks today, so it needs its own verified branch. |
+| 3 | Debt collected on the next ride (cash by the replacement rider; online via PayMongo, webhook-verified, idempotent; separately identifiable; no commission for the collector) | **Built for rides** (Stage C) | Cash: `collectCash` (lock, repeat-safe). Online: its own PayMongo payment (`payable_type=ride_penalty`, ledger, double-payment → incident). Daily receipt line `cancellation_fees`, not an earning. |
+| 3 | Same for **food orders**; shown before confirmation | **Missing** | `dueOnRide` is rides only; food checkout (`TouristFoodCart`, `FoodController`/`GroupOrderService`) shows nothing. COD food drop-off has no collect step. |
+| 3 | Office records recovery of an advanced compensation | **Missing** (with item 2) | |
+| 4 | Pickup waiting: 3 min free, ₱2 per completed 3 min, from server-confirmed arrival, only if the passenger boards, none on a cancel | **Built** (Stage A): `RideTimeChargeService::waitingFee = intdiv(max(0,s−180),180)×2`, unique `charge_key`, first arrival kept | Matches the formula. Tests: `RidePickupWaitingTest`, plus "no waiting fee on cancel" in `RideCancellationPenaltyTest`. |
+| 5 | Mid-trip stop: ₱2 per started minute, rider start/end, independent, no overlap or duplicates | **Missing** | Can reuse `ride_time_events` (unique `event_key`) and `ride_additional_charges` (unique `charge_key`). |
+| 6 | Destination change: keep the original, completed portion from verified distance, remaining from current location by road route, no double charge, history, one-time rule | **Mostly built** (`RideDestinationChangeService`, 2026-11-17) | Original and history kept (`ride_destination_changes`, ledger). Preview = verified km so far + road-route remaining km, × per km + base. One change per trip. |
+| 6 | "Applicable elapsed travel time" in both portions | **Gap / question** | Fares have **no per-minute rate** (base + per km only). |
+| 6 | Revised total fixed at confirmation vs final fare | **Differs** | Today the final fare is re-measured from verified GPS at the drop-off, capped at 115% of the confirmed estimate (approved 2026-11-17). |
+| 6/7 | Never accept an unverified route | **Conflict** | `TransportationService::getRoute` falls back to a **straight line** when OSRM fails, and the destination-change preview accepts it (`route_source = straight_line`). |
+| 7 | Motorcycle ≤ 50 km, car ≤ 100 km (traveled + remaining road route) | **Missing** | No distance limit anywhere (booking or change). Ride vehicles: motorcycle, tricycle, car, van. |
+| 8 | Rider accepts or declines the change before it applies | **Conflict** | Today the change applies on the tourist's confirmation; the rider only acknowledges ("Got it"). |
+| 9 | "Existing 18% system deduction" on ride earnings | **Conflict** | No 18% exists. A ride's rider earning is `rider_commission = max(₱20, 40% of fare)` (`TransportationService`, `RideDestinationChangeService::commission`, `RideTimeChargeService`); food riders earn the full delivery fee. |
+| 9 | Separate records for every money component | **Partly** | Fare, changes, waiting charges, penalty, collection: yes (rows + ledger). Compensation, advance, recovery, stops: no. |
+
+### N.2 Proposed stages (each: migration, tests, reviewable diff, stop for review)
+
+1. **C2 — penalty status policy.**
+   - Every qualifying tourist cancellation is `owed`; the evidence is still recorded for reference.
+   - `under_review` only through a dispute (`disputed`) or office action.
+   - Files: `RideCancellationPenaltyService::assess/judge`, `RideCancellationPenalty` (statuses), `RideCancellationPenaltyTest`, cancel-dialog text (`CancellationPenaltyCard::cancellationFeeNote`), audit §L/§N.
+2. **D — rider compensation, advance and recovery.**
+   - New tables: `ride_cancellation_compensations` (penalty unique, rider, amount, status, earning id) and `office_cash_advances` / `office_recoveries`, or one `penalty_financial_events` table with typed rows.
+   - The compensation is a `rider_earnings` row (its own type, no deduction) posted to `rider_earning_entries`.
+   - `RiderEarningVerifier` / `CashoutValidator` get a compensation branch (verified against the penalty, not the cancelled order's sale).
+   - Collection (`collectCash` / `collectOnline`) records the recovery when the office had advanced.
+   - Never paid twice: unique per penalty, with locks.
+   - Files: migration, models, `RideCancellationPenaltyService`, `RiderEarningVerifier`, `CashoutValidator`, `TransactionIntegrityService` (cancelled-order exception), rider earnings UI label, tests.
+3. **F — debt on food orders.**
+   - Food checkout shows the debt separately.
+   - Online: its own PayMongo payment (Stage C path) at checkout.
+   - COD: the food rider collects it at the drop-off (generalise `dueOnRide` → `dueOnDelivery`, food drop-off UI).
+   - The group-order model and COD settlement are untouched.
+   - Files: `RideCancellationPenaltyService`, `RiderMapController`, `RiderCancellationFeeController`, `TouristFoodCart`, food rider drop-off components, tests.
+4. **G — distance limits and verified routes only.**
+   - Per-vehicle maximum (config), checked at booking and at destination change against traveled + remaining road-route km.
+   - A straight-line fallback is refused for the change and the limit check.
+   - Files: `config/transport.php` (or the fare settings), `RideVehicles`, `TransportationService` (booking), `RideDestinationChangeService::preview/confirm`, `BookTransportRequest`, frontend messages, tests.
+5. **H — rider approval of a destination change.**
+   - New statuses `pending_rider` → `confirmed` | `declined` | `expired`.
+   - The trip destination and fare update only after the rider accepts; a decline keeps the original and notifies the tourist.
+   - Files: migration (status / timestamps), `RideDestinationChangeService` (`confirm` → `request`, new `riderDecide`), routes, `RiderDestinationChangeBanner` (Accept / Decline with route and fare), tourist change page (waiting / declined state), tests.
+6. **I — mid-trip stops.**
+   - Rider start/end endpoints, one open stop at a time, ₱2 × started minutes, server time, its own charge per stop.
+   - The tourist sees a running timer and the itemised amount.
+   - Files: `RideTimeChargeService` (`startStop` / `endStop` / `stopFee`), `RiderDeliveryController` or a new controller, routes, `GlobalRiderAlert` / trip panel, `TouristTransportTracking`, receipts, tests.
+7. **J — destination-change fare model** (only if the answers change it): a time component and/or fixing the final fare at confirmation.
+8. **E — Tourism Office dashboard:** review, waive, dispute resolution, advance and recovery screens.
+
+### N.3 Open policy questions (answers decide the stages above)
+
+1. **Ride earnings:** the policy says "18% system deduction"; the code pays the rider `max(₱20, 40% of fare)`. Which is right? Changing it affects every ride's earning, commission and integrity checks.
+2. **Penalty status:** may every qualifying tourist cancellation be `owed` (evidence kept, tourist can dispute, office can waive)? What should happen to the existing `under_review` penalty?
+3. **Compensation timing:** credit the original rider ₱50 immediately when the penalty is created (the office advances it automatically and recovers it on collection), or only when the office presses "Advance", or only when collected?
+4. **Online debt on the next booking:** keep it as its own PayMongo payment shown at checkout (current Stage C, keeps the order's amounts and settlement untouched), or combine it into the same checkout session? Should a booking be allowed while debt is unpaid?
+5. **Mid-trip stops:** must the tourist request or confirm a stop in the app before the rider's timer counts (protects against invented stops)? Any maximum stop length?
+6. **Destination change fare:** keep the approved model (final fare re-measured from GPS at the drop-off, capped at 115%), or fix the final fare at confirmation (completed portion + remaining estimate)? With no per-minute rate today, is a time component wanted? At what rate?
+7. **Vehicle limits:** what are the limits for tricycle and van? Apply the limits at booking as well as on a change?
+8. **Rider approval:** how long does the rider have to answer (e.g. 60 s, then it expires)? Does a declined or expired request use up the tourist's one change?
+
+
+## O. Ride hailing — Stage C2: penalty status policy (owner decisions 2026-11-18)
+
+**Verified against the code before editing**
+- `assess()` is called only from `TransportationService::cancelRide`, which both tourist cancel endpoints use.
+- It runs inside that method's `DB::transaction`, on the locked order and delivery rows.
+- `cancelRideByDriver` and dispatch failure never call it, and there is no admin or office ride-cancel path.
+- `cancelled_order_id` is UNIQUE; `firstOrCreate` plus the unique-violation catch keeps one penalty per ride.
+- The ride earnings formula is unchanged: `max(₱20, 40% of fare)`. **No 18% deduction is introduced.**
+
+**Rule now**
+- A tourist cancellation more than 300 s after `assigned_at` creates a ₱50 penalty with status **`owed`**.
+- 300 s or less (exactly 300 s included) is free, and so is cancelling before acceptance. Rider cancellations are exempt; there is no administrative or safety cancellation path to exempt yet.
+- No GPS progress or arrival confirmation is required.
+- `judge()` still records the evidence (fix count and ages, distances to the pickup, accuracy, confirmed arrival) for reference only. `review_reasons` is empty, and `RECENT_FIX_SECONDS` was removed.
+- `under_review` is no longer assigned automatically. **The existing historical under-review penalty is kept as it is**, never charged or changed automatically (no migration, no backfill).
+
+**Disputes:** unchanged. A tourist can dispute an `owed` (or historical `under_review`) penalty, which becomes `disputed`.
+
+**Waiver (new)**
+- `POST /admin/ride-penalties/{id}/waive {reason}` (Bansud Tourism Office only; reason 5–500 characters).
+- Allowed from `owed`, `under_review` and `disputed`. A `collected` penalty can't be waived (a refund is separate). Repeat-safe.
+- Records `resolved_at`, `resolved_by` and `resolution_note`.
+- **Immutable audit:** ledger event `ride_cancellation_penalty_waived` (from, reason, admin, tourist, compensated rider) plus an activity-log entry (financial). The tourist is notified ("₱50.00 cancellation fee waived… Reason: …").
+- `GET /admin/ride-penalties?status=` lists them with counts and the evidence. UI: Admin › Riders › **Cancellation fees**.
+
+**References kept:** `tourist_id` and `compensated_rider_id` (the original accepting rider) never change.
+
+**Not in this stage:** nothing is collected or paid automatically. Collection stays the manual Stage C paths (next driver confirms cash; tourist pays online). Rider compensation is Stage D.
+
+**Review checks (2026-11-18, `RidePenaltyC2VerificationTest`, 6 tests). No code change was needed.**
+1. **Boundary on the server clock:** 299 s and 300 s are free; 301 s owes ₱50 (`seconds_after_acceptance` 301, `acceptance_at` = `assigned_at`). Device-sent `cancelled_at`, `client_time` and `seconds` are ignored.
+2. **Repeated or concurrent cancellation:**
+   - `cancelRide` re-reads the order and delivery under `lockForUpdate` inside the transaction, so a second request gets 422.
+   - Result: one `ride_cancelled` event, one penalty, one `…assessed` event and one notification.
+   - Re-running `assess` on the same ride returns the existing row and records nothing.
+   - The DB unique index backs this, covered by `RideCancellationPenaltyTest`.
+3. **Waiver vs payment:**
+   - `collectOnline` re-reads the penalty under a row lock inside the webhook transaction and applies a payment only to an `owed` penalty.
+   - When the office waives after the tourist opened GCash / QR Ph, the PayMongo notice leaves the penalty `waived` (no collection, no "paid" notification). The payment is recorded as received and escalated once (`penalty_double_payment`, "…after it was waived: refund ₱50.00").
+   - A repeated notice changes nothing; distinct duplicate notices for an owed fee collect it once.
+4. **Authorization:** both routes run behind `CheckRole:bansud_tourism_office` (exact role match). A municipal admin (`tourism_office`), a business owner, a rider and a tourist get 403 on list and waive.
+
+The race and boundary tests were checked by deliberately breaking the code (removing the status re-check, and making exactly 300 s owe): each made its test fail.
+
+**Still manual:** browser (dialog, alert, fee card, waive screen), phone layout, and a PayMongo sandbox payment with GCash and QR Ph, including a real duplicate webhook.
+
+
+## P. Ride hailing — Stage D design: original-rider compensation, receipts, advances and payouts (2026-11-18)
+
+**Status: design only, awaiting the owner's go.** No code, migrations or commits. It builds on the read-only Stage D audit and the owner's revised workflow. The five decisions below follow the reviewer's recommended defaults (2026-11-18).
+
+### P.1 Principles
+
+1. **Ownership.** The compensation belongs to the rider who accepted the cancelled booking: `ride_cancellation_penalties.compensated_rider_id`, which never changes. The rider who later collects cash only hands it in: no ownership, no commission, no earning.
+2. **Exactly once.** One compensation per penalty (DB unique). It is created only when the full penalty is **received** (online: PayMongo-verified; cash: staff-confirmed receipt), or earlier by an explicit, approved **advance**, whichever comes first. A later receipt never credits the rider again.
+3. **Existing systems unchanged:**
+   - `rider_earnings` / `rider_earning_entries`;
+   - `CashoutValidator` and `RiderEarningVerifier`;
+   - the ride earnings formula `max(₱20, 40% of fare)`;
+   - `RiderCashFundService` / daily COD reconciliation;
+   - food settlement and the canonical group-order model.
+
+   Compensation never appears in `rider_earnings`, so it can't be counted twice.
+4. **Everything auditable.** Every collection, receipt, compensation, advance, recovery, void, write-off, reservation and payment is an append-only ledger entry. It is also a tamper-evident `TransactionLedger` event on the cancelled ride (the integrity checks ignore unknown event types, as verified) and an activity-log entry.
+
+### P.2 Decisions (recommended defaults, 2026-11-18)
+
+| # | Decision | Rule |
+|---|---|---|
+| 1 | Linking payouts | One office action pays the earnings cashout and its linked compensation payout. Each part has its own validator; database state changes are atomic. |
+| 2 | Cash receipt | A batch receipt per rider remittance, listing every penalty separately. A receipt number is required. Partial amounts are allocated per penalty. |
+| 3 | Compensation-only payout | Allowed, with no extra minimum. |
+| 4 | Refunded penalty payment | Same as a waiver: void if not yet paid to the rider (releasing any reservation); write-off if already paid. |
+| 5 | Advance | Optional and exceptional. Needs a reason, an authorised staff member and an advance payment reference, plus a second staff approval when the amount reaches the existing two-person threshold (`config('payouts.two_person_threshold')`, default ₱5,000). |
+
+### P.3 Data model
+
+**`ride_cancellation_penalties`: add receipt fields**
+- `received_amount` (decimal; the sum of allocations) and `received_at` (set only when the full amount is received).
+- Online: set automatically from the verified PayMongo payment (`collection_payment_id` and the provider reference).
+- Cash: set from staff-confirmed receipt allocations.
+
+**`penalty_cash_receipts`:** one row per rider remittance.
+- `receipt_number` (unique), `collecting_rider_id`, `received_amount`, `received_by`, `received_at`, `note`.
+
+**`penalty_cash_receipt_allocations`:** one row per penalty in a receipt.
+- `receipt_id`, `penalty_id`, `amount`.
+- The sum of a receipt's allocations equals its `received_amount`, and a penalty's allocations can never exceed `penalty_amount`.
+
+**`rider_cancellation_compensations`:** one per penalty (`penalty_id` UNIQUE).
+- Links and amount: `rider_id` (= `compensated_rider_id`), `cancelled_order_id`, `amount` (= `penalty_amount`).
+- `funding`: `collection` | `advance`.
+- `status`: `payable` | `held` | `reserved` | `paid` | `voided` | `written_off`.
+- Advance fields: `advance_reason`, `advanced_by`, `advance_approved_by`, `advance_reference`.
+- Timestamps: `earned_at`, `recovered_at`, `voided_at`, `written_off_at`, plus `resolution_reason`.
+
+**`rider_compensation_entries`:** append-only (DB triggers refuse UPDATE/DELETE, as in `rider_earning_entries`), with a UNIQUE `idempotency_key`.
+- Columns: `compensation_id`, `rider_id`, `entry_type`, `bucket` (`earned` | `reserved` | `paid` | `office`), signed `amount`, `payout_id`, `actor_id`, `details`.
+- Entry types: `compensation_earned`, `advance_granted`, `advance_recovered` (office bucket, rider balance unchanged), `voided`, `written_off`, `reserved`, `reservation_released`, `paid`.
+
+**`rider_compensation_payouts`:**
+- `rider_id`, nullable `rider_payout_id` (the paired earnings cashout), `amount`, `status` mirroring `RiderPayout`, the review / approval / paid columns and the GCash evidence.
+- Pivot `rider_compensation_payout_items` with `compensation_id` UNIQUE among live payouts: one live payout per compensation.
+
+**`rider_payout_statements`:** the office's single payout action.
+- `rider_id`, `rider_payout_id` (nullable), `rider_compensation_payout_id` (nullable), `total_amount`, `transfer_reference`, `transferred_total`, `status`, two-person approval columns.
+
+### P.4 Flows
+
+**Online penalty payment.** `collectOnline()`, already locked and webhook-verified, also:
+1. sets `received_amount` / `received_at` from the verified payment;
+2. then calls `RideCompensationService::onReceived()` in the same transaction.
+
+If no compensation exists, it creates one (`collection`, `payable`) with entry `compensation_earned` +₱50. If it was advanced, it records `advance_recovered` (office bucket) and **no** rider credit. Duplicate PayMongo notices are no-ops (payment status, the unique compensation row, idempotency keys).
+
+**Cash penalty payment**
+1. The collecting rider confirms the collection (Stage C). The penalty becomes **collected, waiting for office receipt**: no compensation yet, and it's listed on that rider's daily receipt as "cancellation fees to hand in".
+2. When the rider remits, staff record one **receipt** (number required), and allocate amounts per penalty up to what was actually received.
+3. A penalty is marked received only when its allocations reach the full `penalty_amount`. Only then does `onReceived()` run (compensation or advance recovery as above). If ₱100 of ₱150 is handed in, two penalties are received and one stays outstanding.
+
+**Advance (exceptional)**
+- Allowed only while the penalty is `owed` (not disputed, waived or collected) and no compensation exists.
+- Needs the penalty reference, original rider, amount, reason, authorising staff and advance reference, plus a second approver when the threshold applies.
+- Creates the compensation (`advance`, `payable`) with entry `advance_granted` +₱50. It is paid out in the rider's next payout like any payable compensation. It is recovered only by a later full receipt, and never credits the rider twice.
+
+**Waiver** (penalty `owed`, `under_review` or `disputed`; a collected penalty is never waived)
+- No compensation: nothing.
+- Compensation `payable` or `held`: `voided` (−₱50).
+- `reserved`: release the reservation, then void.
+- `paid`: `written_off` (office record); the rider keeps it.
+
+**Refund of a penalty payment.** Linked to the penalty and the actual refund reference; the same rules as a waiver. Never deducted from unrelated future earnings.
+
+**Dispute** (only an `owed` penalty can be disputed)
+- An advanced compensation that isn't yet reserved or paid becomes `held`, and is excluded from payouts until resolved.
+- Ordinary penalties need no routine review. Historical `under_review` rows are unchanged and get no compensation.
+
+### P.5 Payouts: one office action, two validated parts, atomic state
+
+**Request.** One request, in one transaction:
+1. The existing `RiderPayoutService::requestPayout` creates the earnings cashout, unchanged, when the rider has eligible earnings.
+2. `CompensationPayoutService` reserves all `payable` compensation into a compensation payout (`reserved` entries).
+3. A `rider_payout_statements` row links them, with `total_amount = earnings + compensation`.
+
+A compensation-only request creates only the compensation part.
+
+**Validation.** The earnings part passes the **existing `CashoutValidator`**, unchanged. The compensation part passes the new **`CompensationPayoutValidator`**, which checks per compensation:
+- it is owned by the original rider of its penalty;
+- funding `collection` has a received penalty, and funding `advance` has its recorded approvals;
+- it is not `held`, `voided` or `written_off`;
+- it is reserved in this payout only, and its ledger reservation equals its amount;
+- the cancelled booking's ledger passes `verifyOrder`.
+
+Any BLOCK on either part stops the whole statement.
+
+**`PayoutStatementService` (orchestration, no asynchronous listeners for money)**
+- **Approve:** validates both parts, then calls the existing `approve()` and the compensation approve inside **one DB transaction**. If either throws, nothing changes. The two-person threshold is applied to the **statement total**.
+- **Mark paid:** one manual GCash transfer with one reference.
+  - Staff enter `transferred_total`, which must equal the statement total.
+  - The existing `markPaid()` is called with the earnings part's own amount and the shared reference; its "amount equals approved amount" rule is unchanged.
+  - The compensation part is marked paid with its amount and the same reference.
+  - All of this happens in one transaction; any failure rolls both back.
+- **Reject / failed transfer:** calls the existing `reject()` / `markFailed()` and releases every compensation reservation (`reservation_released`), so the compensation can be requested again.
+- **Repeats:** state checks under row locks plus idempotency keys make a repeated approve or paid click a no-op. Compensation can never be paid twice.
+
+**External money.** Payouts are manual GCash transfers (no disbursement API, so no payout callbacks). A transfer that didn't go through is recorded with **Mark failed**, which rolls the statement back to the rider's balance. The only provider callbacks are the PayMongo penalty payments, handled idempotently in P.4.
+
+### P.6 Statements and screens
+
+**Earnings statement** (`RiderStatementService`, read-only, from both ledgers). Lines:
+- normal ride earnings;
+- normal delivery earnings;
+- cancellation compensation (each with its original booking reference);
+- other adjustments;
+- total payable;
+- previously paid;
+- remaining balance.
+
+Cash-ride or COD earnings the rider kept are shown separately, as today.
+
+**Rider:** read-only compensation history (original booking reference, amount, collection status, payable / paid / voided / written off) and the statement.
+
+**Tourism Office**
+- Cancellation fees page: tourist, original rider, booking reference, penalty collection status (online reference; cash: collecting rider, receipt number and allocations), compensation, **Record cash receipt** (batch) and **Advance** (exceptional, with approval).
+- Rider statement page: the full statement, both ledgers, receipts.
+- Payout review: the earnings part (existing checks), the compensation part (new checks), the statement total, the transfer reference and the confirmation.
+
+### P.7 Transaction examples (₱50 penalty; Rider A accepted the cancelled booking)
+
+1. **Online.** QR Ph paid, then PayMongo-verified:
+   - the penalty is received;
+   - A earns **+₱50 compensation**;
+   - A's payout contains earnings ₱X + compensation ₱50, verified, and paid in one GCash transfer of ₱X+50.
+   - A duplicate notice does nothing.
+2. **Cash.** Rider B collects ₱50:
+   - the penalty waits for office receipt, and B earns nothing;
+   - B remits; staff record receipt R-1001 with an allocation of ₱50;
+   - the penalty is received; A earns **+₱50**.
+3. **Partial batch.** B collected 3 × ₱50 and remits ₱100 (receipt R-1002): two penalties are received (A1 and A2 each **+₱50**), and the third stays outstanding.
+4. **Advance.** The office advances ₱50 to A (reason + approver):
+   - A is paid it in the next payout;
+   - the tourist pays later and it is received: **advance recovered**, and A **+₱0**.
+5. **Waiver or refund after an advance.**
+   - Not yet paid out: voided.
+   - Reserved: released, then voided.
+   - Paid out: written off, and A keeps it.
+6. **Failed transfer.** Both parts are rolled back to the rider's balance; compensation is requestable again.
+
+### P.8 Files (when approved)
+
+- **New migration:** penalty receipt fields; the receipts, allocations, compensations, compensation entries (with triggers), compensation payouts (with items) and payout statements tables.
+- **New models** for those tables.
+- **New services:** `RideCompensationService`, `RideCompensationLedger`, `PenaltyCashReceiptService`, `CompensationPayoutService`, `CompensationPayoutValidator`, `PayoutStatementService`, `RiderStatementService`.
+- **Small hooks**
+  - `RideCancellationPenaltyService`: cash collection now waits for office receipt; `collectOnline` → `onReceived`; waiver void / write-off; dispute hold.
+  - The rider cashout request goes through `PayoutStatementService`.
+  - The admin payout actions go through it too.
+  - `RiderCashFundService` daily receipt: Stage C's existing `cancellation_fees` line, unchanged.
+- **Controllers / routes:** admin receipts, advance, statement and payout actions; rider statement and compensation history.
+- **Frontend:** admin Cancellation fees (receipt, advance), admin rider statement and payout review, rider statement and compensation history.
+- **Tests:**
+  - exactly once;
+  - duplicate notices;
+  - waiver / dispute / refund races;
+  - partial batch receipts;
+  - advance approval and the threshold;
+  - atomic approve / paid / reject / failed with one part failing;
+  - double-click safety;
+  - statement totals;
+  - integrity / verifyOrder;
+  - the existing earnings and cashout suites unchanged.
+- **Docs:** this section, plus PROGRESS.
+
+
+### P.9 Stage D1 — built (2026-11-18): compensation core
+
+**Built:** P.3 tables except the payout tables (D2), P.4 flows, the admin endpoints, and tests. Not built yet: payouts and the statement (D2), screens (D3).
+
+**Schema** — migration `2026_11_18_000005_create_ride_compensation_tables`, applied to dev by path:
+- penalty fields `received_amount`, `received_at`, `received_by`, `refunded_at`, `refund_reference`;
+- `penalty_cash_receipts` (unique `receipt_number`) and `penalty_cash_receipt_allocations` (unique receipt + penalty);
+- `rider_cancellation_compensations` (unique `penalty_id`);
+- `rider_compensation_entries` (append-only via triggers on SQLite and MySQL/MariaDB; unique `idempotency_key`).
+
+**Services**
+- `RideCompensationLedger`: keyed, repeat-safe writes; per-compensation and per-rider balances.
+- `RideCompensationService`:
+  - `onReceived`: create once, or recover an advance. A still-pending advance becomes collection-funded and is credited once.
+  - `advance`: owed penalties only, with a reason and reference. Credited at once below the threshold; at or above it, `pending_approval` until a different signed-in staff member calls `approveAdvance`, the same two-person rule as payouts.
+  - `onWaived` / `onRefunded`: void while unpaid, releasing any reservation first; write off once paid (office bucket, the rider keeps it). A never-credited pending advance is voided without a ledger reversal.
+  - `onDisputed`: hold a payable advance.
+- `PenaltyCashReceiptService`: batch receipt per rider remittance.
+  - Each line must be a fee **this** rider collected in cash; lines must add up; never more than outstanding; locks taken in fixed order.
+  - A penalty counts as received only at its full amount, and only then does compensation run.
+
+**Hooks**
+- `collectOnline` marks the penalty received (PayMongo-verified) and runs `onReceived`.
+- `waive` runs `onWaived` and refuses `refunded` as well as `collected`.
+- `dispute` runs `onDisputed`.
+- New `recordRefund(reference, reason)` (status `refunded`) runs `onRefunded`.
+- Cash collection by a later rider is unchanged; it now waits for the office's receipt before any compensation.
+
+**Endpoints** (all `CheckRole:bansud_tourism_office`):
+- `GET /admin/ride-penalties/cash-to-receive`
+- `POST /admin/ride-penalties/cash-receipts`
+- `POST /admin/ride-penalties/{id}/advance`
+- `POST /admin/ride-compensations/{id}/approve-advance`
+- `POST /admin/ride-penalties/{id}/refund`
+
+`GET /admin/ride-penalties` gains the receipt, refund and compensation fields and `can_advance` / `can_refund`.
+
+**Unchanged:** `rider_earnings`, `rider_earning_entries`, `CashoutValidator`, `RiderEarningVerifier`, `RiderPayoutService`, the ride earnings formula, `RiderCashFundService`, food settlement and group orders.
+
+**Tests:** `RideCompensationTest` (14) covers:
+- online exactly once with duplicate notices, owned by the original rider, `rider_earnings` untouched;
+- cash only after the office receipt and never the collector's (wrong rider, sums, over-allocation and duplicate receipt refused);
+- partial remittances allocated per fee;
+- advance recovered online and by cash receipt, never credited twice;
+- the two-person advance;
+- paying before a pending advance is approved;
+- waiver void and write-off;
+- refund void and write-off;
+- dispute hold;
+- the append-only ledger;
+- the integrity verdict unchanged;
+- Bansud office only;
+- historical under-review penalties get no compensation.
+
+Two rules were checked by deliberately breaking the code (partial cash counted as full; an advance not recovered): each made its tests fail.
+
+
+### P.10 Stage D2 — built (2026-11-18): payouts and the earnings statement
+
+**Schema** — migration `2026_11_18_000006_create_rider_compensation_payouts`, applied to dev by path:
+- `rider_compensation_payouts`:
+  - linked to the existing cashout by a unique nullable `rider_payout_id`;
+  - `active_key` unique: one live compensation payout per rider;
+  - review, approval, paid (including `transferred_total`) and failure columns.
+- `rider_compensation_payout_items`: `live_key` unique, so a compensation is in one live payout only.
+- These two tables replace the planned `rider_payout_statements`: the link column ties the two parts together.
+
+**`CompensationPayoutValidator`**, its own validator; `CashoutValidator` is unchanged. Per compensation it checks:
+- **owner:** the payout's rider is the cancelled booking's original rider;
+- **funded:** the penalty was fully received and not refunded, or the advance was approved;
+- **standing:** reserved (or paid), not held, voided or written off, and the penalty not disputed;
+- **single:** in no other payout;
+- **ledger:** the entitlement and this payout's reservation equal the amount;
+- **integrity:** the cancelled booking's history does not BLOCK.
+
+Per payout it checks that the amount equals the sum of its items. Any failure blocks.
+
+**`PayoutStatementService`** (one office action, atomic):
+- **Without compensation**, every action calls the existing `RiderPayoutService` directly, so behaviour is identical, including the stored record of a refused validation.
+- **With linked compensation**, both parts run in ONE transaction; the existing service's own transactions nest as savepoints.
+  - Approve checks the compensation part first, then calls the existing `approve`.
+  - If the existing earnings check refuses, its validation record (rolled back with the transaction) is stored again afterwards, so the audit trail matches the earnings-only behaviour.
+- **Request.** With payable compensation, the existing `requestPayout` runs when the rider has eligible earnings. Then every payable compensation is reserved into a compensation payout linked to it, or a standalone one for a compensation-only request with no minimum.
+- **Mark paid.** Staff enter the **transferred total**, which must equal earnings + compensation.
+  - The two-person rule applies to that total.
+  - The GCash reference must be unused on any earnings or compensation payout.
+  - The existing `markPaid` records the earnings share under its own unchanged amount rule; the compensation part records its share, the transferred total and the same reference.
+  - A repeated click is refused by the existing state check and never pays compensation twice.
+- **Reject / failed / cancel** release every still-reserved compensation (back to payable, or held if disputed). Voided compensation stays voided and is released only once.
+- **Compensation-only** payouts have their own actions (review, approve, reject, paid, failed, rider cancel). A compensation linked to a cashout refuses them: "use that cashout".
+
+**`RiderStatementService`**, read-only from both ledgers:
+- lines for ride earnings, delivery earnings, cancellation compensation and adjustments;
+- cash kept (COD) separately;
+- total earned, total payable now (earnings / compensation), previously paid (earnings / compensation), remaining balance;
+- each compensation with its booking reference, funding, status, penalty status and paid amount.
+
+**Endpoints**
+- Rider: `GET /rider/earnings-statement` (`/earnings/statement` would be captured by the earlier `/earnings/{delivery}` route), `GET /rider/compensation-payouts`, `POST /rider/compensation-payouts/{id}/cancel`.
+- Admin (Bansud office): `GET /admin/compensation-payouts` and `/{id}`, plus `start-review`, `approve`, `reject`, `mark-paid` (password, proof) and `mark-failed`; `GET /admin/riders/{rider}/statement`.
+- The existing rider request / cancel and admin start-review / approve / reject / mark-paid / mark-failed now go through `PayoutStatementService`. The admin cashout detail gains `compensation_payout` (with validation) and `transfer_total`.
+
+**Unchanged** (no diff since the last commit): `RiderPayoutService`, `CashoutValidator`, `RiderEarningVerifier`, `RiderEarningLedger`, the ride earnings formula, the COD cash fund, food settlement and group orders.
+
+**Tests:** `PayoutStatementTest` (10):
+- one request, one approval and one transfer pay both (wrong total refused; same reference; a repeat never pays twice; validation trail `request`, `approve`, `pay`);
+- the compensation part refused (refunded meanwhile) means nothing is approved;
+- the earnings part refused (tampered) means nothing is approved and the refusal is recorded;
+- reject, failed and cancel release the compensation, which can be requested again (net reserved 0);
+- the two-person rule on the combined total;
+- a compensation-only payout (wrong amount refused, repeat-safe, no earnings cashout);
+- a linked compensation only through its cashout;
+- a waiver during a payout voids it, blocks payment and releases once;
+- one live request per rider, and never in two payouts;
+- the statement lines, paid amounts and remaining balance (rider and office; a rider can't read the office endpoint).
+
+All existing payout, cashout and validation suites pass unchanged. Two rules were checked by deliberately breaking the code (skipping the compensation check before approval; dropping the transfer-total rule): each made its test fail.
+
+## Q. Cancellation fee added to the next ride or food order payment (owner decisions 2026-11-23)
+
+**Decisions.**
+- A qualifying tourist cancellation is **owed** right away. There is no Tourism Office review and no tourist dispute; the office can still waive.
+- An owed fee is added **automatically to the tourist's next payment**, whichever comes first: a ride or a food order.
+- **Cash** (ride, or COD food): the driver or rider collects the fee with the fare or order. It is **not their earning**; they hand it in with their cash remittance.
+- The fee belongs to the rider who **accepted the cancelled booking**. It is recorded in their earnings statement as a compensation (Stage D) and paid to them with their earnings.
+
+**What changed.**
+- **Status.** `RideCancellationPenaltyService::oweReviewed` turns any `under_review` / `disputed` penalty into `owed`. Each change is recorded in the ledger (`ride_cancellation_penalty_now_owed`) and the activity log, and a held compensation is released to `payable` (`RideCompensationService::onOwedAgain`). It runs once from migration `2026_11_23_000001` and is repeat-safe.
+- **Dispute removed:** `POST /tourist/transport/trip/{id}/penalty/dispute`, `dispute()`, `onDisputed()`, and the tourist dispute form. `can_dispute` is always false.
+- **Online.** `create-intent` for an `order` (ride or food) or a `group_order` adds one line per owed fee ("Cancellation fee (ride …)") to the **same PayMongo checkout**, recorded in `payment_penalty_items` (payment, penalty, amount; unique per pair).
+  - On confirmation, `markPayablePaid` calls `applyOnlinePayment`: each fee is collected through `collectOnline`, once. A fee already paid in cash raises the existing `penalty_double_payment` incident for a manual refund.
+  - The order's `paid_amount` is the payment **minus the fee portion**.
+  - `PaymentRefundProcessor::refundTotals` excludes the fee portion, so refunding a food order never refunds a fee that was owed and paid.
+- **Cash.** `dueOnDelivery` (rides and food) feeds the rider app's `cancellation_fee_due`. `collectCash` accepts a food delivery at the customer's door (`in_transit` onwards) as well as a ride at the destination.
+  - The fee stays out of the COD payment records, so COD reconciliation (`RiderCashFundService`) is untouched. It appears on the collecting rider's daily receipt under `cancellation_fees`.
+  - Compensation for the accepting rider starts when the office confirms the cash was received (unchanged Stage D rule).
+- **Never collected:** a pickup food order paid in cash has no rider, so the fee stays owed for the next payment. The cart says so.
+- **Tourist screens.**
+  - Book a ride: a fee line, "Total to pay", and a Book button that includes the fee.
+  - Food cart: fee line, Total Due and the pay buttons include it.
+  - The banner and notifications say the fee is added to the next ride or food order payment.
+
+**Tests.**
+- `CancellationFeeNextPaymentTest`:
+  - online ride: fee line, collected once, ride `paid_amount` = fare, compensation for the accepting rider;
+  - food online: fee line, refund limit excludes it;
+  - COD food: rider collects at the door, and it is not their compensation;
+  - nothing owed: no line.
+- Updated: penalty status (no dispute, `oweReviewed`), compensation release, waiver.
+- Frontend: breakdown lines and total; banner and card copy.
+- Full suites: Laravel 1,367 passed (2 skipped); Vitest 922 passed.
+
+## R. Tourism Office earnings and commission specification (owner decisions 2026-11-23)
+
+**Status:** specification agreed; build not started. Four stages, each reviewed before the next starts.
+
+### R1. Commission rules
+
+| Source | Rule | ₱ example |
+|---|---|---|
+| Food order (cash **and** GCash) | Tourist pays food + system fee (10% of food) on top. Split 80/20 on (food + fee): restaurant 80%, office 20%. Rider keeps the full delivery fee (§financial decision 2). | ₱100 food + ₱10 fee → restaurant ₱88, office ₱22 |
+| Passenger ride | Driver earns max(₱20, 40% of fare); office gets the exact remainder (never a flat 60%). Waiting fees follow the same rule on the total. | ₱200 → driver ₱80, office ₱120; ₱50 → driver ₱20, office ₱30 |
+| Fast Delivery | Becomes a fee (was a 100% rider tip): TrackTour 10%, rider 30%, office 60%. Tourist still chooses the amount (₱20–₱100); the available amounts are configurable by Bansud. The rider sees the exact peso amount of their 30% before accepting. | ₱50 → TrackTour ₱5, rider ₱15, office ₱30 |
+| Rider online cash-out | Configurable fee, default 2% of the withdrawal, credited to the rider's municipality office. | ₱1,000 → fee ₱20 |
+| TrackTour platform | Configurable, default 10% of each municipality's **net** earnings per period = office commissions − that office's recorded expenses. Never on gross sales; nothing when net ≤ 0. The office's 60% Fast Delivery share is **excluded** from this base (TrackTour already took its 10% of that fee). | — |
+| Cancellation fee | 100% to the driver who accepted the cancelled booking (§Q). Never office income. | — |
+
+Not revenue: rider earnings, restaurant payables, COD purchasing cash, rider cash advances / cash funds.
+
+### R2. Attribution and authority
+
+- Food → the restaurant's municipality; ride → the driver's municipality. The municipality is stored on the earnings record when the transaction completes and is never recomputed.
+- Rates: Bansud sets district defaults, the TrackTour % and the Fast Delivery amounts. Each municipal office may override its own town's ride / food / Fast Delivery / cash-out rates. Food uses the restaurant's town rates; rides use the driver's town rates. Every ride and order keeps the rates it was booked with.
+- Visibility: Bansud sees every municipality, the district total and every town's rates; a municipal office sees only its own.
+
+### R3. Audit finding — cash rides (2026-11-23)
+
+A cash ride is settled by `NearestRiderService` (cash payment + `cash_settled_at`), but `CodSettlementService::recordAllocations()` returns no allocation for `order_type = transport`. `RiderCashFundService::buildDailyReceipt()` then **excludes** the ride ("A completed order has no COD settlement allocation."). Result: the office's share of a cash ride fare is never recorded as owed and never appears in the rider's remittance. Required fix (stage 2): record the office share as an amount owed by the driver at completion, include it in the daily remittance, and recognise it as collected only when the remittance is verified.
+
+### R4. Stages and guard rails
+
+1. Rate settings (defaults, town overrides, snapshot on booking).
+2. Calculation changes: GCash 80/20, Fast Delivery split, cash-out fee, cash-ride office share owed + remitted. Only for transactions created after release.
+3. Earnings records: one record per completed, payment-verified transaction; refunds add a reversing entry; period TrackTour calculation; back-fill of history as read-only records.
+4. Earnings page (mockup design) for Bansud and municipal offices; dashboard moves to the new records so rides count.
+
+Guard rails: no edits to completed transactions; the rider earnings formula changes only where §R1 says so; PayMongo settlement changes are tested before release; cash advances and rider funds are never revenue; every entry goes to the tamper-evident ledger.
+
+### R5. Stage 1 — rate settings (built 2026-11-24)
+
+- `CommissionRateSettings`: rates in `tourism_settings` as `commission.<field>`. District defaults have `municipality_id` NULL; a town's own values have its id. Fallback per field: town → district → built-in (today's rules; the food rates follow `delivery.system_fee_percentage` / `delivery.cod_platform_fee_percent`).
+  - Town fields: `ride_driver_percent` 40, `ride_driver_minimum` ₱20, `food_system_fee_percent` 10, `food_office_percent` 20, `fast_platform/rider/office_percent` 10/30/60, `cashout_fee_percent` 2.
+  - District-only fields: `platform_net_percent` 10, `fast_amount_minimum` ₱20, `fast_amount_maximum` ₱100, `fast_amount_options` [25, 50, 100].
+  - Rules: percentages 0–100; the Fast Delivery split must total 100% for the district and for every town after merging; Fast Delivery amounts sit inside min–max. Every change is written to the activity log with old → new values.
+- Authority: Bansud (`/admin/commission-rates`) edits the district defaults and Bansud's own rates, and views every town. Editing another town's rates returns 403. A municipal office (`/municipal/commission-rates`) edits only its own town; district-only fields are ignored. Other towns are never returned to it.
+- Snapshots: `commission_rate_snapshots` (write-once; update throws), plus ledger event `commission_rates_captured`.
+  - Food: at checkout, one row per restaurant town (single and group checkout).
+  - Rides: when a driver accepts (`applyAcceptedAssignment`, the shared accept path), with the driver's town.
+- **No amount changes in Stage 1.** Fares, fees, settlements and earnings still use the existing formulas. Both pages say so.
+- UI: Bansud → Financial management → Commission Rates (district defaults, Bansud's own rates, table of every town). Municipal → Finance → Commission Rates. Each card shows a worked peso example.
+- Tests: `CommissionRateSettingsTest` (11) and `RideHailingAcceptanceTest::test_an_accepted_ride_keeps_the_drivers_town_commission_rates`; `tests/ui/commission-rates.test.tsx` (7).
+
+### R6. Stage 1 follow-up: limits, snapshot protection, ride cap (built 2026-11-24)
+
+Decided by the product owner after the Stage 1 review. Stage 2 waits until this is reviewed.
+
+- **Limits for municipalities.** Bansud sets a lowest and highest value for every town rate (`commission.limits`, district row, JSON). Bansud saves them with the district defaults, and leaving them out of a save keeps the limits in force. Starting limits:
+
+  | Rate | Default | Lowest | Highest |
+  | --- | --- | --- | --- |
+  | Driver share (`ride_driver_percent`) | 40% | 30% | 70% |
+  | Driver minimum (`ride_driver_minimum`) | ₱20 | ₱10 | ₱50 |
+  | Food system fee (`food_system_fee_percent`) | 10% | 0% | 20% |
+  | Cash-out fee (`cashout_fee_percent`) | 2% | 0% | 5% |
+  | Office food share; Fast Delivery shares | 20%; 10 / 30 / 60% | 0% | 100% (until Bansud narrows them) |
+
+  - Checks: lowest ≤ highest; each district default sits inside its limit; a town's own value (and Bansud's own) must sit inside its limit, or the save is refused with the allowed range.
+  - Narrowing a limit while a town's saved value is outside it is refused, and the message names the town. Bansud cannot change another town's rates, so that town's office changes its value first.
+  - Fast Delivery: the split still totals exactly 100%, each share stays inside its limit, and the amounts stay inside the district range.
+  - Limit changes are written to the activity log (`<field> limit: old → new`).
+  - UI: the Bansud page has a "Limits for municipalities" table. Every town-rate field on both pages shows "Allowed …" and turns red when the value is outside the range.
+- **Snapshots cannot be deleted.** The model refuses `delete()` as well as updates. The foreign keys are now `RESTRICT`, for both `order_id` and `municipality_id`, so the database refuses a hard delete of an order or town that has snapshots. Orders, businesses and municipalities are only soft-deleted by the app, so no app flow is affected. Database triggers were not added because Railway's MySQL may refuse to create them without SUPER, and tests run on SQLite. The migration was edited in place: it had never been deployed.
+- **Ride cap.** Driver share = min(fare, max(₱20, 40% × fare)), so the office share is never negative. A single rule (`RideDestinationChangeService::commission`) is now used at booking, destination change, time charges and the integrity check. With the current fares (base ₱50 or more) no amount changes. `commission_rule` texts now read "…, at most the fare".
+- **Kept:** a ledger failure while recording the rates stops the checkout or acceptance. An order never proceeds without its rate snapshot and audit record.
+- **Recorded for Stage 2** (product owner, 2026-11-24):
+  - Two-town group order: the first restaurant's town receives the office's 60% of the Fast Delivery fee, and its rates set the split.
+  - The food system fee is calculated per restaurant with that restaurant's town rate, then 80/20 on each restaurant's (food + fee). Checkout preview, payment request, payout and ledger use the same calculation.
+  - The TrackTour net percentage is locked at the start of each accounting period. A mid-period change applies from the next period. TrackTour share = max(0, net) × period rate.
+- Tests: `CommissionRateSettingsTest` (17, +6, and the food test now also checks deletes) and `tests/ui/commission-rates.test.tsx` (9, +2).
+
+## S. Dish sales: discounted item prices at checkout (owner decisions 2026-11-24)
+
+**Decisions.**
+- An owner (or Menu & Promotions staff) puts chosen dishes on sale: a % off (below 100%) or a ₱ amount off, for a period of Manila days.
+- **The business pays for the discount.** The sale price is simply that order's unit price. The 10% system fee and the restaurant's share are worked out on the discounted food total. Delivery fees, the rider's delivery earning and tips are unchanged.
+- Label promotions (badges such as "20% OFF" shown on a business) stay as they were and never change a price.
+
+**What changed.**
+- **One price calculation.** `App\Services\SalePricing` is the only code that works out a sale price. The tourist menus, the cart price refresh (`POST /tourist/food/availability` with `offering_ids`), both checkouts (`FoodController::orderFlat`, `GroupOrderService::createGroup`) and the final locked recheck all use it. Prices sent by the browser are never charged.
+- **Price the tourist saw.** Each checkout line may carry `expected_unit_price`, the price the cart showed. It is only compared: if it differs from the server's price the checkout is refused (422, "The price of X changed to ₱Y…") and no order is created. Variation lines do not send it; their charged price is unchanged by this work (see risks).
+- **Concurrency.** `CheckoutAvailabilityGuard` (inside the order transaction, rows locked in id order) re-quotes every locked dish and requires the same unit price **and** the same sale (`promotion_id`). Saving, ending or archiving a sale (`BusinessOwnerSaleController`) first locks the same dish rows in the same order, so a sale change either commits before a checkout's recheck (the checkout fails with "price changed") or waits until the order exists. A sale that starts or ends between the cart and the recheck likewise fails the checkout.
+- **Never twice.** A dish is in at most one sale at a time. Overlapping periods are refused under the dish locks, so two concurrent saves cannot both pass. The discount lives only in `order_items.unit_price`; `orders.discount` / `group_checkouts.discount` stay 0 for dish sales.
+- **Never free.** Saving a sale refuses any dish whose sale price would be ₱0 or less. A menu price change that would do the same to a running or upcoming sale is refused (`Offering::saving`, which covers every menu edit path). `SalePricing` also ignores a sale whose price would be under ₱0.01.
+- **History.** `order_items` gained `original_unit_price` (menu price before the sale), `promotion_id` (nullOnDelete) and `sale_label` ("25% off · Weekend Sale"). Refunds, item cancellations, COD settlement, payouts and reports keep reading `unit_price` / `subtotal`, so they use the price actually charged. Ending or archiving a sale changes no existing order.
+- **Old endpoints.** The label-promotion endpoints neither list nor change dish sales (422). An archived dish sale cannot be restored from the Archive (422), because restoring would skip the checks.
+- **Dates.** A date without a time is a Manila day (start 00:00, end 23:59:59). A start earlier than now becomes now, so orders already placed are never presented as sale orders.
+
+**Migration.** `2026_11_27_000001_add_item_sales_to_promotions`: `promotions.kind` (`label` default | `item_sale`), the `promotion_offering` pivot, and the three `order_items` columns. It adds columns only, and existing rows become `label`.
+
+**Tests.** `DishSalesTest` (8):
+- shown and charged price, system fee on the discounted total, order-item snapshot kept after archiving;
+- group checkout;
+- a cart price that is no longer current is refused;
+- the locked recheck refuses a sale that started or ended mid-checkout;
+- server validation;
+- no overlapping sales;
+- a menu price change cannot make a sale free, and the old endpoints cannot touch sales;
+- owner and Menu & Promotions staff only.
+
+Frontend: `tests/ui/promotions-sales.test.tsx` (5).
+
+**Remaining risks.**
+- **Pre-existing:** dish variations are shown at the variation's price but both checkouts charge the dish's base price (now the sale price while a sale runs). This work did not change that.
+- The Food page's price sort uses the menu price, not the sale price.

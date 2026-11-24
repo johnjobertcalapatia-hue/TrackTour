@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import RiderCancellationFeeCollect from './RiderCancellationFeeCollect'
 import RidePaymentStep from '@/features/rider/components/RidePaymentStep'
 import RideWaitingStep from '@/features/rider/components/RideWaitingStep'
 import { CheckCircle, ShoppingBag, Loader2, AlertTriangle, Zap, Banknote, Store, MapPin, ChevronDown, ChevronUp } from 'lucide-react'
@@ -568,8 +569,15 @@ export default function GlobalRiderAlert() {
                   switching={!!switchToCashBusy}
                 />
               )}
+              {!isPickup && isRide && !needsArrival && activeDelivery?.cancellation_fee_due && (
+                <RiderCancellationFeeCollect deliveryId={activeDelivery.id} due={activeDelivery.cancellation_fee_due} />
+              )}
               {!isPickup && isRide && (arriveError || switchToCashError) && (
                 <p role="alert" className="rounded-xl border border-[#FCA5A5] bg-[#FEF2F2] px-3 py-2.5 text-sm font-medium text-[#B91C1C]">{arriveError ?? switchToCashError}</p>
+              )}
+              {/* 2026-11-23: a food customer's owed cancellation fee is collected at the door too. */}
+              {!isPickup && !isRide && arrivingNow && activeDelivery?.cancellation_fee_due && (
+                <RiderCancellationFeeCollect deliveryId={activeDelivery.id} due={activeDelivery.cancellation_fee_due} />
               )}
               {!isPickup && !isRide && arrivingNow && (
                 <DeliveryPhotoCapture

@@ -106,6 +106,10 @@ class OrderItemReviewController extends Controller
         }
 
         [$saved, $oldImages] = $review;
+        // Notifications module: a new dish review tells the restaurant's owner.
+        if ($saved->wasRecentlyCreated) {
+            app(\App\Services\ReviewNotifier::class)->itemReview($saved);
+        }
         // Replaced photos are removed from storage.
         if ($paths !== [] && $oldImages) {
             Storage::disk('public')->delete(array_values(array_diff($oldImages, $paths)));

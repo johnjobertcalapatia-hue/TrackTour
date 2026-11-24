@@ -1,4 +1,5 @@
 import { Fragment, memo, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
+import RiderSosButton from '@/features/rider/components/RiderSosButton'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { get, patch, post } from '@/shared/services/api'
@@ -59,9 +60,14 @@ const WORLD_BOUNDS: L.LatLngBoundsExpression = [
   [85.05112878, 180],
 ]
 
+/** A saved position older than this is not shown as the rider's place (wait for live GPS). */
+const SAVED_POSITION_MAX_AGE_MS = 2 * 60 * 1000
+
 interface RiderLocation {
   latitude: number
   longitude: number
+  /** When the saved position was recorded (ISO). */
+  recorded_at?: string | null
   heading?: number
   speed?: number
   accuracy?: number
@@ -460,9 +466,13 @@ export default function RiderMap() {
   useEffect(() => () => headingController.destroy(), [headingController])
 
   // Until this device reports GPS, start from the rider's last saved location
-  // (server) instead of the placeholder town centre.
-  const serverLat = data?.rider?.latitude != null ? Number(data.rider.latitude) : null
-  const serverLng = data?.rider?.longitude != null ? Number(data.rider.longitude) : null
+  // (server) instead of the placeholder town centre — but only a RECENT one
+  // (2026-11-23): a position saved before the rider logged out is not where
+  // they are now, so the map waits for this phone's live GPS instead.
+  const serverAt = data?.rider?.recorded_at ? Date.parse(data.rider.recorded_at) : NaN
+  const serverRecent = Number.isFinite(serverAt) && Date.now() - serverAt <= SAVED_POSITION_MAX_AGE_MS
+  const serverLat = serverRecent && data?.rider?.latitude != null ? Number(data.rider.latitude) : null
+  const serverLng = serverRecent && data?.rider?.longitude != null ? Number(data.rider.longitude) : null
   useEffect(() => {
     if (locationSource !== 'none' || serverLat === null || serverLng === null) return
     if (!Number.isFinite(serverLat) || !Number.isFinite(serverLng) || (serverLat === 0 && serverLng === 0)) return
@@ -997,6 +1007,8 @@ export default function RiderMap() {
               </span>
             )}
           </button>
+          {/* SOS (only during a trip): top-left under Orders, clear of the rider sheet. */}
+          <RiderSosButton inline />
         </div>
 
       {/* Daily cash advance (2026-11-08): the rider already holds the Tourism

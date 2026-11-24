@@ -24,6 +24,7 @@ class SendBookingCreatedNotifications implements ShouldQueue
                 'title' => 'New Booking Received',
                 'message' => "Booking #{$booking->booking_number} from {$booking->customer_name}. Check-in: {$booking->check_in_date}.",
                 'type' => 'booking_created',
+                'data' => ['booking_id' => $booking->id, 'business_id' => $business->id],
             ]);
         }
 
@@ -40,6 +41,7 @@ class SendBookingCreatedNotifications implements ShouldQueue
                 'title' => 'New Booking Received',
                 'message' => "Booking #{$booking->booking_number} from {$booking->customer_name}. Check-in: {$booking->check_in_date}.",
                 'type' => 'booking_created',
+                'data' => ['booking_id' => $booking->id, 'business_id' => $business->id],
             ]);
         }
     }

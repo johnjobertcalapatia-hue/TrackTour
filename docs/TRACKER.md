@@ -50,7 +50,7 @@ checkpoints, `docs/current-status/known-issues.md` (baseline 2026-10-06),
 | F17 | Payout transition atomicity (`lockForUpdate` on approve/markPaid/reject) | ⚪ | P11 recon #7 — Pending (`known-issues.md` MED #2) |
 | F18 | Offer-timeout scheduled runner (currently poll-driven only) | ⚪ | `known-issues.md` MED #4 — Pending |
 | F19 | PING delivery honesty (dispatch_status vs actual ping outcome) | ⚪ | `known-issues.md` MED #5 — spec drafted, awaiting checkpoint |
-| F20 | SOS / emergency alerts | 🔴 stub | Admin live SOS page exists as stub; Tier-2 feature (`roadmap.md`) |
+| F20 | SOS / emergency alerts | 🟢 done (2026-11-18) | Tourist (ride) and rider (any trip) hold 3 s → Bansud Tourism Office: SOS Alerts page, red banner on every admin page, acknowledge → send help → resolve. In-app only; SMS not yet (no provider). See PROGRESS. |
 | F21 | Mobile app, localization, advanced reporting exports | ⚪ | Tier-2 (`roadmap.md`); API/Sanctum already mobile-ready |
 
 ### Admin module (Phases 1–7)

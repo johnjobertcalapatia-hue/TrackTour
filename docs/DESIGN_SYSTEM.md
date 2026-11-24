@@ -409,3 +409,32 @@ theme: {
     stays), destination pages (attractions) and food item pages (dishes,
     `kind: 'food'`).
   * A dish and a place with the same id are kept as separate entries.
+
+### Business owner portal (redesign, 2026-11-23)
+
+Matches the TrackTour owner mockup. Batch 1: shell, restaurant Dashboard, Orders and Menu headers.
+
+* **Shell** (`BusinessOwnerShell`, owner portal only; other roles keep `DashboardLayout`):
+  * Dark green sidebar (`#0F4D2B` → `#0A3920`) containing:
+    * the TrackTour logo;
+    * a business card with the logo, the name on up to 2 lines, a category chip and the switcher;
+    * navigation, where the active item is `#1F7A45` with a yellow `#F4C430` bar on the left and "New" badges are yellow;
+    * a "Grow your restaurant" card linking to Reports;
+    * Log Out.
+  * The whole sidebar scrolls as one column, so the menu is never hidden on short screens.
+  * Header on the cream page: business icon and name, a notification bell with an unread badge (from the owner notifications list), and the profile menu.
+  * Page background is warm cream `#F6F4EE`.
+  * Below `lg`, the sidebar becomes a drawer behind a menu button.
+* **Cards:** `rounded-[20px] border-[#ECE7DA] bg-[#fff]` with a soft shadow. Written as `bg-[#fff]` / `rounded-[20px]` on purpose, so the global `bg-white + rounded-2xl + border` milky-card rule does not apply.
+* **Restaurant dashboard** (`RestaurantOwnerDashboard`; food categories with one selected business):
+  * Welcome banner on the restaurant's own cover photo with a green fade, or brand green when there is no photo, plus a live Manila date/time.
+  * Stat tiles with round filled icons. Orders and revenue are "this month, completed" with daily sparklines and the all-time total as a hint.
+  * Sales Overview shows revenue only. Orders per day appear in the tooltip; two y-axes are never used.
+  * Quick Actions, Recent Orders, and a Business Summary of this month: sales, expenses by category, and net.
+  * **Only real data:** there is no period-over-period source, so no "+x%" badges.
+* **Page titles:** a round dark-green icon badge plus a `#17201B` title (Orders, Menu Items). Stat tiles use round filled icons.
+* **Batch 2 (whole owner portal):** `.owner-portal` rules in `index.css`, scoped to the owner shell.
+  * Every owner page's white card (`bg-white` + `rounded-2xl|xl` + `border`) becomes pure white with a warm `#ECE7DA` border and one soft neutral shadow.
+  * Standard green page titles (`h1.text-[#126B32]`) become dark ink.
+  * Owner page code is unchanged; other roles are unaffected.
+  * The Staff Management stat cards use the round filled icons.

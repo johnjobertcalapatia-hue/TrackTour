@@ -464,6 +464,8 @@ const DEFAULT_CATEGORIES: LandingCategory[] = [
 ]
 
 const RIDE_IMAGE = 'https://images.unsplash.com/photo-1494976388531-d1058494cdd8?auto=format&fit=crop&w=800&q=60'
+// Bansud photo for the attractions tile when no listed spot has a photo yet.
+const BANSUD_ATTRACTION_IMAGE = '/assets/tourism/discover-bansud.png'
 const DEFAULT_HERO_SUBTITLE = 'Your all-in-one travel and delivery platform in Bansud \u2014 for a smarter, easier, and more enjoyable experience!'
 
 type PanelTab = 'Overview' | 'Menu' | 'Gallery' | 'Videos' | 'Reviews' | 'About' | 'Amenities' | 'Visitor Info'
@@ -477,7 +479,7 @@ function businessAction(b: MapBusiness): { label: string; to: string; icon: Luci
     return { label: 'Book / Reserve', to: '/tourist/stays', icon: Hotel }
   }
   if (group === 'spot') {
-    return { label: 'Explore Destination', to: `/tourist/explore/${b.id}`, icon: Compass }
+    return { label: 'Explore Destination', to: `/explore/place/${b.id}`, icon: Compass }
   }
   return { label: 'View Business', to: '/tourist/directory', icon: Building2 }
 }
@@ -485,7 +487,7 @@ function businessAction(b: MapBusiness): { label: string; to: string; icon: Luci
 function visitBusinessRoute(b: MapBusiness): string {
   const group = getDiscoveryGroup(b.category)
   if (group === 'dining') return `/explore/food/${b.id}`
-  return `/tourist/explore/${b.id}`
+  return `/explore/place/${b.id}`
 }
 
 interface MunicipalityLite {
@@ -494,6 +496,9 @@ interface MunicipalityLite {
   barangays?: { id: number; municipality_id: number; name: string }[]
   destinations_count?: number
   businesses_count?: number
+  /** Municipal Tourism Office logo and cover photo ("Where to Next?" cards). */
+  logo_url?: string | null
+  cover_url?: string | null
 }
 
 interface LandingCategory {
@@ -709,11 +714,19 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
 
   const categories = landingContent?.categories?.length ? landingContent.categories : DEFAULT_CATEGORIES
 
-  const categoryImage = (tab: string, fallback: string) => toAssetUrl(categories.find((c) => c.tab === tab)?.image) || fallback
+  // Tile photo, in order: an image the tourism office uploaded for the category,
+  // then the photo of a real Bansud listing of that type (a restaurant for Food,
+  // a resort for Stays, a spot for Attractions), then a fitting default.
+  const categoryImage = (tab: string, cardType: string, fallback: string) => {
+    const uploaded = categories.find((c) => c.tab === tab)?.image
+    if (uploaded && !uploaded.includes('images.unsplash.com')) return toAssetUrl(uploaded) || fallback
+    const listing = cards.find((c) => c.types.includes(cardType) && c.image)
+    return toAssetUrl(listing?.image) || fallback
+  }
   const popularTiles: PopularTile[] = [
-    { label: 'Restaurants & Food Hub', to: '/explore?tab=food', image: categoryImage('food', DEFAULT_CATEGORIES[1]!.image), icon: POPULAR_ICONS.food },
-    { label: 'Resorts & Stays', to: '/explore?tab=stays', image: categoryImage('stays', DEFAULT_CATEGORIES[3]!.image), icon: POPULAR_ICONS.stays },
-    { label: 'Attractions & Tours', to: '/explore?tab=places', image: categoryImage('places', DEFAULT_CATEGORIES[0]!.image), icon: POPULAR_ICONS.places },
+    { label: 'Restaurants & Food Hub', to: '/explore?tab=food', image: categoryImage('food', 'food', DEFAULT_CATEGORIES[1]!.image), icon: POPULAR_ICONS.food },
+    { label: 'Resorts & Stays', to: '/explore?tab=stays', image: categoryImage('stays', 'resort', DEFAULT_CATEGORIES[3]!.image), icon: POPULAR_ICONS.stays },
+    { label: 'Attractions & Tours', to: '/explore?tab=places', image: categoryImage('places', 'spot', BANSUD_ATTRACTION_IMAGE), icon: POPULAR_ICONS.places },
     { label: 'Ride Anywhere', to: '/tourist/transport', image: RIDE_IMAGE, icon: POPULAR_ICONS.ride },
   ]
 

@@ -190,7 +190,7 @@ export default function RideLocationPicker({
             onChange={(e) => setQuery(e.target.value)}
             placeholder={isPickup ? 'Search a pickup place, hotel or landmark' : 'Search where you want to go'}
             aria-label={isPickup ? 'Search pickup location' : 'Search drop-off location'}
-            className="h-11 w-full rounded-xl! border! border-[#E5E9E7]! bg-[#fff]! pl-10 pr-10 text-sm text-[#17201B] shadow-none! placeholder:text-[#8A948F] focus:border-[#087F3F]! focus:outline-none focus:ring-2 focus:ring-[#087F3F]/20"
+            className="h-11 w-full rounded-xl! border! border-[#E5E9E7]! bg-[#fff]! pl-10 pr-10 text-sm text-[#17201B] shadow-none! placeholder:text-[#8A948F] focus:border-[#087F3F]! focus:outline-none focus:ring-2 focus:ring-[#087F3F]/20 [&::-webkit-search-cancel-button]:hidden"
           />
           {query && (
             <button type="button" onClick={() => setQuery('')} aria-label="Clear search" className="absolute right-2 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-[#68736D] hover:bg-[#F3F8F5]">

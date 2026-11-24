@@ -8,6 +8,8 @@ import { Modal } from '@/shared/components/Modal'
 import { cn, formatDate, formatDateTime } from '@/shared/utils'
 import { RiderRecords } from '@/features/admin/components/RiderRecords'
 import { RiderVehicleCard } from '@/features/admin/components/RiderVehicleCard'
+import EarningsStatementView from '@/features/compensation/EarningsStatementView'
+import type { EarningsStatement } from '@/features/compensation/types'
 import {
   ArrowLeft, Ban, Bike, CalendarDays, Car, CheckCircle, CheckCircle2, Clock, ExternalLink, FileText, History, Mail, MapPin, Phone,
   ReceiptText, RotateCcw, ShieldCheck, User, UtensilsCrossed, XCircle,
@@ -157,6 +159,7 @@ export default function AdminRiderShow() {
 
       {/* Records: status, deliveries, earnings, COD cash, cash out */}
       <RiderRecords riderId={rider.id} />
+      <RiderStatementSection riderId={rider.id} />
 
       {/* Profile details, side by side */}
       <div>
@@ -343,4 +346,11 @@ function Chip({ icon: Icon, children, warn = false }: { icon: typeof User; child
       <Icon className="h-3.5 w-3.5" aria-hidden="true" /> {children}
     </li>
   )
+}
+
+/** Stage D (2026-11-18): the rider's earnings statement — earnings, cancellation compensation, paid and remaining. */
+function RiderStatementSection({ riderId }: { riderId: number | string }) {
+  const { data } = useQuery({ queryKey: ['admin-rider-statement', riderId], queryFn: () => get<EarningsStatement>(`/admin/riders/${riderId}/statement`) })
+  if (!data) return null
+  return <EarningsStatementView statement={data} audience="office" />
 }

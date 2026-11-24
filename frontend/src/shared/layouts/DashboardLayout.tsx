@@ -2,6 +2,7 @@ import { Suspense, useContext, useState, useEffect, useCallback, useRef, cloneEl
 import { Link, useLocation, useNavigate, Outlet } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '@/features/auth/services/auth-store'
+import { useOfficeProfile } from '@/features/admin/hooks/use-office-profile'
 import { patch, post } from '@/shared/services/api'
 import { Skeleton } from '@/shared/components/Skeleton'
 import RiderOrderInfoSheet from '@/features/rider/components/RiderOrderInfoSheet'
@@ -68,6 +69,13 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
   const setUser = useAuthStore((s) => s.setUser)
   const fetchUser = useAuthStore((s) => s.fetchUser)
   const logout = useAuthStore((s) => s.logout)
+  // The Bansud Tourism Office sees its own logo (uploaded on Office Profile,
+  // else the bundled one); every other role keeps the TrackTour mark.
+  const bansudOffice = user?.role === 'bansud_tourism_office'
+  const { data: officeProfile } = useOfficeProfile(bansudOffice)
+  const officeLogo = officeProfile?.logo_url ? toAssetUrl(officeProfile.logo_url) : '/assets/logo/bansud-tourism-office.jpg'
+  const [officeLogoFailed, setOfficeLogoFailed] = useState(false)
+  useEffect(() => setOfficeLogoFailed(false), [officeLogo])
   // null whenever this layout is rendered outside the /rider routes — every
   // trip flag below therefore stays inert for the other roles.
   const riderTrip = useContext(RiderActiveTripContext)
@@ -601,14 +609,21 @@ export default function DashboardLayout({ navItems, roleLabel, sections, sidebar
         )}
       >
         <div className={cn('h-16 flex items-center shrink-0', admin ? 'border-b border-[#E5E9E7]' : tourism ? 'border-b border-[#E5E9E7]' : 'border-b border-white/30', collapsed ? 'justify-center px-2' : 'gap-3 px-5')}>
-          {/* The sidebar always carries the TrackTour brand; the Bansud office
-              logo lives on its Office Profile page. */}
-          <img
-            src="/assets/logo/tracktour.png"
-            alt="TrackTour Logo"
-            className="w-24 h-24 object-contain shrink-0"
-          />
-          {!collapsed && <span className="text-base font-bold min-w-0 truncate text-[#087F3F]">TrackTour</span>}
+          {bansudOffice ? (
+            <img
+              src={officeLogoFailed ? '/assets/logo/bansud-tourism-office.jpg' : officeLogo}
+              alt="Bansud Tourism Office logo"
+              onError={() => setOfficeLogoFailed(true)}
+              className="h-11 w-11 rounded-xl object-contain shrink-0"
+            />
+          ) : (
+            <img
+              src="/assets/logo/tracktour.png"
+              alt="TrackTour Logo"
+              className="w-24 h-24 object-contain shrink-0"
+            />
+          )}
+          {!collapsed && <span className="text-base font-bold min-w-0 truncate text-[#087F3F]">{bansudOffice ? 'Bansud Tourism' : 'TrackTour'}</span>}
         </div>
 
         {!collapsed &&

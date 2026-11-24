@@ -38,7 +38,8 @@ class PaymentController extends Controller
     public function createIntent(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'payable_type' => 'required|in:order,booking,group_order',
+            // ride_penalty: an owed ₱50 ride cancellation fee, paid on its own (Stage C, 2026-11-18).
+            'payable_type' => 'required|in:order,booking,group_order,ride_penalty',
             'payable_id' => 'required|integer',
             'method' => 'required|in:gcash,card',
         ]);
@@ -170,6 +171,35 @@ class PaymentController extends Controller
             if ($existing) {
                 return $this->errorResponse('This group order has already been paid.', 422);
             }
+        } elseif ($payableType === 'ride_penalty') {
+            // Stage C (2026-11-18): the tourist pays an OWED cancellation fee
+            // online, on its own — never added to a ride's order amounts.
+            $penalty = \App\Models\RideCancellationPenalty::with('cancelledOrder:id,order_number')
+                ->where('id', $payableId)
+                ->where('tourist_id', $user->id)
+                ->firstOrFail();
+            if ($penalty->status !== \App\Models\RideCancellationPenalty::STATUS_OWED) {
+                return $this->errorResponse($penalty->status === \App\Models\RideCancellationPenalty::STATUS_COLLECTED
+                    ? 'This cancellation fee has already been paid.'
+                    : 'This cancellation fee is not owed (it is under review or disputed), so there is nothing to pay.', 422);
+            }
+            $amount = (int) round((float) $penalty->penalty_amount * 100);
+            $rideNumber = $penalty->cancelledOrder?->order_number ?? (string) $penalty->cancelled_order_id;
+            $description = 'Track-Tour cancellation fee for ride #'.$rideNumber;
+            $referenceNumber = 'CXL-'.$penalty->id;
+            $lineItems = [[
+                'name' => 'Cancellation fee (ride '.$rideNumber.')',
+                'amount' => $amount,
+                'currency' => 'PHP',
+                'quantity' => 1,
+            ]];
+            $existing = Payment::where('payable_type', \App\Models\RideCancellationPenalty::class)
+                ->where('payable_id', $penalty->id)
+                ->where('status', 'paid')
+                ->first();
+            if ($existing) {
+                return $this->errorResponse('This cancellation fee has already been paid.', 422);
+            }
         } else {
             $booking = Booking::where('id', $payableId)
                 ->where(function ($q) use ($user) {
@@ -189,6 +219,29 @@ class PaymentController extends Controller
             }
         }
 
+        // Owner decision 2026-11-23: owed cancellation fees are added to the
+        // next ride or food order payment — one line each on the same
+        // checkout. They stay separate records (payment_penalty_items) and
+        // never become order money (paid amount / refund limit exclude them).
+        $owedFees = collect();
+        if ($payableType === 'order' || $payableType === 'group_order') {
+            $owedFees = app(\App\Services\RideCancellationPenaltyService::class)
+                ->owedForCheckout($user->id, $payableType === 'order' ? $order->id : null);
+            foreach ($owedFees as $fee) {
+                $cents = (int) round((float) $fee->penalty_amount * 100);
+                $lineItems[] = [
+                    'name' => 'Cancellation fee (ride '.($fee->cancelledOrder?->order_number ?? $fee->cancelled_order_id).')',
+                    'amount' => $cents,
+                    'currency' => 'PHP',
+                    'quantity' => 1,
+                ];
+                $amount += $cents;
+            }
+            if ($owedFees->isNotEmpty()) {
+                $description .= ' + cancellation fee';
+            }
+        }
+
         if (! $this->paymongo->isConfigured()) {
             return $this->errorResponse('Payment gateway is not configured. Please contact support.', 503);
         }
@@ -204,8 +257,11 @@ class PaymentController extends Controller
             'currency' => 'PHP',
             'description' => $description,
             'reference_number' => $referenceNumber,
-            'line_items' => in_array($payableType, ['order', 'group_order']) ? $lineItems : null,
-            'payment_method_types' => $validated['method'] === 'gcash' ? ['gcash'] : ['card'],
+            'line_items' => in_array($payableType, ['order', 'group_order', 'ride_penalty']) ? $lineItems : null,
+            // "Pay online" opens PayMongo with GCash and QR Ph (2026-11-18); the
+            // payment stays method 'gcash' (online via PayMongo) for settlement
+            // and refunds, and Payment::paidVia() tells which one was used.
+            'payment_method_types' => $validated['method'] === 'gcash' ? (config('services.paymongo.online_methods') ?: ['gcash']) : ['card'],
             'success_url' => $frontendUrl.'/payment/callback?payment_number='.$paymentNumber.'&status=success&payable_type='.$payableType.'&payable_id='.$payableId.$returnKind,
             'cancel_url' => $frontendUrl.'/payment/callback?payment_number='.$paymentNumber.'&status=cancelled&payable_type='.$payableType.'&payable_id='.$payableId.$returnKind,
             'metadata' => [
@@ -227,9 +283,14 @@ class PaymentController extends Controller
             return $this->errorResponse('Failed to initialize payment. Please try again.', 502);
         }
 
-        Payment::create([
+        $payment = Payment::create([
             'payment_number' => $paymentNumber,
-            'payable_type' => $payableType === 'order' ? Order::class : ($payableType === 'group_order' ? GroupCheckout::class : Booking::class),
+            'payable_type' => match ($payableType) {
+                'order' => Order::class,
+                'group_order' => GroupCheckout::class,
+                'ride_penalty' => \App\Models\RideCancellationPenalty::class,
+                default => Booking::class,
+            },
             'payable_id' => $payableId,
             'user_id' => $user->id,
             'amount' => $amount / 100,
@@ -240,10 +301,18 @@ class PaymentController extends Controller
             'description' => $description,
             'metadata' => $session,
         ]);
+        foreach ($owedFees as $fee) {
+            \App\Models\PaymentPenaltyItem::create([
+                'payment_id' => $payment->id,
+                'penalty_id' => $fee->id,
+                'amount' => (float) $fee->penalty_amount,
+            ]);
+        }
 
         return $this->successResponse([
             'payment_number' => $paymentNumber,
             'checkout_url' => $checkoutUrl,
+            'cancellation_fees' => round((float) $owedFees->sum('penalty_amount'), 2),
         ]);
     }
 
@@ -761,7 +830,12 @@ class PaymentController extends Controller
             'amount' => $payment->amount,
             'method' => $payment->method,
             'paid_at' => $payment->paid_at,
-            'payable_type' => $payment->payable_type === Order::class ? 'order' : ($payment->payable_type === GroupCheckout::class ? 'group_order' : 'booking'),
+            'payable_type' => match ($payment->payable_type) {
+                Order::class => 'order',
+                GroupCheckout::class => 'group_order',
+                \App\Models\RideCancellationPenalty::class => 'ride_penalty',
+                default => 'booking',
+            },
             'order_id' => $payment->payable_type === Order::class ? $payment->payable_id : null,
             'group_order_id' => $payment->payable_type === GroupCheckout::class ? $payment->payable_id : null,
             // 'transport' = a ride: the return page goes back to the ride.
@@ -946,6 +1020,21 @@ class PaymentController extends Controller
             return;
         }
 
+        // Stage C (2026-11-18): an owed ride cancellation fee paid online. It
+        // has no order amounts; a payment landing after the fee was already
+        // collected (e.g. in cash) is escalated for a manual refund.
+        if ($payable instanceof \App\Models\RideCancellationPenalty) {
+            app(\App\Services\RideCancellationPenaltyService::class)->collectOnline($payable, $payment);
+
+            return;
+        }
+
+        // 2026-11-23: owed cancellation fees carried by this ride / food
+        // payment are marked collected (once); the order's paid amount is the
+        // payment minus that fee portion.
+        $feePortion = app(\App\Services\RideCancellationPenaltyService::class)->applyOnlinePayment($payment);
+        $orderPaid = round((float) $payment->amount - $feePortion, 2);
+
         // Authoritative-once guard (P11.4): a payable whose payment_status is
         // already 'paid' has been finalized by the first paid payment.
         // Concurrent/distinct webhook events converging on the same payable can
@@ -969,7 +1058,7 @@ class PaymentController extends Controller
             }
 
             $payable->update([
-                'paid_amount' => $payment->amount,
+                'paid_amount' => $orderPaid,
                 'payment_method' => $payment->method,
                 'payment_status' => 'paid',
             ]);
@@ -995,7 +1084,7 @@ class PaymentController extends Controller
 
         if ($payable instanceof Order && in_array($payable->status, self::CLOSED_ORDER_STATUSES, true)) {
             $payable->update([
-                'paid_amount' => $payment->amount,
+                'paid_amount' => $orderPaid,
                 'payment_method' => $payment->method,
                 'payment_status' => 'paid',
             ]);
@@ -1019,14 +1108,14 @@ class PaymentController extends Controller
         // (CodPickupPaymentGuard), the rider buys nothing and collects no cash
         // (NearestRiderService::isCodDelivery). Decision 2026-11-10.
         if ($payable instanceof Order && in_array($payable->status, self::IN_PROGRESS_ORDER_STATUSES, true)) {
-            $this->recordOnlinePaymentOnly($payable, (float) $payment->amount, (string) $payment->method);
+            $this->recordOnlinePaymentOnly($payable, $orderPaid, (string) $payment->method);
 
             return;
         }
 
         if ($payable instanceof Order && ! in_array($payable->status, ['accepted', 'preparing', 'ready', 'delivered', 'completed'])) {
             $payable->update([
-                'paid_amount' => $payment->amount,
+                'paid_amount' => $orderPaid,
                 'payment_method' => $payment->method,
                 'payment_status' => 'paid',
                 'status' => 'waiting_restaurant',
@@ -1059,7 +1148,7 @@ class PaymentController extends Controller
             }
         } elseif ($payable instanceof GroupCheckout && $payable->payment_status !== 'paid') {
             $payable->update([
-                'paid_amount' => $payment->amount,
+                'paid_amount' => $orderPaid,
                 'payment_method' => $payment->method,
                 'payment_status' => 'paid',
             ]);
@@ -1129,7 +1218,7 @@ class PaymentController extends Controller
             $payable->refreshAggregateStatus();
         } elseif ($payable instanceof Booking && $payable->status !== 'completed') {
             $payable->update([
-                'paid_amount' => $payment->amount,
+                'paid_amount' => $orderPaid,
                 'payment_status' => 'paid',
             ]);
         }

@@ -11,8 +11,11 @@ class BusinessCategoryStaffRoleSeeder extends Seeder
     public function run(): void
     {
         $map = [
+            // Staff Management section 5: restaurants, cafes and food hubs offer the three restaurant roles.
             'Restaurant' => [
-                'Restaurant Manager',
+                'Order & Pickup Staff',
+                'Finance Staff',
+                'Menu & Promotions Staff',
             ],
             'Hotel' => [
                 'Reservation & Front Desk Staff',
@@ -27,16 +30,14 @@ class BusinessCategoryStaffRoleSeeder extends Seeder
                 'Maintenance Staff',
             ],
             'Café' => [
-                'Order & Payment Staff',
-                'Menu Management Staff',
-                'Kitchen / Preparation Staff',
-                'Digital Promotion Staff',
+                'Order & Pickup Staff',
+                'Finance Staff',
+                'Menu & Promotions Staff',
             ],
-            'Food Hub / Food Park' => [
-                'Order & Payment Staff',
-                'Food Menu Staff',
-                'Kitchen / Preparation Staff',
-                'Digital Promotion Staff',
+            'Food Hub' => [
+                'Order & Pickup Staff',
+                'Finance Staff',
+                'Menu & Promotions Staff',
             ],
             'Tourist Attraction' => [
                 'Visitor Management Staff',

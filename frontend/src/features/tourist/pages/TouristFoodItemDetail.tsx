@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { SalePrice, type DishSale } from '@/shared/components/SalePrice'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { forgetBrowsedPlace, recordBrowsedPlace } from '@/shared/services/browsing-history'
 import { isNotFoundError } from '@/shared/components/PlaceUnavailable'
@@ -52,6 +53,9 @@ export interface FoodItemDetail {
   name: string
   description: string | null
   price: number
+  /** Menu price while a dish sale runs (Promotions Part A); `price` is the sale price. */
+  original_price?: number | null
+  sale?: DishSale | null
   compare_price: number | null
   category: string
   image: string | null
@@ -394,8 +398,14 @@ export default function TouristFoodItemDetail() {
             )}
 
             <div className="mt-4 flex items-baseline gap-2">
-              <span className="text-[clamp(1.6rem,3vw,2.25rem)] font-extrabold leading-none text-[#087F3F]">{formatCurrency(unitPrice)}</span>
-              {item.compare_price != null && Number(item.compare_price) > Number(item.price) && (
+              {selectedVariation ? (
+                <span className="text-[clamp(1.6rem,3vw,2.25rem)] font-extrabold leading-none text-[#087F3F]">{formatCurrency(unitPrice)}</span>
+              ) : (
+                <span className="text-[clamp(1.6rem,3vw,2.25rem)] leading-none">
+                  <SalePrice price={item.price} original_price={item.original_price} sale={item.sale} className="font-extrabold text-[#087F3F]" />
+                </span>
+              )}
+              {!item.sale && item.compare_price != null && Number(item.compare_price) > Number(item.price) && (
                 <span className="text-base text-[#56615B] line-through">{formatCurrency(Number(item.compare_price))}</span>
               )}
               {item.unit && <span className="text-sm text-[#56615B]">per {item.unit}</span>}

@@ -13,7 +13,7 @@ function TripPage() {
 }
 
 describe('My Activities › Travels › Transport (2026-11-18)', () => {
-  it('View Trip opens that ride’s details, not the booking page', async () => {
+  it('View Trip opens that ride’s details page, not the booking page', async () => {
     api.get.mockResolvedValue({
       trips: { data: [
         { id: 57, order_number: 'TRP-6AFC86AC347A2', business_name: '', status: 'cancelled', total: 204.34, created_at: '2026-11-18T00:54:00+08:00' },
@@ -24,7 +24,7 @@ describe('My Activities › Travels › Transport (2026-11-18)', () => {
         <MemoryRouter initialEntries={['/tourist/activities']}>
           <Routes>
             <Route path="/tourist/activities" element={<TouristHistory embedded only={['transport']} />} />
-            <Route path="/tourist/transport/tracking/:id" element={<TripPage />} />
+            <Route path="/tourist/transport/trips/:id" element={<TripPage />} />
             <Route path="/tourist/transport" element={<p>Book a ride</p>} />
           </Routes>
         </MemoryRouter>

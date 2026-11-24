@@ -58,6 +58,13 @@ class StaffApiTest extends TestCase
             'name' => 'Cashier',
             'description' => 'Handles transactions',
         ]);
+        // Staff Management Stage 1 enforces permissions on every staff route
+        // (docs/staff-management-plan.md). These tests exercise the success
+        // paths, so the role is granted what they use; a role without grants
+        // is now refused (covered in StaffManagementStage1Test).
+        foreach (['orders.view', 'orders.update', 'bookings.view', 'bookings.update'] as $permission) {
+            $staffRole->grants()->create(['permission' => $permission]);
+        }
 
         Staff::create([
             'business_id' => $this->business->id,
@@ -109,13 +116,10 @@ class StaffApiTest extends TestCase
             ->assertJson([
                 'success' => true,
             ])
+            // The owner's Orders page shape (2026-11-24).
             ->assertJsonStructure([
-                'data' => [
-                    'orders',
-                    'status_counts',
-                    'today_summary',
-                    'pagination',
-                ],
+                'data',
+                'meta' => ['current_page', 'last_page', 'total', 'status_counts'],
             ]);
     }
 

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import TouristProfile from '@/features/tourist/pages/TouristProfile'
@@ -82,6 +82,26 @@ describe('Tourist profile photo', () => {
 
     expect(screen.queryByRole('button', { name: /remove/i })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Change profile photo' })).toBeInTheDocument()
+  })
+
+  it('shows the header card and grouped sections, with no self-linking Settings entry', async () => {
+    api.get.mockResolvedValue({ ...me(null), created_at: '2026-03-15T00:00:00Z' })
+    renderProfile()
+    const header = await screen.findByRole('region', { name: 'Your profile' })
+    expect(header).toHaveTextContent('Jayvie De Torres')
+    expect(header).toHaveTextContent('j@example.com')
+    expect(await within(header).findByText('Member since March 2026')).toBeInTheDocument()
+
+    const activity = screen.getByRole('region', { name: 'Activity' })
+    // My Activities moved here from the navigation bar; it is the first Activity entry.
+    expect(within(activity).getAllByRole('link')[0]).toHaveAccessibleName(/My Activities/)
+    expect(screen.getByRole('link', { name: /My Activities/ })).toHaveAttribute('href', '/tourist/activities')
+    expect(screen.getByRole('link', { name: /Favorites/ })).toHaveAttribute('href', '/tourist/favorites')
+    expect(screen.getByRole('link', { name: /My reviews/ })).toHaveAttribute('href', '/tourist/reviews')
+    expect(screen.getByRole('link', { name: /Notifications/ })).toHaveAttribute('href', '/tourist/notifications')
+    expect(activity).not.toHaveTextContent('Settings')
+    expect(screen.getByRole('region', { name: 'Safety' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Log Out' })).toBeInTheDocument()
   })
 
   it('shows an error when the upload fails', async () => {

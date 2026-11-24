@@ -275,7 +275,7 @@ class TransactionIntegrityService
             $base = (float) ($finalized['base_fare'] ?? 0);
             $computed = round(max($base + round((float) ($finalized['verified_km'] ?? 0) * (float) ($finalized['per_km'] ?? 0), 2), $base), 2);
             $final = min($computed, (float) ($finalized['max_fare'] ?? $computed));
-            $commission = round(max(20, $final * 0.4), 2);
+            $commission = \App\Services\RideDestinationChangeService::commission($final);
             $ok = abs($computed - (float) ($finalized['computed_fare'] ?? -1)) < 0.005
                 && abs($final - (float) ($finalized['final_fare'] ?? -1)) < 0.005
                 && abs($final - (float) $order->subtotal) < 0.005
@@ -296,7 +296,7 @@ class TransactionIntegrityService
         if ($applied !== null) {
             $chargesTotal = round((float) collect($applied['charges'] ?? [])->sum('amount'), 2);
             $total = round((float) ($applied['subtotal'] ?? 0) + $chargesTotal, 2);
-            $commission = round(max(20, $total * 0.4), 2);
+            $commission = \App\Services\RideDestinationChangeService::commission($total);
             $live = round((float) \App\Models\RideAdditionalCharge::where('order_id', $order->id)->where('status', 'approved')->sum('amount'), 2);
             $ok = abs($chargesTotal - (float) ($applied['charges_total'] ?? -1)) < 0.005
                 && abs($total - (float) ($applied['total'] ?? -1)) < 0.005

@@ -117,9 +117,17 @@ class RiderAcceptanceGateTest extends TestCase
             'latitude' => 12.52, 'longitude' => 121.32,
         ]);
 
+        // Staff Management Stage 1 enforces permissions on staff routes; the
+        // staff member gets a kitchen role so this test still checks the
+        // rider-acceptance gate (422) rather than a missing permission (403).
+        $kitchenRole = \App\Models\StaffRole::create(['name' => 'Kitchen / Preparation Staff']);
+        foreach (['orders.view', 'orders.update'] as $permission) {
+            $kitchenRole->grants()->create(['permission' => $permission]);
+        }
         Staff::create([
             'business_id' => $this->restaurantA->id,
             'user_id' => $this->staffA->id,
+            'staff_role_id' => $kitchenRole->id,
             'status' => 'active',
         ]);
 

@@ -89,5 +89,8 @@ class StaffRoleSeeder extends Seeder
                 ['description' => $role['description']]
             );
         }
+
+        // Staff Management Stage 1: default permissions for roles created here.
+        \App\Support\StaffPermissions::seedRolesWithoutGrants();
     }
 }

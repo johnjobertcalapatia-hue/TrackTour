@@ -5,8 +5,8 @@ import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { formatCurrency } from '@/shared/utils'
 import { Plus, Pencil, Archive, ChevronLeft, ChevronRight, Wallet, TrendingDown } from 'lucide-react'
 import { Modal } from '@/shared/components/Modal'
-import { useBusinessOwnerStore } from '../services/business-owner-store'
 import type { Business } from '@/shared/types'
+import { useBusinessPortal } from '../services/business-portal'
 
 interface Expense {
   id: number
@@ -42,8 +42,9 @@ const categoryLabels: Record<string, string> = {
 const emptyForm = { business_id: 0, vendor_name: '', category: 'other', amount: 0, expense_date: new Date().toISOString().split('T')[0], notes: '' }
 
 export default function BusinessOwnerExpenses() {
+  const portal = useBusinessPortal()
   const queryClient = useQueryClient()
-  const selectedBusinessId = useBusinessOwnerStore((s) => s.selectedBusinessId)
+  const selectedBusinessId = portal.businessId
   const [page, setPage] = useState(1)
   const [showForm, setShowForm] = useState(false)
   const [editing, setEditing] = useState<Expense | null>(null)
@@ -58,18 +59,19 @@ export default function BusinessOwnerExpenses() {
 
   const { data: businessesData } = useQuery({
     queryKey: ['bo-businesses'],
-    queryFn: () => get<{ data: Business[] }>('/business-owner/businesses'),
+    queryFn: () => get<Business[] | { data: Business[] }>(`${portal.prefix}/businesses`),
   })
-  const businesses = businessesData?.data ?? []
+  // GET /businesses returns the list itself (get() unwraps the envelope); older code read `.data` and got nothing.
+  const businesses: Business[] = Array.isArray(businessesData) ? businessesData : businessesData?.data ?? []
 
   const { data: expensesData, isLoading } = useQuery<PaginatedResponse<Expense>>({
     queryKey: ['bo-expenses', queryParams.toString()],
-    queryFn: () => get<PaginatedResponse<Expense>>(`/business-owner/expenses?${queryParams.toString()}`),
+    queryFn: () => get<PaginatedResponse<Expense>>(`${portal.prefix}/expenses?${queryParams.toString()}`),
   })
 
   const { data: summaryData } = useQuery<ExpenseSummary>({
     queryKey: ['bo-expenses-summary', selectedBusinessId],
-    queryFn: () => get<ExpenseSummary>(`/business-owner/expenses/summary${selectedBusinessId ? '?business_id=' + selectedBusinessId : ''}`),
+    queryFn: () => get<ExpenseSummary>(`${portal.prefix}/expenses/summary${selectedBusinessId ? '?business_id=' + selectedBusinessId : ''}`),
   })
 
   const expenses = expensesData?.data ?? []
@@ -78,8 +80,8 @@ export default function BusinessOwnerExpenses() {
   const saveMutation = useMutation({
     mutationFn: (data: typeof form) =>
       editing
-        ? put(`/business-owner/expenses/${editing.id}`, data)
-        : post('/business-owner/expenses', data),
+        ? put(`${portal.prefix}/expenses/${editing.id}`, data)
+        : post(`${portal.prefix}/expenses`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['bo-expenses'] })
       queryClient.invalidateQueries({ queryKey: ['bo-expenses-summary'] })
@@ -88,7 +90,7 @@ export default function BusinessOwnerExpenses() {
   })
 
   const archiveMutation = useMutation({
-    mutationFn: (id: number) => del(`/business-owner/expenses/${id}`),
+    mutationFn: (id: number) => del(`${portal.prefix}/expenses/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['bo-expenses'] })
       queryClient.invalidateQueries({ queryKey: ['bo-expenses-summary'] })
@@ -178,7 +180,10 @@ export default function BusinessOwnerExpenses() {
                     <td className="px-5 py-3.5 text-right">
                       <div className="flex items-center justify-end gap-1">
                         <button onClick={() => openEdit(exp)} className="p-1.5 rounded-lg text-[#647067] hover:text-[#16803C] hover:bg-[#EAF6ED] transition"><Pencil className="w-4 h-4" /></button>
-                        <button onClick={() => setArchiveId(exp.id)} className="p-1.5 rounded-lg text-[#647067] hover:text-[#A66F00] hover:bg-[#FFF7D6] transition"><Archive className="w-4 h-4" /></button>
+                        {/* Deleting an expense is owner-only (Staff Management section 5); the server refuses it too. */}
+                        {!portal.isStaff && (
+                          <button onClick={() => setArchiveId(exp.id)} aria-label="Delete expense" className="p-1.5 rounded-lg text-[#647067] hover:text-[#A66F00] hover:bg-[#FFF7D6] transition"><Archive className="w-4 h-4" /></button>
+                        )}
                       </div>
                     </td>
                   </tr>

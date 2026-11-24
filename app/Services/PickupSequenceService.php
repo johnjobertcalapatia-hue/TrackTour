@@ -245,11 +245,31 @@ class PickupSequenceService
     }
 
     /**
-     * Distance from the rider's latest location to the stop, if measurable.
+     * The rider's latest saved fix, only if it is current (within
+     * tracking.proof_location_max_age_seconds, 120 s by default). An older
+     * fix — e.g. from before the rider logged out — never decides that the
+     * rider is at a restaurant (2026-11-23).
+     *
+     * @return array{latitude: float, longitude: float, recorded_at: \Illuminate\Support\Carbon}|null
+     */
+    public function currentRiderLocation(int $riderId): ?array
+    {
+        $location = $this->latestRiderLocation($riderId);
+        $maxAge = (int) config('tracking.proof_location_max_age_seconds', 120);
+        if (! $location || $location['recorded_at'] === null || $location['recorded_at']->lt(now()->subSeconds($maxAge))) {
+            return null;
+        }
+
+        return $location;
+    }
+
+    /**
+     * Distance from the rider's CURRENT location to the stop, if measurable
+     * (null when there is no fix from the last couple of minutes).
      */
     public function stopDistanceMeters(Delivery $delivery, DeliveryPickupStop $stop): ?float
     {
-        $location = $this->latestRiderLocation((int) $delivery->rider_id);
+        $location = $this->currentRiderLocation((int) $delivery->rider_id);
 
         if (! $location || $stop->pickup_latitude === null || $stop->pickup_longitude === null) {
             return null;
@@ -330,6 +350,33 @@ class PickupSequenceService
      *
      * @throws InvalidArgumentException
      */
+    /**
+     * The saved fix could not place the rider at the restaurant: let the
+     * phone's own fix sent with the action stand in (owner decision
+     * 2026-11-24, the food drop-off rules of 2026-11-12): at most 30 s old,
+     * ±200 m or better, inside the pickup radius and no teleport; coarser than
+     * ±50 m is flagged for the Tourism Office. Without a phone fix the
+     * original message stands.
+     */
+    private function assertAtRestaurantByPhone(Delivery $delivery, DeliveryPickupStop $stop, int $riderId, ?array $deviceFix, string $action, string $fallbackMessage): void
+    {
+        if ($stop->pickup_latitude === null || $stop->pickup_longitude === null || $deviceFix === null) {
+            throw new InvalidArgumentException($fallbackMessage);
+        }
+
+        $proof = app(DropoffLocationProof::class)->evaluate(
+            $delivery, $riderId, $deviceFix, $action,
+            'You must be within %d m of the restaurant (you are %s away).',
+            [(float) $stop->pickup_latitude, (float) $stop->pickup_longitude],
+            (float) config('tracking.pickup_radius_meters', 50),
+            'the restaurant',
+            'escalation.pickup_low_precision_gps',
+        );
+        if (! $proof['ok']) {
+            throw new InvalidArgumentException($proof['message'] ?? $fallbackMessage);
+        }
+    }
+
     public function confirmArrival(Delivery $delivery, int $businessId, int $riderId, ?array $deviceFix = null): array
     {
         return DB::transaction(function () use ($delivery, $businessId, $riderId, $deviceFix) {
@@ -377,11 +424,10 @@ class PickupSequenceService
                     : ($distance !== null && $distance <= (float) config('tracking.pickup_radius_meters', 50));
 
                 if (! $withinRadius) {
-                    throw new InvalidArgumentException(
+                    $this->assertAtRestaurantByPhone($locked, $stop, $riderId, $deviceFix, 'Confirm Arrival at the restaurant',
                         $distance === null
                             ? 'A current GPS location is required to confirm arrival.'
-                            : 'You must be within the pickup area to confirm arrival.'
-                    );
+                            : 'You must be within the pickup area to confirm arrival.');
                 }
 
                 $stop->update([
@@ -489,7 +535,8 @@ class PickupSequenceService
                         && $distance <= (float) config('tracking.pickup_radius_meters', 50));
 
                 if (! $withinRadius) {
-                    throw new InvalidArgumentException('You must be within the pickup area before confirming the order items.');
+                    $this->assertAtRestaurantByPhone($locked, $stop, $riderId, $deviceFix, 'Confirm Pick Up',
+                        'You must be within the pickup area before confirming the order items.');
                 }
 
                 $stop->update([

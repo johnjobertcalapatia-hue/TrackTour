@@ -64,6 +64,11 @@ export interface PickupStop {
   arrival_reason: 'not_current' | 'too_far' | 'gps_unavailable' | null
   items: PickupStopItem[]
   cod_purchase: PickupStopCodPurchase | null
+  /** The restaurant's "Handed to rider" record (Staff Management section 5). You still confirm the pickup yourself. */
+  restaurant_handover?: { confirmed_at: string; confirmed_by: string | null } | null
+  /** Set by the app (withPhoneFixAtStop) when the phone's own fix places the rider here, not the saved one. */
+  location_source?: 'phone'
+  phone_accuracy_m?: number
 }
 
 export interface PickupStopsData {

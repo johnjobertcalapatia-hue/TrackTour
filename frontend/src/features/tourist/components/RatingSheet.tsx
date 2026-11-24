@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Star } from 'lucide-react'
 import { cn } from '@/shared/utils'
 
-const RATING_TAG_LABELS: Record<string, string> = {
+export const RATING_TAG_LABELS: Record<string, string> = {
   friendly: 'Friendly',
   safe_driving: 'Safe driving',
   clean_vehicle: 'Clean vehicle',

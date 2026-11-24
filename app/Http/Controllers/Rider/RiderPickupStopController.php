@@ -59,12 +59,22 @@ class RiderPickupStopController extends Controller
             }
         }
 
-        $payloadStops = $stops->map(function (DeliveryPickupStop $stop) use ($delivery, $itemsByBusiness) {
+        // The restaurants' "Handed to rider" confirmations (Staff Management §5):
+        // shown to the rider only — the rider still confirms each pickup.
+        $handovers = \App\Models\RestaurantHandover::where('delivery_id', $delivery->id)->with('confirmer.profile')->get()->keyBy('business_id');
+
+        $payloadStops = $stops->map(function (DeliveryPickupStop $stop) use ($delivery, $itemsByBusiness, $handovers) {
             $payload = $this->sequence->stopPayload($delivery, $stop);
             $payload['items'] = $this->orderItemsPayload(collect($itemsByBusiness[(int) $stop->business_id] ?? []));
             $payload['cod_purchase'] = $this->codPurchasePayload(
                 $delivery->codPurchases->firstWhere('business_id', (int) $stop->business_id)
             );
+            $handover = $handovers->get((int) $stop->business_id);
+            $payload['restaurant_handover'] = $handover ? [
+                'confirmed_at' => $handover->confirmed_at,
+                // First name only: never another person's email.
+                'confirmed_by' => $handover->confirmer?->profile?->first_name,
+            ] : null;
 
             return $payload;
         })->values();

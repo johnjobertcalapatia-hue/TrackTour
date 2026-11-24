@@ -24,6 +24,7 @@ class SendOrderCreatedNotifications implements ShouldQueue
                 'title' => 'New Order Received',
                 'message' => "Order #{$order->order_number} has been placed. Total: ₱{$order->total}.",
                 'type' => 'order_created',
+                'data' => ['order_id' => $order->id, 'business_id' => $business->id],
             ]);
         }
 
@@ -40,6 +41,7 @@ class SendOrderCreatedNotifications implements ShouldQueue
                 'title' => 'New Order Received',
                 'message' => "Order #{$order->order_number} has been placed. Total: ₱{$order->total}.",
                 'type' => 'order_created',
+                'data' => ['order_id' => $order->id, 'business_id' => $business->id],
             ]);
         }
     }

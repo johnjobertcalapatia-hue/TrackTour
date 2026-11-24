@@ -39,7 +39,7 @@ export default function BusinessOwnerOfferingCreate() {
 
   const { data: businesses, isLoading: loadingBusinesses } = useQuery({
     queryKey: ['bo-businesses-select'],
-    queryFn: () => get<{ data: Business[] }>('/business-owner/businesses'),
+    queryFn: () => get<Business[] | { data: Business[] }>('/business-owner/businesses'),
   })
 
   const { data: categories, isLoading: loadingCategories } = useQuery({
@@ -72,7 +72,8 @@ export default function BusinessOwnerOfferingCreate() {
 
   if (loadingBusinesses || loadingCategories) return <DashboardSkeleton />
 
-  const businessList = businesses?.data ?? []
+  // GET /businesses returns the list itself (get() unwraps the envelope); older code read `.data` and got nothing.
+  const businessList: Business[] = Array.isArray(businesses) ? businesses : businesses?.data ?? []
   const categoryList = categories?.data ?? []
 
   return (

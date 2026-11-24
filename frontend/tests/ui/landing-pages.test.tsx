@@ -65,7 +65,7 @@ describe('landing explore page', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Resorts/ }))
 
     expect(screen.getByTestId('current-path')).toHaveTextContent('/explore?tab=stays')
-    expect(await screen.findByRole('link', { name: /Seaside Resort/ })).toHaveAttribute('href', '/tourist/explore/9')
+    expect(await screen.findByRole('link', { name: /Seaside Resort/ })).toHaveAttribute('href', '/explore/place/9') // public page, not the tourist portal
   })
 })
 
@@ -74,7 +74,7 @@ describe('landing all categories page', () => {
     renderAt('/explore/categories', <LandingAllCategoriesPage />)
 
     const businesses = await screen.findByRole('region', { name: 'Businesses' })
-    expect(within(businesses).getByRole('link', { name: /Bansud Hardware/ })).toHaveAttribute('href', '/tourist/explore/12')
+    expect(within(businesses).getByRole('link', { name: /Bansud Hardware/ })).toHaveAttribute('href', '/explore/place/12')
     expect(screen.getByRole('region', { name: 'Tourist Spots' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Food\s*1/ })).toHaveAttribute('href', '#category-food')
   })

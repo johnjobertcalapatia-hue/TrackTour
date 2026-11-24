@@ -82,12 +82,15 @@ class FoodController extends Controller
         $pageIds = $offerings->getCollection()->pluck('id')->all();
         ['sold' => $soldByOffering, 'ratings' => $foodRatings] = app(FoodPopularityService::class)->stats($pageIds);
 
-        $items = $offerings->map(function ($food) use ($soldByOffering, $foodRatings) {
+        // Promotions Part A: `price` is what the tourist pays now (dish sale price while one runs).
+        $quotes = app(\App\Services\SalePricing::class)->quoteMany($offerings->getCollection());
+
+        $items = $offerings->map(function ($food) use ($soldByOffering, $foodRatings, $quotes) {
             return (object) [
                 'id' => $food->id,
                 'name' => $food->name,
                 'description' => $food->description,
-                'price' => $food->price,
+                ...\App\Services\SalePricing::presentFields($quotes[$food->id]),
                 'category' => $food->category->name ?? $food->business->category->name ?? 'General',
                 'image' => $food->image,
                 'is_available' => $food->is_available,
@@ -183,7 +186,8 @@ class FoodController extends Controller
             'id' => $offering->id,
             'name' => $offering->name,
             'description' => $offering->description,
-            'price' => $offering->price,
+            // Promotions Part A: what the tourist pays now, with the sale while one runs.
+            ...\App\Services\SalePricing::presentFields(app(\App\Services\SalePricing::class)->quote($offering)),
             'compare_price' => $offering->compare_price,
             'category' => $offering->category->name ?? $business->category->name ?? 'General',
             'image' => $offering->image,
@@ -271,6 +275,9 @@ class FoodController extends Controller
         $validated = $request->validate([
             'business_ids' => 'required|array|min:1|max:20',
             'business_ids.*' => 'integer|exists:businesses,id',
+            // Promotions Part A: the cart refreshes its dish prices (sales start and end).
+            'offering_ids' => 'nullable|array|max:100',
+            'offering_ids.*' => 'integer',
         ]);
 
         $businesses = Business::whereIn('id', array_unique($validated['business_ids']))->get();
@@ -285,7 +292,16 @@ class FoodController extends Controller
             ]];
         });
 
-        return $this->successResponse(['restaurants' => $result]);
+        $prices = [];
+        if (! empty($validated['offering_ids'])) {
+            $offerings = Offering::whereIn('id', array_unique($validated['offering_ids']))->get(['id', 'business_id', 'name', 'price'])->keyBy('id');
+            foreach (app(\App\Services\SalePricing::class)->quoteMany($offerings) as $id => $quote) {
+                // The name lets the cart tell a plain line from a variation line ("Adobo (Large)").
+                $prices[$id] = ['name' => $offerings[$id]->name] + \App\Services\SalePricing::presentFields($quote);
+            }
+        }
+
+        return $this->successResponse(['restaurants' => $result, 'prices' => (object) $prices]);
     }
 
     public function orderFlat(Request $request)
@@ -296,6 +312,8 @@ class FoodController extends Controller
             'items.*.offering_id' => 'required|exists:offerings,id',
             'items.*.quantity' => 'required|integer|min:1',
             'items.*.notes' => 'nullable|string|max:500',
+            // The price the cart showed. Only compared, never charged (Promotions Part A).
+            'items.*.expected_unit_price' => 'nullable|numeric|min:0',
             'order_type' => 'required|in:delivery,pickup',
             'delivery_speed' => 'required_if:order_type,delivery|in:standard,fast',
             'rider_tip' => 'nullable|numeric|min:0|max:100',
@@ -342,6 +360,7 @@ class FoodController extends Controller
         $subtotal = 0;
         $orderItems = [];
 
+        $pricing = app(\App\Services\SalePricing::class);
         foreach ($validated['items'] as $item) {
             $offering = Offering::findOrFail($item['offering_id']);
             if ((int) $offering->business_id !== (int) $business->id) {
@@ -350,14 +369,23 @@ class FoodController extends Controller
             if (! $offering->is_available) {
                 return $this->errorResponse($offering->name.' is no longer available.', 422);
             }
-            $qty = $item['quantity'];
-            $subtotal += $offering->price * $qty;
+            $qty = (int) $item['quantity'];
+            // Server price only: the menu price, or the running dish sale's price.
+            $quote = $pricing->quote($offering);
+            if (isset($item['expected_unit_price']) && round((float) $item['expected_unit_price'], 2) !== $quote['unit_price']) {
+                return $this->errorResponse('The price of '.$offering->name.' changed to ₱'.number_format($quote['unit_price'], 2).'. Please review your cart before placing the order.', 422);
+            }
+            $lineSubtotal = round($quote['unit_price'] * $qty, 2);
+            $subtotal += $lineSubtotal;
             $orderItems[] = [
                 'offering_id' => $offering->id,
                 'product_name' => $offering->name,
                 'quantity' => $qty,
-                'unit_price' => $offering->price,
-                'subtotal' => $offering->price * $qty,
+                'unit_price' => $quote['unit_price'],
+                'original_unit_price' => $quote['original_unit_price'],
+                'promotion_id' => $quote['promotion_id'],
+                'sale_label' => $quote['sale_label'],
+                'subtotal' => $lineSubtotal,
                 // Snapshot the menu's preparation time so later menu edits
                 // never change this order's countdown (spec §16).
                 'preparation_time' => $offering->preparation_time,
@@ -379,6 +407,7 @@ class FoodController extends Controller
         $deliveryFee = $fee['delivery_fee'] ?? 0;
 
         // Calculate COD financial fields per spec
+        $subtotal = round($subtotal, 2);
         $systemFee = \App\Models\Order::calculateSystemFee($subtotal);
         $riderFinancedAmount = \App\Models\Order::calculateRiderFinancedAmount($subtotal, $systemFee);
         $riderDeliveryEarnings = $deliveryFee;
@@ -426,6 +455,9 @@ class FoodController extends Controller
                 foreach ($orderItems as $item) {
                     $order->items()->create($item);
                 }
+
+                // Earnings Stage 1 (§R2): keep the restaurant town's commission rates with the order.
+                app(\App\Services\CommissionRateSettings::class)->captureFoodOrder($order);
 
                 return $order;
             });

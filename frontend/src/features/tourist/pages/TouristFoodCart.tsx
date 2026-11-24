@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { SalePrice, type DishSale } from '@/shared/components/SalePrice'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { get, post } from '@/shared/services/api'
@@ -10,6 +11,15 @@ import { savePendingAction } from '@/shared/services/pending-action'
 import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import { checkoutPinIcon } from '@/shared/utils/pin-icon'
+import { OwedFeeLines, useOwedCancellationFees } from '@/features/tourist/components/ride/CancellationFeeBanner'
+
+/** Current price of a dish from POST /tourist/food/availability (Promotions Part A). */
+interface LivePrice {
+  name: string
+  price: number
+  original_price: number | null
+  sale: DishSale | null
+}
 
 interface CartItem {
   id: number
@@ -179,6 +189,7 @@ export default function TouristFoodCart() {
   const [locationError, setLocationError] = useState('')
   const [searchError, setSearchError] = useState('')
   const [orderError, setOrderError] = useState('')
+  const [priceNotice, setPriceNotice] = useState('')
   const [showConfirm, setShowConfirm] = useState(false)
   const searchTimer = useRef<ReturnType<typeof setTimeout>>()
   const locationRequestId = useRef(0)
@@ -463,15 +474,56 @@ export default function TouristFoodCart() {
   const calculatedDeliveryFee = isMultiBusinessCart ? groupDeliveryFee : deliveryFee
   const riderTipAmount = deliverySpeed === 'fast' && orderType === 'delivery' ? Number(riderTip) || 0 : 0
   const total = subtotal + calculatedDeliveryFee + riderTipAmount
+  // 2026-11-23: an owed ride cancellation fee is added to this order's
+  // payment — online, or in cash to the delivery rider. A pickup paid in cash
+  // has no rider to collect it, so it then stays owed for the next payment.
+  const owedFees = useOwedCancellationFees()
+  const feeOnThisOrder = owedFees.total > 0 && (paymentMethod !== 'cash' || orderType === 'delivery')
+  const totalDue = total + (feeOnThisOrder ? owedFees.total : 0)
 
+  // Promotions Part A: the same call also returns each dish's current price
+  // (a dish sale may have started or ended since it was added to the cart).
+  const cartOfferingIds = useMemo(() => Array.from(new Set(cart.map((item) => item.id))).sort((a, b) => a - b), [cart])
   const availabilityQuery = useQuery({
-    queryKey: ['food-availability', [...distinctBusinessIds].sort()],
-    queryFn: () => post<{ restaurants: Record<number, { is_accepting_orders: boolean; availability: string; open_status: { status: string; label: string }; business_name: string }> }>('/tourist/food/availability', {
+    queryKey: ['food-availability', [...distinctBusinessIds].sort(), cartOfferingIds],
+    queryFn: () => post<{
+      restaurants: Record<number, { is_accepting_orders: boolean; availability: string; open_status: { status: string; label: string }; business_name: string }>
+      prices?: Record<number, LivePrice>
+    }>('/tourist/food/availability', {
       business_ids: distinctBusinessIds,
+      offering_ids: cartOfferingIds,
     }),
     enabled: distinctBusinessIds.length > 0,
     staleTime: 60_000,
   })
+
+  const livePrices = availabilityQuery.data?.prices ?? {}
+  /** The server's current price for a plain cart line (a variation line keeps its own price). */
+  const livePriceFor = (item: CartItem): LivePrice | null => {
+    const live = livePrices[item.id]
+    return live && live.name === item.name ? live : null
+  }
+
+  // Bring stored cart prices up to date, and say which changed.
+  useEffect(() => {
+    const prices = availabilityQuery.data?.prices
+    if (!prices || cart.length === 0) return
+    const changed: string[] = []
+    const next = cart.map((item) => {
+      const live = prices[item.id]
+      if (!live || live.name !== item.name || Number(live.price) === Number(item.price)) return item
+      changed.push(`${item.name} is now ${formatCurrency(Number(live.price))}${live.sale ? ` (${live.sale.label})` : ''}`)
+      return { ...item, price: Number(live.price) }
+    })
+    if (changed.length > 0) {
+      updateCart(next)
+      setPriceNotice(`Prices updated: ${changed.join(', ')}.`)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availabilityQuery.data])
+
+  /** The price shown for each line, sent so the server refuses a price the tourist did not see. */
+  const expectedPrice = (item: CartItem) => (livePriceFor(item) ? { expected_unit_price: item.price } : {})
 
   const restaurantStatus = availabilityQuery.data?.restaurants ?? {}
   const closedBusinessIds = distinctBusinessIds.filter((id) => restaurantStatus[id] && !restaurantStatus[id].is_accepting_orders)
@@ -491,7 +543,7 @@ export default function TouristFoodCart() {
 
         const restaurants = Array.from(groups.entries()).map(([businessId, groupItems]) => ({
           business_id: businessId,
-          items: groupItems.map((item) => ({ offering_id: item.id, quantity: item.quantity, notes: item.notes || null })),
+          items: groupItems.map((item) => ({ offering_id: item.id, quantity: item.quantity, notes: item.notes || null, ...expectedPrice(item) })),
         }))
 
         const response = await post<{ group_order: { id: number; reference_number: string } }>('/tourist/food/group-order', {
@@ -511,7 +563,7 @@ export default function TouristFoodCart() {
 
       const response = await post<{ order: { id: number; order_number: string } }>('/tourist/food/order', {
         business_id: businessId,
-        items: items.map((item) => ({ offering_id: item.id, quantity: item.quantity, notes: item.notes || null })),
+        items: items.map((item) => ({ offering_id: item.id, quantity: item.quantity, notes: item.notes || null, ...expectedPrice(item) })),
         order_type: orderType,
         delivery_address: orderType === 'delivery' ? fullAddress : null,
         delivery_latitude: orderType === 'delivery' ? markerPos?.[0] : null,
@@ -556,6 +608,8 @@ export default function TouristFoodCart() {
         ? Object.values(errors).flat().join('. ')
         : error?.response?.data?.message || 'Failed to place order. Please try again.'
       setOrderError(msg)
+      // A price changed (e.g. a dish sale ended): refresh the cart's prices.
+      if (/price of/i.test(String(msg))) void availabilityQuery.refetch()
     },
   })
 
@@ -662,7 +716,9 @@ export default function TouristFoodCart() {
                     <div className="flex-1 min-w-0">
                       <h3 className="font-medium text-[#17201B] truncate">{item.name}</h3>
                       <p className="text-xs text-[#6B7280]">{item.business_name}</p>
-                      <p className="text-sm font-semibold text-[#087F3F] mt-1">{formatCurrency(item.price)}</p>
+                      <p className="text-sm mt-1">
+                        <SalePrice price={item.price} original_price={livePriceFor(item)?.original_price} sale={livePriceFor(item)?.sale} className="font-semibold text-[#087F3F]" />
+                      </p>
                     </div>
                   </Link>
                   <div className="flex items-center gap-2">
@@ -1134,12 +1190,23 @@ export default function TouristFoodCart() {
                     <span className="text-[#087F3F] font-medium">{formatCurrency(riderTipAmount)}</span>
                   </div>
                 )}
+                {feeOnThisOrder && <OwedFeeLines fees={owedFees.fees} className="text-sm text-[#6B7280]" />}
+                {owedFees.total > 0 && !feeOnThisOrder && (
+                  <p className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] text-[#8A5A00]">
+                    You owe a {formatCurrency(owedFees.total)} cancellation fee. A cash pickup can't collect it, so it will be added to your next ride or delivery (or pay online now).
+                  </p>
+                )}
                 <div className="flex justify-between pt-3 border-t border-[#E5E9E7]">
                   <span className="text-base font-bold text-[#17201B]">Total Due</span>
-                  <span className="text-base font-bold text-[#17201B]">
-                    {isMultiBusinessCart && !groupFeesReady ? 'Calculating...' : formatCurrency(total)}
+                  <span className="text-base font-bold text-[#17201B]" data-testid="food-total-due">
+                    {isMultiBusinessCart && !groupFeesReady ? 'Calculating...' : formatCurrency(totalDue)}
                   </span>
                 </div>
+                {feeOnThisOrder && (
+                  <p className="text-[11px] text-[#8A5A00]">
+                    Includes your cancellation fee, which goes to the driver who accepted your cancelled ride{paymentMethod === 'cash' ? '. Pay it to your rider in cash with the order.' : '.'}
+                  </p>
+                )}
               </div>
 
               {/* Payment Method */}
@@ -1156,8 +1223,8 @@ export default function TouristFoodCart() {
                     <Smartphone className="w-5 h-5 text-white" />
                   </div>
                   <div className="flex-1">
-                    <p className="text-sm font-semibold text-blue-700">GCash</p>
-                    <p className="text-xs text-[#6B7280]">Pay securely online through GCash</p>
+                    <p className="text-sm font-semibold text-blue-700">GCash or QR Ph</p>
+                    <p className="text-xs text-[#6B7280]">Pay securely online: GCash, or scan a QR Ph code with Maya or your bank app</p>
                   </div>
                   <span className={`w-4 h-4 rounded-full border-2 ${paymentMethod === 'gcash' ? 'border-blue-600 bg-blue-600' : 'border-gray-300'}`} />
                 </button>
@@ -1181,6 +1248,13 @@ export default function TouristFoodCart() {
             </div>
 
             {/* Error */}
+            {priceNotice && (
+              <div role="status" className="flex items-start gap-3 p-3 bg-[#FFF7E0] border border-[#F2D58A] rounded-xl text-sm text-[#7A5600]">
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span className="flex-1">{priceNotice}</span>
+                <button type="button" onClick={() => setPriceNotice('')} aria-label="Dismiss price update" className="shrink-0"><X className="w-4 h-4" /></button>
+              </div>
+            )}
             {orderError && (
               <div className="flex items-start gap-3 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
                 <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
@@ -1216,12 +1290,12 @@ export default function TouristFoodCart() {
               className="w-full bg-[#087F3F] hover:bg-[#056B35] text-white py-3.5 rounded-xl font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed text-sm"
             >
               {checkoutPaymentMutation.isPending
-                ? 'Redirecting to GCash...'
+                ? 'Redirecting to PayMongo...'
                 : checkoutMutation.isPending
                   ? 'Placing Order...'
                   : paymentMethod === 'cash'
-                    ? `Place Cash Order (${isMultiBusinessCart ? 'Group Checkout' : formatCurrency(total)})`
-                    : `Pay with GCash (${isMultiBusinessCart ? 'Group Checkout' : formatCurrency(total)})`}
+                    ? `Place Cash Order (${isMultiBusinessCart ? 'Group Checkout' : formatCurrency(totalDue)})`
+                    : `Pay with GCash or QR Ph (${isMultiBusinessCart ? 'Group Checkout' : formatCurrency(totalDue)})`}
             </button>
 
             <p className="text-center text-[11px] text-[#9CA3AF]">
@@ -1250,10 +1324,10 @@ export default function TouristFoodCart() {
               </h3>
               <p className="text-sm text-[#6B7280] mt-2">
                 {paymentMethod === 'cash'
-                  ? <>Pay <span className="font-semibold text-[#17201B]">{formatCurrency(total)}</span> in cash {orderType === 'delivery' ? 'when your order is delivered' : 'when you pick up your order'}.</>
+                  ? <>Pay <span className="font-semibold text-[#17201B]">{formatCurrency(totalDue)}</span> in cash {orderType === 'delivery' ? 'when your order is delivered' : 'when you pick up your order'}.</>
                   : isMultiBusinessCart
-                    ? <>You will be redirected to GCash to complete a single payment for all {distinctBusinessIds.length} restaurants. Final amount is calculated at checkout.</>
-                    : <>You will be redirected to GCash to complete your payment of <span className="font-semibold text-[#17201B]">{formatCurrency(total)}</span>.</>}
+                    ? <>You will be redirected to PayMongo to pay with GCash or QR Ph: one payment for all {distinctBusinessIds.length} restaurants. Final amount is calculated at checkout.</>
+                    : <>You will be redirected to PayMongo to pay <span className="font-semibold text-[#17201B]">{formatCurrency(totalDue)}</span> with GCash or QR Ph.</>}
               </p>
             </div>
             <div className="flex gap-3">

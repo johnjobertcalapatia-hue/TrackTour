@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -8,6 +8,7 @@ vi.mock('@/shared/services/api', () => ({ ...api, API_BASE_URL: 'http://localhos
 
 import AdminLayout from '@/features/admin/components/AdminLayout'
 import AdminSectionTabs from '@/features/admin/components/AdminSectionTabs'
+import AdminSettingsLayout, { AdminSettingsHome } from '@/features/admin/components/AdminSettingsLayout'
 import { ADMIN_REDIRECTS, BUSINESSES_TABS, MUNICIPALITIES_TABS, SETTINGS_TABS, USERS_TABS } from '@/features/admin/sectionTabs'
 import { useAuthStore } from '@/features/auth/services/auth-store'
 
@@ -33,8 +34,8 @@ function renderAt(path: string) {
               <Route path="accounts" element={page('municipality accounts')} />
             </Route>
             <Route path="reports" element={page('reports')} />
-            <Route path="settings" element={<AdminSectionTabs label="Settings sections" title="Settings" tabs={SETTINGS_TABS} />}>
-              <Route index element={<Navigate to="configuration" replace />} />
+            <Route path="settings" element={<AdminSettingsLayout sections={SETTINGS_TABS} />}>
+              <Route index element={<AdminSettingsHome sections={SETTINGS_TABS} />} />
               <Route path="configuration" element={page('configuration')} />
               <Route path="access-control" element={page('roles')} />
               <Route path="document-verification" element={page('ocr')} />
@@ -68,7 +69,8 @@ describe('Bansud admin navigation (tourism-focused)', () => {
       'Tourism management': ['Businesses', 'Users', 'Riders', 'Rider Onboarding', 'Cashouts'],
       'Municipality management': ['Municipalities'],
       'Records & analytics': ['Reports', 'Audit Logs', 'Notifications'],
-      System: ['Office Profile', 'Settings'],
+      // System Notices (2026-11-23): the admin sends maintenance notices to owners, riders, tourists or everyone.
+      System: ['Office Profile', 'System Notices', 'Settings'],
     }
     for (const [group, items] of Object.entries(groups)) {
       const list = within(nav).getByText(group).nextElementSibling as HTMLElement
@@ -89,25 +91,43 @@ describe('Bansud admin navigation (tourism-focused)', () => {
     expect(within(screen.getByRole('navigation', { name: 'Admin navigation' })).getByRole('link', { name: 'Users' })).toHaveAttribute('aria-current', 'page')
   })
 
-  it('opens Settings on Platform Configuration with all system tabs', () => {
+  it('opens Settings as a page of buttons, one per settings area (no tab bar)', () => {
     renderAt('/admin/settings')
-    expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
-    expect(screen.getByText('configuration page')).toBeInTheDocument()
-    const tabs = screen.getByRole('navigation', { name: 'Settings sections' })
-    expect(within(tabs).getAllByRole('link').map((l) => l.textContent)).toEqual(['Platform Configuration', 'Access Control', 'Document Verification', 'Security', 'Data Backup', 'System Diagnostics', 'Incident History'])
+    expect(screen.getByRole('heading', { name: 'Settings', level: 1 })).toBeInTheDocument()
+    expect(screen.queryByText('configuration page')).toBeNull()
+    const buttons = within(screen.getByRole('navigation', { name: 'Settings sections' })).getAllByRole('link')
+    const labels = ['Platform Configuration', 'Access Control', 'Document Verification', 'Security', 'Data Backup', 'System Diagnostics', 'Incident History']
+    expect(buttons).toHaveLength(labels.length)
+    buttons.forEach((b, i) => expect(b.textContent).toMatch(new RegExp(`^${labels[i]}`)))
+    expect(within(screen.getByRole('navigation', { name: 'Admin navigation' })).getByRole('link', { name: 'Settings' })).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('a settings button opens its own page, with a way back to Settings', () => {
+    renderAt('/admin/settings')
+    fireEvent.click(screen.getByRole('link', { name: /^System Diagnostics/ }))
+    expect(screen.getByText('diagnostics page')).toBeInTheDocument()
+    expect(screen.queryByRole('navigation', { name: 'Settings sections' })).toBeNull()
+    expect(screen.getByRole('heading', { name: 'System Diagnostics', level: 1 })).toBeInTheDocument()
+
+    fireEvent.click(within(screen.getByRole('navigation', { name: 'Breadcrumb' })).getByRole('link', { name: 'Settings' }))
+    expect(screen.queryByText('diagnostics page')).toBeNull()
+    expect(screen.getByRole('navigation', { name: 'Settings sections' })).toBeInTheDocument()
   })
 
   it.each([
     ['/admin/settings/security', 'security', /preventing unauthorised access/],
     ['/admin/settings/diagnostics', 'diagnostics', /finding technical problems/],
     ['/admin/settings/incidents', 'incidents', /tracking problems and how they were fixed/],
-  ])('keeps the single Settings entry active on %s and says what the tab is for', (path, name, about) => {
+  ])('keeps the single Settings entry active on %s, with a back link and no tab bar', (path, name, about) => {
     renderAt(path)
     expect(screen.getByText(`${name} page`)).toBeInTheDocument()
     const sidebar = within(screen.getByRole('navigation', { name: 'Admin navigation' }))
     expect(sidebar.getByRole('link', { name: 'Settings' })).toHaveAttribute('aria-current', 'page')
     expect(sidebar.queryByRole('link', { name: /Security|Backup|Diagnostics|Incident History/ })).not.toBeInTheDocument()
-    expect(screen.getByLabelText(/: about this section$/)).toHaveTextContent(about)
+    expect(screen.queryByRole('navigation', { name: 'Settings sections' })).toBeNull()
+    expect(within(screen.getByRole('navigation', { name: 'Breadcrumb' })).getByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/admin/settings')
+    // Security has its own title; Diagnostics and Incident History get one (with what they are for) from the layout.
+    if (name !== 'security') expect(screen.getByRole('heading', { level: 1 }).parentElement).toHaveTextContent(about)
   })
 
   it.each([

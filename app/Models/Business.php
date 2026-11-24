@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\DiscoveryGroup;
 use App\Enums\PriceRange;
 use App\Services\RestaurantWalletService;
 use Illuminate\Database\Eloquent\Model;
@@ -388,8 +389,32 @@ class Business extends Model
         if ($this->force_closed) {
             return false;
         }
+        // Tourist attractions (falls, rivers, beaches, parks…) are always open;
+        // only an explicit "temporarily closed" (force_closed) closes them.
+        if ($this->isTouristAttraction()) {
+            return true;
+        }
 
         return $this->isWithinScheduleNow();
+    }
+
+    /**
+     * True when the business's category is a tourist attraction / spot. The
+     * attraction category ids are looked up once per request (not per
+     * business), so lists that append `is_open` stay a single query.
+     */
+    public function isTouristAttraction(): bool
+    {
+        if (! $this->business_category_id) {
+            return false;
+        }
+
+        $key = 'business.attraction_category_ids';
+        if (! app()->bound($key)) {
+            app()->instance($key, BusinessCategory::query()->inDiscoveryGroup(DiscoveryGroup::Spot)->pluck('id')->map(fn ($id) => (int) $id)->all());
+        }
+
+        return in_array((int) $this->business_category_id, app($key), true);
     }
 
     /**
@@ -494,6 +519,9 @@ class Business extends Model
     {
         if ($this->force_closed) {
             return ['status' => 'temporarily_closed', 'label' => 'Temporarily Closed'];
+        }
+        if ($this->isTouristAttraction()) {
+            return ['status' => 'open', 'label' => 'Always open'];
         }
         if ($this->isWithinScheduleNow()) {
             return ['status' => 'open', 'label' => 'Open now'];

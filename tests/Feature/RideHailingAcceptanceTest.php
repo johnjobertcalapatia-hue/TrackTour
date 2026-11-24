@@ -336,6 +336,25 @@ class RideHailingAcceptanceTest extends TestCase
         $this->assertSame('busy', $transportRider->riderDetail->fresh()->rider_status);
     }
 
+    public function test_an_accepted_ride_keeps_the_drivers_town_commission_rates(): void
+    {
+        // Earnings Stage 1 (§R2): a ride belongs to the driver's municipality.
+        $gloria = \App\Models\Municipality::create(['name' => 'Gloria', 'district' => '1st', 'province' => 'Oriental Mindoro']);
+        \App\Models\TourismSetting::create(['municipality_id' => $gloria->id, 'key' => 'commission.ride_driver_percent', 'value' => '50']);
+        $driver = $this->makeRider('ride-town@example.com', ['current_service' => 'transport', 'municipality_id' => $gloria->id]);
+        $this->setCandidates([$driver]);
+
+        $order = $this->createRide(['payment_method' => 'gcash']);
+        $this->assertSame(0, \App\Models\CommissionRateSnapshot::where('order_id', $order->id)->count(), 'no driver yet, no rates');
+
+        $this->assertTrue($this->service->handleRiderResponse($order->delivery->id, $driver->id, 'accepted')['success']);
+
+        $snapshot = \App\Models\CommissionRateSnapshot::where('order_id', $order->id)->sole();
+        $this->assertSame(\App\Models\CommissionRateSnapshot::CONTEXT_RIDE_ACCEPTED, $snapshot->context);
+        $this->assertSame($gloria->id, $snapshot->municipality_id);
+        $this->assertEquals(50, $snapshot->rates['ride_driver_percent']);
+    }
+
     // ---------- C ----------
 
     public function test_food_rider_is_not_offered_and_cannot_accept_a_ride(): void

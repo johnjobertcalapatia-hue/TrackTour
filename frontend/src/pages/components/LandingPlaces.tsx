@@ -33,12 +33,12 @@ const FALLBACKS = [
   'from-[#1D4E2A] to-[#B8860B]',
 ]
 
-/** Where a landing card leads: restaurants to their public food page. */
+/** Where a landing card leads: restaurants to their public food page, other businesses to their public place page. */
 export function landingCardLink(card: LandingCard): string {
   const [kind, id] = card.key.split('-')
   if (kind === 'spot') return `/tourist/destinations/${id}`
   if (card.types.includes('food')) return `/explore/food/${id}`
-  return `/tourist/explore/${id}`
+  return `/explore/place/${id}`
 }
 
 /** "Places to Discover": filter tabs over the live place cards. */

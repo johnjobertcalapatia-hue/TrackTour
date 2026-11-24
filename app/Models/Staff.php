@@ -4,12 +4,27 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Staff extends Model
 {
     use SoftDeletes;
+
+    /** Invited, not yet activated (cannot sign in). */
+    public const STATUS_PENDING = 'pending';
+
+    public const STATUS_ACTIVE = 'active';
+
+    /** Deactivated by the owner (cannot sign in). */
+    public const STATUS_INACTIVE = 'inactive';
+
+    /** Suspended by the owner (cannot sign in). */
+    public const STATUS_SUSPENDED = 'suspended';
+
+    /** Removed (soft-deleted). */
+    public const STATUS_ARCHIVED = 'archived';
 
     protected $fillable = [
         'business_id',
@@ -98,6 +113,45 @@ class Staff extends Model
         return $permission ? $permission->{$action} : false;
     }
 
+    public function invitations(): HasMany
+    {
+        return $this->hasMany(StaffInvitation::class);
+    }
+
+    public function activityLogs(): HasMany
+    {
+        return $this->hasMany(StaffActivityLog::class);
+    }
+
+    /** All roles held (an employee may have several; staff_role_id is the first). */
+    public function roles(): BelongsToMany
+    {
+        return $this->belongsToMany(StaffRole::class, 'staff_role_assignments')->withTimestamps();
+    }
+
+    /**
+     * Permission keys this staff member holds: the union of their roles'
+     * grants (plus the primary role's), catalogue keys only.
+     *
+     * @return list<string>
+     */
+    public function grantedPermissions(): array
+    {
+        $roleIds = $this->roles()->pluck('staff_roles.id')->push($this->staff_role_id)->filter()->unique();
+        $granted = StaffRolePermission::whereIn('staff_role_id', $roleIds)->pluck('permission');
+
+        return \App\Support\StaffPermissions::effective($granted);
+    }
+
+    /** @return list<string> role names, primary first */
+    public function roleNames(): array
+    {
+        $names = $this->roles()->orderBy('staff_role_assignments.id')->pluck('name')->all();
+        $primary = $this->staffRole?->name;
+
+        return array_values(array_unique(array_filter([$primary, ...$names])));
+    }
+
     public function getAccessibleModulesAttribute(): array
     {
         return $this->module_permissions ?? [];
@@ -105,7 +159,8 @@ class Staff extends Model
 
     public function getFullNameAttribute(): string
     {
-        $name = trim(($this->user->profile?->first_name ?? '').' '.($this->middle_name ?? '').' '.($this->user->profile?->last_name ?? ''));
+        // No double space where the middle name is missing ("Maria  Santos").
+        $name = trim(preg_replace('/\s+/', ' ', ($this->user->profile?->first_name ?? '').' '.($this->middle_name ?? '').' '.($this->user->profile?->last_name ?? '')));
 
         return $name ?: ($this->user->email ?? 'Unknown');
     }
@@ -130,6 +185,7 @@ class Staff extends Model
     public function getStatusLabelAttribute(): string
     {
         return match ($this->status) {
+            'pending' => 'Invitation pending',
             'active' => 'Active',
             'inactive' => 'Inactive',
             'suspended' => 'Suspended',
@@ -141,6 +197,7 @@ class Staff extends Model
     public function getStatusColorAttribute(): string
     {
         return match ($this->status) {
+            'pending' => 'amber',
             'active' => 'emerald',
             'inactive' => 'gray',
             'suspended' => 'red',

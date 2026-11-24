@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PickupStop, PickupStopsData } from '@/features/rider/pickup-stops'
-import { deliveryConditions, dropoffArrivalConditions, stepState, stopAction, stopConditions, tripStage } from '@/features/rider/trip-steps'
+import { deliveryConditions, dropoffArrivalConditions, stepState, stopAction, stopConditions, tripStage, withPhoneFixAtStop } from '@/features/rider/trip-steps'
 
 const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), patch: vi.fn(), del: vi.fn() }))
 vi.mock('@/shared/services/api', () => ({ ...api, apiErrorMessage: (_e: unknown, f: string) => f }))
@@ -126,6 +126,49 @@ describe('trip action conditions', () => {
     const left = { ...arrived, reason: 'too_far' as const, distance_meters: 300 }
     expect(stopConditions(left, stopsData([left])).find((c) => c.label.startsWith('Within'))).toEqual({ label: 'Within 50 m of the restaurant (you are 300 m away)', met: false })
     expect(stopConditions({ ...arrived, status: 'collected' }, stopsData([arrived]))).toEqual([])
+  })
+
+  it('Confirm Pick Up blocked by an imprecise GPS says so (not "turn on your location")', () => {
+    // The server only uses a SAVED fix (±50 m or better); a ±120 m phone is refused every time (2026-11-24).
+    const waiting = stop({ arrived_at: '2026-11-18T07:54:19Z', can_confirm: false, reason: 'gps_unavailable', distance_meters: null, payment_confirmed: true, is_ready: true, ready_label: 'ready' })
+    const line = (refusal: string | null, acc: number | null) => stopConditions(waiting, stopsData([waiting]), refusal, acc).find((c) => c.label.startsWith('Within'))!
+    expect(line('low_accuracy', 123.4)).toEqual({
+      label: 'Within 50 m of the restaurant: your GPS is not precise enough (now ±123 m). It needs ±50 m or better: turn on Precise location or step outside',
+      met: false,
+    })
+    expect(line('implausible_movement', null).label).toMatch(/jumped too far/)
+    // No refusal known: the old wording.
+    expect(line(null, null).label).toBe('Within 50 m of the restaurant (turn on your location)')
+    // Before arrival, the same explanation.
+    const notArrived = stop({ distance_meters: null, arrival_can_confirm: false, arrival_reason: 'gps_unavailable' })
+    expect(stopConditions(notArrived, stopsData([notArrived]), 'low_accuracy', 300)[0]!.label).toMatch(/not precise enough \(now ±300 m\)/)
+  })
+
+  it("the phone's own fix stands in at the restaurant up to ±200 m (owner decision 2026-11-24)", () => {
+    const now = Date.parse('2026-11-24T02:00:00Z')
+    // ~10 m north of the restaurant (12.8, 121.4).
+    const fix = (accuracy: number | null, ageMs = 2000, dLat = 0.00009) => ({ latitude: 12.8 + dLat, longitude: 121.4, accuracy, at: now - ageMs })
+    // Arrived, paid and ready: only the saved location is missing.
+    const waiting = stop({ arrived_at: '2026-11-18T07:54:19Z', can_confirm: false, reason: 'gps_unavailable', distance_meters: null, payment_confirmed: true })
+    const patched = withPhoneFixAtStop(stopsData([waiting]), fix(120), now).stops[0]!
+    expect(patched).toMatchObject({ can_confirm: true, reason: null, location_source: 'phone', phone_accuracy_m: 120, distance_meters: 10 })
+    expect(stopAction(patched, stopsData([patched]))).toMatchObject({ kind: 'pickup', enabled: true })
+    expect(stopConditions(patched, stopsData([patched])).every((c) => c.met)).toBe(true)
+    expect(stopConditions(patched, stopsData([patched])).at(-1)).toEqual({ label: 'Location checked from your phone (±120 m)', met: true })
+
+    // Not good enough: coarser than ±200 m, older than 30 s, outside 50 m, or no accuracy.
+    for (const bad of [fix(250), fix(40, 31_000), fix(40, 2000, 0.0009), fix(null)]) {
+      expect(withPhoneFixAtStop(stopsData([waiting]), bad, now).stops[0]).toBe(waiting)
+    }
+    // Never skips another gate: the food is not ready.
+    const notReady = { ...waiting, reason: 'waiting_ready' as const, is_ready: false, ready_label: 'preparing' as const }
+    expect(withPhoneFixAtStop(stopsData([notReady]), fix(40), now).stops[0]).toBe(notReady)
+    // Arrival the same way.
+    const notArrived = stop({ arrived_at: null, arrival_can_confirm: false, arrival_reason: 'gps_unavailable', distance_meters: null })
+    expect(withPhoneFixAtStop(stopsData([notArrived]), fix(150), now).stops[0]).toMatchObject({ arrival_can_confirm: true, arrival_reason: null, location_source: 'phone' })
+    // Only the current stop in route order.
+    const second = stop({ id: 2, business_id: 20, sequence: 2, arrived_at: null, arrival_can_confirm: false, arrival_reason: 'not_current' })
+    expect(withPhoneFixAtStop(stopsData([waiting, second]), fix(40), now).stops[1]).toBe(second)
   })
 
   it('drop-off: arrival within 50 m, delivery within 50 m plus the photo', () => {

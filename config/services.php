@@ -40,6 +40,10 @@ return [
         'public_key' => env('PAYMONGO_PUBLIC_KEY'),
         'webhook_secret' => env('PAYMONGO_WEBHOOK_SECRET'),
         'base_url' => env('PAYMONGO_BASE_URL', 'https://api.paymongo.com/v1'),
+        // What PayMongo's checkout page offers for an online payment (2026-11-18):
+        // GCash and QR Ph (scan with GCash, Maya or most bank apps). Set
+        // PAYMONGO_ONLINE_METHODS=gcash if the account has no QR Ph.
+        'online_methods' => array_values(array_filter(array_map('trim', explode(',', (string) env('PAYMONGO_ONLINE_METHODS', 'gcash,qrph'))))),
     ],
 
 ];

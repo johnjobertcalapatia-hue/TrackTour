@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
@@ -51,6 +52,34 @@ class Offering extends Model
     }
 
     const MINIMUM_RECORDS_FOR_PREDICTION = 5;
+
+    protected static function booted(): void
+    {
+        // Promotions Part A: a menu price change may not make a running or
+        // upcoming dish sale ₱0 or less (every menu edit path saves through here).
+        static::saving(function (Offering $offering) {
+            if (! $offering->exists || ! $offering->isDirty('price')) {
+                return;
+            }
+            $pricing = app(\App\Services\SalePricing::class);
+            $conflict = $offering->sales()
+                ->where('promotions.kind', Promotion::KIND_ITEM_SALE)
+                ->where('promotions.is_active', true)
+                ->where('promotions.end_date', '>=', now())
+                ->get(['promotions.id', 'promotions.name', 'promotions.type', 'promotions.value'])
+                ->first(fn (Promotion $sale) => $pricing->salePrice((float) $offering->price, (string) $sale->type, (float) $sale->value) < 0.01);
+            if ($conflict) {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'price' => "This price would make the sale \"{$conflict->name}\" ₱0 or less. Change or end the sale first.",
+                ]);
+            }
+        });
+    }
+
+    public function sales(): BelongsToMany
+    {
+        return $this->belongsToMany(Promotion::class, 'promotion_offering')->withTimestamps();
+    }
 
     public function scopeAvailable($q)
     {

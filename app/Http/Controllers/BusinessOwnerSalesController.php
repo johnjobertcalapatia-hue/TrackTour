@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ActsForBusiness;
 use App\Models\Payment;
 use App\Services\PaymongoService;
 use Illuminate\Http\JsonResponse;
@@ -10,6 +11,8 @@ use Illuminate\Support\Facades\DB;
 
 class BusinessOwnerSalesController extends Controller
 {
+    use ActsForBusiness;
+
     public function __construct(
         private PaymongoService $paymongo
     ) {}
@@ -21,7 +24,7 @@ class BusinessOwnerSalesController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $businessIds = $request->user()->businesses()->pluck('id');
+        $businessIds = $this->actingBusinessIds($request);
         $period = $request->get('period', 'today');
         $dates = $this->getDateRange($period);
 
@@ -70,7 +73,7 @@ class BusinessOwnerSalesController extends Controller
      */
     public function payments(Request $request): JsonResponse
     {
-        $businessIds = $request->user()->businesses()->pluck('id');
+        $businessIds = $this->actingBusinessIds($request);
         $page = $request->get('page', 1);
         $perPage = $request->get('perPage', 20);
         $status = $request->get('status');
@@ -119,7 +122,7 @@ class BusinessOwnerSalesController extends Controller
      */
     public function summary(Request $request): JsonResponse
     {
-        $businessIds = $request->user()->businesses()->pluck('id');
+        $businessIds = $this->actingBusinessIds($request);
 
         $todayStart = now()->startOfDay();
         $weekStart = now()->startOfWeek();

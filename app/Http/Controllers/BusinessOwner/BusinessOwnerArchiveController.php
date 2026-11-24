@@ -94,6 +94,12 @@ class BusinessOwnerArchiveController extends Controller
             default => abort(404, 'Unknown type'),
         };
 
+        // A dish sale is never restored: bringing it back would skip the
+        // overlap and price checks (Promotions Part A). Create a new sale instead.
+        if ($model instanceof Promotion && $model->isItemSale()) {
+            return $this->errorResponse('An archived dish sale cannot be restored. Create a new sale instead.', 422);
+        }
+
         $model->restore();
 
         return $this->successResponse(['message' => ucfirst($type) . ' restored successfully.']);
@@ -106,7 +112,8 @@ class BusinessOwnerArchiveController extends Controller
 
         $model = match ($type) {
             'offering' => Offering::whereIn('business_id', $businessIds)->findOrFail($id),
-            'promotion' => Promotion::whereIn('business_id', $businessIds)->findOrFail($id),
+            // Dish sales are archived from the Sales tab (it locks the dishes first).
+            'promotion' => Promotion::labels()->whereIn('business_id', $businessIds)->findOrFail($id),
             'order' => Order::whereIn('business_id', $businessIds)->findOrFail($id),
             'booking' => Booking::whereIn('business_id', $businessIds)->findOrFail($id),
             'staff' => Staff::whereIn('business_id', $businessIds)->findOrFail($id),

@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   Activity, Bike, ClipboardCheck, FileBarChart, FileCheck2, LayoutDashboard, Landmark, LogOut, Menu, Settings, Store, UserCheck, Users, X,
   type LucideIcon,
+  Percent,
 } from 'lucide-react'
 import { get } from '@/shared/services/api'
 import { useAuthStore } from '@/features/auth/services/auth-store'
@@ -69,6 +70,8 @@ export default function MunicipalLayout() {
         { to: '/municipal/activity-logs', label: 'Activity Logs', icon: Activity },
       ],
     },
+    // Earnings Stage 1 (2026-11-24): this town's own commission rates.
+    { label: 'Finance', items: [{ to: '/municipal/commission-rates', label: 'Commission Rates', icon: Percent }] },
     { label: 'Office', items: [{ to: '/municipal/profile', label: 'Profile & Settings', icon: Settings }] },
   ]
 
@@ -169,7 +172,9 @@ export default function MunicipalLayout() {
       )}
 
       <div className="lg:pl-64">
-        <header className="sticky top-0 z-20 bg-[#FAF7F0]/90 backdrop-blur border-b border-[#E7E2D6]">
+        {/* z-40: above the pages' own sticky bars (z-20, e.g. Office Profile's Save changes),
+            so the account menu that opens from this header is never covered. */}
+        <header className="sticky top-0 z-40 bg-[#FAF7F0]/90 backdrop-blur border-b border-[#E7E2D6]">
           <div className="flex items-center gap-3 px-4 sm:px-6 lg:px-8 h-16">
             <button
               type="button"

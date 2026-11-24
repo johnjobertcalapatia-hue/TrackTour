@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import HoldToSendButton from '@/shared/components/HoldToSendButton'
 import { CheckCircle2, MessageCircle, Phone, Share2, ShieldAlert, Star, X } from 'lucide-react'
 import { cn, formatCurrency, toAssetUrl } from '@/shared/utils'
 import { rideVehicleIcon } from './vehicleIcon'
@@ -217,17 +218,18 @@ export function InTripStats({ minutes, km }: { minutes: number | null; km: numbe
   )
 }
 
-export function SafetyActions({ onSos, onShare, showSos }: { onSos: () => void; onShare: () => void; showSos: boolean }) {
+/** SOS (2026-11-18): hold for 3 seconds to alert the Bansud Tourism Office. */
+export function SafetyActions({ onSos, onShare, showSos, sosPending = false }: { onSos: () => void; onShare: () => void; showSos: boolean; sosPending?: boolean }) {
   return (
     <div className={cn('grid gap-3', showSos ? 'grid-cols-2' : 'grid-cols-1')}>
       {showSos && (
-        <button
-          type="button"
-          onClick={onSos}
-          className="flex h-12 items-center justify-center gap-2 rounded-full bg-[#DC2626] text-base font-bold text-white shadow hover:bg-[#B91C1C]"
-        >
-          <ShieldAlert className="h-5 w-5" aria-hidden="true" /> SOS
-        </button>
+        <HoldToSendButton
+          ariaLabel="SOS: hold for 3 seconds to alert the Tourism Office"
+          onComplete={onSos}
+          disabled={sosPending}
+          className="h-12 rounded-full bg-[#DC2626] text-base font-bold text-white shadow hover:bg-[#B91C1C] disabled:opacity-70"
+          label={<><ShieldAlert className="h-5 w-5" aria-hidden="true" /> {sosPending ? 'Sending…' : 'Hold for SOS'}</>}
+        />
       )}
       <button
         type="button"

@@ -1098,6 +1098,9 @@ class NearestRiderService
             ['rider_status' => 'busy', 'rider_status_updated_at' => now()]
         );
 
+        // Earnings Stage 1 (§R2): a ride keeps the driver's town commission rates.
+        app(CommissionRateSettings::class)->captureRide($lockedDelivery, $riderId);
+
         // Purchasing-cash flow: create the per-restaurant cod_purchases
         // stops atomically with the assignment so the Tourism Office can
         // issue the purchasing cash immediately (idempotent).

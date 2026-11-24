@@ -285,7 +285,7 @@ class RiderEarningLedger
     public static function commissionRule(?Order $order): ?string
     {
         return match (self::service($order)) {
-            'ride' => 'max(₱20, 40% of fare)',
+            'ride' => 'max(₱20, 40% of fare), at most the fare',
             'food' => 'full delivery fee (before any delivery-fee promotion)',
             default => null,
         };

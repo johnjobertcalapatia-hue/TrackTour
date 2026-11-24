@@ -260,6 +260,12 @@ export default function BusinessOwnerBusinessGallery() {
   }, [businessId, urlId, navigate])
 
   const [mode, setMode] = useState<'edit' | 'preview'>('edit')
+  const topRef = useRef<HTMLDivElement>(null)
+  // "View More" on the Customer Preview card: switch to Preview Mode and go to the top.
+  const showPreview = () => {
+    setMode('preview')
+    topRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+  }
   const [activeTab, setActiveTab] = useState<TabKey>('about')
   const [draft, setDraft] = useState<ProfileDraft>(emptyDraft())
   const [signatureDishes, setSignatureDishes] = useState<string[]>([])
@@ -778,7 +784,7 @@ const categoryName = categories.find((c) => c.id === draft.business_category_id)
         </div>
       )}
 
-      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 mb-6">
+      <div ref={topRef} className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 mb-6 scroll-mt-4">
         <div>
           <Link to="/business-owner/businesses" className="inline-flex items-center gap-2 text-sm text-[#4B5563] hover:text-[#16803C] mb-3 transition">
             <ArrowLeft className="w-4 h-4" /> Back to Businesses
@@ -1236,8 +1242,11 @@ const categoryName = categories.find((c) => c.id === draft.business_category_id)
           <div className="bg-white rounded-2xl border border-[#E5E7EB] shadow-[0_1px_3px_rgba(0,0,0,0.1)] overflow-hidden">
             <div className="p-4 border-b border-[#E5E7EB] flex items-center justify-between gap-2">
               <h2 className="text-sm font-semibold text-[#111827] flex items-center gap-2"><Eye className="w-4 h-4 text-[#16803C]" /> Customer Preview</h2>
-              <a href={`/tourist/explore/${businessId}`} target="_blank" rel="noopener noreferrer"
-                className="text-xs font-semibold text-[#16803C] hover:underline whitespace-nowrap">View More</a>
+              {/* Shows the full customer view here (Preview Mode); the tourist app is not for owner accounts. */}
+              {mode === 'edit' && (
+                <button type="button" onClick={showPreview}
+                  className="text-xs font-semibold text-[#16803C] hover:underline whitespace-nowrap">View More</button>
+              )}
             </div>
             <div className="p-4">
               <div className="rounded-xl border border-[#E5E7EB] overflow-hidden">

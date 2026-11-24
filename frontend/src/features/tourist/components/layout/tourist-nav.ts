@@ -15,6 +15,9 @@ export interface TouristNavItem {
 /** Single source of truth for the tourist sidebar and the mobile bottom bar. */
 export const TOURIST_NAV_ITEMS: TouristNavItem[] = [
   { to: '/tourist/dashboard', label: 'Home', shortLabel: 'Home', icon: Home },
+  { to: '/tourist/food', label: 'Food & Dining', shortLabel: 'Food', icon: UtensilsCrossed },
+  { to: '/tourist/stays', label: 'Stays', shortLabel: 'Stays', icon: BedDouble },
+  // Explore is the middle button (4th of 7) (2026-11-24).
   {
     to: '/tourist/explore',
     label: 'Explore',
@@ -22,8 +25,9 @@ export const TOURIST_NAV_ITEMS: TouristNavItem[] = [
     icon: Compass,
     alsoActive: ['/tourist/search', '/tourist/directory', '/tourist/destinations', '/tourist/municipality', '/tourist/events'],
   },
-  { to: '/tourist/food', label: 'Food & Dining', shortLabel: 'Food', icon: UtensilsCrossed },
-  { to: '/tourist/stays', label: 'Stays', shortLabel: 'Stays', icon: BedDouble },
+  // Ride hailing (2026-11-10: replaced the Saved tab, named Transport; Saved stays on the header heart button).
+  { to: '/tourist/transport', label: 'Transport', shortLabel: 'Transport', icon: Bike },
+  // Back in the bar after Transport (2026-11-24); Profile also links to it.
   {
     to: '/tourist/activities',
     label: 'My Activities',
@@ -31,8 +35,6 @@ export const TOURIST_NAV_ITEMS: TouristNavItem[] = [
     icon: ClipboardList,
     alsoActive: ['/tourist/orders', '/tourist/trips', '/tourist/booking', '/tourist/history', '/tourist/reviews'],
   },
-  // Ride hailing (2026-11-10: replaced the Saved tab, named Transport; Saved stays on the header heart button).
-  { to: '/tourist/transport', label: 'Transport', shortLabel: 'Transport', icon: Bike },
   { to: '/tourist/profile', label: 'Profile', shortLabel: 'Profile', icon: User },
 ]
 

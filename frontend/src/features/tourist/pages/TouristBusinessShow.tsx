@@ -1,4 +1,5 @@
 import { useMemo, useState, useEffect } from 'react'
+import { SalePrice, type DishSale } from '@/shared/components/SalePrice'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { get, post } from '@/shared/services/api'
@@ -14,6 +15,8 @@ interface Offering {
   id: number
   name: string
   price: number | string
+  original_price?: number | string | null
+  sale?: DishSale | null
   description?: string
   image: string | null
   is_available: boolean
@@ -380,7 +383,7 @@ function FoodCard({ item, onOpen, onAdd }: { item: Offering; onOpen: () => void;
         <h3 className="text-[15px] font-semibold text-white leading-tight line-clamp-1">{item.name}</h3>
         <div className="flex items-center justify-between mt-1.5">
           <div className="min-w-0">
-            <p className="text-sm font-bold text-brand-light">{formatCurrency(Number(item.price))}</p>
+            <p className="text-sm"><SalePrice price={item.price} original_price={item.original_price} sale={item.sale} className="font-bold text-brand-light" compact /></p>
             {rating > 0 && (
               <p className="flex items-center gap-0.5 text-[11px] text-muted">
                 <Star className="w-2.5 h-2.5 text-gold fill-current" /> {rating.toFixed(1)}
@@ -455,7 +458,7 @@ function ProductModal({ item, onAdd, onClose }: { item: Offering; onAdd: (qty: n
         <div className="p-5">
           <div className="flex items-center gap-3">
             <h2 className="text-xl font-bold text-white flex-1">{item.name}</h2>
-            <p className="text-lg font-bold text-brand-light">{formatCurrency(Number(item.price))}</p>
+            <p className="text-lg"><SalePrice price={item.price} original_price={item.original_price} sale={item.sale} className="font-bold text-brand-light" /></p>
           </div>
           {rating > 0 && (
             <div className="flex items-center gap-1.5 mt-2 text-gold">

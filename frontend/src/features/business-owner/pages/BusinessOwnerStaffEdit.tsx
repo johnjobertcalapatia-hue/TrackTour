@@ -9,6 +9,7 @@ import { usePersistFormRHF } from '@/shared/hooks/use-persist-form-rhf'
 import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { ArrowLeft, Save, Upload, UserRoundPen } from 'lucide-react'
+import { RolePicker, type RoleOption } from '../components/staff/RolePicker'
 
 const schema = z.object({
   first_name: z.string().min(2, 'First name must be at least 2 characters'),
@@ -19,8 +20,7 @@ const schema = z.object({
   date_of_birth: z.string().optional().or(z.literal('')),
   mobile_number: z.string().optional(),
   email: z.string().email('Invalid email address'),
-  password: z.string().optional().or(z.literal('')),
-  staff_role_id: z.coerce.number().min(1, 'Staff role selection is required'),
+  staff_role_ids: z.array(z.coerce.number()).min(1, 'Choose at least one role'),
   date_hired: z.string().optional().or(z.literal('')),
   salary_type: z.string().optional(),
   employment_status: z.string().optional(),
@@ -44,6 +44,7 @@ interface StaffMember {
   profile_picture: string | null
   staff_role: { id: number; name: string } | null
   staff_role_id: number
+  role_ids?: number[]
   department: string | null
   is_active: boolean
   status: string
@@ -93,7 +94,7 @@ export default function BusinessOwnerStaffEdit() {
     defaultValues: {},
   })
 
-  const { register, handleSubmit, reset, formState: { errors } } = form
+  const { register, handleSubmit, reset, watch, setValue, formState: { errors } } = form
 
   const { clearDraft } = usePersistFormRHF({
     draftKey: 'bo-staff-edit',
@@ -112,8 +113,7 @@ export default function BusinessOwnerStaffEdit() {
         date_of_birth: staff.date_of_birth ? staff.date_of_birth.substring(0, 10) : '',
         mobile_number: staff.mobile_number ?? '',
         email: staff.email ?? '',
-        password: '',
-        staff_role_id: staff.staff_role?.id ?? staff.staff_role_id ?? 0,
+        staff_role_ids: staff.role_ids?.length ? staff.role_ids : [staff.staff_role?.id ?? staff.staff_role_id].filter(Boolean) as number[],
         date_hired: staff.date_hired ? staff.date_hired.substring(0, 10) : '',
         salary_type: staff.salary_type ?? 'monthly',
         employment_status: staff.employment_status ?? 'full_time',
@@ -140,7 +140,10 @@ export default function BusinessOwnerStaffEdit() {
     mutationFn: (data: FormData) => {
       const formData = new FormData()
       Object.entries(data).forEach(([key, val]) => {
-        if (val !== undefined && val !== null && val !== '') {
+        if (Array.isArray(val)) {
+          // staff_role_ids[]: one or more roles (Staff Management section 5)
+          val.forEach((v) => formData.append(`${key}[]`, String(v)))
+        } else if (val !== undefined && val !== null && val !== '') {
           formData.append(key, val as any)
         }
       })
@@ -168,7 +171,10 @@ export default function BusinessOwnerStaffEdit() {
   if (isLoading) return <DashboardSkeleton />
   if (!staff) return <div className="text-center py-20 text-[#647067]">Staff member not found.</div>
 
-  const roleList = roles ?? []
+  const offered: RoleOption[] = roles ?? []
+  const roleList: RoleOption[] = staff?.staff_role && !offered.some((r) => r.id === staff.staff_role!.id)
+    ? [...offered, staff.staff_role]
+    : offered
 
   return (
     <div className="max-w-4xl mx-auto">
@@ -279,14 +285,12 @@ export default function BusinessOwnerStaffEdit() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-[#4B5563] mb-1.5">Staff Role (System Access)</label>
-                <select {...register('staff_role_id')} className="w-full px-4 py-3 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition">
-                  <option value="">Select staff role</option>
-                  {roleList.map((r) => (
-                    <option key={r.id} value={r.id}>{r.name}</option>
-                  ))}
-                </select>
-                {errors.staff_role_id && <p className="text-[#B91C1C] text-xs mt-1">{errors.staff_role_id.message}</p>}
+                <RolePicker
+                  roles={roleList}
+                  value={watch('staff_role_ids') ?? []}
+                  onChange={(ids) => setValue('staff_role_ids', ids, { shouldValidate: true, shouldDirty: true })}
+                  error={errors.staff_role_ids?.message}
+                />
               </div>
 
               {/* Contact */}
@@ -307,14 +311,10 @@ export default function BusinessOwnerStaffEdit() {
                 <textarea {...register('address')} rows={2} placeholder="Complete home address" className="w-full px-4 py-3 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition resize-none" />
               </div>
 
-              {/* Security/Password */}
-              <h3 className="text-base font-semibold text-[#17201A] border-b border-[#E2E8E3] pt-4 pb-2">Change Password</h3>
-              <p className="text-xs text-[#647067] mb-4">Leave password blank if you do not want to change it.</p>
-              <div>
-                <label className="block text-sm font-medium text-[#4B5563] mb-1.5">New Password</label>
-                <input {...register('password')} type="password" placeholder="Minimum 8 characters" className="w-full px-4 py-3 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition" />
-                {errors.password && <p className="text-[#B91C1C] text-xs mt-1">{errors.password.message}</p>}
-              </div>
+              {/* Staff Stage 1: the owner never sets a staff password. */}
+              <p className="text-xs text-[#647067] pt-2">
+                To help a staff member who forgot their password, use "Send password reset link" on their profile.
+              </p>
             </div>
 
             <div className="flex items-center justify-end gap-3">

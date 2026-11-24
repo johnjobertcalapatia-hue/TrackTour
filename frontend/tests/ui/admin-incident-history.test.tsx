@@ -183,7 +183,16 @@ describe('Incident History', () => {
     expect(within(dialog.getByRole('region', { name: 'Responsible action' })).getByText('Handled by Office.')).toBeInTheDocument()
     expect(dialog.queryByRole('button', { name: 'Mark as fixed' })).not.toBeInTheDocument()
 
+    // Reopen asks first (a double-click on "Save as fixed" used to land on Reopen).
     fireEvent.click(dialog.getByRole('button', { name: /Reopen/ }))
+    expect(api.post).not.toHaveBeenCalledWith('/admin/system/incidents/1/reopen', {})
+    const confirm = within(dialog.getByRole('group', { name: 'Confirm reopen' }))
+    fireEvent.click(confirm.getByRole('button', { name: 'Cancel' }))
+    expect(dialog.queryByRole('group', { name: 'Confirm reopen' })).toBeNull()
+    expect(api.post).not.toHaveBeenCalledWith('/admin/system/incidents/1/reopen', {})
+
+    fireEvent.click(dialog.getByRole('button', { name: /Reopen/ }))
+    fireEvent.click(within(dialog.getByRole('group', { name: 'Confirm reopen' })).getByRole('button', { name: /Yes, reopen/ }))
     await waitFor(() => expect(api.post).toHaveBeenCalledWith('/admin/system/incidents/1/reopen', {}))
   })
 })

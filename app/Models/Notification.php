@@ -12,6 +12,7 @@ class Notification extends Model
         'title',
         'message',
         'type',
+        'data',
         'read_at',
     ];
 
@@ -19,6 +20,7 @@ class Notification extends Model
     {
         return [
             'read_at' => 'datetime',
+            'data' => 'array',
         ];
     }
 

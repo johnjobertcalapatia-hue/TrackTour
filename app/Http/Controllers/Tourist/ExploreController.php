@@ -405,6 +405,8 @@ class ExploreController extends Controller
         $foods = $foodsQuery
             ->take(5)
             ->values()
+            // Promotions Part A: show the price the tourist pays now.
+            ->tap(fn ($foods) => app(\App\Services\SalePricing::class)->decorateForTourists($foods))
             ->map(fn ($food) => [
                 'id' => $food->id,
                 'business_id' => $food->business_id,
@@ -531,6 +533,8 @@ class ExploreController extends Controller
                 ->sortBy(fn ($food) => $this->distanceTo((string) $lat, (string) $lng, $food->business) ?? PHP_FLOAT_MAX)
                 ->take(8)
                 ->values()
+                // Promotions Part A: show the price the tourist pays now.
+                ->tap(fn ($foods) => app(\App\Services\SalePricing::class)->decorateForTourists($foods))
                 ->map(function ($food) use ($lat, $lng) {
                     return [
                         'kind' => 'food',
@@ -741,13 +745,16 @@ class ExploreController extends Controller
             ->with(['category'])
             ->orderByDesc('bestseller')
             ->orderBy('sort_order')
-            ->get(['id', 'business_id', 'name', 'description', 'price', 'image', 'is_available', 'bestseller'])
+            ->get(['id', 'business_id', 'name', 'description', 'price', 'image', 'is_available', 'bestseller']);
+        // Promotions Part A: the price the tourist pays now (one query for every dish's sale).
+        $menuQuotes = app(\App\Services\SalePricing::class)->quoteMany($menuByBusiness);
+        $menuByBusiness = $menuByBusiness
             ->groupBy('business_id')
             ->map(fn ($items) => $items->values()->map(fn ($o) => [
                 'id' => $o->id,
                 'name' => $o->name,
                 'description' => $o->description,
-                'price' => (float) $o->price,
+                ...\App\Services\SalePricing::presentFields($menuQuotes[$o->id]),
                 'image' => $o->image,
                 'bestseller' => (bool) $o->bestseller,
                 'category' => $o->category?->name,
@@ -832,13 +839,16 @@ class ExploreController extends Controller
             ->with('category')
             ->orderByDesc('bestseller')
             ->orderBy('sort_order')
-            ->get(['id', 'business_id', 'name', 'description', 'price', 'image', 'is_available', 'bestseller'])
+            ->get(['id', 'business_id', 'name', 'description', 'price', 'image', 'is_available', 'bestseller']);
+        // Promotions Part A: the price the tourist pays now (one query for every dish's sale).
+        $menuQuotes = app(\App\Services\SalePricing::class)->quoteMany($menuByBusiness);
+        $menuByBusiness = $menuByBusiness
             ->groupBy('business_id')
             ->map(fn ($items) => $items->values()->map(fn ($offering) => [
                 'id' => $offering->id,
                 'name' => $offering->name,
                 'description' => $offering->description,
-                'price' => (float) $offering->price,
+                ...\App\Services\SalePricing::presentFields($menuQuotes[$offering->id]),
                 'image' => $offering->image,
                 'bestseller' => (bool) $offering->bestseller,
                 'category' => $offering->category?->name,
@@ -910,11 +920,13 @@ class ExploreController extends Controller
             ->orderBy('sort_order')
             ->get();
 
+        // Promotions Part A: what the tourist pays now (dish sale price while one runs).
+        $quotes = app(\App\Services\SalePricing::class)->quoteMany($offerings);
         $menuItems = $offerings->map(fn ($o) => [
             'id' => $o->id,
             'name' => $o->name,
             'description' => $o->description,
-            'price' => (float) $o->price,
+            ...\App\Services\SalePricing::presentFields($quotes[$o->id]),
             'image' => $o->image,
             'is_available' => (bool) $o->is_available,
             'category' => $o->category?->name,
@@ -926,6 +938,8 @@ class ExploreController extends Controller
             ->with(['offerings' => fn ($q) => $q->where('is_available', true)->orderByDesc('bestseller')->orderBy('sort_order')])
             ->orderBy('sort_order')
             ->get();
+
+        app(\App\Services\SalePricing::class)->decorateForTourists($offerings->concat($offeringCategories->flatMap->offerings));
 
         $gallery = $business->media;
 

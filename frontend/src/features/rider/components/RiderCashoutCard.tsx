@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Banknote, Clock, ShieldCheck, Wallet } from 'lucide-react'
+import { Banknote, Clock, HandCoins, ShieldCheck, Wallet } from 'lucide-react'
 import { apiErrorMessage, get, post } from '@/shared/services/api'
 import { formatCurrency, formatDateTime } from '@/shared/utils'
+import type { CompensationPayout, EarningsStatement } from '@/features/compensation/types'
 
 interface Available {
   earnings: { earning_id: number; reference: string | null; type: 'food' | 'ride'; amount: number }[]
@@ -25,6 +26,8 @@ interface CashoutRow {
   payment_reference: string | null
   rejection_reason: string | null
   failure_reason: string | null
+  /** Stage D2: cancellation compensation paid with this cashout. */
+  compensation_payout?: CompensationPayout | null
 }
 
 export const CASHOUT_STATUS: Record<CashoutRow['status'], { label: string; tone: string }> = {
@@ -55,10 +58,15 @@ export function RiderCashoutCard() {
 
   const available = useQuery({ queryKey: ['rider-cashout-available'], queryFn: () => get<Available>('/rider/payouts/available') })
   const history = useQuery({ queryKey: ['rider-cashouts'], queryFn: () => get<{ data: CashoutRow[] }>('/rider/payouts') })
+  // Stage D2: cancellation compensation is cashed out with the earnings (or on its own).
+  const statement = useQuery({ queryKey: ['rider-earnings-statement'], queryFn: () => get<EarningsStatement>('/rider/earnings-statement') })
+  const compPayouts = useQuery({ queryKey: ['rider-compensation-payouts'], queryFn: () => get<CompensationPayout[]>('/rider/compensation-payouts') })
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ['rider-cashout-available'] })
     void queryClient.invalidateQueries({ queryKey: ['rider-cashouts'] })
+    void queryClient.invalidateQueries({ queryKey: ['rider-earnings-statement'] })
+    void queryClient.invalidateQueries({ queryKey: ['rider-compensation-payouts'] })
   }
 
   const request = useMutation({
@@ -76,6 +84,15 @@ export function RiderCashoutCard() {
     onError: (e) => setNotice({ type: 'error', text: apiErrorMessage(e, 'Could not request the cashout.') }),
   })
 
+  const cancelCompensation = useMutation({
+    mutationFn: (id: number) => post(`/rider/compensation-payouts/${id}/cancel`),
+    onSuccess: () => {
+      setNotice({ type: 'success', text: 'Request cancelled. The compensation is available again.' })
+      refresh()
+    },
+    onError: (e) => setNotice({ type: 'error', text: apiErrorMessage(e, 'Could not cancel the request.') }),
+  })
+
   const cancel = useMutation({
     mutationFn: (id: number) => post(`/rider/payouts/${id}/cancel`),
     onSuccess: () => {
@@ -87,7 +104,11 @@ export function RiderCashoutCard() {
 
   const rows = history.data?.data ?? []
   const open = rows.find((r) => OPEN.includes(r.status))
-  const total = available.data?.total ?? 0
+  const compensationReady = statement.data?.payable_now?.cancellation_compensation ?? 0
+  const total = (available.data?.total ?? 0) + compensationReady
+  // A compensation-only request (no earnings cashout).
+  const openCompOnly = (Array.isArray(compPayouts.data) ? compPayouts.data : []).find((p) => p.rider_payout_id === null && OPEN.includes(p.status as CashoutRow['status']))
+  const canRequest = !!available.data?.payable || compensationReady > 0
 
   return (
     <section aria-label="Cash out" className="mb-6 rounded-2xl border border-[#CFE8D6] bg-white p-4">
@@ -113,6 +134,12 @@ export function RiderCashoutCard() {
           {available.data?.earnings.length ?? 0} verified online {available.data?.earnings.length === 1 ? 'earning' : 'earnings'}: paid by the customer
           online and trip completed.
         </li>
+        {compensationReady > 0 && (
+          <li className="flex items-center gap-1.5" data-testid="cashout-compensation">
+            <HandCoins className="h-3.5 w-3.5 text-[#16803C]" aria-hidden="true" />
+            {formatCurrency(compensationReady)} cancellation compensation: tourists who cancelled after you accepted paid the fee. Cashed out with your earnings.
+          </li>
+        )}
         {(available.data?.cash_total ?? 0) > 0 && (
           <li className="flex items-center gap-1.5">
             <Banknote className="h-3.5 w-3.5 text-[#92400E]" aria-hidden="true" />
@@ -134,11 +161,31 @@ export function RiderCashoutCard() {
         </p>
       )}
 
-      {open ? (
+      {openCompOnly && !open ? (
         <div className="mt-3 rounded-xl border border-[#E5E9E7] bg-[#F6F8F4] p-3" data-testid="cashout-open">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm font-semibold text-[#17201B]">
-              {open.payout_number} · {formatCurrency(open.amount)}
+              {openCompOnly.payout_number} · {formatCurrency(openCompOnly.amount)} cancellation compensation
+            </p>
+            <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${CASHOUT_STATUS[openCompOnly.status as CashoutRow['status']].tone}`}>{CASHOUT_STATUS[openCompOnly.status as CashoutRow['status']].label}</span>
+          </div>
+          {openCompOnly.status === 'pending' && (
+            <button
+              type="button"
+              onClick={() => cancelCompensation.mutate(openCompOnly.id)}
+              disabled={cancelCompensation.isPending}
+              className="mt-2 rounded-lg border border-[#D7E2DC] px-3 py-1.5 text-xs font-semibold text-[#17201B] hover:bg-white disabled:opacity-50"
+            >
+              Cancel request
+            </button>
+          )}
+        </div>
+      ) : open ? (
+        <div className="mt-3 rounded-xl border border-[#E5E9E7] bg-[#F6F8F4] p-3" data-testid="cashout-open">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-sm font-semibold text-[#17201B]">
+              {open.payout_number} · {formatCurrency(open.amount + (open.compensation_payout?.amount ?? 0))}
+              {open.compensation_payout && <span className="block text-xs font-normal text-[#6B7280]">earnings {formatCurrency(open.amount)} + cancellation compensation {formatCurrency(open.compensation_payout.amount)}</span>}
             </p>
             <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${CASHOUT_STATUS[open.status].tone}`}>{CASHOUT_STATUS[open.status].label}</span>
           </div>
@@ -197,14 +244,14 @@ export function RiderCashoutCard() {
           </label>
           <button
             type="submit"
-            disabled={!available.data?.payable || request.isPending || gcash.trim() === '' || name.trim() === ''}
+            disabled={!canRequest || request.isPending || gcash.trim() === '' || name.trim() === ''}
             className="rounded-lg bg-[#16803C] px-4 py-2.5 text-sm font-semibold text-white hover:bg-[#126B32] disabled:opacity-50 sm:col-span-3"
           >
             {request.isPending ? 'Requesting…' : 'Request cashout'}
           </button>
           <p className="text-[11px] text-[#6B7280] sm:col-span-3">
-            The request takes your oldest earnings up to the amount (whole earnings only). The Tourism Office checks each one against its
-            order and payment before sending the money.
+            The request takes your oldest earnings up to the amount (whole earnings only), plus all cancellation compensation that is ready.
+            The Tourism Office checks each one against its order and payment before sending the money.
           </p>
         </form>
       )}

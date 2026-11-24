@@ -4,21 +4,22 @@ import { get } from '@/shared/services/api'
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import { AppProviders } from '@/app/providers'
 import ProtectedRoute from '@/shared/components/ProtectedRoute'
+import BusinessOwnerShell from '@/features/business-owner/components/shell/BusinessOwnerShell'
 import DashboardLayout from '@/shared/layouts/DashboardLayout'
 import TouristLayout from '@/shared/layouts/TouristLayout'
 import MunicipalLayout from '@/features/municipal/components/MunicipalLayout'
 import AdminLayout from '@/features/admin/components/AdminLayout'
 import AdminSectionTabs from '@/features/admin/components/AdminSectionTabs'
+import AdminSettingsLayout, { AdminSettingsHome } from '@/features/admin/components/AdminSettingsLayout'
 import { ADMIN_REDIRECTS, BUSINESSES_TABS, MUNICIPALITIES_TABS, RIDERS_TABS, SETTINGS_TABS, USERS_TABS } from '@/features/admin/sectionTabs'
 import { RiderOnboardingGate } from '@/features/onboarding/components/RiderOnboardingGate'
-import BusinessSwitcher from '@/features/business-owner/components/BusinessSwitcher'
 import { useBusinessOwnerStore } from '@/features/business-owner/services/business-owner-store'
 import { useAuthStore } from '@/features/auth/services/auth-store'
 import {
   LayoutDashboard, MapPin, Building2, Tag, Map, Shield, FileBarChart, Bell,
   Settings, Navigation, Compass, UtensilsCrossed, CalendarCheck, Car,
   Calendar, Heart, Star, Clock, MessageSquare, User, ClipboardList,
-  Package, BookOpen, Percent, BarChart3, Activity, ShoppingCart, UserPlus,
+  Package, BookOpen, BarChart3, Activity, ShoppingCart, UserPlus,
   Megaphone, FileText, Wallet, CreditCard, ChefHat, CalendarDays,
   BedDouble, Image, Home, ClipboardCheck, DollarSign, Archive, Eye,
   Settings2
@@ -33,6 +34,7 @@ import RiderRegisterPage from '@/features/auth/pages/RiderRegisterPage'
 import LandingPage from '@/pages/LandingPage'
 import LandingExplorePage from '@/pages/LandingExplorePage'
 import LandingRestaurantPage from '@/pages/LandingRestaurantPage'
+import LandingPlacePage from '@/pages/LandingPlacePage'
 import LandingFoodItemPage from '@/pages/LandingFoodItemPage'
 import LandingAllCategoriesPage from '@/pages/LandingAllCategoriesPage'
 import LandingMunicipalityPage from '@/pages/LandingMunicipalityPage'
@@ -47,6 +49,7 @@ const lazy_ = (factory: () => Promise<{ default: React.ComponentType }>) => {
 // --- Auth (lazy) ---
 const ForgotPasswordPage = lazy_(() => import('@/features/auth/pages/ForgotPasswordPage'))
 const ResetPasswordPage = lazy_(() => import('@/features/auth/pages/ResetPasswordPage'))
+const StaffActivatePage = lazy_(() => import('@/features/auth/pages/StaffActivatePage'))
 const VerifyEmailPage = lazy_(() => import('@/features/auth/pages/VerifyEmailPage'))
 const ConfirmPasswordPage = lazy_(() => import('@/features/auth/pages/ConfirmPasswordPage'))
 const PaymentCallbackPage = lazy_(() => import('@/features/tourist/pages/PaymentCallbackPage'))
@@ -71,9 +74,11 @@ const AdminRiderCashReconciliation = lazy_(() => import('@/features/admin/pages/
 const AdminRiderCash = lazy_(() => import('@/features/admin/pages/AdminRiderCash'))
 const AdminRiderCashouts = lazy_(() => import('@/features/admin/pages/AdminRiderCashouts'))
 const AdminCashoutInvestigation = lazy_(() => import('@/features/admin/pages/AdminCashoutInvestigation'))
+const AdminCompensationPayout = lazy_(() => import('@/features/admin/pages/AdminCompensationPayout'))
 const AdminReports = lazy_(() => import('@/features/admin/pages/AdminReports'))
 const AdminAuditLogs = lazy_(() => import('@/features/admin/pages/AdminAuditLogs'))
 const AdminNotifications = lazy_(() => import('@/features/admin/pages/AdminNotifications'))
+const AdminSystemNotices = lazy_(() => import('@/features/admin/pages/AdminSystemNotices'))
 const AdminOfficeProfile = lazy_(() => import('@/features/admin/pages/AdminOfficeProfile'))
 const AdminSystemConfig = lazy_(() => import('@/features/admin/pages/AdminSystemConfig'))
 const AdminSystemBackup = lazy_(() => import('@/features/admin/pages/AdminSystemBackup'))
@@ -82,8 +87,10 @@ const AdminIncidentHistory = lazy_(() => import('@/features/admin/pages/AdminInc
 const AdminSystemSecurity = lazy_(() => import('@/features/admin/pages/AdminSystemSecurity'))
 const AdminSystemOcrSettings = lazy_(() => import('@/features/admin/pages/AdminSystemOcrSettings'))
 const AdminLiveMap = lazy_(() => import('@/features/admin/pages/AdminLiveMap'))
+const AdminCommissionRates = lazy_(() => import('@/features/admin/pages/AdminCommissionRates'))
 const AdminLiveDeliveries = lazy_(() => import('@/features/admin/pages/AdminLiveDeliveries'))
 const AdminLiveSOS = lazy_(() => import('@/features/admin/pages/AdminLiveSOS'))
+const AdminRidePenalties = lazy_(() => import('@/features/admin/pages/AdminRidePenalties'))
 
 // --- Tourist ---
 const TouristDashboard = lazy_(() => import('@/features/tourist/pages/TouristDashboard'))
@@ -109,9 +116,11 @@ const TouristTransport = lazy_(() => import('@/features/tourist/pages/TouristTra
 const TouristBookRide = lazy_(() => import('@/features/tourist/pages/TouristBookRide'))
 const TouristChangeDestination = lazy_(() => import('@/features/tourist/pages/TouristChangeDestination'))
 const TouristTransportTracking = lazy_(() => import('@/features/tourist/pages/TouristTransportTracking'))
+const TouristTripDetails = lazy_(() => import('@/features/tourist/pages/TouristTripDetails'))
 const TouristEvents = lazy_(() => import('@/features/tourist/pages/TouristEvents'))
 const TouristEventsShow = lazy_(() => import('@/features/tourist/pages/TouristEventsShow'))
 const TouristMessages = lazy_(() => import('@/features/tourist/pages/TouristMessages'))
+const TouristConversation = lazy_(() => import('@/features/tourist/pages/TouristConversation'))
 const TouristFavorites = lazy_(() => import('@/features/tourist/pages/TouristFavorites'))
 const TouristReviews = lazy_(() => import('@/features/tourist/pages/TouristReviews'))
 const TouristHistory = lazy_(() => import('@/features/tourist/pages/TouristHistory'))
@@ -120,6 +129,8 @@ const TouristProfile = lazy_(() => import('@/features/tourist/pages/TouristProfi
 const TouristDestinations = lazy_(() => import('@/features/tourist/pages/TouristDestinations'))
 const TouristDestinationShow = lazy_(() => import('@/features/tourist/pages/TouristDestinationShow'))
 const TouristHome = lazy_(() => import('@/features/tourist/pages/TouristHome'))
+const TouristPosts = lazy_(() => import('@/features/tourist/pages/TouristPosts'))
+const TouristPostViewer = lazy_(() => import('@/features/tourist/pages/TouristPostViewer'))
 const TouristSearch = lazy_(() => import('@/features/tourist/pages/TouristSearch'))
 const TouristStays = lazy_(() => import('@/features/tourist/pages/TouristStays'))
 const MyTrips = lazy_(() => import('@/features/tourist/pages/MyTrips'))
@@ -153,6 +164,9 @@ const BusinessOwnerPromotions = lazy_(() => import('@/features/business-owner/pa
 const BusinessOwnerPromotionCreate = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerPromotionCreate'))
 const BusinessOwnerPromotionEdit = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerPromotionEdit'))
 const BusinessOwnerPromotionFeatured = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerPromotionFeatured'))
+const BusinessOwnerSaleForm = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerSaleForm'))
+const BusinessOwnerPostForm = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerPostForm'))
+const BusinessOwnerPostInsights = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerPostInsights'))
 const BusinessOwnerStaff = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerStaff'))
 const BusinessOwnerStaffCreate = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerStaffCreate'))
 const BusinessOwnerStaffEdit = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerStaffEdit'))
@@ -162,6 +176,8 @@ const BusinessOwnerProfileEdit = lazy_(() => import('@/features/business-owner/p
 const BusinessOwnerAccountSettings = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerAccountSettings'))
 const BusinessOwnerAccountStatus = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerAccountStatus'))
 const BusinessOwnerNotifications = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerNotifications'))
+const BusinessOwnerNotificationDetail = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerNotificationDetail'))
+const BusinessOwnerConversation = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerConversation'))
 const BusinessOwnerActivityLogs = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerActivityLogs'))
 const BusinessOwnerReports = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerReports'))
 const BusinessOwnerTables = lazy_(() => import('@/features/business-owner/pages/BusinessOwnerTables'))
@@ -194,11 +210,9 @@ const BusinessOwnerBusinessStep11 = lazy_(() => import('@/features/business-owne
 
 // --- Staff ---
 const StaffDashboard = lazy_(() => import('@/features/staff/pages/StaffDashboard'))
-const StaffOrders = lazy_(() => import('@/features/staff/pages/StaffOrders'))
+const StaffLayout = lazy_(() => import('@/features/staff/components/StaffLayout'))
+const StaffProfile = lazy_(() => import('@/features/staff/pages/StaffProfile'))
 const StaffBookings = lazy_(() => import('@/features/staff/pages/StaffBookings'))
-const StaffFoodIndex = lazy_(() => import('@/features/staff/pages/StaffFoodIndex'))
-const StaffFoodCreate = lazy_(() => import('@/features/staff/pages/StaffFoodCreate'))
-const StaffMenuEdit = lazy_(() => import('@/features/staff/pages/StaffMenuEdit'))
 
 // --- Rider ---
 const RiderProfile = lazy_(() => import('@/features/rider/pages/RiderProfile'))
@@ -216,6 +230,7 @@ const RiderMap = lazy_(() => import('@/features/rider/pages/RiderMap'))
 import RiderDispatchNotification from '@/features/rider/components/RiderDispatchNotification'
 import GlobalRiderAlert from '@/features/rider/components/GlobalRiderAlert'
 import RiderDestinationChangeBanner from '@/features/rider/components/RiderDestinationChangeBanner'
+import RiderSosButton from '@/features/rider/components/RiderSosButton'
 import { RiderActiveTripProvider } from '@/features/rider/context/RiderActiveTripContext'
 
 // --- Tourism Office ---
@@ -243,6 +258,7 @@ const MunicipalDocuments = lazy_(() => import('@/features/municipal/pages/Munici
 const MunicipalReports = lazy_(() => import('@/features/municipal/pages/MunicipalReports'))
 const MunicipalActivityLogs = lazy_(() => import('@/features/municipal/pages/MunicipalActivityLogs'))
 const MunicipalProfile = lazy_(() => import('@/features/municipal/pages/MunicipalProfile'))
+const MunicipalCommissionRates = lazy_(() => import('@/features/municipal/pages/MunicipalCommissionRates'))
 const MunicipalRiderOnboarding = lazy_(() => import('@/features/onboarding/pages/OnboardingOfficePages').then((m) => ({ default: m.MunicipalRiderOnboardingPage })))
 const AdminRiderOnboarding = lazy_(() => import('@/features/onboarding/pages/OnboardingOfficePages').then((m) => ({ default: m.AdminRiderOnboardingPage })))
 const BecomeRiderPage = lazy_(() => import('@/features/onboarding/pages/BecomeRiderPage'))
@@ -317,7 +333,7 @@ const businessOwnerCommonSections: CategorySubSection[] = [
     label: 'Operations',
     items: [
       { to: '/business-owner/orders', label: 'Orders', icon: <ShoppingCart className="w-5 h-5" />, module: 'food_ordering' },
-      { to: '/business-owner/promotions', label: 'Promotions', icon: <Percent className="w-5 h-5" />, module: 'promotions' },
+      { to: '/business-owner/promotions', label: 'Deals & Posts', icon: <Megaphone className="w-5 h-5" />, module: 'promotions' },
     ],
   },
   {
@@ -397,7 +413,7 @@ const categorySubSections: Record<string, CategorySubSection[]> = {
       { to: '/business-owner/pos', label: 'POS & Sales', icon: <CreditCard className="w-5 h-5" />, module: 'pos_sales' },
       { to: '/business-owner/orders', label: 'Orders', icon: <ShoppingCart className="w-5 h-5" />, module: 'food_ordering' },
       { to: '/business-owner/kitchen', label: 'Kitchen Display System', icon: <ChefHat className="w-5 h-5" />, module: 'kitchen_orders' },
-      { to: '/business-owner/promotions', label: 'Promotions', icon: <Percent className="w-5 h-5" />, module: 'promotions' },
+      { to: '/business-owner/promotions', label: 'Deals & Posts', icon: <Megaphone className="w-5 h-5" />, module: 'promotions' },
     ]},
     { label: 'Workforce', items: [
       { to: '/business-owner/attendance', label: 'Attendance', icon: <ClipboardCheck className="w-5 h-5" />, module: 'attendance' },
@@ -429,7 +445,7 @@ const categorySubSections: Record<string, CategorySubSection[]> = {
       { to: '/business-owner/bookings', label: 'Check-in / Check-out', icon: <ClipboardList className="w-5 h-5" />, module: 'check_in_out' },
     ]},
     { label: 'Sales', items: [
-      { to: '/business-owner/promotions', label: 'Promotions', icon: <Percent className="w-5 h-5" />, module: 'promotions' },
+      { to: '/business-owner/promotions', label: 'Deals & Posts', icon: <Megaphone className="w-5 h-5" />, module: 'promotions' },
     ]},
   ],
 }
@@ -510,24 +526,9 @@ function BusinessOwnerLayout() {
     return sections
   }, [businesses, selectedBusinessId])
 
-  return (
-    <DashboardLayout
-      sections={filteredSections}
-      roleLabel="Business Owner"
-      theme="tourism"
-      sidebarTopSlot={<BusinessSwitcher />}
-    />
-  )
+  // Redesigned owner shell (dark green sidebar, cream page); same sections and module filtering.
+  return <BusinessOwnerShell sections={filteredSections} />
 }
-
-const staffSections = [
-  { items: [{ to: '/staff/dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" /> }] },
-  { label: 'Operations', items: [
-    { to: '/staff/orders', label: 'Orders', icon: <ClipboardList className="w-5 h-5" /> },
-    { to: '/staff/bookings', label: 'Bookings', icon: <CalendarCheck className="w-5 h-5" /> },
-    { to: '/staff/menu', label: 'Menu', icon: <BookOpen className="w-5 h-5" /> },
-  ]},
-]
 
 const riderSections = [
   { items: [
@@ -611,6 +612,8 @@ export default function App() {
           <Route path="/" element={<LandingPage />} />
           <Route path="/explore" element={<LandingExplorePage />} />
           <Route path="/explore/food/:id" element={<LandingRestaurantPage />} />
+          {/* Attractions, resorts and other businesses, public like restaurants (2026-11-24). */}
+          <Route path="/explore/place/:id" element={<LandingPlacePage />} />
           {/* Food item page (same as the tourist one) for guests on the public site. */}
           <Route path="/explore/food/item/:id" element={<SuspenseWrapper><LandingFoodItemPage /></SuspenseWrapper>} />
           <Route path="/explore/categories" element={<LandingAllCategoriesPage />} />
@@ -633,6 +636,8 @@ export default function App() {
           <Route path="/unauthorized" element={<UnauthorizedPage />} />
           <Route path="/forgot-password" element={<SuspenseWrapper><ForgotPasswordPage /></SuspenseWrapper>} />
           <Route path="/reset-password" element={<SuspenseWrapper><ResetPasswordPage /></SuspenseWrapper>} />
+          {/* Staff Management Stage 1: public, single-use staff activation link */}
+          <Route path="/staff/activate/:token" element={<SuspenseWrapper><StaffActivatePage /></SuspenseWrapper>} />
           <Route path="/verify-email" element={<SuspenseWrapper><VerifyEmailPage /></SuspenseWrapper>} />
           <Route path="/confirm-password" element={<SuspenseWrapper><ConfirmPasswordPage /></SuspenseWrapper>} />
           <Route path="/payment/callback" element={<SuspenseWrapper><PaymentCallbackPage /></SuspenseWrapper>} />
@@ -672,18 +677,22 @@ export default function App() {
             <Route path="riders" element={<AdminSectionTabs label="Riders sections" tabs={RIDERS_TABS} />}>
               <Route index element={<AdminRiders />} />
               <Route path="fares" element={<AdminRiderFares />} />
+              <Route path="cancellation-fees" element={<AdminRidePenalties />} />
             </Route>
             <Route path="riders/:id" element={<AdminRiderShow />} />
             <Route path="riders/:id/cash-reconciliation" element={<AdminRiderCashReconciliation />} />
             <Route path="rider-cash" element={<AdminRiderCash />} />
             <Route path="cashouts" element={<AdminRiderCashouts />} />
+            <Route path="finance/commission-rates" element={<AdminCommissionRates />} />
             <Route path="cashouts/:id" element={<AdminCashoutInvestigation />} />
+            <Route path="cashouts/compensation/:id" element={<AdminCompensationPayout />} />
             <Route path="reports" element={<AdminReports />} />
             <Route path="audit-logs" element={<AdminAuditLogs />} />
             <Route path="notifications" element={<AdminNotifications />} />
-            {/* Settings → Configuration | Access Control | Document Verification | Security | Backup | Diagnostics | Incident History */}
-            <Route path="settings" element={<AdminSectionTabs label="Settings sections" title="Settings" description="Platform configuration, access control and system administration." tabs={SETTINGS_TABS} />}>
-              <Route index element={<Navigate to="configuration" replace />} />
+            <Route path="system-notices" element={<AdminSystemNotices />} />
+            {/* Settings: a page of buttons (Configuration, Access Control, Document Verification, Security, Backup, Diagnostics, Incident History); each opens its own page. */}
+            <Route path="settings" element={<AdminSettingsLayout sections={SETTINGS_TABS} />}>
+              <Route index element={<AdminSettingsHome sections={SETTINGS_TABS} />} />
               <Route path="configuration" element={<AdminSystemConfig />} />
               <Route path="access-control" element={<AdminRoles />} />
               <Route path="document-verification" element={<AdminSystemOcrSettings />} />
@@ -716,6 +725,8 @@ export default function App() {
               <Route path="transport" element={<TouristTransport />} />
               <Route path="transport/book" element={<TouristBookRide />} />
               <Route path="transport/tracking/:id" element={<TouristTransportTracking />} />
+              {/* A trip from My Activities › Travels: details without a map (2026-11-18). */}
+              <Route path="transport/trips/:id" element={<TouristTripDetails />} />
               <Route path="transport/tracking/:id/change-destination" element={<TouristChangeDestination />} />
               {/* Ride Hailing map (Map button): the business map without the places panel. */}
               <Route path="transport/map" element={<TouristExploreMap mapOnly />} />
@@ -730,6 +741,7 @@ export default function App() {
               <Route path="history" element={<TouristHistory />} />
               <Route path="notifications" element={<TouristNotifications />} />
               <Route path="messages" element={<TouristMessages />} />
+              <Route path="messages/:roomId" element={<TouristConversation />} />
               <Route path="profile" element={<TouristProfile />} />
               <Route path="food" element={<TouristFood />} />
               <Route path="food/item/:id" element={<TouristFoodItemDetail />} />
@@ -749,6 +761,9 @@ export default function App() {
             <Route path="directory" element={<TouristDirectory />} />
             <Route path="events" element={<TouristEvents />} />
             <Route path="events/:id" element={<TouristEventsShow />} />
+            {/* Deals & Posts: public like explore (guests browse; liking, saving, commenting need a tourist login). */}
+            <Route path="posts" element={<TouristPosts />} />
+            <Route path="posts/:id" element={<TouristPostViewer />} />
           </Route>
 
           {/* Business Owner */}
@@ -804,6 +819,11 @@ export default function App() {
             <Route path="promotions/create" element={<BusinessOwnerPromotionCreate />} />
             <Route path="promotions/:id/edit" element={<BusinessOwnerPromotionEdit />} />
             <Route path="promotions/featured" element={<BusinessOwnerPromotionFeatured />} />
+            <Route path="promotions/sales/new" element={<BusinessOwnerSaleForm />} />
+            <Route path="promotions/sales/:id/edit" element={<BusinessOwnerSaleForm key="edit-sale" />} />
+            <Route path="promotions/posts/new" element={<BusinessOwnerPostForm />} />
+            <Route path="promotions/posts/:id/edit" element={<BusinessOwnerPostForm key="edit-post" />} />
+            <Route path="promotions/posts/:id/insights" element={<BusinessOwnerPostInsights />} />
             <Route path="staff" element={<BusinessOwnerStaff />} />
             <Route path="staff/create" element={<BusinessOwnerStaffCreate />} />
             <Route path="staff/:id" element={<BusinessOwnerStaffShow />} />
@@ -813,6 +833,8 @@ export default function App() {
             <Route path="account-settings" element={<BusinessOwnerAccountSettings />} />
             <Route path="account-status" element={<BusinessOwnerAccountStatus />} />
             <Route path="notifications" element={<BusinessOwnerNotifications />} />
+            <Route path="notifications/:id" element={<BusinessOwnerNotificationDetail />} />
+            <Route path="notifications/messages/:roomId" element={<BusinessOwnerConversation />} />
             <Route path="activity-logs" element={<BusinessOwnerActivityLogs />} />
             <Route path="gallery" element={<BusinessOwnerGallery />} />
             <Route path="reports" element={<BusinessOwnerReports />} />
@@ -836,16 +858,32 @@ export default function App() {
             path="/staff"
             element={
               <ProtectedRoute roles={['staff']}>
-                <DashboardLayout sections={staffSections} roleLabel="Staff" />
+                <SuspenseWrapper><StaffLayout /></SuspenseWrapper>
               </ProtectedRoute>
             }
           >
             <Route path="dashboard" element={<StaffDashboard />} />
-            <Route path="orders" element={<StaffOrders />} />
+            {/* The owner's Orders module, scoped to the staff member's restaurant (2026-11-24). */}
+            <Route path="orders" element={<BusinessOwnerOrders />} />
+            <Route path="orders/:id" element={<BusinessOwnerOrderShow />} />
             <Route path="bookings" element={<StaffBookings />} />
-            <Route path="menu" element={<StaffFoodIndex />} />
-            <Route path="menu/create" element={<StaffFoodCreate />} />
-            <Route path="menu/:id/edit" element={<StaffMenuEdit />} />
+            <Route path="profile" element={<StaffProfile />} />
+            {/* Staff Management section 5: the owner's pages, in the staff portal (prefix /staff, their restaurant). */}
+            <Route path="menu" element={<BusinessOwnerMenu />} />
+            <Route path="menu/create" element={<BusinessOwnerMenuCreate />} />
+            <Route path="menu/:id/edit" element={<BusinessOwnerMenuEdit />} />
+            <Route path="food/create" element={<BusinessOwnerFoodCreate />} />
+            <Route path="promotions" element={<BusinessOwnerPromotions />} />
+            <Route path="promotions/create" element={<BusinessOwnerPromotionCreate />} />
+            <Route path="promotions/:id/edit" element={<BusinessOwnerPromotionEdit />} />
+            <Route path="promotions/featured" element={<BusinessOwnerPromotionFeatured />} />
+            <Route path="promotions/sales/new" element={<BusinessOwnerSaleForm />} />
+            <Route path="promotions/sales/:id/edit" element={<BusinessOwnerSaleForm key="edit-sale" />} />
+            <Route path="promotions/posts/new" element={<BusinessOwnerPostForm />} />
+            <Route path="promotions/posts/:id/edit" element={<BusinessOwnerPostForm key="edit-post" />} />
+            <Route path="promotions/posts/:id/insights" element={<BusinessOwnerPostInsights />} />
+            <Route path="reports" element={<BusinessOwnerReports />} />
+            <Route path="expenses" element={<BusinessOwnerExpenses />} />
           </Route>
 
           {/* Rider */}
@@ -859,6 +897,7 @@ export default function App() {
                     <DashboardLayout sections={riderSections} roleLabel="Rider" theme="tourism" profilePath="/rider/profile" bottomNavigation />
                     <GlobalRiderAlert />
                     <RiderDestinationChangeBanner />
+                    <RiderSosButton />
                   </RiderActiveTripProvider>
                 </RiderOnboardingGate>
               </ProtectedRoute>
@@ -923,6 +962,7 @@ export default function App() {
             <Route path="reports" element={<MunicipalReports />} />
             <Route path="activity-logs" element={<MunicipalActivityLogs />} />
             <Route path="profile" element={<MunicipalProfile />} />
+            <Route path="commission-rates" element={<MunicipalCommissionRates />} />
             <Route path="onboarding" element={<MunicipalRiderOnboarding />} />
           </Route>
 

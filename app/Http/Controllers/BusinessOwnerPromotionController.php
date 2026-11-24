@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ActsForBusiness;
 use App\Http\Requests\BusinessOwner\StorePromotionRequest;
 use App\Http\Requests\BusinessOwner\UpdatePromotionRequest;
 use App\Http\Resources\PromotionResource;
@@ -13,11 +14,15 @@ use Illuminate\Http\Request;
 
 class BusinessOwnerPromotionController extends Controller
 {
+    use ActsForBusiness;
+
     public function index(Request $request): JsonResponse
     {
-        $businessIds = $request->user()->businesses()->pluck('id');
+        $businessIds = $this->actingBusinessIds($request);
 
+        // Label promotions only; dish sales have their own endpoints (/sales).
         $promotions = Promotion::whereIn('business_id', $businessIds)
+            ->labels()
             ->with('business')
             ->latest()
             ->paginate(20);
@@ -33,15 +38,15 @@ class BusinessOwnerPromotionController extends Controller
 
         $business = Business::findOrFail($validated['business_id']);
 
-        if ($business->owner_id !== $request->user()->id) {
+        if (! $this->actsFor($request, $business)) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
         $promotion = $business->promotions()->create([
             'name' => $validated['title'],
             'description' => $validated['description'] ?? null,
-            'type' => 'percentage',
-            'value' => $validated['discount_percentage'],
+            'type' => $validated['discount_type'],
+            'value' => $validated['discount_value'],
             'start_date' => $validated['valid_from'],
             'end_date' => $validated['valid_until'],
             'is_active' => true,
@@ -55,8 +60,12 @@ class BusinessOwnerPromotionController extends Controller
 
     public function update(UpdatePromotionRequest $request, Promotion $promotion): JsonResponse
     {
-        if ($promotion->business->owner_id !== $request->user()->id) {
+        if (! $this->actsFor($request, $promotion->business)) {
             return $this->forbiddenResponse('You do not own this business.');
+        }
+        if ($promotion->isItemSale()) {
+            // Dish sales change checkout prices: only the sales endpoints (with their locks and checks) may change them.
+            return $this->errorResponse('This is a dish sale. Manage it from the Sales tab.', 422);
         }
 
         $validated = $request->validated();
@@ -64,7 +73,8 @@ class BusinessOwnerPromotionController extends Controller
         $data = [
             'name' => $validated['title'] ?? $promotion->name,
             'description' => $validated['description'] ?? $promotion->description,
-            'value' => $validated['discount_percentage'],
+            'type' => $validated['discount_type'],
+            'value' => $validated['discount_value'],
             'start_date' => $validated['valid_from'],
             'end_date' => $validated['valid_until'],
         ];
@@ -79,7 +89,7 @@ class BusinessOwnerPromotionController extends Controller
 
     public function toggleStatus(Request $request, Promotion $promotion): JsonResponse
     {
-        if ($promotion->business->owner_id !== $request->user()->id) {
+        if (! $this->actsFor($request, $promotion->business)) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 
@@ -93,8 +103,12 @@ class BusinessOwnerPromotionController extends Controller
 
     public function destroy(Request $request, Promotion $promotion): JsonResponse
     {
-        if ($promotion->business->owner_id !== $request->user()->id) {
+        if (! $this->actsFor($request, $promotion->business)) {
             return $this->forbiddenResponse('You do not own this business.');
+        }
+        if ($promotion->isItemSale()) {
+            // Dish sales change checkout prices: only the sales endpoints (with their locks and checks) may change them.
+            return $this->errorResponse('This is a dish sale. Manage it from the Sales tab.', 422);
         }
 
         $promotion->update(['is_active' => false]);
@@ -105,7 +119,7 @@ class BusinessOwnerPromotionController extends Controller
 
     public function featured(Request $request): JsonResponse
     {
-        $businesses = $request->user()->businesses()->with('offerings', 'offerings.category')->get();
+        $businesses = $this->actingBusinesses($request)->with('offerings', 'offerings.category')->get();
 
         return $this->successResponse($businesses->map(fn ($b) => [
             'id' => $b->id,
@@ -129,7 +143,7 @@ class BusinessOwnerPromotionController extends Controller
 
         $business = Business::findOrFail($validated['business_id']);
 
-        if ($business->owner_id !== $request->user()->id) {
+        if (! $this->actsFor($request, $business)) {
             return $this->forbiddenResponse('You do not own this business.');
         }
 

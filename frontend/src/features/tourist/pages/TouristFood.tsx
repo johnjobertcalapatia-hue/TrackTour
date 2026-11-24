@@ -86,7 +86,7 @@ export default function TouristFood() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search food, restaurants..."
-            className="w-full h-11 pl-10 pr-10 bg-white border border-[#E5E9E7] rounded-full text-sm text-[#17201B] placeholder-[#68736D] focus:outline-none focus:ring-2 focus:ring-[#087F3F]/20 focus:border-[#087F3F]"
+            className="w-full h-11 pl-10 pr-10 bg-white border border-[#E5E9E7] rounded-full text-sm text-[#17201B] placeholder-[#68736D] focus:outline-none focus:ring-2 focus:ring-[#087F3F]/20 focus:border-[#087F3F] [&::-webkit-search-cancel-button]:hidden"
           />
           {searchQuery && (
             <button

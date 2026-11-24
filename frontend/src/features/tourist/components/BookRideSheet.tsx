@@ -8,6 +8,7 @@ import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap, useMapEvents 
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { rideVehicleIcon, type VehicleIcon } from '@/features/tourist/components/ride/vehicleIcon'
+import { OwedFeeLines, useOwedCancellationFees } from '@/features/tourist/components/ride/CancellationFeeBanner'
 import {
   ArrowLeft, MapPin, Loader2, CheckCircle2, ChevronLeft,
   Navigation, Crosshair, Search, RotateCcw, ArrowRight,
@@ -102,12 +103,12 @@ const VEHICLES: { type: string; name: string; icon: VehicleIcon; pax: number }[]
   { type: 'van', name: 'Van', icon: rideVehicleIcon('van'), pax: 8 },
 ]
 
-/** Rides: cash to the driver, or GCash online (PayMongo). Server: BookTransportRequest. */
+/** Rides: cash to the driver, or online on PayMongo: GCash or QR Ph (2026-11-18). Server: BookTransportRequest. */
 const PAYMENT_METHODS = ['cash', 'gcash']
-const PAYMENT_LABELS: Record<string, string> = { cash: 'Cash', gcash: 'GCash (online)' }
+const PAYMENT_LABELS: Record<string, string> = { cash: 'Cash', gcash: 'GCash or QR Ph (online)' }
 const PAYMENT_HINTS: Record<string, string> = {
   cash: 'Pay your driver in cash at drop-off.',
-  gcash: 'Pay online with GCash through PayMongo when the ride ends.',
+  gcash: 'Pay online through PayMongo when the ride ends: GCash, or scan a QR Ph code with Maya or your bank app.',
 }
 
 const RECENT_KEY = 'tracktour_recent_locations'
@@ -248,6 +249,8 @@ export default function BookRideSheet({ isOpen = true, onClose, destination, des
   const [pinLabel, setPinLabel] = useState<{ name: string; address: string } | null>(null)
   const [vehicleType, setVehicleType] = useState('motorcycle')
   const [paymentMethod, setPaymentMethod] = useState('cash')
+  // 2026-11-23: an owed cancellation fee is added to this ride's payment.
+  const owedFees = useOwedCancellationFees()
   const [estimate, setEstimate] = useState<EstimateResult | null>(null)
   /** Set when the server refused the booking because a ride is unfinished. */
   const [activeRideUrl, setActiveRideUrl] = useState<string | null>(null)
@@ -876,8 +879,21 @@ export default function BookRideSheet({ isOpen = true, onClose, destination, des
                   <div className="h-px bg-[#E5E9E7]" />
                   <div className="flex justify-between items-center">
                     <span className="text-xs font-medium text-[#68736D]">Total fare</span>
-                    <span className="text-lg font-bold text-[#17201B]">{formatCurrency(currentFare.total_fare)}</span>
+                    <span className={owedFees.total > 0 ? 'text-sm font-semibold text-[#17201B]' : 'text-lg font-bold text-[#17201B]'}>{formatCurrency(currentFare.total_fare)}</span>
                   </div>
+                  {/* 2026-11-23: an owed cancellation fee is added to this ride's payment. */}
+                  {owedFees.total > 0 && (
+                    <>
+                      <OwedFeeLines fees={owedFees.fees} />
+                      <div className="flex justify-between items-center" data-testid="ride-total-to-pay">
+                        <span className="text-xs font-medium text-[#68736D]">Total to pay</span>
+                        <span className="text-lg font-bold text-[#17201B]">{formatCurrency(Number(currentFare.total_fare) + owedFees.total)}</span>
+                      </div>
+                      <p className="text-[11px] text-[#8A5A00]">
+                        {paymentMethod === 'cash' ? 'Give the fee to your driver in cash with the fare.' : 'The fee is included when you pay online at the drop-off.'} It goes to the driver who accepted your cancelled ride.
+                      </p>
+                    </>
+                  )}
                   <div className="flex items-center justify-between text-xs text-[#9CA3AF]">
                     <span>{estimate.distance_text} • {estimate.duration_text}</span>
                     {estimate.service_fee > 0 && <span>Service fee not included in billed total</span>}
@@ -916,7 +932,7 @@ export default function BookRideSheet({ isOpen = true, onClose, destination, des
                 {requestRideMutation.isPending ? (
                   <><Loader2 className="w-5 h-5 animate-spin" /> Booking…</>
                 ) : (
-                  <>Book Ride Now{currentFare ? ` · ${formatCurrency(currentFare.total_fare)}` : ''}</>
+                  <>Book Ride Now{currentFare ? ` · ${formatCurrency(Number(currentFare.total_fare) + owedFees.total)}` : ''}</>
                 )}
               </button>
               <p className="text-xs text-[#9CA3AF] text-center">Ride managed by Tourism Office transportation</p>

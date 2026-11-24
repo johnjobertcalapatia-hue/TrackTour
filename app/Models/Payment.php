@@ -85,4 +85,38 @@ class Payment extends Model
     {
         return $query->where('status', 'paid');
     }
+
+    /**
+     * Which PayMongo method the customer actually used (2026-11-18): 'gcash',
+     * 'qrph', 'card', … read from what PayMongo sent back (the paid payment's
+     * source type, or the checkout session's payment_method_used). Null when
+     * not paid or unknown. `method` stays the app's channel ('gcash' = online).
+     */
+    public function paidVia(): ?string
+    {
+        if (! in_array($this->status, ['paid', 'pending_refund', 'partially_refunded', 'refunded'], true)) {
+            return null;
+        }
+        $meta = is_array($this->metadata) ? $this->metadata : [];
+        $candidates = [];
+        foreach (['checkout_session_payment_paid', 'webhook_data', 'checkout_session'] as $key) {
+            $block = $meta[$key] ?? null;
+            if (! is_array($block)) {
+                continue;
+            }
+            $attrs = is_array($block['attributes'] ?? null) ? $block['attributes'] : $block;
+            $candidates[] = $attrs['payment_method_used'] ?? null;
+            $candidates[] = $attrs['source']['type'] ?? null;
+            $candidates[] = $attrs['payments'][0]['attributes']['source']['type'] ?? null;
+        }
+        foreach ($candidates as $type) {
+            if (is_string($type) && $type !== '') {
+                $type = strtolower($type);
+
+                return $type === 'qr_ph' ? 'qrph' : $type;
+            }
+        }
+
+        return null;
+    }
 }
