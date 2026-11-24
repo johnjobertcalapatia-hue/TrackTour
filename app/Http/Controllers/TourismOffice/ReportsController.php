@@ -67,7 +67,7 @@ class ReportsController extends Controller
                 'revenue' => (float) $o->revenue,
             ]);
 
-        $avgRating = Review::where('status', 'approved')
+        $avgRating = Review::whereIn('status', Review::PUBLIC_STATUSES)
             ->where('created_at', '>=', $dateFrom)
             ->avg('rating');
 

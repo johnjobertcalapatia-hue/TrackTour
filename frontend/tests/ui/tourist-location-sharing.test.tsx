@@ -3,8 +3,10 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TouristProfile from '@/features/tourist/pages/TouristProfile'
+import { TouristLocationSharer } from '@/features/tourist/location-sharing'
 
 const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn() }))
+const auth = vi.hoisted(() => ({ user: { id: 1, name: 'Tina Tourist', role: 'tourist' } as { id: number; name: string; role: string } | null }))
 
 vi.mock('@/shared/services/api', () => ({
   get: api.get, post: api.post, put: api.put,
@@ -12,7 +14,7 @@ vi.mock('@/shared/services/api', () => ({
 }))
 vi.mock('@/features/auth/services/auth-store', () => ({
   useAuthStore: (selector?: (v: unknown) => unknown) => {
-    const state = { user: { id: 1, name: 'Tina Tourist', role: 'tourist' }, logout: () => {}, setUser: () => {} }
+    const state = { user: auth.user, logout: () => {}, setUser: () => {} }
     return selector ? selector(state) : state
   },
 }))
@@ -71,5 +73,26 @@ describe('Tourist location sharing (opt-in)', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/Allow location access/)
     expect(api.put).not.toHaveBeenCalled()
     expect(toggle).toHaveAttribute('aria-checked', 'false')
+  })
+})
+
+describe('Location sharer in the tourist layout (2026-11-24)', () => {
+  const renderSharer = () => render(
+    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+      <TouristLocationSharer />
+    </QueryClientProvider>,
+  )
+  afterEach(() => { auth.user = { id: 1, name: 'Tina Tourist', role: 'tourist' } })
+
+  it('a guest on a public page (Explore, the map) sends no request, so no 401 logs them out to /login', async () => {
+    auth.user = null
+    renderSharer()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(api.get).not.toHaveBeenCalledWith('/tourist/location-sharing')
+  })
+
+  it('a signed-in tourist still reads their setting', async () => {
+    renderSharer()
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith('/tourist/location-sharing'))
   })
 })

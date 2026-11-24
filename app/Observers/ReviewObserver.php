@@ -50,8 +50,9 @@ class ReviewObserver
     protected function updateBusinessReviewMetrics(int $businessId): void
     {
         $reviewModel = new Review;
-        $avg = $reviewModel->where('business_id', $businessId)->avg('rating') ?? 0;
-        $count = $reviewModel->where('business_id', $businessId)->count();
+        // The same reviews tourists see (not rejected).
+        $avg = $reviewModel->where('business_id', $businessId)->whereIn('status', Review::PUBLIC_STATUSES)->avg('rating') ?? 0;
+        $count = $reviewModel->where('business_id', $businessId)->whereIn('status', Review::PUBLIC_STATUSES)->count();
 
         $business = Business::find($businessId);
         if (! $business) {

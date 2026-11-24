@@ -16,6 +16,7 @@ class UpdateBusinessRating implements ShouldQueue
         $business = $event->business;
 
         $stats = Review::where('business_id', $business->id)
+            ->whereIn('status', Review::PUBLIC_STATUSES)
             ->selectRaw('AVG(rating) as avg_rating, COUNT(*) as review_count')
             ->first();
 

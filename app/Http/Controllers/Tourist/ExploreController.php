@@ -15,6 +15,7 @@ use App\Models\Review;
 use App\Models\TourismEvent;
 use App\Services\TouristService;
 use Carbon\Carbon;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Auth;
@@ -123,11 +124,11 @@ class ExploreController extends Controller
         $featured = $this->loadAvgRating($featured);
 
         $trending = Business::where('status', 'approved')
-            ->whereHas('reviews', fn ($q) => $q->where('status', 'approved'))
+            ->whereHas('reviews', fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES))
             ->when($hasLocation, fn ($q) => $this->proximityScope($q, $touristLat, $touristLng))
             ->with('category', 'municipality')
-            ->withCount(['reviews' => fn ($q) => $q->where('status', 'approved')])
-            ->withAvg(['reviews' => fn ($q) => $q->where('status', 'approved')], 'rating')
+            ->withCount(['reviews' => fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)])
+            ->withAvg(['reviews' => fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)], 'rating')
             ->orderByDesc('reviews_count')
             ->orderByDesc('reviews_avg_rating')
             ->take(10)
@@ -237,7 +238,7 @@ class ExploreController extends Controller
             ->when($hasLocation, fn ($q) => $this->proximityScope($q, $touristLat, $touristLng))
             ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Spot))
             ->with('municipality', 'media')
-            ->withAvg(['reviews' => fn ($q) => $q->where('status', 'approved')], 'rating')
+            ->withAvg(['reviews' => fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)], 'rating')
             ->when($hasLocation, fn ($q) => $q->orderBy('distance_km'))
             ->take(20)
             ->get()
@@ -267,7 +268,7 @@ class ExploreController extends Controller
             ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Dining))
             ->whereHas('offerings', fn ($q) => $q->where('is_available', true)->where('status', 'available'))
             ->with('municipality')
-            ->withAvg(['reviews' => fn ($q) => $q->where('status', 'approved')], 'rating')
+            ->withAvg(['reviews' => fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)], 'rating')
             ->when($hasLocation, fn ($q) => $q->orderBy('distance_km'))
             ->take(20)
             ->get();
@@ -298,7 +299,7 @@ class ExploreController extends Controller
             ->when($hasLocation, fn ($q) => $this->proximityScope($q, $touristLat, $touristLng))
             ->whereHas('category', fn ($q) => $q->inDiscoveryGroup(DiscoveryGroup::Accommodation))
             ->with('municipality')
-            ->withAvg(['reviews' => fn ($q) => $q->where('status', 'approved')], 'rating')
+            ->withAvg(['reviews' => fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)], 'rating')
             ->when($hasLocation, fn ($q) => $q->orderBy('distance_km'))
             ->take(20)
             ->get()
@@ -595,8 +596,8 @@ class ExploreController extends Controller
     {
         $businesses = Cache::remember('directory_featured_businesses', 900, function () {
             return Business::where('status', 'approved')->with(['category', 'municipality', 'promotions' => fn ($q) => $q->active()])
-                ->withCount(['reviews' => fn ($q) => $q->where('status', 'approved')])
-                ->withAvg(['reviews' => fn ($q) => $q->where('status', 'approved')], 'rating')
+                ->withCount(['reviews' => fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)])
+                ->withAvg(['reviews' => fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)], 'rating')
                 ->where(fn ($q) => $q->whereHas('promotions', fn ($promotion) => $promotion->active())->orWhereNotNull('cover_photo'))
                 ->orderByDesc('reviews_count')->take(8)->get();
         });
@@ -626,8 +627,8 @@ class ExploreController extends Controller
                 'barangay',
                 'promotions' => fn ($q) => $q->active(),
             ])
-            ->withCount(['reviews' => fn ($q) => $q->where('status', 'approved')])
-            ->withAvg(['reviews' => fn ($q) => $q->where('status', 'approved')], 'rating');
+            ->withCount(['reviews' => fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)])
+            ->withAvg(['reviews' => fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)], 'rating');
 
         if ($query) {
             $businessesQuery->where(function ($q) use ($query) {
@@ -812,8 +813,8 @@ class ExploreController extends Controller
                 'media' => fn ($q) => $q->orderBy('sort_order'),
                 'promotions' => fn ($q) => $q->active(),
             ])
-            ->withCount(['reviews' => fn ($q) => $q->where('status', 'approved')])
-            ->withAvg(['reviews' => fn ($q) => $q->where('status', 'approved')], 'rating')
+            ->withCount(['reviews' => fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)])
+            ->withAvg(['reviews' => fn ($q) => $q->whereIn('status', \App\Models\Review::PUBLIC_STATUSES)], 'rating')
             ->get()
             ->map(function ($b) {
                 $b->is_open = $this->isBusinessOpen($b);
@@ -876,6 +877,27 @@ class ExploreController extends Controller
         return response()->json(compact('businesses', 'categories', 'municipalities', 'selectedMunicipality', 'focusLat', 'focusLng', 'focusBusinessId'));
     }
 
+    /**
+     * GET /tourist/explore/{business}/reviews (public, 2026-11-24): the rating
+     * summary and the latest reviews, for the map's place panel and the
+     * landing page. Only what anyone may see (Review::publicCard).
+     */
+    public function reviews(Business $business, Request $request): JsonResponse
+    {
+        if ($business->status !== 'approved') {
+            abort(404);
+        }
+        $limit = min(20, max(1, (int) $request->query('limit', 10)));
+        $summary = Review::approvedSummaryFor($business->id);
+
+        return $this->successResponse([
+            'average' => $summary['average'],
+            'count' => $summary['count'],
+            'breakdown' => $summary['breakdown'],
+            'reviews' => Review::publicFor($business->id, $limit)->map->publicCard()->values(),
+        ]);
+    }
+
     public function show(Business $business, Request $request)
     {
         if ($business->status !== 'approved') {
@@ -899,13 +921,9 @@ class ExploreController extends Controller
             fn ($detail) => [$detail->field_name => $detail->field_value]
         );
 
-        $reviews = Review::where('business_id', $business->id)
-            ->where('status', 'approved')
-            ->with('user')
-            ->latest()
-            ->take(10)
-            ->get();
-        // Aggregate over ALL approved reviews (not just the latest 10 shown).
+        // Public page: only what anyone may see of each review (no reviewer email or phone).
+        $reviews = Review::publicFor($business->id)->map->publicCard()->values();
+        // Aggregate over ALL shown reviews (not just the latest 10 listed).
         $ratingSummary = Review::approvedSummaryFor($business->id);
         $ratingBreakdown = $ratingSummary['breakdown'];
         $reviewsCount = $ratingSummary['count'];
@@ -1021,15 +1039,15 @@ class ExploreController extends Controller
     {
         return $businesses->map(function ($business) {
             if (isset($business->reviews_avg_rating)) {
-                $business->avg_rating = $business->reviews_avg_rating ?? 0;
+                $business->avg_rating = (float) ($business->reviews_avg_rating ?? 0);
             } else {
-                $business->avg_rating = Review::where('business_id', $business->id)
-                    ->where('status', 'approved')
-                    ->avg('rating') ?? 0;
+                $business->avg_rating = (float) (Review::where('business_id', $business->id)
+                    ->whereIn('status', Review::PUBLIC_STATUSES)
+                    ->avg('rating') ?? 0);
             }
             if (! isset($business->reviews_count)) {
                 $business->reviews_count = Review::where('business_id', $business->id)
-                    ->where('status', 'approved')
+                    ->whereIn('status', Review::PUBLIC_STATUSES)
                     ->count();
             }
 

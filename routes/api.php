@@ -174,6 +174,7 @@ Route::prefix('tourist')->group(function () {
     Route::get('/destinations/{destination}', [TouristDestinationController::class, 'show']);
 
     Route::get('/explore/{business}', [ExploreController::class, 'show']);
+    Route::get('/explore/{business}/reviews', [ExploreController::class, 'reviews'])->whereNumber('business')->middleware('throttle:60,1');
 
     // Food
     Route::get('/food', [FoodController::class, 'index']);
@@ -366,6 +367,7 @@ Route::middleware('token.only')->group(function () {
         Route::middleware('business.approved')->group(function () {
             // Dashboard
             Route::get('/dashboard', [BusinessOwnerDashboardController::class, 'index']);
+            Route::get('/dashboard/attraction/{business}', [BusinessOwnerDashboardController::class, 'attraction'])->whereNumber('business');
 
             // Notifications
             Route::get('/notifications', [BusinessOwnerNotificationController::class, 'index']);

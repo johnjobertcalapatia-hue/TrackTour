@@ -5,6 +5,7 @@ import { MapContainer, TileLayer, Marker, Polyline, Popup, useMap, useMapEvents 
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { get } from '@/shared/services/api'
+import BusinessReviews from '@/shared/components/BusinessReviews'
 import { toAssetUrl } from '@/shared/utils'
 import { businessLogoIcon, pinIcon, userPinIcon } from '@/shared/utils/pin-icon'
 import { MapZoomOutLimit } from '@/features/rider/components/MapZoomOutLimit'
@@ -1306,24 +1307,7 @@ function calcFare(distanceKm: number, mode: typeof transportModes[number]): numb
                         </div>
                       )}
 
-                      {panelTab === 'Reviews' && (
-                        <div className="pt-10 pb-6 text-center">
-                          <p className="text-3xl font-bold text-gray-900">{Number(displayBusiness.average_rating ?? 0).toFixed(1)}</p>
-                          <p className="mt-1 inline-flex items-center gap-1 text-sm text-gray-600">
-                            {Array.from({ length: 5 }, (_, i) => (
-                              <Star
-                                key={i}
-                                className={`w-4 h-4 ${
-                                  i < Math.round(displayBusiness.average_rating ?? 0) ? 'fill-[#F4B400] text-[#F4B400]' : 'fill-gray-200 text-gray-200'
-                                }`}
-                              />
-                            ))}
-                          </p>
-                          <p className="mt-1 text-sm text-gray-500">
-                            Based on {displayBusiness.review_count ?? 0} review{(displayBusiness.review_count ?? 0) === 1 ? '' : 's'}
-                          </p>
-                        </div>
-                      )}
+                      {panelTab === 'Reviews' && <BusinessReviews businessId={displayBusiness.id} />}
 
                       {panelTab === 'About' && (
                         <div className="pt-10 pb-6 text-center">
