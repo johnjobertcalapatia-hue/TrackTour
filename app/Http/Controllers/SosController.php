@@ -12,7 +12,8 @@ use Illuminate\Http\Request;
 
 /**
  * SOS from a trip (2026-11-18): tourists during a ride, riders during any
- * trip. The alert goes to the Bansud Tourism Office; the other party on the
+ * trip. The alert goes to the trip's municipal Tourism Office and the Bansud
+ * Tourism Office (Municipal Office plan Stage 3); the other party on the
  * trip is never told.
  */
 class SosController extends Controller
@@ -33,7 +34,8 @@ class SosController extends Controller
     {
         return $this->successResponse(
             ['sos' => $alert->presentForSender()],
-            $created ? 'SOS sent to the Bansud Tourism Office.' : 'Your SOS is still open. Location updated.',
+            // Municipal Office plan Stage 3: the trip's town office and the Bansud Tourism Office.
+            $created ? 'SOS sent to the Tourism Office.' : 'Your SOS is still open. Location updated.',
             $created ? 201 : 200,
         );
     }

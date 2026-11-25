@@ -447,3 +447,189 @@ Booking & pricing, Inventory & guests, Rules, Visibility:
   the helpers.
 - Frontend: 405 passed (56 files, including the cross-tab session fix). Build clean.
 - Laravel: 800 passed, 2 skipped (known environment skips), 0 failures. The first full run had 1 intermittent failure in `EmailVerificationTest` (line 76, a mail count); it passes alone and on the rerun. No backend code changed.
+
+
+## 11. Reservations plan — Stages 6–10 (2026-11-24, decisions recorded; awaiting "go" for Stage 6)
+
+### Product owner's decisions (2026-11-24)
+
+| Topic | Decision |
+| --- | --- |
+| Payment | The tourist chooses **pay at the resort** or **GCash online** (PayMongo, payable = Booking — already supported). Refund rules apply to cancellations and owner rejections. |
+| Confirmation | **Owner approves.** A reservation starts Pending and holds its units; the owner (or staff with `bookings.update`) confirms or rejects. |
+| Cancellation | The tourist may cancel **any time before the check-in date**. |
+| Commission | Deducted from the resort's share, never added on top for the tourist. **8%** default; **5%** for event venues / function areas (`function_area`). Configurable by the Tourism Office. Charged only on money paid **through TrackTour**; reversed on a full refund, recalculated on a partial refund. No commission on refundable security deposits. Gateway fees recorded separately. |
+
+### Audit (2026-11-24)
+
+- No resort reservation can be made today: `Tourist\BookingController@store` saves dates/guests only (no price, no items, no availability or concurrency check). There are no bookings in the dev database.
+- `bookings` / `booking_items` / `payments` (payable = Booking) exist; the owner Reservations page confirms / completes / cancels with no rules (`BusinessOwnerBookingManageController@updateStatus`).
+- Stage 4 offerings carry everything the engine needs (booking mode, pricing basis, inventory, guests, dependencies).
+- Earnings: §R Stage 1 (rate settings + snapshots) is built; earnings records (§R Stage 3) are not.
+
+### Stages (each: targeted tests, full suites, DB verification, this doc; review before the next)
+
+| Stage | Scope |
+| --- | --- |
+| 6 | **Availability engine.** `resort_blocked_dates` (owner closures) and `resort_offering_allocations` (offering, date, reserved_quantity; UNIQUE(offering, date)). Day use = 1 date; overnight = each night from check-in to the night before check-out. Capacity checked under `lockForUpdate`; the UNIQUE row is the backstop. Read API: availability per offering for a date range. Owner UI: blocked dates on the resort setup. |
+| 7 | **Quote + reservation (pay at the resort).** `POST /tourist/resorts/{business}/quote` (read-only price breakdown, every rule checked) and `POST /tourist/resorts/{business}/reservations`: transaction + locks, `bookings` row (subtotal, commission snapshot, payment choice) + `booking_items` **snapshots** + `booking_status_logs`. Owner confirm / reject (reason) / complete / no-show; tourist cancel before check-in; every cancel or reject releases the units in the same transaction. Notifications to both sides. Tourist reservation builder on the resort page (dates, guests, offerings, required items, dependencies, summary) and the reservation in My Activities → Travels. |
+| 8 | **GCash online payment + refunds.** Pay at submission through the existing Booking payment flow; an unpaid GCash reservation holds its units for 30 minutes, then expires and releases them. Refunds through the existing refund processor (dedupe per the PayMongo idempotency finding): owner reject → full refund; owner cancel → full refund; tourist cancel before check-in → per the decision below. |
+| 9 | **Commission.** Rates `resort_commission_percent` 8 and `resort_event_commission_percent` 5 in `CommissionRateSettings` (district default, town override, Bansud limits), snapshotted per reservation. Commission on the GCash amount only, at completion; reversed / recalculated on refund. Resort payable shown to the owner per reservation (pending → available after check-out). Payout to the resort stays manual GCash (no automated disbursement). |
+| 10 | Concurrency (two tourists, last unit), authorization, payment and cancellation tests; full regression; deploy notes. |
+
+### Further decisions (product owner, 2026-11-24)
+
+1. **Commission is set by the Tourism Office**: Bansud sets the district defaults (8%, events 5%) and the limits; each municipal office may set its own town's rates inside them (same mechanism as §R5–R6 of the secure-transaction audit).
+2. **Pay at the resort: no commission.** Commission only on money paid through TrackTour (the risk that resorts steer guests to pay on arrival is accepted).
+3. **The commission is the resort's municipal Tourism Office's income** (resort's town, snapshotted), like food and ride commissions; TrackTour takes its platform % of the office's net (§R1).
+4. **Cancellation policy per resort, inside Tourism Office limits.**
+   - The resort owner sets: free cancellation until **N days before check-in**, then a **late-cancellation penalty %** (example: free until 3 days before, 50% after).
+   - The Tourism Office sets the defaults and the allowed range for both, and **edits the penalty percentage** (district default + town override + Bansud limits).
+   - Starting values: free days 3 (allowed 0–14); penalty 50% (allowed 0–100% until the office narrows it).
+   - The policy in force is **snapshotted on the reservation** and shown to the tourist before booking (no hidden charges).
+5. **Refunds (GCash).**
+   | Case | Refund |
+   | --- | --- |
+   | Tourist cancels inside the free period | 100% |
+   | Tourist cancels after the free period (before check-in) | 100% − penalty % (penalty kept by the resort) |
+   | Owner rejects or cancels | 100% |
+   | Payment / TrackTour failure | 100% |
+   | No-show | none (as disclosed) |
+   - **No extra refund transaction fee** for the tourist; an unrecovered PayMongo fee is recorded separately as a **TrackTour platform expense**, never as commission.
+   - Commission: reversed on a full refund; on a partial refund it is recalculated on the amount the resort keeps (the penalty).
+   - The tourist may still cancel any time before the check-in date; only the refund amount depends on the policy.
+
+### Stage changes from these decisions
+
+- Stage 7 adds the resort's cancellation policy setting (owner, inside the office's limits) and shows it in the reservation builder and on the reservation.
+- Stage 8 computes refunds from the snapshotted policy.
+- Stage 9 adds the office settings (commission 8% / events 5%, free days, penalty %, with limits), the commission on retained amounts, and the platform-expense record for unrecovered gateway fees.
+
+
+## 12. Stage 6 checkpoint: availability engine (2026-11-24, built — awaiting review)
+
+**Schema** (migration `2026_11_28_000001_create_resort_availability_tables`, local MySQL verified with `SHOW CREATE TABLE`)
+- `resort_blocked_dates`: business_id (FK cascade), `resort_offering_id` (nullable FK cascade; NULL = whole resort), inclusive `start_date`/`end_date`, reason, created_by (FK users, null on delete). Index (business_id, start_date, end_date).
+- `resort_offering_allocations`: resort_offering_id (FK cascade), `date`, `slot` varchar(5) default `''` (time-slot start, `''` for whole day/night so the key never holds NULL), `reserved_quantity` **unsigned** int. `UNIQUE(resort_offering_id, date, slot)`.
+
+**Engine** — `App\Services\ResortAvailabilityService` (dates are Philippine dates; app timezone stays UTC)
+- Dates used: day_use / duration → the date; time_slot → the date at a start time; overnight → each night from check-in to the night before check-out (max 30 nights).
+- Amount used: `units` → quantity; `capacity` / `slots` → guests. Capacity = `inventory_quantity`.
+- Unavailable when: blocked by the owner (whole resort or that offering); the resort is closed that weekday (it has opening hours and none that day — day-based offerings only; nights may fall on a closed day, Stage 7 refuses a check-in on one); outside today … +365 days; an unknown time slot; not enough left.
+- Time slots: from the day's opening hours, one every `duration_minutes`, each ending by closing; 08:00–17:00 when the resort set no hours.
+- `reserve()` / `release()` run only inside the caller's transaction (a `LogicException` otherwise): rows created with `insertOrIgnore`, then `lockForUpdate`, merged and sorted by (offering, date, slot) so every transaction locks in the same order; one failing claim fails the whole reservation (`ResortUnavailableException` with a list of problems: sold_out with `available`, blocked, closed, slot, out_of_window, unknown). Release never goes below zero.
+- **MySQL race check (dev DB):** two separate PHP processes each asked for both units of RJM's Family room for the same night. Process A reserved and held its transaction 3 s; process B **waited on the row lock (2.2 s)** and was then refused "Family room is fully booked". With A rolling back instead, B waited and then got the room. Test rows were removed (0 allocation rows left, no open transactions).
+
+**API**
+- Tourist (public, throttled): `GET /api/tourist/resorts/{business}/availability?from=&to=` — approved Resort businesses only (404 otherwise); published offerings (a dependent one only with its published partner); per offering per date: capacity, reserved, available, blocked, closed, and for time slots each slot's availability; plus `closed_dates` and the blocks. Past `from` moves to today; at most 62 days.
+- Owner (Resort businesses they own): `GET …/resort-availability` (includes unpublished offerings), `GET/POST …/resort-blocked-dates`, `DELETE …/resort-blocked-dates/{block}`. A block must start today or later, end on/after its start, last at most a year, and name an offering of this resort. Reservations already on those dates stay booked; the reply reports `already_reserved` so the owner can contact guests.
+
+**Owner UI** — Cottages & Offerings gains "Closed & blocked dates" (`BlockedDatesPanel`): first/last day, whole resort or one offering, optional reason; upcoming closures listed with Reopen.
+
+**Tests**
+- `tests/Feature/ResortAvailabilityTest.php` (11): dates and usage per mode; capacity enforced with the whole reservation rolled back; a sold-out night refuses the whole stay; same-date lines added together; capacity counts guests; release floor; blocked / closed / past / far dates; time slots from opening hours; tourist calendar (published only, blocked, closed, slots, range limits, unapproved 404); owner block/reopen with the already-reserved warning and validation; other owners 403, non-resorts refused. (The "outside a transaction" guard is not unit-tested: RefreshDatabase already wraps every test in a transaction.)
+- `frontend/tests/ui/resort-blocked-dates.test.tsx` (4).
+- Frontend full suite: 157 files, 1078 tests passed.
+
+**Not in this stage:** no reservation is created yet (Stage 7 uses `reserve()`); tourists see no calendar UI until the Stage 7 builder.
+
+**Found by the full Laravel run (fixed in this stage):** production names its attraction category **"Attractions"** (BusinessModuleSeeder alias), not "Tourist Attraction". The not-yet-deployed Deals & Posts migration `2026_11_27_000005` now also covers "Attractions", and the owner sidebar / Business Gallery type mapping (`profileKind`) treats it as an attraction. `BusinessModuleBackfillTest` now expects the attraction modules to include `promotions`.
+
+**Full Laravel suite:** 1509 passed, 2 skipped, 2 failed before the fix — the backfill test above (fixed; 6/6 in the affected files after) and `OrderDeliveryScenariosTest::a rider on a trip cannot accept a second one`, which passes when run alone (intermittent, unrelated to this stage).
+
+
+## 13. Ownership, visibility and visitor access — plan (decided 2026-11-24; build after Stage 7)
+
+Product owner's decisions, for **resorts and tourist attractions**. Three separate settings:
+
+| Setting | Values | Meaning |
+| --- | --- | --- |
+| Ownership | Private · Government · Community-managed | Information shown on the listing. A privately owned place can still be publicly listed and take ordinary reservations. |
+| Listing visibility | Public · Unlisted · Private | **Public:** in search, lists and the map. **Unlisted:** not in search/lists/map; its page opens from a direct link. **Private ("hidden, request access"):** not listed anywhere; a tourist with the link sees only the name, photos and contact, and can submit a **Request access** form; the owner approves or rejects; offerings and reservations stay unavailable to that tourist until approved. |
+| Visitor access | Open to all · Reservation required · Approval required · Exclusive access | Open: visit during operating hours without booking. Reservation required: must reserve first. Approval required: must request the owner's permission. Exclusive: only approved bookings / private groups. |
+
+**Tourism Office review:** approval at registration stays for every ownership type. After approval, changing **ownership type, or making a listing Private / an access type Restricted (Approval required or Exclusive)** goes back to the Tourism Office; the listing keeps its current settings until approved. Other edits do not need re-review.
+
+**Attraction operating hours (supersedes "attractions are always open", same day):** operating hours and reservations are independent settings. An attraction chooses **Open 24 hours (24/7)**, **custom operating hours** (opening/closing time and closed days), or **Temporarily closed**. Being open 24/7 is not an access permission: reservations, capacity limits and owner approval still apply when the access type says so. Owners can set visitor capacity per day or time slot, entrance fees, tour packages and guided tours; attraction reservations reuse the resort reservation engine (Stages 6–10).
+- **Today's behaviour = the "Open 24 hours" option for every attraction** (built 2026-11-24: no hours asked or stored, "Always open" shown). The custom-hours and temporarily-closed options come with this stage.
+
+**Order:** after Stage 7 (tourist resort reservations). Plan the stage (audit + decisions) before building.
+
+
+## 14. Stage 7 checkpoint: quote, reservations (pay at the resort), status flow, cancellation policy (2026-11-24, built — awaiting review)
+
+**Schema** — migration `2026_11_28_000002_add_resort_reservations` (additive; local MySQL verified)
+- `bookings` + `subtotal`, `payment_option`, `cancellation_policy` (JSON snapshot), `confirmed_at`, `client_reference` with `UNIQUE(user_id, client_reference)`.
+- `booking_items` + `resort_offering_id` (FK, null on delete), category, booking_mode, pricing_basis, units, guests, nights, **`allocated_quantity`** (exactly what is held per date), start/end date, slot, `snapshot` JSON. The price and name are snapshots: later offering edits never change a booking.
+- `booking_status_logs` (from → to, actor id/type, reason; append-only).
+- `resort_settings` (one per resort: `cancellation_free_days` default 3, `cancellation_penalty_percent` default 50).
+
+**Engine** — `App\Services\ResortReservationService`
+- `quote()` / `create()` check: approved Resort; check-in today or later; guests 1–200; each published offering once; **required offerings included**; **add-ons only with their partner**; min/max quantity; guests per unit (`max_guests × units`) or per reservation (capacity); a time for time-slot offerings; check-out after check-in (max 30 nights) and **no check-in on a closed day** for overnight stays; availability (Stage 6).
+- Pricing (nights = 1 for day use): per_person price × people × nights; per_unit / per_night price × units × nights; per_hour price × hours × quantity; per_booking flat.
+- `create()`: one transaction — reserve (row locks) → booking (`booking_type = resort`, pending, pay at the resort, unpaid, policy snapshot) → item snapshots → status log; owner notified (`booking_created`). A repeated `client_reference` returns the same booking (also when two submits race: the UNIQUE key keeps one).
+- Status changes lock the booking row: pending → confirmed (owner/staff) · pending → rejected (reason) · pending/confirmed → cancelled by the resort (reason) · pending/confirmed → cancelled by the tourist **before the check-in date** · confirmed → completed / no-show **from the check-in date**. Reject, cancel and no-show **release the units** in the same transaction. Every change is logged; the other side is notified (`booking_status_changed`).
+- GCash is refused with a "coming soon" message until Stage 8.
+
+**Cancellation policy** — `App\Support\ResortCancellationPolicy`: starting defaults and limits (free 3 days, allowed 0–14; penalty 50%, allowed 0–100%) until Stage 9 moves them to the Tourism Office settings. `refundPercent()` ready for Stage 8 (free period 100%, then 100 − penalty). A pay-at-the-resort cancellation costs nothing (nothing was paid).
+
+**API**
+- Public: `POST /api/tourist/resorts/{business}/quote`.
+- Tourist (`role:tourist`): `POST /api/tourist/resorts/{business}/reservations` (throttle 10/min), `GET /api/tourist/reservations/{booking}` (own only; includes `can_cancel`), `POST /api/tourist/reservations/{booking}/cancel`.
+- Owner: `PATCH /api/business-owner/bookings/{id}/status` now routes resort reservations through the service (confirmed / rejected / cancelled / completed / no_show; reason for reject and cancel) — and finds bookings with `whereIn` over the owner's businesses (it used `where(…, list)`). `GET /api/business-owner/bookings/{booking}` adds `actions` (allowed changes now). `GET/PUT …/businesses/{business}/resort-policy`.
+- Staff with `bookings.update`: the same service for resort reservations (`no_show` added to the request rule).
+- `GET /api/tourist/explore/{id}` → `resort.cancellation_policy` (shown before reserving).
+- Fixed on the way: `BookingItemResource` referenced columns that do not exist (unit_price, notes, offering) — it now returns the real fields; the tourist history list showed no resort name (it read `business_name`, the API sends `business`).
+
+**Frontend**
+- Resort page: "Reserve your stay" card + a bottom "From ₱X · Reserve" bar (only with published offerings) open `ReserveBuilder`: dates (check-out only when an overnight offering is chosen), guests, offerings with "N left" from the Stage 6 calendar, required items included (per-person ones follow the party size), add-ons locked until their partner, guests per unit, time slots, the server's price breakdown, contact, **Pay at the resort** (GCash shown as coming soon), the policy; a per-form `client_reference`; success screen with the booking number. Logged-out visitors are asked to log in (no quote or calendar requests).
+- Tourist: `/tourist/reservations/:id` — status and next step, dates, guests, items and total, policy, history, Cancel (before check-in). Trips & bookings opens it for resort reservations.
+- Owner: a resort reservation on `/business-owner/bookings/:id` shows guest and contact, notes, items and total, payment, policy, history and only the allowed actions; reject / cancel ask for a reason the guest sees. Cottages & Offerings gains the **Cancellation policy** panel.
+
+**Verification**
+- `tests/Feature/ResortReservationTest.php` (12, 114 assertions): pricing per basis; every rule; reserve holds units, notifies the owner, snapshots price and policy; double submit books once; login / role / GCash refusals; confirm + notice + no double confirm; reject needs a reason and frees units; complete / no-show only from the check-in date (no-show frees units); another owner refused, legacy bookings still update; tourist cancel before check-in only (other tourist 404); owner policy limits, snapshot kept, policy on the tourist page; refund percentages.
+- `frontend/tests/ui/resort-reservations.test.tsx` (8); `resort-detail-page.test.tsx` updated (the Reserve button now exists).
+- **MySQL smoke test (rolled back):** RJM — 4 guests, cottage + Family room 2 nights → ₱3,380; a repeated submit returned the same booking; units held per night; confirm → tourist cancel released them; log pending → confirmed → cancelled; 0 rows left.
+- Frontend full suite: 159 files, 1095 tests passed. Laravel full suite: 1525 passed, 2 skipped (known environment skips), 0 failed.
+
+**Next (Stage 8):** GCash online payment through the existing Booking payment flow, 30-minute hold for unpaid GCash reservations, refunds from the snapshotted policy.
+
+
+## 15. Stage 8 checkpoint: GCash payment and refunds (2026-11-24, built — awaiting review)
+
+**Schema** — migration `2026_11_28_000003_add_resort_reservation_payments` (additive; local MySQL migrated): `bookings.payment_due_at`, `bookings.refund_due`, index (booking_type, payment_status, payment_due_at). New booking status `expired`.
+
+**Flow** (`ResortReservationService`, existing payment + refund infrastructure reused)
+- **Reserve with GCash:** `payment_option = gcash`, `payment_status = awaiting_payment`, units held for **30 minutes** (`payment_due_at`). The owner is **not** notified, the reservation is **not** in the owner's / staff's lists or dashboard counts, and it cannot be confirmed or rejected ("The guest has not paid with GCash yet.") until paid. The tourist may still cancel the hold (nothing to refund; units released).
+- **Pay:** the existing `POST /api/payments/create-intent` (payable = booking) — for a resort reservation only while it is pending, awaiting payment, inside its hold, and the tourist's own; a paid reservation cannot be paid twice. PayMongo's webhook (existing, exactly-once per event, row-locked) → `markPayablePaid` → `recordPayment()`:
+  - in time → `paid`, `paid_amount`, hold cleared, owner notified "New reservation (paid with GCash)";
+  - after the hold expired or after a cancel → money recorded and **refunded in full** (payment failure is never the tourist's loss), tourist notified.
+- **Expiry:** `resorts:process-payments` (every minute, `onOneServer`) expires unpaid holds past `payment_due_at` → status `expired`, units released, logged as `system`, tourist notified.
+- **Refunds** — `refund_due` is decided under the booking lock when the status changes, then `PaymentRefundProcessor::initiateRefund` runs after commit (records "requested" before the single PayMongo call; never refunds more than paid − refunded − in flight; the existing webhook / `ReconcilePendingRefunds` settle pending refunds):
+
+  | Change | Refund |
+  | --- | --- |
+  | Owner/staff reject or cancel | 100% |
+  | Tourist cancel before check-in | snapshotted policy: 100% in the free period, then 100 − penalty % (the resort keeps the penalty) |
+  | Late payment (expired / cancelled) | 100% |
+  | No-show, completed | none |
+- **Refused refunds** are retried by the same command until **5** failed attempts; then it stops and records `escalation.resort_refund_failed` (financial activity log, once) so an admin returns the money by hand.
+- Unchanged on purpose: the food "no refund after a rider accepts" rule only looks at orders (booking payments are never blocked); restaurant wallet deductions only apply to orders.
+
+**API additions**
+- Tourist reservation (`GET /api/tourist/reservations/{id}` and the cancel/create replies): `awaiting_payment`, `payment_due_at`, `cancel_refund` ({percent, amount} for cancelling now) and `refund` ({due, refunded, in_flight, status none/pending/refunded/failed, failed_attempts}).
+- Owner reservation (show + status change): `refund`.
+
+**Frontend**
+- Builder: payment choice **Pay at the resort** / **GCash online** ("held 30 minutes while you pay"); "Reserve & pay" creates the reservation and goes straight to the PayMongo checkout; if the checkout cannot open, the tourist gets **Pay now** on the reservation page.
+- Tourist reservation page: while held, "Pay ₱X with GCash within N minutes" + **Pay with GCash**; cancel dialog states the exact refund ("You get ₱170.00 back (50%) …" or the full amount); refund status shown (refunded / on its way / did not go through yet). Expired reservations explain why.
+- Owner page: "₱X paid online" and the refund status. PayMongo's return page now goes back to the reservation (it went to the food order tracker for bookings).
+
+**Verification**
+- `tests/Feature/ResortReservationPaymentTest.php` (7): 30-minute hold invisible to the owner and unconfirmable; paying through the real create-intent + webhook path sends it to the owner, no second payment; expiry releases the units and a late webhook payment is refunded in full; tourist cancel in / after the free period (100% / 50%, payment stays "paid" on a partial refund); owner reject = 100%, no-show = none; refused refund retried to 5 attempts then stops and escalates once; cancelling an unpaid hold costs nothing. PayMongo faked over HTTP.
+- `ResortReservationTest` (12) still green (GCash is now allowed).
+- `frontend/tests/ui/resort-reservations.test.tsx` (13, +5): GCash checkout redirect, Pay now fallback, pay-again on the reservation page, refund preview, refund status.
+- **MySQL smoke (rolled back, no PayMongo calls):** a GCash hold awaited payment with no owner actions; recording the payment made it paid and confirmable; a second hold past its due time expired and released its unit; 0 rows left.
+- Frontend full suite: 159 files, 1100 tests passed. Laravel full suite: 1532 passed, 2 skipped (known environment skips), 0 failed.
+
+**Next (Stage 9):** commission (8% / events 5%, Tourism Office settings, on GCash money only, reversed / recalculated on refunds), the policy limits as Tourism Office settings, unrecovered PayMongo fees as a TrackTour platform expense, owner earnings per reservation.

@@ -6,7 +6,8 @@ import { get, post } from '@/shared/services/api'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { toAssetUrl } from '@/shared/utils'
 import { useBusinessPortal } from '../services/business-portal'
-import { POST_LIMITS, type DishSaleSummary, type OwnerPost } from '../services/promotions'
+import { POST_LIMITS, sellsFood, type DishSaleSummary, type OwnerPost } from '../services/promotions'
+import { dealsCopy, portalKind } from '../services/business-profile-kind'
 
 const input = 'w-full rounded-xl border border-[#D9E2DC] bg-[#fff] px-3.5 py-2.5 text-sm text-[#17201B] focus:border-[#16803C] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25'
 
@@ -49,10 +50,12 @@ export default function BusinessOwnerPostForm() {
     setKeep(p.media)
   }, [postQuery.data])
 
+  // Dish sales exist only for businesses with a menu (not resorts or tourist attractions).
+  const food = businessId == null || sellsFood(portal.businesses, businessId)
   const salesQuery = useQuery({
     queryKey: ['bo-dish-sales', portal.prefix, businessId],
     queryFn: () => get<DishSaleSummary[]>(`${portal.prefix}/dish-sales?business_id=${businessId}`),
-    enabled: businessId != null,
+    enabled: businessId != null && food,
   })
   const sales = useMemo(() => (salesQuery.data ?? []).filter((s) => s.status === 'active' || s.status === 'scheduled' || String(s.id) === saleId), [salesQuery.data, saleId])
 
@@ -161,7 +164,7 @@ export default function BusinessOwnerPostForm() {
           )}
           <div>
             <label htmlFor="post-caption" className="mb-1.5 block text-sm font-medium text-[#17201B]">Caption</label>
-            <textarea id="post-caption" className={input} rows={4} maxLength={POST_LIMITS.captionMax} value={caption} onChange={(e) => setCaption(e.target.value)} placeholder="What’s new? e.g. Our sisig is 25% off this weekend!" aria-describedby="post-caption-count" />
+            <textarea id="post-caption" className={input} rows={4} maxLength={POST_LIMITS.captionMax} value={caption} onChange={(e) => setCaption(e.target.value)} placeholder={dealsCopy(portalKind(portal.businesses, businessId)).postPlaceholder} aria-describedby="post-caption-count" />
             <p id="post-caption-count" className="mt-1 text-right text-xs text-[#5E6B63]">{caption.length}/{POST_LIMITS.captionMax}</p>
           </div>
 
@@ -203,14 +206,14 @@ export default function BusinessOwnerPostForm() {
             )}
           </div>
 
-          <div>
+          {(food || saleId !== '') && <div>
             <label htmlFor="post-sale" className="mb-1.5 block text-sm font-medium text-[#17201B]">Link a sale <span className="font-normal text-[#5E6B63]">(optional)</span></label>
             <select id="post-sale" className={input} value={saleId} onChange={(e) => setSaleId(e.target.value)}>
               <option value="">No sale</option>
               {sales.map((s) => <option key={s.id} value={s.id}>{s.title} · {s.label}{s.status === 'scheduled' ? ' (scheduled)' : ''}</option>)}
             </select>
             <p className="mt-1 text-xs text-[#5E6B63]">Tourists see the sale’s dishes at their sale price and a “Shop the deal” button while it runs.</p>
-          </div>
+          </div>}
         </section>
 
         {progress !== null && save.isPending && (

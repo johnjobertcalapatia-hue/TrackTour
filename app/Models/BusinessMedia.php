@@ -10,6 +10,20 @@ class BusinessMedia extends Model
 {
     use SoftDeletes;
 
+    /**
+     * Gallery photo categories for every kind of business (restaurant, resort,
+     * tourist attraction, others); the owner's Business Gallery page offers the
+     * ones that fit the business type (business-profile-kind.ts).
+     */
+    public const GALLERY_CATEGORIES = [
+        // restaurants
+        'food', 'restaurant', 'signature_dish', 'interior', 'dining_area', 'behind_the_scenes', 'new_menu', 'best_seller', 'dessert', 'drink',
+        // resorts and tourist attractions
+        'beach', 'nature', 'attraction', 'pool', 'cottage', 'room', 'facility', 'activity', 'scenery', 'campsite', 'river',
+        // any business
+        'promotion', 'event',
+    ];
+
     protected $fillable = [
         'business_id',
         'type',

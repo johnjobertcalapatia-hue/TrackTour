@@ -22,6 +22,8 @@ class BusinessOwnerBookingController extends Controller
         $perPage = $filters['perPage'] ?? 20;
 
         $bookings = Booking::whereIn('business_id', $businessIds)
+            // Stage 8: an unpaid GCash hold is not a reservation for the owner yet.
+            ->where('payment_status', '!=', 'awaiting_payment')
             ->with('business', 'items')
             ->when($filters['status'] ?? null, fn ($q, $s) => $q->where('status', $s))
             ->when($filters['business_id'] ?? null, fn ($q, $id) => $q->where('business_id', $id))
@@ -40,9 +42,13 @@ class BusinessOwnerBookingController extends Controller
             return $this->forbiddenResponse('You do not own this business.');
         }
 
-        $booking->load('items', 'business');
+        $booking->load('items', 'business', 'statusLogs');
 
-        return $this->successResponse(BookingResource::make($booking));
+        // Resort reservations (Stage 7) also say which status changes are allowed now.
+        return $this->successResponse(BookingResource::make($booking)->resolve() + [
+            'actions' => $booking->isResortReservation() ? app(\App\Services\ResortReservationService::class)->ownerActions($booking) : null,
+            'refund' => $booking->isResortReservation() ? app(\App\Services\ResortReservationService::class)->refundInfo($booking) : null,
+        ]);
     }
 
     public function updateStatus(UpdateBookingStatusRequest $request, Booking $booking): JsonResponse

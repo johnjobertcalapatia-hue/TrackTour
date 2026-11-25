@@ -5,6 +5,7 @@ import { AlertTriangle, Bike, CheckCircle2, Loader2, MapPin, MessageSquareText, 
 import { apiErrorMessage, get, post } from '@/shared/services/api'
 import { TableSkeleton } from '@/shared/components/Skeleton'
 import { cn, formatDateTime } from '@/shared/utils'
+import { useOfficePortal } from '@/features/admin/office-portal'
 
 /** SOS alerts (2026-11-18): raised by a tourist during a ride or a rider during any trip. */
 export interface AdminSos {
@@ -12,6 +13,10 @@ export interface AdminSos {
   reference: string
   status: 'pending' | 'acknowledged' | 'responding' | 'resolved'
   active: boolean
+  /** Municipal Office plan Stage 3: the municipal office that handles it (null: Bansud only). */
+  municipality: { id: number; name: string } | null
+  /** True once the Bansud Tourism Office has acted on it. */
+  bansud_involved: boolean
   raised_by_role: 'tourist' | 'rider'
   service: 'ride' | 'food'
   reporter: { name: string | null; phone: string | null }
@@ -56,10 +61,12 @@ const ago = (iso: string | null) => {
 }
 
 export default function AdminLiveSOS() {
+  // Bansud: every alert. Municipal office: its own town's alerts (Bansud can take any over).
+  const portal = useOfficePortal()
   const [filter, setFilter] = useState<Filter>('active')
   const { data, isLoading } = useQuery({
-    queryKey: ['admin-live-sos', filter],
-    queryFn: () => get<{ data: AdminSos[]; summary: { active: number; pending: number } }>(`/admin/live/sos?filter=${filter}`),
+    queryKey: ['admin-live-sos', portal.api, filter],
+    queryFn: () => get<{ data: AdminSos[]; summary: { active: number; pending: number } }>(`${portal.api}/live/sos?filter=${filter}`),
     refetchInterval: 5000,
   })
   const alerts = data?.data ?? []
@@ -113,6 +120,7 @@ export default function AdminLiveSOS() {
 }
 
 function SosCard({ alert: a }: { alert: AdminSos }) {
+  const portal = useOfficePortal()
   const queryClient = useQueryClient()
   const [mode, setMode] = useState<'view' | 'respond' | 'resolve'>('view')
   const [responder, setResponder] = useState('')
@@ -120,7 +128,7 @@ function SosCard({ alert: a }: { alert: AdminSos }) {
   const [outcome, setOutcome] = useState<'handled' | 'false_alarm'>('handled')
 
   const act = useMutation({
-    mutationFn: (v: { action: 'acknowledge' | 'respond' | 'resolve'; body?: Record<string, unknown> }) => post(`/admin/live/sos/${a.id}/${v.action}`, v.body ?? {}),
+    mutationFn: (v: { action: 'acknowledge' | 'respond' | 'resolve'; body?: Record<string, unknown> }) => post(`${portal.api}/live/sos/${a.id}/${v.action}`, v.body ?? {}),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin-live-sos'] })
       queryClient.invalidateQueries({ queryKey: ['admin-sos-summary'] })
@@ -137,6 +145,14 @@ function SosCard({ alert: a }: { alert: AdminSos }) {
         <span className={cn('rounded-full px-2.5 py-0.5 text-xs font-bold', status.tone)}>{status.label}</span>
         <span className="text-sm font-semibold text-[#1C2B22]">{a.reference}</span>
         <span className="rounded-full bg-[#FAF7F0] px-2.5 py-0.5 text-xs font-medium text-[#3F4B43] ring-1 ring-[#E7E2D6]">{who(a)}</span>
+        {/* Bansud sees which office handles each alert; a municipal office sees when Bansud stepped in. */}
+        {portal.district ? (
+          <span className="rounded-full bg-sky-50 px-2.5 py-0.5 text-xs font-medium text-sky-700 ring-1 ring-sky-100">
+            {a.municipality ? `${a.municipality.name} office` : 'No town · Bansud'}
+          </span>
+        ) : a.bansud_involved ? (
+          <span className="rounded-full bg-sky-50 px-2.5 py-0.5 text-xs font-medium text-sky-700 ring-1 ring-sky-100">Bansud Tourism Office is helping</span>
+        ) : null}
         <span className="ml-auto text-xs text-[#66736B]" title={a.raised_at ? formatDateTime(a.raised_at) : undefined}>Raised {ago(a.raised_at)}</span>
       </div>
 
@@ -188,7 +204,7 @@ function SosCard({ alert: a }: { alert: AdminSos }) {
             <span className="text-xs font-normal text-[#66736B]">{ago(a.live_location.at)}</span>
           </a>
         )}
-        {a.active && <Link to="/admin/live/map" className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 font-medium text-[#2E8B57] hover:underline">Open Live Map</Link>}
+        {a.active && <Link to={`${portal.route}/live/map`} className="inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 font-medium text-[#2E8B57] hover:underline">Open Live Map</Link>}
       </div>
 
       <ol className="mt-4 space-y-1 border-l-2 border-[#E7E2D6] pl-4 text-sm text-[#3F4B43]" aria-label="What was done">

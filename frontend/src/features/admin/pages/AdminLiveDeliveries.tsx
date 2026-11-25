@@ -6,6 +6,7 @@ import { TableSkeleton } from '@/shared/components/Skeleton'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { cn, formatDateTime } from '@/shared/utils'
 import TripDiagnosticsPanel from '@/features/admin/components/TripDiagnosticsPanel'
+import { useOfficePortal } from '@/features/admin/office-portal'
 import type { DestinationChange } from '@/features/tourist/services/destination-change'
 
 interface LiveCodPurchase {
@@ -111,15 +112,17 @@ export default function AdminLiveDeliveries() {
   if (from) params.from = from
   if (to) params.to = to
 
+  // Bansud: /admin (its own municipality). Municipal office: /municipal (its own town).
+  const portal = useOfficePortal()
   const { data, isLoading } = useQuery({
-    queryKey: ['admin-live-deliveries', params],
-    queryFn: () => get<DeliveriesResponse>('/admin/live/deliveries', { params }),
+    queryKey: ['admin-live-deliveries', portal.api, params],
+    queryFn: () => get<DeliveriesResponse>(`${portal.api}/live/deliveries`, { params }),
     placeholderData: keepPreviousData,
     refetchInterval: bucket === 'active' ? 10000 : false,
   })
 
   const issueCashMutation = useMutation({
-    mutationFn: (deliveryId: number) => post(`/admin/deliveries/${deliveryId}/issue-purchasing-cash`),
+    mutationFn: (deliveryId: number) => post(`${portal.api}/deliveries/${deliveryId}/issue-purchasing-cash`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-live-deliveries'] }),
   })
 
@@ -291,14 +294,17 @@ export default function AdminLiveDeliveries() {
                         <StatusBadge status={d.status} />
                         {isCod(d) && <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[#B45309]">COD</span>}
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => setDiagnosing(d.id)}
-                        aria-label={`Diagnose trip ${d.order_number ?? d.id}`}
-                        className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-[#2E8B57] hover:underline"
-                      >
-                        <Stethoscope className="h-3.5 w-3.5" /> Diagnose
-                      </button>
+                      {/* Trip diagnostics can repair trips: Bansud only. */}
+                      {portal.district && (
+                        <button
+                          type="button"
+                          onClick={() => setDiagnosing(d.id)}
+                          aria-label={`Diagnose trip ${d.order_number ?? d.id}`}
+                          className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-[#2E8B57] hover:underline"
+                        >
+                          <Stethoscope className="h-3.5 w-3.5" /> Diagnose
+                        </button>
+                      )}
                     </td>
                     <td className="whitespace-nowrap px-4 py-3">{purchasingCash(d)}</td>
                     <td className="whitespace-nowrap px-4 py-3 text-right">
@@ -328,7 +334,7 @@ export default function AdminLiveDeliveries() {
         )}
       </div>
 
-      {diagnosing !== null && <TripDiagnosticsPanel deliveryId={diagnosing} onClose={() => setDiagnosing(null)} />}
+      {portal.district && diagnosing !== null && <TripDiagnosticsPanel deliveryId={diagnosing} onClose={() => setDiagnosing(null)} />}
     </div>
   )
 }

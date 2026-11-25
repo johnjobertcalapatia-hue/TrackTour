@@ -480,7 +480,7 @@ function PromotionCard({ promo }: { promo: PromotionItem }) {
 function FilterCheck({ label, count, checked, onChange }: { label: string; count: number; checked: boolean; onChange: () => void }) {
   return (
     <label className={cn(
-      'inline-flex items-center gap-1.5 h-8 px-3 rounded-full border text-[13px] font-medium cursor-pointer select-none transition-colors',
+      'relative inline-flex items-center gap-1.5 h-8 px-3 rounded-full border text-[13px] font-medium cursor-pointer select-none transition-colors',
       checked ? 'bg-[#E9F7EF] border-[#087F3F] text-[#087F3F]' : 'bg-white border-[#E5E9E7] text-[#3B4540] hover:border-[#087F3F]',
     )}>
       <input type="checkbox" checked={checked} onChange={onChange} className="sr-only" />

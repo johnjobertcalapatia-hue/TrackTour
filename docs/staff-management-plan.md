@@ -295,3 +295,76 @@ attraction, transport and other categories keep their existing roles. All four r
 - No owner or staff screen for `sales/*` or `reports/cod-settlements` yet (API available to finance staff).
 - The owner's group-checkout gaps from Stage 1 (§4 risk 1) remain.
 - Deploy: run `2026_11_25_000001…000007` on Railway.
+
+## 6. Roles & Permissions page — Stage 2 (approved and built 2026-11-24, not committed)
+
+### Audit
+
+- `/business-owner/roles` (sidebar "User Roles & Permissions") renders `BusinessOwnerRoles.tsx`, a mock:
+  four hard-coded roles, "Add Role" and "Edit" buttons do nothing.
+- Roles are global templates only (`staff_roles`, `name` globally UNIQUE), offered per business category
+  (`business_category_staff_role`). Grants live in `staff_role_permissions`; staff permissions = union of
+  their roles' grants (`Staff::grantedPermissions`, catalogue keys only). Owners cannot see or change grants.
+- `GET /business-owner/staff/roles` is an inline route closure; it returns every role in the system when the
+  business is missing, not the owner's, or its category has no templates.
+- `rolesError` only accepts templates offered for the business's category.
+
+### Proposal
+
+1. **Built-in roles (templates) are read-only.** They are shared by every business of that type, so an owner
+   cannot change them. The page shows each with its permissions and staff count, plus **Duplicate** to start
+   a custom role from it.
+2. **Custom roles per business.** Additive migration: nullable `staff_roles.business_id` (FK, cascade);
+   replace the global `UNIQUE(name)` with `UNIQUE(business_id, name)`; a custom role may not reuse a
+   built-in role's name for that business (checked in code, since MySQL lets NULLs repeat). Max 20 custom
+   roles per business; name 2–50 chars, description up to 255.
+3. **Permission editor** grouped by module (`CATALOGUE`), showing only the permissions that fit the business
+   type: food businesses → orders, rider cash, handover, menu, promotions, finance, expenses; booking
+   businesses (resort, attraction, …) → bookings, finance, expenses, promotions. `NEVER_GRANTABLE` items are
+   listed as locked "Owner only" rows so owners can see what staff can never do. At least one permission.
+4. **Changes apply immediately** to everyone holding the role (permissions are already checked per request).
+   Each affected staff member gets a `staff_activity_logs` "role permissions changed" entry with before/after;
+   the page warns "This changes access for N staff" before saving.
+5. **Delete** a custom role only when nobody holds it (the page lists who to reassign); built-ins cannot be
+   deleted.
+6. **Staff create/edit:** `RolePicker` shows built-in + this business's custom roles; `rolesError` accepts a
+   custom role only for its own business. The roles endpoint moves into a controller and returns nothing for
+   a business the owner does not own (fixes the "all roles" leak above).
+7. **API** (owner only, `role:business_owner`, ownership checked): `GET /business-owner/roles?business_id=`,
+   `GET /business-owner/roles/permissions?business_id=` (catalogue for that business type),
+   `POST /business-owner/roles`, `PUT /business-owner/roles/{role}`, `DELETE /business-owner/roles/{role}`.
+   Staff never get these routes (`staff.manage` stays never-grantable).
+8. **Page:** business selector (owners with several businesses), "Built-in" and "Custom" role lists with
+   permission chips and staff count; create/edit drawer with grouped checkboxes; staff-holding-this-role list.
+9. **Tests:** feature tests (CRUD, cross-business refusal, name rules, grant filtering by business type, never-
+   grantable refused, delete while assigned refused, picker accepts own custom role / refuses another's,
+   permission change takes effect for staff + logged) and a UI test for the page.
+
+Out of scope: editing built-in templates, resort/attraction built-in role lists (unchanged until described),
+staff dashboards (Stage 3), the full activity log page (Stage 4).
+
+### Product owner's decision (2026-11-24)
+
+"Roles for staff: there are 3 roles for staff, and the business owner can add roles and choose what modules
+they can manage." The three restaurant roles stay built-in (read-only); owners add custom roles by module.
+
+### Implementation record (built 2026-11-24, not committed)
+
+- Migration `2026_11_25_000008_add_business_id_to_staff_roles_table`: nullable `business_id` (FK, cascade),
+  `created_by`; `UNIQUE(name)` → `UNIQUE(business_id, name)`. Local MySQL verified. Rollback refused while
+  custom roles exist.
+- `StaffPermissions::MODULES` (Orders, Rider cash payments, Rider handover, Bookings & reservations, Menu,
+  Promotions & discounts, Sales & reports, Expenses), `modulesForCategory` (food modules for Restaurant /
+  Café / Food Hub, bookings for other types, both for Hotel & Restaurant Combination), `withImplied`
+  (manage ⇒ view), `OWNER_ONLY_LABELS`.
+- `BusinessOwner\BusinessOwnerRoleController`: `GET/POST /business-owner/roles`,
+  `PUT/DELETE /business-owner/roles/{role}`, and `GET /business-owner/staff/roles` (replaces the route
+  closure; returns nothing for a business the owner does not own). Max 20 custom roles; a custom name may
+  not repeat one of the business's roles or any built-in name (case-insensitive). Editing logs
+  `staff.role_permissions_changed` (before/after) for every holder whose access changed.
+- `BusinessOwnerStaffController::rolesError` accepts a custom role of the same business only.
+- Seeders look up built-in roles only (`business_id` NULL).
+- Frontend: `BusinessOwnerRoles.tsx` rewritten (follows the owner's selected business); `RolePicker` tags
+  custom roles.
+- Tests: `tests/Feature/StaffCustomRolesTest.php` (8), `frontend/tests/ui/business-owner-roles.test.tsx` (5).
+- Deploy: run `2026_11_25_000008` on Railway with the earlier `000001…000007`.

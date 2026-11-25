@@ -7,12 +7,21 @@ use App\Models\Business;
 use App\Models\Municipality;
 use App\Models\TourismSetting;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 
 class AdminMapController extends Controller
 {
-    public function index(): JsonResponse
+    /**
+     * Map pins. /admin: every municipality. /municipal (Municipal Office plan
+     * Stage 2, `municipal.scope` sets the `municipality` attribute): only the
+     * officer's businesses and its own town marker.
+     */
+    public function index(Request $request): JsonResponse
     {
+        $town = $request->attributes->get('municipality');
+
         $businesses = Business::query()
+            ->when($town, fn ($q) => $q->where('municipality_id', $town->id))
             ->with(['category:id,name', 'municipality:id,name'])
             ->whereNotNull('latitude')
             ->whereNotNull('longitude')
@@ -37,6 +46,7 @@ class AdminMapController extends Controller
         // the logo uploaded on Office Profile.
         $officeLogo = TourismSetting::query()->whereNull('municipality_id')->where('key', 'office_logo')->value('value');
         $municipalities = Municipality::query()
+            ->when($town, fn ($q) => $q->whereKey($town->id))
             ->orderBy('name')
             ->get(['id', 'name', 'latitude', 'longitude', 'logo'])
             ->map(fn (Municipality $m) => [

@@ -7,6 +7,8 @@ import { Skeleton } from '@/shared/components/Skeleton'
 import SystemNoticeBanner from '@/shared/components/SystemNoticeBanner'
 import { cn, getInitials, toAssetUrl } from '@/shared/utils'
 import { useBusinessOwnerStore } from '../../services/business-owner-store'
+import { profileKind, type ProfileKind } from '../../services/business-profile-kind'
+import { fullPageLoad, pageAfterSwitch } from '../../navigation/owner-nav'
 import { ArrowRight, Bell, Check, ChevronDown, LogOut, Menu, Settings, User, X } from 'lucide-react'
 
 export interface ShellNavItem {
@@ -20,8 +22,6 @@ export interface ShellNavSection {
   items: ShellNavItem[]
 }
 
-/** Food businesses get the restaurant wording and icon. */
-const FOOD_CATEGORIES = ['Restaurant', 'Café', 'Food Hub', 'Hotel & Restaurant Combination']
 
 /**
  * Pages reached through a redirect that live under another item's path: the
@@ -52,6 +52,17 @@ export interface ShellPortal {
   menu: { to: string; label: string; icon: ReactNode }[]
   /** Accessible name of the sidebar navigation. */
   navLabel?: string
+}
+
+/**
+ * The sidebar's "Grow your … with TrackTour" card, worded for each business
+ * type. An attraction has no sales reports, so it points to Deals & Posts.
+ */
+const SIDE_CARD: Record<ProfileKind, { noun: string; text: string; action: string; to: string }> = {
+  restaurant: { noun: 'restaurant', text: 'See your sales, orders and expenses in one place.', action: 'View Insights', to: '/business-owner/reports' },
+  resort: { noun: 'resort', text: 'See your reservations, earnings and expenses in one place.', action: 'View Insights', to: '/business-owner/reports' },
+  attraction: { noun: 'attraction', text: 'Share deals and posts to reach more visitors.', action: 'Create a Post', to: '/business-owner/promotions' },
+  general: { noun: 'business', text: 'See your sales, bookings and expenses in one place.', action: 'View Insights', to: '/business-owner/reports' },
 }
 
 /** Routes that show a "New" badge in the sidebar. */
@@ -113,17 +124,23 @@ function SidebarContent({ sections, onClose, portal }: { sections: ShellNavSecti
   const navigate = useNavigate()
   const location = useLocation()
   const business = useSelectedBusiness()
-  const isFood = business ? FOOD_CATEGORIES.includes(business.category) : true
+  const card = SIDE_CARD[business ? profileKind(business.category) : 'restaurant']
 
   const navTargets = sections.flatMap((section) => section.items.map((item) => item.to))
   const aliasTarget = Object.entries(ACTIVE_ALIASES).find(([to, pattern]) => navTargets.includes(to) && pattern.test(location.pathname))?.[0]
 
-  const isActive = (to: string) => {
-    if (aliasTarget) return to === aliasTarget
-    const [path, query] = to.split('?')
+  const matches = (to: string) => {
+    const [path = '', query] = to.split('?')
     if (query) return location.pathname === path && location.search.includes(query)
     return location.pathname === path || (path !== (portal?.homeTo ?? '/business-owner/dashboard') && location.pathname.startsWith(path + '/'))
   }
+  // Only ONE item is active: the most specific match. E.g. an attraction's
+  // /business-owner/businesses/8/tourist-attraction-edit lights "Attraction
+  // Details", not also "My Businesses" (/business-owner/businesses).
+  const activeTarget = aliasTarget ?? navTargets
+    .filter(matches)
+    .sort((a, b) => (b.includes('?') ? 1 : 0) - (a.includes('?') ? 1 : 0) || (b.split('?')[0] ?? '').length - (a.split('?')[0] ?? '').length)[0]
+  const isActive = (to: string) => to === activeTarget
 
   return (
     <div className="flex h-full w-full flex-col overflow-y-auto bg-gradient-to-b from-[#0F4D2B] via-[#0C4325] to-[#0A3920] text-white">
@@ -178,14 +195,14 @@ function SidebarContent({ sections, onClose, portal }: { sections: ShellNavSecti
       <div className="px-3 pb-3">
         {portal ? (portal.sideCard ?? null) : (
         <div className="rounded-[18px] border border-[#ffffff26] bg-gradient-to-br from-[#14653A] to-[#0D4A2A] p-4">
-          <p className="text-sm font-bold leading-snug text-white">Grow your {isFood ? 'restaurant' : 'business'} with TrackTour</p>
-          <p className="mt-1 text-xs text-[#C8E6D2]">See your sales, orders and expenses in one place.</p>
+          <p className="text-sm font-bold leading-snug text-white">Grow your {card.noun} with TrackTour</p>
+          <p className="mt-1 text-xs text-[#C8E6D2]">{card.text}</p>
           <button
             type="button"
-            onClick={() => navigate('/business-owner/reports')}
+            onClick={() => navigate(card.to)}
             className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-[#F4C430] px-3 py-1.5 text-xs font-bold text-[#3A2A00] hover:bg-[#FFD24D]"
           >
-            View Insights <ArrowRight className="h-3.5 w-3.5" />
+            {card.action} <ArrowRight className="h-3.5 w-3.5" />
           </button>
         </div>
         )}
@@ -208,8 +225,19 @@ function BusinessCard() {
   const selectedBusinessId = useBusinessOwnerStore((s) => s.selectedBusinessId)
   const setSelectedBusinessId = useBusinessOwnerStore((s) => s.setSelectedBusinessId)
   const business = useSelectedBusiness()
+  const location = useLocation()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+
+  // Switching business reloads the whole page, so every screen and its data
+  // load fresh for that business. The choice is saved first (localStorage), and
+  // a page the new business type does not have opens its Dashboard instead.
+  const switchTo = (id: number | null) => {
+    setOpen(false)
+    if (id === selectedBusinessId) return
+    setSelectedBusinessId(id)
+    fullPageLoad.to(pageAfterSwitch(businesses, id, location.pathname, location.search))
+  }
 
   useEffect(() => {
     const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false) }
@@ -248,14 +276,14 @@ function BusinessCard() {
         <ul role="listbox" aria-label="Your businesses" className="absolute left-0 right-0 z-30 mt-2 max-h-72 overflow-y-auto rounded-xl bg-[#fff] p-1 text-sm text-[#17201B] shadow-xl">
           {businesses.length > 1 && (
             <li>
-              <button type="button" role="option" aria-selected={selectedBusinessId === null} onClick={() => { setSelectedBusinessId(null); setOpen(false) }} className="flex w-full items-center justify-between rounded-lg px-3 py-2 hover:bg-[#F3F8F4]">
+              <button type="button" role="option" aria-selected={selectedBusinessId === null} onClick={() => switchTo(null)} className="flex w-full items-center justify-between rounded-lg px-3 py-2 hover:bg-[#F3F8F4]">
                 All Businesses {selectedBusinessId === null && <Check className="h-4 w-4 text-[#16803C]" />}
               </button>
             </li>
           )}
           {businesses.map((b) => (
             <li key={b.id}>
-              <button type="button" role="option" aria-selected={b.id === selectedBusinessId} onClick={() => { setSelectedBusinessId(b.id); setOpen(false) }} className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left hover:bg-[#F3F8F4]">
+              <button type="button" role="option" aria-selected={b.id === selectedBusinessId} onClick={() => switchTo(b.id)} className="flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left hover:bg-[#F3F8F4]">
                 <span className="min-w-0">
                   <span className="block truncate font-medium">{b.name}</span>
                   <span className="block text-xs text-[#647067]">{b.category}</span>

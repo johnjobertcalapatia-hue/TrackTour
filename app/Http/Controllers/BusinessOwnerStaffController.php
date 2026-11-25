@@ -387,9 +387,9 @@ class BusinessOwnerStaffController extends Controller
     }
 
     /**
-     * Every role must be a template offered for this business's category (when
-     * the category has templates): restaurants, cafés and food hubs offer the
-     * three restaurant roles, other categories their own.
+     * Every role must be offered to this business: a built-in role (template)
+     * offered for its category (any built-in role when the category has none),
+     * or one of this business's own custom roles (Staff Management §6).
      *
      * @param  list<int>  $roleIds
      */
@@ -397,8 +397,16 @@ class BusinessOwnerStaffController extends Controller
     {
         $allowed = $business->category?->staffRoles()->pluck('staff_roles.id')->map(fn ($id) => (int) $id);
         foreach ($roleIds as $roleId) {
-            if (! StaffRole::whereKey($roleId)->exists()) {
+            $role = StaffRole::find($roleId);
+            if (! $role) {
                 return 'Unknown role.';
+            }
+            if ($role->isCustom()) {
+                if ((int) $role->business_id !== (int) $business->id) {
+                    return 'That role is not available for this business.';
+                }
+
+                continue;
             }
             if ($allowed && $allowed->isNotEmpty() && ! $allowed->contains($roleId)) {
                 return 'That role is not available for this type of business.';

@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { ArrowLeft, Bike, Car, CheckCircle2, ChevronDown, ChevronRight, CircleAlert, Clock, Flag, MapPin, Phone, Search, ShieldCheck, Store, Users, UtensilsCrossed, X } from 'lucide-react'
 import { cn, getInitials, toAssetUrl } from '@/shared/utils'
+import { useOfficePortal } from '@/features/admin/office-portal'
 import {
   ACTIVITY_META, timeAgo, tripStatusLabel,
   TOURIST_BG, TOURIST_COLOR,
@@ -421,6 +422,7 @@ function Row({ icon: Icon, children }: { icon: typeof Phone; children: ReactNode
 const box = 'rounded-2xl bg-white p-4 ring-1 ring-[#E7E2D6]'
 
 function RiderDetail({ rider: r, sos, onBack }: { rider: LiveRider; sos?: SosPin; onBack: () => void }) {
+  const portal = useOfficePortal()
   const trip = r.trip
   const meta = ACTIVITY_META[r.activity]
   return (
@@ -428,7 +430,7 @@ function RiderDetail({ rider: r, sos, onBack }: { rider: LiveRider; sos?: SosPin
       <DetailHeader eyebrow="Rider" onBack={onBack} />
       <div className="flex-1 space-y-4 overflow-y-auto px-6 pb-6">
         {sos && (
-          <Link to="/admin/live/sos" className="flex items-center gap-2 rounded-lg bg-red-600 px-3 py-2.5 text-sm font-bold text-white hover:bg-red-700">
+          <Link to={`${portal.route}/live/sos`} className="flex items-center gap-2 rounded-lg bg-red-600 px-3 py-2.5 text-sm font-bold text-white hover:bg-red-700">
             <CircleAlert className="h-4 w-4 shrink-0" />
             <span className="flex-1">SOS {sos.reference} raised {timeAgo(sos.raised_at)}</span>
             <span className="text-xs font-semibold underline">Handle</span>
@@ -494,6 +496,7 @@ function RiderDetail({ rider: r, sos, onBack }: { rider: LiveRider; sos?: SosPin
 }
 
 function BusinessDetail({ business: b, onBack }: { business: BusinessPin; onBack: () => void }) {
+  const portal = useOfficePortal()
   return (
     <>
       <DetailHeader eyebrow="Place" onBack={onBack} />
@@ -512,13 +515,14 @@ function BusinessDetail({ business: b, onBack }: { business: BusinessPin; onBack
           {b.open_status && <Row icon={Clock}><span style={{ color: (OPEN_META[b.open_status.status] ?? OPEN_META.no_hours!).color }} className="font-semibold">{b.open_status.label}</span></Row>}
           <Row icon={CheckCircle2}><span className="capitalize">{b.status.replace(/_/g, ' ')}</span></Row>
         </div>
-        <Link to="/admin/businesses" className="block rounded-full bg-[#FFD000] px-4 py-3 text-center text-sm font-bold text-[#14351F] shadow-[0_10px_24px_rgba(224,168,0,0.35)] hover:bg-[#FFDD33]">Open in Businesses</Link>
+        <Link to={`${portal.route}/businesses`} className="block rounded-full bg-[#FFD000] px-4 py-3 text-center text-sm font-bold text-[#14351F] shadow-[0_10px_24px_rgba(224,168,0,0.35)] hover:bg-[#FFDD33]">Open in Businesses</Link>
       </div>
     </>
   )
 }
 
 function SosDetail({ sos: s, onBack }: { sos: SosPin; onBack: () => void }) {
+  const portal = useOfficePortal()
   return (
     <>
       <DetailHeader eyebrow="SOS alert" onBack={onBack} />
@@ -535,7 +539,7 @@ function SosDetail({ sos: s, onBack }: { sos: SosPin; onBack: () => void }) {
           {s.message && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-800">“{s.message}”</p>}
           {!sosHasPoint(s) && <p className="text-xs text-[#6B7280]">No location was shared with this alert.</p>}
         </div>
-        <Link to="/admin/live/sos" className="block rounded-full bg-red-600 px-4 py-3 text-center text-sm font-bold text-white hover:bg-red-700">Handle in SOS Alerts</Link>
+        <Link to={`${portal.route}/live/sos`} className="block rounded-full bg-red-600 px-4 py-3 text-center text-sm font-bold text-white hover:bg-red-700">Handle in SOS Alerts</Link>
       </div>
     </>
   )

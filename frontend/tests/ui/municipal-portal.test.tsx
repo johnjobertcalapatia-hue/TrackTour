@@ -13,6 +13,7 @@ import MunicipalDocuments from '@/features/municipal/pages/MunicipalDocuments'
 import MunicipalReports from '@/features/municipal/pages/MunicipalReports'
 import MunicipalProfile from '@/features/municipal/pages/MunicipalProfile'
 import MunicipalTourists from '@/features/municipal/pages/MunicipalTourists'
+import { MunicipalAnnouncements, MunicipalDestinations } from '@/features/municipal/pages/MunicipalTourismContent'
 import AdminMunicipalities from '@/features/admin/pages/AdminMunicipalities'
 import AdminMunicipalityAccounts from '@/features/admin/pages/AdminMunicipalityAccounts'
 import { getRoleDashboardPath } from '@/shared/utils'
@@ -121,10 +122,17 @@ describe('municipal tourism office portal', () => {
     )
 
     const nav = await screen.findByRole('navigation', { name: 'Municipal navigation' })
-    for (const label of ['Dashboard', 'Business Owners', 'Businesses', 'Riders', 'Tourists', 'Documents', 'Reports', 'Activity Logs', 'Profile & Settings']) {
+    for (const label of ['Dashboard', 'Live Map', 'Deliveries', 'Rider Cash', 'SOS Alerts', 'Business Owners', 'Businesses', 'Riders', 'Tourists', 'Destinations', 'Events', 'Announcements', 'Documents', 'Reports', 'Activity Logs', 'Office Profile']) {
       expect(within(nav).getByRole('link', { name: new RegExp(label) })).toBeInTheDocument()
     }
-    expect(within(nav).queryByRole('link', { name: /Destinations|Landing/ })).not.toBeInTheDocument()
+    expect(within(nav).getByRole('link', { name: /Live Map/ })).toHaveAttribute('href', '/municipal/live/map')
+    expect(within(nav).getByRole('link', { name: /Rider Cash/ })).toHaveAttribute('href', '/municipal/rider-cash')
+    expect(within(nav).getByRole('link', { name: /SOS Alerts/ })).toHaveAttribute('href', '/municipal/live/sos')
+    // Municipal Office plan Stages 1–2: the same group headings, in order, as the Bansud sidebar.
+    const headings = within(nav).getAllByText(/^(Overview|Live operations|Tourism management|Tourism content|Financial management|Records & analytics|System)$/).map((el) => el.textContent)
+    expect(headings).toEqual(['Overview', 'Live operations', 'Tourism management', 'Tourism content', 'Financial management', 'Records & analytics', 'System'])
+    // Platform-wide settings stay with Bansud.
+    expect(within(nav).queryByRole('link', { name: /Landing|Municipalities/ })).not.toBeInTheDocument()
     await waitFor(() => expect(within(nav).getByLabelText('4 waiting')).toBeInTheDocument()) // 3 docs + 1 rider
     expect(screen.getAllByText('Gloria Tourism Office').length).toBeGreaterThan(0)
   })
@@ -283,6 +291,57 @@ describe('municipal tourism office portal', () => {
 
     expect(await screen.findByRole('link', { name: 'Kim Lee' })).toHaveAttribute('href', '/municipal/tourists/3')
     expect(screen.queryByRole('button', { name: /Suspend|Approve|Reject/ })).not.toBeInTheDocument()
+  })
+
+  it('creates a destination without choosing a municipality (the server uses the office town)', async () => {
+    api.get.mockImplementation((url: string) =>
+      Promise.resolve(
+        url === '/tourism-office/categories'
+          ? [{ id: 2, name: 'Waterfalls' }]
+          : { data: [{ id: 7, name: 'Tamaraw Falls', address: 'Brgy. Villaflor', status: 'active', category: { name: 'Waterfalls' } }], current_page: 1, last_page: 1, per_page: 15, total: 1 },
+      ),
+    )
+    api.post.mockResolvedValue({ id: 8 })
+
+    renderPage(<MunicipalDestinations />)
+
+    expect(await screen.findByText('Tamaraw Falls')).toBeInTheDocument()
+    expect(api.get).toHaveBeenCalledWith('/tourism-office/destinations?page=1')
+
+    fireEvent.click(screen.getByRole('button', { name: /Add destination/ }))
+    expect(screen.queryByLabelText(/Municipality/)).not.toBeInTheDocument()
+    const save = screen.getByRole('button', { name: 'Create destination' })
+    expect(save).toBeDisabled()
+
+    await screen.findByRole('option', { name: 'Waterfalls' })
+    fireEvent.change(screen.getByLabelText(/^Name/), { target: { value: 'Bongol Spring' } })
+    fireEvent.change(screen.getByLabelText(/^Category/), { target: { value: '2' } })
+    fireEvent.change(screen.getByLabelText(/^Description/), { target: { value: 'Cold spring' } })
+    fireEvent.change(screen.getByLabelText(/^Address/), { target: { value: 'Brgy. Bongol' } })
+    fireEvent.change(screen.getByLabelText(/^Latitude/), { target: { value: '12.97' } })
+    fireEvent.change(screen.getByLabelText(/^Longitude/), { target: { value: '121.47' } })
+    fireEvent.change(screen.getByLabelText(/^Amenities/), { target: { value: 'Parking\nCottages' } })
+    fireEvent.click(save)
+
+    await waitFor(() => expect(api.post).toHaveBeenCalled())
+    const [url, body] = api.post.mock.calls[0]!
+    expect(url).toBe('/tourism-office/destinations')
+    expect(body).toMatchObject({ name: 'Bongol Spring', category_id: 2, latitude: 12.97, longitude: 121.47, status: 'draft', amenities: ['Parking', 'Cottages'], entrance_fee: null })
+    expect(body).not.toHaveProperty('municipality_id')
+    expect(await screen.findByText('Destination created.')).toBeInTheDocument()
+  })
+
+  it('asks before deleting an announcement', async () => {
+    api.get.mockResolvedValue({ data: [{ id: 3, title: 'Road closure', type: 'safety', status: 'published', published_at: '2026-11-20T00:00:00Z' }], current_page: 1, last_page: 1, per_page: 15, total: 1 })
+    api.del.mockResolvedValue(null)
+
+    renderPage(<MunicipalAnnouncements />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Road closure' }))
+    expect(api.del).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+
+    await waitFor(() => expect(api.del).toHaveBeenCalledWith('/tourism-office/announcements/3'))
   })
 })
 

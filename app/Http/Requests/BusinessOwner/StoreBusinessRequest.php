@@ -2,6 +2,8 @@
 
 namespace App\Http\Requests\BusinessOwner;
 
+use App\Enums\DiscoveryGroup;
+use App\Models\BusinessCategory;
 use Illuminate\Foundation\Http\FormRequest;
 
 class StoreBusinessRequest extends FormRequest
@@ -11,8 +13,17 @@ class StoreBusinessRequest extends FormRequest
         return true;
     }
 
+    protected function prepareForValidation(): void
+    {
+        if ($this->isAttractionCategory($this->input('business_category_id'))) {
+            $this->merge(['opening_time' => null, 'closing_time' => null]);
+        }
+    }
+
     public function rules(): array
     {
+        $attraction = $this->isAttractionCategory($this->input('business_category_id'));
+
         return [
             'business_name' => ['required', 'string', 'max:255'],
             'business_description' => ['required', 'string', 'max:2000'],
@@ -30,9 +41,10 @@ class StoreBusinessRequest extends FormRequest
             'postal_code' => ['nullable', 'string', 'max:10'],
             'landmark' => ['nullable', 'string', 'max:255'],
             'navigation_instructions' => ['nullable', 'string', 'max:1000'],
-            'opening_time' => ['required', 'date_format:H:i'],
-            'closing_time' => ['required', 'date_format:H:i', 'after:opening_time'],
-            'business_days' => ['required', 'array'],
+            // Attractions are always open: no hours (cleared above), no days needed.
+            'opening_time' => $attraction ? ['nullable'] : ['required', 'date_format:H:i'],
+            'closing_time' => $attraction ? ['nullable'] : ['required', 'date_format:H:i', 'after:opening_time'],
+            'business_days' => $attraction ? ['nullable', 'array'] : ['required', 'array'],
             'latitude' => ['required', 'numeric'],
             'longitude' => ['required', 'numeric'],
             'legal_entity_type' => ['required', 'string', 'in:Sole Proprietorship,Partnership,Corporation,OPC'],
@@ -107,5 +119,16 @@ class StoreBusinessRequest extends FormRequest
             'number_of_employees.integer' => 'Number of employees must be a whole number.',
             'occupancy_status.in' => 'Occupancy status must be Owned or Rented.',
         ];
+    }
+
+    /**
+     * Tourist attractions are always open (product owner, 2026-11-24): they
+     * have no opening hours. "Attraction" is the Spot discovery group, the
+     * same rule as Business::isTouristAttraction() ("Always open").
+     */
+    private function isAttractionCategory(mixed $categoryId): bool
+    {
+        return $categoryId !== null && $categoryId !== ''
+            && BusinessCategory::query()->inDiscoveryGroup(DiscoveryGroup::Spot)->whereKey((int) $categoryId)->exists();
     }
 }

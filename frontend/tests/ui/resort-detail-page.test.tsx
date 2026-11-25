@@ -124,8 +124,14 @@ describe('Resort detail page (Stage 3)', () => {
     // Offering sections sit between About and the rest, in order.
     const headings = within(page).getAllByRole('heading', { level: 2 }).map((h) => h.textContent?.replace(/·.*/, '').trim())
     expect(headings.slice(0, 4)).toEqual(['Facilities', 'About', 'Cottages & stays', 'Activities & services'])
-    // Still no reserve button until the reservation builder exists.
-    expect(within(page).queryByRole('button', { name: /reserve|book/i })).not.toBeInTheDocument()
+    // Stage 7: published offerings can be reserved — "Create reservation" beside the photos
+    // (from the cheapest cottage/room, not the ₱150 pool entrance), the section card, and the phone bar.
+    const header = within(page).getByTestId('reserve-header')
+    expect(header).toHaveTextContent('From ₱800 / unit')
+    expect(within(page).getByRole('heading', { name: 'Reserve your stay' })).toBeInTheDocument()
+    expect(within(page).getAllByRole('button', { name: /Create reservation/ }).length).toBe(2)
+    fireEvent.click(within(header).getByRole('button', { name: /Create reservation/ }))
+    expect(await screen.findByRole('dialog', { name: /Reserve at Forest Haven/ })).toBeInTheDocument()
   })
 
   it('hides every section that has no published content', async () => {

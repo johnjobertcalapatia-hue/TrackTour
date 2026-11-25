@@ -185,6 +185,12 @@ class Business extends Model
         return $this->belongsToMany(ResortFacility::class, 'business_resort_facilities')->withTimestamps()->orderBy('sort_order');
     }
 
+    /** The resort's own settings, e.g. its cancellation policy (reservations Stage 7). */
+    public function resortSetting(): \Illuminate\Database\Eloquent\Relations\HasOne
+    {
+        return $this->hasOne(ResortSetting::class);
+    }
+
     /** Bookable resort offerings (cottages, activities, packages, …). */
     public function resortOfferings(): HasMany
     {

@@ -159,4 +159,116 @@ describe('Business owner shell (redesign)', () => {
     expect(within(nav).getByRole('link', { name: 'My Businesses' })).toHaveAttribute('aria-current', 'page')
     expect(within(nav).getByRole('link', { name: 'Business Gallery' })).not.toHaveAttribute('aria-current')
   })
+
+  it.each([
+    ['Restaurant', 'Grow your restaurant with TrackTour', 'See your sales, orders and expenses in one place.', 'View Insights'],
+    ['Resort', 'Grow your resort with TrackTour', 'See your reservations, earnings and expenses in one place.', 'View Insights'],
+    ['Tourist Attraction', 'Grow your attraction with TrackTour', 'Share deals and posts to reach more visitors.', 'Create a Post'],
+  ])('the side card fits a %s', (category, title, text, action) => {
+    respond()
+    useBusinessOwnerStore.setState({ businesses: [{ id: 7, name: 'Place', category, status: 'approved', logo: null, module_codes: [] }], selectedBusinessId: 7 })
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={['/business-owner/dashboard']}>
+          <Routes>
+            <Route path="/business-owner" element={<BusinessOwnerShell sections={[{ items: [{ to: '/business-owner/dashboard', label: 'Dashboard' }] }]} />}>
+              <Route path="*" element={<p>Body</p>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    expect(screen.getAllByText(title)[0]).toBeInTheDocument()
+    expect(screen.getAllByText(text)[0]).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: new RegExp(action) })[0]).toBeInTheDocument()
+    expect(screen.queryByText(category === 'Tourist Attraction' ? /sales, orders/ : /deals and posts to reach/)).toBeNull()
+  })
+
+  it('switching business saves the choice and reloads the whole page (Dashboard when the page does not fit)', async () => {
+    respond()
+    const { fullPageLoad } = await import('@/features/business-owner/navigation/owner-nav')
+    const load = vi.spyOn(fullPageLoad, 'to').mockImplementation(() => {})
+    useBusinessOwnerStore.setState({
+      businesses: [
+        { id: 2, name: 'Ekslusibo Grill', category: 'Restaurant', status: 'approved', logo: null, module_codes: ['menu_management', 'staff_management'] },
+        { id: 7, name: 'RJM Beach Resort', category: 'Resort', status: 'approved', logo: null, module_codes: ['reservation_management', 'staff_management'] },
+      ],
+      selectedBusinessId: 2,
+    })
+    const page = (path: string) => render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="/business-owner" element={<BusinessOwnerShell sections={[{ items: [{ to: '/business-owner/dashboard', label: 'Dashboard' }] }]} />}>
+              <Route path="*" element={<p>Body</p>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const pick = (name: string) => {
+      fireEvent.click(screen.getAllByRole('button', { name: /Switch business/ })[0]!)
+      fireEvent.click(within(screen.getAllByRole('listbox', { name: 'Your businesses' })[0]!).getByRole('option', { name: new RegExp(name) }))
+    }
+
+    // On the restaurant's menu: the resort has no menu → its Dashboard.
+    let view = page('/business-owner/menu')
+    pick('RJM Beach Resort')
+    expect(useBusinessOwnerStore.getState().selectedBusinessId).toBe(7)
+    expect(localStorage.getItem('selected_business_id') ?? String(useBusinessOwnerStore.getState().selectedBusinessId)).toBe('7')
+    expect(load).toHaveBeenLastCalledWith('/business-owner/dashboard')
+    view.unmount()
+
+    // On a page both have: the same page reloads.
+    useBusinessOwnerStore.setState({ selectedBusinessId: 7 })
+    view = page('/business-owner/staff')
+    pick('Ekslusibo Grill')
+    expect(load).toHaveBeenLastCalledWith('/business-owner/staff')
+    view.unmount()
+
+    // Picking the business already selected does nothing.
+    load.mockClear()
+    page('/business-owner/staff')
+    pick('Ekslusibo Grill')
+    expect(load).not.toHaveBeenCalled()
+    load.mockRestore()
+  })
+
+  it('highlights only Attraction Details, not also My Businesses, on the attraction edit page', () => {
+    respond()
+    const sections = [{ items: [
+      { to: '/business-owner/businesses', label: 'My Businesses' },
+      { to: '/business-owner/businesses/8/tourist-attraction-edit', label: 'Attraction Details' },
+      { to: '/business-owner/settings?tab=location', label: 'Location' },
+      { to: '/business-owner/settings?tab=documents', label: 'Documents' },
+    ] }]
+    const page = (path: string) => render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="/business-owner" element={<BusinessOwnerShell sections={sections} />}>
+              <Route path="*" element={<p>Body</p>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const current = () => within(screen.getAllByRole('navigation', { name: 'Sections' })[0]!)
+      .getAllByRole('link').filter((l) => l.getAttribute('aria-current') === 'page').map((l) => l.textContent?.trim())
+
+    let view = page('/business-owner/businesses/8/tourist-attraction-edit')
+    expect(current()).toEqual(['Attraction Details'])
+    view.unmount()
+
+    view = page('/business-owner/businesses')
+    expect(current()).toEqual(['My Businesses'])
+    view.unmount()
+
+    view = page('/business-owner/businesses/8/documents')
+    expect(current()).toEqual(['My Businesses'])
+    view.unmount()
+
+    page('/business-owner/settings?tab=documents')
+    expect(current()).toEqual(['Documents'])
+  })
 })

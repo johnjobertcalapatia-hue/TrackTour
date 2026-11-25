@@ -8,6 +8,7 @@ import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import PostMedia from '@/shared/components/posts/PostMedia'
 import PostCaption from '@/shared/components/posts/PostCaption'
 import { compactCount, plural, postedAgo, postedAt } from '@/shared/components/posts/post-types'
+import { dealsCopy, portalKind } from '../../services/business-profile-kind'
 import { toAssetUrl } from '@/shared/utils'
 import { useBusinessPortal } from '../../services/business-portal'
 import type { DishSaleSummary, OwnerPost } from '../../services/promotions'
@@ -87,7 +88,7 @@ export default function PostsPanel() {
           <div className="rounded-[20px] border border-[#E2E8E3] bg-[#fff] p-10 text-center">
             <Megaphone className="mx-auto mb-3 h-10 w-10 text-[#9CA3AF]" aria-hidden="true" />
             <p className="font-semibold text-[#17201B]">{filter === 'all' ? 'No posts yet' : `No ${FILTERS.find((f) => f.key === filter)!.label.toLowerCase()} posts`}</p>
-            <p className="mt-1 text-sm text-[#647067]">Post a photo of today’s special or a short video of your place.</p>
+            <p className="mt-1 text-sm text-[#647067]">{dealsCopy(portalKind(portal.businesses, portal.businessId)).postsEmpty}</p>
           </div>
         ) : (
           <ul className="flex flex-col gap-5">

@@ -15,14 +15,23 @@ use Symfony\Component\HttpFoundation\Response;
  * (non-deleted) municipality. The resolved municipality is shared with the
  * controllers as the `municipality` request attribute; controllers never read
  * a municipality id from the client.
+ *
+ * `municipal.scope:district` (routes shared with the District Super Admin, e.g.
+ * /tourism-office/destinations): the Bansud Tourism Office passes through with
+ * NO `municipality` attribute (district-wide); a `tourism_office` officer gets
+ * the same checks and scope as above.
  */
 class EnsureMunicipalScope
 {
     public function __construct(private MunicipalScopeService $scope) {}
 
-    public function handle(Request $request, Closure $next): Response
+    public function handle(Request $request, Closure $next, ?string $mode = null): Response
     {
         $user = $request->user();
+
+        if ($mode === 'district' && $user?->role === User::ROLE_BANSUD_TOURISM_OFFICE) {
+            return $next($request);
+        }
 
         if (! $user || $user->role !== User::ROLE_TOURISM_OFFICE) {
             return $this->deny('Unauthorized access.');

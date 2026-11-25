@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Exceptions\SosException;
 use App\Models\ActivityLog;
+use App\Models\Business;
 use App\Models\Delivery;
 use App\Models\Order;
 use App\Models\RiderLocation;
@@ -97,6 +98,8 @@ class SosAlertService
                 'service' => $delivery->order?->order_type === 'transport' ? 'ride' : 'food',
                 'order_id' => $delivery->order_id,
                 'delivery_id' => $delivery->id,
+                // Municipal Office plan Stage 3: the office that handles it, fixed now.
+                'municipality_id' => $this->municipalityIdFor($delivery),
                 'trip_status' => $status,
                 'message' => $message,
                 'status' => SosAlert::STATUS_PENDING,
@@ -200,11 +203,35 @@ class SosAlertService
         return SosAlert::where('raised_by', $sender->id)->where('delivery_id', $deliveryId)->latest('id')->first();
     }
 
-    /* ── Tourism Office ──────────────────────────────────────────────── */
-
-    public function acknowledge(User $admin, int $id): SosAlert
+    /**
+     * The municipal Tourism Office that handles an SOS on this trip (decision D1),
+     * by the office-earnings town rule: food → the restaurant's town (the first
+     * restaurant of a group checkout); ride → the driver's town. Null when no town
+     * is known: then only Bansud sees it (Bansud always sees every alert).
+     */
+    public function municipalityIdFor(Delivery $delivery): ?int
     {
-        return $this->transition($id, function (SosAlert $a) use ($admin) {
+        $order = $delivery->order;
+        if ($order?->order_type === 'transport') {
+            $town = $delivery->rider_id ? User::whereKey($delivery->rider_id)->value('municipality_id') : null;
+
+            return $town !== null ? (int) $town : null;
+        }
+
+        $businessId = $order?->business_id
+            ?? ($order ? $order->items()->whereNotNull('business_id')->orderBy('id')->value('business_id') : null);
+        $town = $businessId ? Business::whereKey($businessId)->value('municipality_id') : null;
+
+        return $town !== null ? (int) $town : null;
+    }
+
+    /* ── Tourism Office ──────────────────────────────────────────────── */
+    // $municipalityId: null for the Bansud Tourism Office (any alert); a municipal
+    // office's id limits it to its own alerts (another town's alert is "not found").
+
+    public function acknowledge(User $admin, int $id, ?int $municipalityId = null): SosAlert
+    {
+        return $this->transition($id, $municipalityId, function (SosAlert $a) use ($admin) {
             if ($a->status !== SosAlert::STATUS_PENDING) {
                 return false; // already acknowledged or further: nothing to do
             }
@@ -214,9 +241,9 @@ class SosAlertService
         });
     }
 
-    public function respond(User $admin, int $id, string $responder, ?string $note): SosAlert
+    public function respond(User $admin, int $id, string $responder, ?string $note, ?int $municipalityId = null): SosAlert
     {
-        return $this->transition($id, function (SosAlert $a) use ($admin, $responder, $note) {
+        return $this->transition($id, $municipalityId, function (SosAlert $a) use ($admin, $responder, $note) {
             $a->fill([
                 'status' => SosAlert::STATUS_RESPONDING,
                 'acknowledged_at' => $a->acknowledged_at ?? now(),
@@ -231,13 +258,13 @@ class SosAlertService
         });
     }
 
-    public function resolve(User $admin, int $id, string $outcome, string $note): SosAlert
+    public function resolve(User $admin, int $id, string $outcome, string $note, ?int $municipalityId = null): SosAlert
     {
         if (! in_array($outcome, [SosAlert::OUTCOME_HANDLED, SosAlert::OUTCOME_FALSE_ALARM], true)) {
             throw new SosException('Choose how the SOS ended.');
         }
 
-        return $this->transition($id, function (SosAlert $a) use ($admin, $outcome, $note) {
+        return $this->transition($id, $municipalityId, function (SosAlert $a) use ($admin, $outcome, $note) {
             $a->fill([
                 'status' => SosAlert::STATUS_RESOLVED,
                 'acknowledged_at' => $a->acknowledged_at ?? now(),
@@ -253,11 +280,11 @@ class SosAlertService
     }
 
     /** @param  callable(SosAlert): (string|false)  $change  returns the log line, or false for no change */
-    private function transition(int $id, callable $change): SosAlert
+    private function transition(int $id, ?int $municipalityId, callable $change): SosAlert
     {
-        return DB::transaction(function () use ($id, $change) {
+        return DB::transaction(function () use ($id, $municipalityId, $change) {
             $alert = SosAlert::lockForUpdate()->find($id);
-            if (! $alert) {
+            if (! $alert || ($municipalityId !== null && (int) $alert->municipality_id !== $municipalityId)) {
                 throw new SosException('SOS not found.', 404);
             }
             if (! $alert->isActive()) {
@@ -276,7 +303,7 @@ class SosAlertService
     /** Everything the Tourism Office needs to act. */
     public function presentForAdmin(SosAlert $a): array
     {
-        $a->loadMissing('sender.profile', 'order', 'delivery.rider.profile', 'delivery.rider.riderDetail', 'acknowledger:id,name', 'respondingAdmin:id,name', 'resolver:id,name');
+        $a->loadMissing('sender.profile', 'order', 'delivery.rider.profile', 'delivery.rider.riderDetail', 'acknowledger:id,name,role', 'respondingAdmin:id,name,role', 'resolver:id,name,role', 'municipality:id,name');
         $order = $a->order;
         $rider = $a->delivery?->rider;
         $detail = $rider?->riderDetail;
@@ -298,6 +325,11 @@ class SosAlertService
             'reference' => $a->reference,
             'status' => $a->status,
             'active' => $a->isActive(),
+            // The municipal office that handles it (null: no town known, Bansud only).
+            'municipality' => $a->municipality ? ['id' => $a->municipality->id, 'name' => $a->municipality->name] : null,
+            // True once the Bansud Tourism Office has acted on it (it can take over any alert).
+            'bansud_involved' => collect([$a->acknowledger, $a->respondingAdmin, $a->resolver])
+                ->filter()->contains(fn ($u) => $u->role === User::ROLE_BANSUD_TOURISM_OFFICE),
             'raised_by_role' => $a->raised_by_role,
             'service' => $a->service,
             'reporter' => [

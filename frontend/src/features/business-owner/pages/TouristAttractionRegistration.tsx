@@ -39,8 +39,6 @@ interface FormState {
   latitude: string
   longitude: string
   entranceFee: string
-  openingTime: string
-  closingTime: string
   bestTime: string
   activities: string
   contactNumber: string
@@ -62,8 +60,6 @@ const defaultForm: FormState = {
   latitude: '',
   longitude: '',
   entranceFee: '0',
-  openingTime: '',
-  closingTime: '',
   bestTime: '',
   activities: '',
   contactNumber: '',
@@ -267,10 +263,6 @@ export default function TouristAttractionRegistration() {
         setError('Please enter a valid business email address.')
         return false
       }
-      if (form.openingTime && form.closingTime && form.closingTime <= form.openingTime) {
-        setError('Closing time must be later than opening time.')
-        return false
-      }
       if (!form.legalEntityType || !form.tin.trim() || !form.yearEstablished) {
         setError('Legal entity, TIN, and year established are required for business registration.')
         return false
@@ -310,8 +302,7 @@ export default function TouristAttractionRegistration() {
       payload.append('email', form.email)
       payload.append('latitude', form.latitude)
       payload.append('longitude', form.longitude)
-      payload.append('opening_time', form.openingTime || '08:00')
-      payload.append('closing_time', form.closingTime || '17:00')
+      // Tourist attractions are always open: no opening or closing time.
       payload.append('business_days[]', 'monday')
       payload.append('business_days[]', 'tuesday')
       payload.append('business_days[]', 'wednesday')
@@ -509,8 +500,6 @@ export default function TouristAttractionRegistration() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Field label="Entrance Fee"><input type="number" min="0" step="0.01" className={inputClass} value={form.entranceFee} onChange={(event) => setField('entranceFee', event.target.value)} placeholder="0.00" /></Field>
               <Field label="Contact Number" required><input className={inputClass} value={form.contactNumber} onChange={(event) => setField('contactNumber', event.target.value)} placeholder="09XXXXXXXXX" /></Field>
-              <Field label="Opening Time"><input type="time" className={inputClass} value={form.openingTime} onChange={(event) => setField('openingTime', event.target.value)} /></Field>
-              <Field label="Closing Time"><input type="time" className={inputClass} value={form.closingTime} onChange={(event) => setField('closingTime', event.target.value)} /></Field>
             </div>
             <Field label="Business Email" required><input type="email" className={inputClass} value={form.email} onChange={(event) => setField('email', event.target.value)} placeholder="attraction@example.com" /></Field>
             <Field label="Best Time to Visit"><input className={inputClass} value={form.bestTime} onChange={(event) => setField('bestTime', event.target.value)} placeholder="e.g. December to May" /></Field>
@@ -535,7 +524,7 @@ export default function TouristAttractionRegistration() {
             <ReviewRow label="Location" value={locationName || 'Not specified'} />
             <ReviewRow label="Coordinates" value={`${form.latitude || '—'}, ${form.longitude || '—'}`} />
             <ReviewRow label="Entrance Fee" value={`₱${Number(form.entranceFee || 0).toFixed(2)}`} />
-            <ReviewRow label="Opening Hours" value={form.openingTime && form.closingTime ? `${form.openingTime} - ${form.closingTime}` : 'Not specified'} />
+            <ReviewRow label="Opening Hours" value="Always open" />
             <ReviewRow label="Best Time to Visit" value={form.bestTime || 'Not specified'} />
             <ReviewRow label="Activities" value={form.activities || 'Not specified'} />
             <ReviewRow label="Contact" value={`${form.contactNumber || '—'} · ${form.email || '—'}`} />

@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { cn, formatDateTime, toAssetUrl } from '@/shared/utils'
 import RestaurantRouteMap from '@/features/tourist/components/RestaurantRouteMap'
+import ReserveBuilder from './ReserveBuilder'
 
 /** Stage 1 resort classification, as returned by GET /tourist/explore/{id} → resort. */
 export interface ResortInfo {
@@ -14,6 +15,8 @@ export interface ResortInfo {
   custom_facilities: string[]
   /** Published, bookable offerings (Stage 4). */
   offerings?: ResortOfferingItem[]
+  /** Reservations Stage 7: shown before reserving. */
+  cancellation_policy?: { free_days: number; penalty_percent: number; summary: string } | null
 }
 
 export interface ResortOfferingItem {
@@ -33,6 +36,9 @@ export interface ResortOfferingItem {
   is_required: boolean
   bookable_independently: boolean
   requires_offering_name: string | null
+  requires_offering_id?: number | null
+  min_quantity?: number | null
+  max_quantity?: number | null
   images: { id: number; path: string }[]
 }
 
@@ -140,6 +146,7 @@ const formatTime = (t?: string | null) => {
 export default function ResortDetail({ business, resort, photos, reviews, avgRating, reviewsCount, isFavorited, onToggleFavorite, onShare }: Props) {
   const navigate = useNavigate()
   const [photoIndex, setPhotoIndex] = useState(0)
+  const [reserving, setReserving] = useState(false)
 
   const name = business.name || business.business_name || 'Resort'
   const description = business.description || business.business_description || ''
@@ -176,10 +183,27 @@ export default function ResortDetail({ business, resort, photos, reviews, avgRat
   const offerings = resort.offerings ?? []
   const stayOfferings = offerings.filter((o) => STAY_CATEGORIES.includes(o.category))
   const otherOfferings = offerings.filter((o) => !STAY_CATEGORIES.includes(o.category))
+  // "From ₱…": the cheapest cottage / room / campsite, else the cheapest paid offering (not a ₱10 entrance fee).
+  const fromPrice = [...(stayOfferings.length ? stayOfferings : offerings)]
+    .filter((o) => Number(o.price) > 0)
+    .sort((a, b) => Number(a.price) - Number(b.price))[0]
   const hasContact = Boolean(phone || business.email)
 
   return (
     <main aria-label={`${name} resort`} className="pb-24 max-w-6xl mx-auto px-4 sm:px-6 space-y-6">
+      {reserving && (
+        <ReserveBuilder businessId={business.id} businessName={name} offerings={offerings}
+          policySummary={resort.cancellation_policy?.summary} onClose={() => setReserving(false)} />
+      )}
+      {offerings.length > 0 && !reserving && (
+        // Phones only: on larger screens "Create reservation" sits beside the photos.
+        <div className="fixed inset-x-0 bottom-16 z-30 flex justify-center px-4 sm:hidden pointer-events-none">
+          <button type="button" onClick={() => setReserving(true)} data-testid="reserve-bar"
+            className="pointer-events-auto inline-flex items-center gap-3 rounded-full bg-[#087F3F] px-6 py-3 text-sm font-bold text-white shadow-[0_10px_30px_rgba(8,127,63,0.35)] hover:bg-[#066C35]">
+            {fromPrice ? `From ₱${Number(fromPrice.price).toLocaleString('en-PH')} · ` : ''}Create reservation
+          </button>
+        </div>
+      )}
       <div className="flex items-center justify-between pt-2">
         <button type="button" onClick={() => navigate(-1)} className="inline-flex items-center gap-2 text-sm font-medium text-[#56615B] hover:text-[#17201B]">
           <ArrowLeft className="w-4 h-4" aria-hidden="true" /> Back
@@ -203,8 +227,9 @@ export default function ResortDetail({ business, resort, photos, reviews, avgRat
             <div className="w-full h-full flex items-center justify-center"><Compass className="w-16 h-16 text-white/30" aria-hidden="true" /></div>
           )}
         </div>
-        {gallery.length > 1 && (
-          <div className="mt-3 flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Resort photos">
+        <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        {gallery.length > 1 ? (
+          <div className="flex min-w-0 gap-2 overflow-x-auto pb-1" role="group" aria-label="Resort photos">
             {gallery.map((src, i) => (
               <button
                 key={`${src}-${i}`}
@@ -218,7 +243,23 @@ export default function ResortDetail({ business, resort, photos, reviews, avgRat
               </button>
             ))}
           </div>
+        ) : <span />}
+
+        {/* Reservations (Stage 7): right beside the photos, where tourists look first */}
+        {offerings.length > 0 && (
+          <div className="flex shrink-0 items-center justify-between gap-4 rounded-2xl border border-[#E5E9E7] bg-white px-4 py-3 sm:justify-end" data-testid="reserve-header">
+            {fromPrice && (
+              <p className="text-sm leading-tight text-[#56615B]">
+                From <span className="block text-lg font-extrabold text-[#17201B]">₱{Number(fromPrice.price).toLocaleString('en-PH', { maximumFractionDigits: 2 })}<span className="text-sm font-medium text-[#56615B]"> / {PRICING_BASIS_LABEL[fromPrice.pricing_basis]}</span></span>
+              </p>
+            )}
+            <button type="button" onClick={() => setReserving(true)}
+              className="inline-flex items-center gap-2 rounded-xl bg-[#087F3F] px-5 py-3 text-sm font-bold text-white shadow-[0_8px_20px_rgba(8,127,63,0.25)] hover:bg-[#066C35]">
+              <CalendarCheck className="h-4 w-4" aria-hidden="true" /> Create reservation
+            </button>
+          </div>
         )}
+        </div>
 
         <div className="mt-4">
           {resort.types.length > 0 && (
@@ -281,6 +322,18 @@ export default function ResortDetail({ business, resort, photos, reviews, avgRat
       {/* 4–5. Bookable offerings (published only; sections hidden when empty) */}
       {stayOfferings.length > 0 && <OfferingSection id="resort-stays" title="Cottages & stays" offerings={stayOfferings} />}
       {otherOfferings.length > 0 && <OfferingSection id="resort-services" title="Activities & services" offerings={otherOfferings} />}
+
+      {/* Reservations (Stage 7): only when there is something to reserve */}
+      {offerings.length > 0 && (
+        <section aria-labelledby="resort-reserve-title" className="bg-white border border-[#E5E9E7] rounded-2xl p-4 sm:p-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 id="resort-reserve-title" className="text-lg font-bold text-[#17201B]">Reserve your stay</h2>
+            <p className="text-sm text-[#56615B]">Pick your dates and what you'd like; {name} confirms your reservation and you pay when you arrive.</p>
+            {resort.cancellation_policy && <p className="mt-1 text-xs text-[#3B4540]">{resort.cancellation_policy.summary}</p>}
+          </div>
+          <button type="button" onClick={() => setReserving(true)} className="shrink-0 rounded-xl bg-[#087F3F] px-5 py-2.5 text-sm font-bold text-white hover:bg-[#066C35]">Reserve</button>
+        </section>
+      )}
 
       {/* Activities (owner-entered) */}
       {activities.length > 0 && (

@@ -1003,6 +1003,8 @@ class ExploreController extends Controller
                     ->filter(fn ($o) => $o->requires_offering_id === null || ($o->requires && $o->requires->is_published))
                     ->map(fn ($o) => \App\Http\Controllers\ResortOfferingController::present($o))
                     ->values(),
+                // Reservations Stage 7: shown to tourists before they reserve.
+                'cancellation_policy' => \App\Support\ResortCancellationPolicy::snapshot($business),
             ]
             : null;
 

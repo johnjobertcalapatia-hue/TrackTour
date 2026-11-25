@@ -86,3 +86,10 @@ graphify-out/*.pre-update-backup.json
 graphify-out/.graphify_python
 graphify-out/.graphify_root
 graphify-out/cost.json
+graphify-out/.graphify_build_state.json
+graphify-out/.graphify_labels.json.sig
+graphify-out/.graphify_labels.pending.json
+graphify-out/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/
+
+# TypeScript incremental build information
+frontend/tsconfig.tsbuildinfo

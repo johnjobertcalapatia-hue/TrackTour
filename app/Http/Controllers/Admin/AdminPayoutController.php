@@ -5,12 +5,14 @@ namespace App\Http\Controllers\Admin;
 use App\Exceptions\PayoutConflictException;
 use App\Http\Controllers\Controller;
 use App\Models\ActivityLog;
+use App\Models\Municipality;
 use App\Models\RiderEarning;
 use App\Models\RiderPayout;
 use App\Models\User;
 use App\Services\PayoutStatementService;
 use App\Services\RiderEarningVerifier;
 use App\Services\RiderPayoutService;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
@@ -32,14 +34,56 @@ class AdminPayoutController extends Controller
         private readonly PayoutStatementService $statements,
     ) {}
 
+    /*
+     * Municipal Office plan Stage 4 (decision D2): the same actions serve
+     * /municipal/*, where `municipal.scope` puts the officer's municipality on
+     * the request. A municipal office reviews, approves and rejects its own
+     * riders' cashouts; the Bansud Tourism Office keeps every cashout and is the
+     * only one that sends the GCash payment (mark paid / mark failed).
+     */
+
+    private function officeMunicipality(Request $request): ?Municipality
+    {
+        return $request->attributes->get('municipality');
+    }
+
+    /** Only the municipal office's riders (no limit for Bansud). */
+    private function inOffice(Request $request, Builder $query): Builder
+    {
+        $town = $this->officeMunicipality($request);
+
+        return $town ? $query->whereHas('rider', fn ($r) => $r->where('municipality_id', $town->id)) : $query;
+    }
+
+    /** Another municipality's cashout is "not found" for a municipal office. */
+    private function assertInOffice(Request $request, RiderPayout $payout): void
+    {
+        $town = $this->officeMunicipality($request);
+        abort_if(
+            $town && (int) User::whereKey($payout->rider_id)->value('municipality_id') !== (int) $town->id,
+            404,
+            'Cashout request not found.',
+        );
+    }
+
+    /** "Bansud Tourism Office" / "Gloria Tourism Office" for whoever acted. */
+    private function officeOf(?User $staff): ?string
+    {
+        return match ($staff?->role) {
+            User::ROLE_BANSUD_TOURISM_OFFICE => 'Bansud Tourism Office',
+            User::ROLE_TOURISM_OFFICE => $staff->municipality?->name ? $staff->municipality->name.' Tourism Office' : 'Municipal Tourism Office',
+            default => null,
+        };
+    }
+
     /** Cashout requests, newest first, optionally by status. */
     public function index(Request $request): JsonResponse
     {
         $validated = $request->validate(['status' => ['nullable', 'in:'.implode(',', RiderPayout::STATUSES).',open']]);
         $status = $validated['status'] ?? null;
 
-        $payouts = RiderPayout::query()
-            ->with('rider')
+        $payouts = $this->inOffice($request, RiderPayout::query())
+            ->with('rider.municipality:id,name')
             ->withCount('earnings')
             ->when($status === 'open', fn ($q) => $q->whereIn('status', RiderPayout::LIVE_STATUSES))
             ->when($status && $status !== 'open', fn ($q) => $q->where('status', $status))
@@ -50,7 +94,7 @@ class AdminPayoutController extends Controller
                 'payout_number' => $p->payout_number,
                 'status' => $p->status,
                 'amount' => (float) $p->amount,
-                'rider' => ['id' => $p->rider_id, 'name' => $p->rider?->name ?? $p->rider?->email],
+                'rider' => ['id' => $p->rider_id, 'name' => $p->rider?->name ?? $p->rider?->email, 'municipality' => $p->rider?->municipality?->name],
                 'destination_gcash_number' => $this->mask($p->destination_gcash_number),
                 'items_count' => $p->earnings_count ?: count($p->items_snapshot ?? []),
                 'requested_at' => $p->requested_at,
@@ -62,6 +106,7 @@ class AdminPayoutController extends Controller
     /** Stage 6: re-validate a live cashout against the earnings ledger now (stored). */
     public function validateNow(Request $request, RiderPayout $payout): JsonResponse
     {
+        $this->assertInOffice($request, $payout);
         app(\App\Services\CashoutValidator::class)->validate($payout, 'manual', $request->user());
 
         return $this->successResponse($this->latestValidation($payout->fresh()), 'Validated against the earnings ledger.');
@@ -85,18 +130,19 @@ class AdminPayoutController extends Controller
     }
 
     /** Dashboard tiles: pending requests, awaiting review, approved unpaid, paid today. */
-    public function summary(): JsonResponse
+    public function summary(Request $request): JsonResponse
     {
         $today = now('Asia/Manila')->startOfDay()->utc();
+        $q = fn () => $this->inOffice($request, RiderPayout::query());
 
         return $this->successResponse([
-            'pending_count' => RiderPayout::where('status', RiderPayout::STATUS_PENDING)->count(),
-            'under_review_count' => RiderPayout::where('status', RiderPayout::STATUS_UNDER_REVIEW)->count(),
-            'awaiting_review_amount' => round((float) RiderPayout::whereIn('status', [RiderPayout::STATUS_PENDING, RiderPayout::STATUS_UNDER_REVIEW])->sum('amount'), 2),
-            'approved_unpaid_count' => RiderPayout::where('status', RiderPayout::STATUS_APPROVED)->count(),
-            'approved_unpaid_amount' => round((float) RiderPayout::where('status', RiderPayout::STATUS_APPROVED)->sum('amount'), 2),
-            'paid_today_amount' => round((float) RiderPayout::where('status', RiderPayout::STATUS_PAID)->where('paid_at', '>=', $today)->sum('paid_amount'), 2),
-            'paid_today_count' => RiderPayout::where('status', RiderPayout::STATUS_PAID)->where('paid_at', '>=', $today)->count(),
+            'pending_count' => $q()->where('status', RiderPayout::STATUS_PENDING)->count(),
+            'under_review_count' => $q()->where('status', RiderPayout::STATUS_UNDER_REVIEW)->count(),
+            'awaiting_review_amount' => round((float) $q()->whereIn('status', [RiderPayout::STATUS_PENDING, RiderPayout::STATUS_UNDER_REVIEW])->sum('amount'), 2),
+            'approved_unpaid_count' => $q()->where('status', RiderPayout::STATUS_APPROVED)->count(),
+            'approved_unpaid_amount' => round((float) $q()->where('status', RiderPayout::STATUS_APPROVED)->sum('amount'), 2),
+            'paid_today_amount' => round((float) $q()->where('status', RiderPayout::STATUS_PAID)->where('paid_at', '>=', $today)->sum('paid_amount'), 2),
+            'paid_today_count' => $q()->where('status', RiderPayout::STATUS_PAID)->where('paid_at', '>=', $today)->count(),
         ], 'Cashout summary.');
     }
 
@@ -106,8 +152,9 @@ class AdminPayoutController extends Controller
      * pickup confirmations, completion / delivery confirmation and the earning
      * computation (rides: passenger, booking, fare, trip). Read-only.
      */
-    public function investigate(RiderPayout $payout, RiderEarning $earning): JsonResponse
+    public function investigate(Request $request, RiderPayout $payout, RiderEarning $earning): JsonResponse
     {
+        $this->assertInOffice($request, $payout);
         $inRequest = $payout->earnings()->whereKey($earning->id)->exists()
             || collect($payout->items_snapshot ?? [])->contains(fn ($i) => (int) ($i['earning_id'] ?? 0) === (int) $earning->id);
         if (! $inRequest || (int) $earning->rider_id !== (int) $payout->rider_id) {
@@ -239,27 +286,38 @@ class AdminPayoutController extends Controller
     /** Full review: rider, destination, every earning traced to its source, history. */
     public function show(Request $request, RiderPayout $payout): JsonResponse
     {
+        $this->assertInOffice($request, $payout);
+
         return $this->successResponse($this->detail($payout), 'Cashout request.');
     }
 
     public function startReview(Request $request, RiderPayout $payout): JsonResponse
     {
+        $this->assertInOffice($request, $payout);
+
         return $this->act(fn () => $this->statements->startReview($payout, $request->user()), 'Review started.');
     }
 
     public function approve(Request $request, RiderPayout $payout): JsonResponse
     {
+        $this->assertInOffice($request, $payout);
         $validated = $request->validate([
             'password' => ['required', 'string'],
             'note' => ['nullable', 'string', 'max:500'],
         ]);
         $this->reauthenticate($request->user(), $validated['password']);
 
-        return $this->act(fn () => $this->statements->approve($payout, $request->user(), $validated['note'] ?? null), 'Cashout approved. Send the GCash transfer, then confirm the payment.');
+        return $this->act(
+            fn () => $this->statements->approve($payout, $request->user(), $validated['note'] ?? null),
+            $this->officeMunicipality($request)
+                ? 'Cashout approved. The Bansud Tourism Office will send the GCash payment.'
+                : 'Cashout approved. Send the GCash transfer, then confirm the payment.',
+        );
     }
 
     public function reject(Request $request, RiderPayout $payout): JsonResponse
     {
+        $this->assertInOffice($request, $payout);
         $validated = $request->validate([
             'reason' => ['required_without:note', 'nullable', 'string', 'max:500'],
             'note' => ['nullable', 'string', 'max:500'],
@@ -270,6 +328,8 @@ class AdminPayoutController extends Controller
 
     public function markPaid(Request $request, RiderPayout $payout): JsonResponse
     {
+        // Not routed for municipal offices; refused here too (decision D2: Bansud pays).
+        abort_if($this->officeMunicipality($request) !== null, 403, 'The Bansud Tourism Office sends the GCash payment.');
         $validated = $request->validate([
             'password' => ['required', 'string'],
             'reference' => ['required', 'string', 'max:64'],
@@ -297,6 +357,7 @@ class AdminPayoutController extends Controller
 
     public function markFailed(Request $request, RiderPayout $payout): JsonResponse
     {
+        abort_if($this->officeMunicipality($request) !== null, 403, 'The Bansud Tourism Office sends the GCash payment.');
         $validated = $request->validate([
             'password' => ['required', 'string'],
             'reason' => ['required', 'string', 'max:500'],
@@ -307,8 +368,9 @@ class AdminPayoutController extends Controller
     }
 
     /** The GCash transfer proof (private file). */
-    public function proof(RiderPayout $payout): StreamedResponse|JsonResponse
+    public function proof(Request $request, RiderPayout $payout): StreamedResponse|JsonResponse
     {
+        $this->assertInOffice($request, $payout);
         if (! $payout->payment_proof_path || ! Storage::disk('local')->exists($payout->payment_proof_path)) {
             return $this->notFoundResponse('No proof on file.');
         }
@@ -363,9 +425,16 @@ class AdminPayoutController extends Controller
             })->values()->all()
             : collect($payout->items_snapshot ?? [])->map(fn ($s) => $s + ['checks' => [], 'verified' => null])->values()->all();
 
-        $names = User::whereIn('id', array_filter([$payout->review_started_by, $payout->approved_by, $payout->paid_by, $payout->failed_by, $payout->reviewed_by]))
-            ->pluck('name', 'id');
-        $staff = fn ($id) => $id ? ['id' => (int) $id, 'name' => $names[$id] ?? "Staff #{$id}"] : null;
+        $people = User::with('municipality:id,name')
+            ->whereIn('id', array_filter([$payout->review_started_by, $payout->approved_by, $payout->paid_by, $payout->failed_by, $payout->reviewed_by]))
+            ->get(['id', 'name', 'role', 'municipality_id'])
+            ->keyBy('id');
+        // Plan Stage 4: which office acted (a municipal office approves, Bansud pays).
+        $staff = fn ($id) => $id ? [
+            'id' => (int) $id,
+            'name' => $people[$id]->name ?? "Staff #{$id}",
+            'office' => $this->officeOf($people[$id] ?? null),
+        ] : null;
 
         // A. GCash accounts this rider used on earlier cashouts.
         $earlier = RiderPayout::where('rider_id', $payout->rider_id)->where('id', '!=', $payout->id)->orderBy('requested_at')->get();

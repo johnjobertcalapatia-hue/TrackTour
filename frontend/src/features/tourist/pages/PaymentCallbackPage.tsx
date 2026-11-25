@@ -58,12 +58,14 @@ export default function PaymentCallbackPage() {
 
   // Stage C (2026-11-18): a cancellation fee paid on its own returns to Book a ride.
   const isPenalty = payableType === 'ride_penalty' || payment?.payable_type === 'ride_penalty'
+  // Resort reservations (Stage 8) return to the reservation page.
+  const isBooking = payableType === 'booking' || payment?.payable_type === 'booking'
   const type = payableType === 'group_order' ? 'group_order' : 'order'
-  const targetId = isPenalty ? (payableId ?? 'fee') : type === 'group_order' ? groupId : orderId
+  const targetId = isPenalty ? (payableId ?? 'fee') : isBooking ? payableId : type === 'group_order' ? groupId : orderId
   // Ride hailing: PayMongo's success page and its "Return to merchant" link
   // both come back to the ride's tracking page.
   const isRide = !isPenalty && type === 'order' && (searchParams.get('kind') === 'ride' || payment?.order_type === 'transport')
-  const targetUrl = isPenalty ? '/tourist/transport/book' : type === 'group_order'
+  const targetUrl = isPenalty ? '/tourist/transport/book' : isBooking ? `/tourist/reservations/${targetId}` : type === 'group_order'
     ? `/tourist/food/group-order/${targetId}`
     : isRide ? `/tourist/transport/tracking/${targetId}` : `/tourist/orders/${targetId}/track`
 

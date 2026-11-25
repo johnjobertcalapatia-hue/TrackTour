@@ -7,24 +7,68 @@ use App\Models\TouristDestination;
 use App\Models\TourismAnnouncement;
 use App\Models\TourismCategory;
 use App\Models\TourismEvent;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 
+/**
+ * Destinations, events and announcements (/tourism-office, behind
+ * `municipal.scope:district`). The Bansud Tourism Office manages every
+ * municipality. A municipal Tourism Office only sees and changes its own: its
+ * municipality comes from the account (the `municipality` request attribute),
+ * another town's record is not found, and naming another town is refused.
+ */
 class TourismManagementController extends Controller
 {
+    /** The municipal office's municipality, or null for the Bansud Tourism Office (district-wide). */
+    private function scopeId(Request $request): ?int
+    {
+        return $request->attributes->get('municipality')?->id;
+    }
+
+    /** Limits a query to the municipal office's municipality (no limit for Bansud). */
+    private function scoped(Request $request, Builder $query): Builder
+    {
+        $id = $this->scopeId($request);
+
+        return $id === null ? $query : $query->where('municipality_id', $id);
+    }
+
+    /**
+     * A municipal office writes only its own municipality: municipality_id is
+     * set to it, and a request naming another municipality is refused.
+     */
+    private function pinMunicipality(Request $request): void
+    {
+        $id = $this->scopeId($request);
+        if ($id === null) {
+            return;
+        }
+        abort_if(
+            $request->filled('municipality_id') && (int) $request->input('municipality_id') !== $id,
+            403,
+            'A municipal Tourism Office can only manage its own municipality.',
+        );
+        $request->merge(['municipality_id' => $id]);
+    }
+
     // ─── Dashboard ──────────────────────────────────────────────────
 
-    public function dashboard(): JsonResponse
+    public function dashboard(Request $request): JsonResponse
     {
+        $destinations = fn () => $this->scoped($request, TouristDestination::query());
+        $events = fn () => $this->scoped($request, TourismEvent::query());
+        $announcements = fn () => $this->scoped($request, TourismAnnouncement::query());
+
         return $this->successResponse([
             'stats' => [
-                'total_destinations' => TouristDestination::count(),
-                'active_destinations' => TouristDestination::where('status', 'active')->count(),
-                'total_events' => TourismEvent::count(),
-                'upcoming_events' => TourismEvent::where('start_date', '>=', now())->count(),
-                'total_announcements' => TourismAnnouncement::count(),
-                'published_announcements' => TourismAnnouncement::where('status', 'published')->count(),
+                'total_destinations' => $destinations()->count(),
+                'active_destinations' => $destinations()->where('status', 'active')->count(),
+                'total_events' => $events()->count(),
+                'upcoming_events' => $events()->where('start_date', '>=', now())->count(),
+                'total_announcements' => $announcements()->count(),
+                'published_announcements' => $announcements()->where('status', 'published')->count(),
             ],
         ]);
     }
@@ -33,7 +77,7 @@ class TourismManagementController extends Controller
 
     public function indexDestinations(Request $request): JsonResponse
     {
-        $query = TouristDestination::with('category', 'municipality');
+        $query = $this->scoped($request, TouristDestination::with('category', 'municipality'));
 
         if ($request->has('search') && $request->search) {
             $search = $request->search;
@@ -56,15 +100,17 @@ class TourismManagementController extends Controller
         return $this->successResponse($destinations);
     }
 
-    public function showDestination(int $id): JsonResponse
+    public function showDestination(Request $request, int $id): JsonResponse
     {
-        $destination = TouristDestination::with('category', 'municipality')->findOrFail($id);
+        $destination = $this->scoped($request, TouristDestination::with('category', 'municipality'))->findOrFail($id);
 
         return $this->successResponse($destination);
     }
 
     public function storeDestination(Request $request): JsonResponse
     {
+        $this->pinMunicipality($request);
+
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'description' => 'required|string',
@@ -97,7 +143,8 @@ class TourismManagementController extends Controller
 
     public function updateDestination(Request $request, int $id): JsonResponse
     {
-        $destination = TouristDestination::findOrFail($id);
+        $destination = $this->scoped($request, TouristDestination::query())->findOrFail($id);
+        $this->pinMunicipality($request);
 
         $validated = $request->validate([
             'name' => 'sometimes|required|string|max:255',
@@ -129,9 +176,9 @@ class TourismManagementController extends Controller
         );
     }
 
-    public function destroyDestination(int $id): JsonResponse
+    public function destroyDestination(Request $request, int $id): JsonResponse
     {
-        TouristDestination::findOrFail($id)->delete();
+        $this->scoped($request, TouristDestination::query())->findOrFail($id)->delete();
 
         return $this->successResponse(null, 'Destination deleted.');
     }
@@ -140,7 +187,7 @@ class TourismManagementController extends Controller
 
     public function indexEvents(Request $request): JsonResponse
     {
-        $query = TourismEvent::with('municipality');
+        $query = $this->scoped($request, TourismEvent::with('municipality'));
 
         if ($request->has('search') && $request->search) {
             $search = $request->search;
@@ -159,15 +206,17 @@ class TourismManagementController extends Controller
         return $this->successResponse($events);
     }
 
-    public function showEvent(int $id): JsonResponse
+    public function showEvent(Request $request, int $id): JsonResponse
     {
-        $event = TourismEvent::with('municipality')->findOrFail($id);
+        $event = $this->scoped($request, TourismEvent::with('municipality'))->findOrFail($id);
 
         return $this->successResponse($event);
     }
 
     public function storeEvent(Request $request): JsonResponse
     {
+        $this->pinMunicipality($request);
+
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'description' => 'required|string',
@@ -192,7 +241,8 @@ class TourismManagementController extends Controller
 
     public function updateEvent(Request $request, int $id): JsonResponse
     {
-        $event = TourismEvent::findOrFail($id);
+        $event = $this->scoped($request, TourismEvent::query())->findOrFail($id);
+        $this->pinMunicipality($request);
 
         $validated = $request->validate([
             'name' => 'sometimes|required|string|max:255',
@@ -213,9 +263,9 @@ class TourismManagementController extends Controller
         );
     }
 
-    public function destroyEvent(int $id): JsonResponse
+    public function destroyEvent(Request $request, int $id): JsonResponse
     {
-        TourismEvent::findOrFail($id)->delete();
+        $this->scoped($request, TourismEvent::query())->findOrFail($id)->delete();
 
         return $this->successResponse(null, 'Event deleted.');
     }
@@ -224,7 +274,7 @@ class TourismManagementController extends Controller
 
     public function indexAnnouncements(Request $request): JsonResponse
     {
-        $query = TourismAnnouncement::with('municipality');
+        $query = $this->scoped($request, TourismAnnouncement::with('municipality'));
 
         if ($request->has('search') && $request->search) {
             $search = $request->search;
@@ -247,15 +297,17 @@ class TourismManagementController extends Controller
         return $this->successResponse($announcements);
     }
 
-    public function showAnnouncement(int $id): JsonResponse
+    public function showAnnouncement(Request $request, int $id): JsonResponse
     {
-        $announcement = TourismAnnouncement::with('municipality')->findOrFail($id);
+        $announcement = $this->scoped($request, TourismAnnouncement::with('municipality'))->findOrFail($id);
 
         return $this->successResponse($announcement);
     }
 
     public function storeAnnouncement(Request $request): JsonResponse
     {
+        $this->pinMunicipality($request);
+
         $validated = $request->validate([
             'title' => 'required|string|max:255',
             'content' => 'required|string',
@@ -281,7 +333,8 @@ class TourismManagementController extends Controller
 
     public function updateAnnouncement(Request $request, int $id): JsonResponse
     {
-        $announcement = TourismAnnouncement::findOrFail($id);
+        $announcement = $this->scoped($request, TourismAnnouncement::query())->findOrFail($id);
+        $this->pinMunicipality($request);
 
         $validated = $request->validate([
             'title' => 'sometimes|required|string|max:255',
@@ -304,9 +357,9 @@ class TourismManagementController extends Controller
         );
     }
 
-    public function destroyAnnouncement(int $id): JsonResponse
+    public function destroyAnnouncement(Request $request, int $id): JsonResponse
     {
-        TourismAnnouncement::findOrFail($id)->delete();
+        $this->scoped($request, TourismAnnouncement::query())->findOrFail($id)->delete();
 
         return $this->successResponse(null, 'Announcement deleted.');
     }

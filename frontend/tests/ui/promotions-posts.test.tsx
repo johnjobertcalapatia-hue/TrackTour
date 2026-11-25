@@ -121,6 +121,25 @@ describe('owner: Deals & Posts page', () => {
     expect(await screen.findByText('No badges yet.')).toBeInTheDocument()
     expect(location).toBe('/business-owner/promotions?tab=sales')
   })
+
+  it.each(['Resort', 'Tourist Attraction'])('a %s gets Posts and Deals, without dish sales', async (category) => {
+    useBusinessOwnerStore.setState({ businesses: [{ id: 8, name: 'Tambunan', category, status: 'approved', logo: null }], selectedBusinessId: 8 })
+    renderPage()
+    expect(screen.getByRole('link', { name: /Create Post/ })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /Create Deal/ })).toHaveAttribute('href', '/business-owner/promotions/create')
+    expect(screen.queryByRole('link', { name: /Create Sale/ })).toBeNull()
+    expect(screen.queryByRole('tab', { name: /Sales/ })).toBeNull()
+
+    fireEvent.click(screen.getByRole('tab', { name: /Deals/ }))
+    expect(await screen.findByText('No deals yet.')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Deals' })).toBeInTheDocument()
+    expect(api.get.mock.calls.some(([url]) => String(url).includes('/dish-sales'))).toBe(false)
+    // Worded for the business type.
+    expect(screen.getByText(category === 'Resort'
+      ? 'Share resort updates and promote deals on cottages, rooms and day tours to attract more guests.'
+      : 'Share photos, news and events to attract more visitors.')).toBeInTheDocument()
+    expect(screen.getByText(category === 'Resort' ? /honour them when the guest arrives/ : /honour them at the entrance/)).toBeInTheDocument()
+  })
 })
 
 describe('owner: post form', () => {
@@ -138,6 +157,15 @@ describe('owner: post form', () => {
   beforeEach(() => {
     api.get.mockResolvedValue([])
     api.post.mockResolvedValue({ id: 5 })
+  })
+
+  it('a resort post has no dish sale to link', () => {
+    useBusinessOwnerStore.setState({ businesses: [{ id: 8, name: 'Tambunan', category: 'Resort', status: 'approved', logo: null }], selectedBusinessId: 8 })
+    renderForm()
+    expect(screen.getByLabelText('Caption')).toBeInTheDocument()
+    expect(screen.queryByLabelText(/Link a sale/)).toBeNull()
+    expect(screen.getByLabelText('Caption')).toHaveAttribute('placeholder', 'What’s new? e.g. 20% off cottages this weekend!')
+    expect(api.get).not.toHaveBeenCalled()
   })
 
   it('allows at most 10 photos and never photos with a video', () => {

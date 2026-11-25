@@ -100,7 +100,7 @@ class BusinessCategoryStaffRoleSeeder extends Seeder
                 continue;
             }
 
-            $roleIds = StaffRole::whereIn('name', $roleNames)->pluck('id')->toArray();
+            $roleIds = StaffRole::builtIn()->whereIn('name', $roleNames)->pluck('id')->toArray();
             $category->staffRoles()->sync($roleIds);
         }
     }

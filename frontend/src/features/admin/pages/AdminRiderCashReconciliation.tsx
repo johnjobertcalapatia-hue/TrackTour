@@ -6,6 +6,7 @@ import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { apiErrorMessage, get, post } from '@/shared/services/api'
 import { formatCurrency, formatDateTime } from '@/shared/utils'
+import { useOfficePortal } from '@/features/admin/office-portal'
 
 interface ReceiptRecord {
   id: number
@@ -134,6 +135,8 @@ function MoneyRow({ label, value }: { label: string; value: number | null }) {
 }
 
 export default function AdminRiderCashReconciliation() {
+  // Bansud: /admin. Municipal office: /municipal — the server limits it to its own riders.
+  const portal = useOfficePortal()
   const { id } = useParams<{ id: string }>()
   // ?date=YYYY-MM-DD opens a given day (linked from the Rider Cash board).
   const [searchParams] = useSearchParams()
@@ -162,7 +165,7 @@ export default function AdminRiderCashReconciliation() {
 
   const { data: receipt, isLoading, isError } = useQuery({
     queryKey,
-    queryFn: () => get<Receipt>(`/admin/riders/${id}/cash-fund/daily-receipt`, { params: { date } }),
+    queryFn: () => get<Receipt>(`${portal.api}/riders/${id}/cash-fund/daily-receipt`, { params: { date } }),
     enabled: !!id,
   })
 
@@ -193,7 +196,7 @@ export default function AdminRiderCashReconciliation() {
   }, [receipt])
 
   const verifyMutation = useMutation({
-    mutationFn: () => post(`/admin/riders/${id}/cash-fund/daily-receipt/${receipt?.reconciliation?.id}/verify`, {
+    mutationFn: () => post(`${portal.api}/riders/${id}/cash-fund/daily-receipt/${receipt?.reconciliation?.id}/verify`, {
       cash_received: Number(cashReceived),
       office_cash_returned: Number(cashReturned),
       rider_reimbursement_paid: Number(reimbursement),
@@ -208,7 +211,7 @@ export default function AdminRiderCashReconciliation() {
   })
 
   const movementMutation = useMutation({
-    mutationFn: () => post(`/admin/riders/${id}/cash-fund/daily-receipt/${receipt?.reconciliation?.id}/movements`, {
+    mutationFn: () => post(`${portal.api}/riders/${id}/cash-fund/daily-receipt/${receipt?.reconciliation?.id}/movements`, {
       movement_type: movementType,
       amount: Number(movementAmount),
       reference: movementReference.trim(),
@@ -227,7 +230,7 @@ export default function AdminRiderCashReconciliation() {
   })
 
   const returnMutation = useMutation({
-    mutationFn: () => post(`/admin/riders/${id}/cash-fund/returns`, {
+    mutationFn: () => post(`${portal.api}/riders/${id}/cash-fund/returns`, {
       amount: Number(returnAmount),
       transaction_at: returnTransactionAt,
       reference: returnReference.trim(),
@@ -246,7 +249,7 @@ export default function AdminRiderCashReconciliation() {
   })
 
   const closeMutation = useMutation({
-    mutationFn: () => post(`/admin/riders/${id}/cash-fund/daily-receipt/${receipt?.reconciliation?.id}/close`, {
+    mutationFn: () => post(`${portal.api}/riders/${id}/cash-fund/daily-receipt/${receipt?.reconciliation?.id}/close`, {
       idempotency_key: crypto.randomUUID(),
     }),
     onSuccess: async () => {
@@ -260,7 +263,7 @@ export default function AdminRiderCashReconciliation() {
   const latestCorrection = record?.corrections?.[record.corrections.length - 1]
   const mutationsEnabled = receipt?.reconciliation_policy.mutations_enabled === true
   const correctionReviewMutation = useMutation({
-    mutationFn: () => post(`/admin/riders/${id}/cash-fund/daily-receipt/${record?.id}/corrections/${latestCorrection?.id}/review`, {
+    mutationFn: () => post(`${portal.api}/riders/${id}/cash-fund/daily-receipt/${record?.id}/corrections/${latestCorrection?.id}/review`, {
       decision: 'approve',
       note: correctionNote.trim() || undefined,
       idempotency_key: crypto.randomUUID(),
@@ -272,7 +275,7 @@ export default function AdminRiderCashReconciliation() {
     onError: (error) => setNotice({ type: 'error', message: apiErrorMessage(error, 'Could not review the corrected balances.') }),
   })
   const correctionCloseMutation = useMutation({
-    mutationFn: () => post(`/admin/riders/${id}/cash-fund/daily-receipt/${record?.id}/corrections/${latestCorrection?.id}/close`, {
+    mutationFn: () => post(`${portal.api}/riders/${id}/cash-fund/daily-receipt/${record?.id}/corrections/${latestCorrection?.id}/close`, {
       idempotency_key: crypto.randomUUID(),
     }),
     onSuccess: async () => {
@@ -286,7 +289,7 @@ export default function AdminRiderCashReconciliation() {
 
   return (
     <main className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6">
-      <Link to={`/admin/riders/${id}`} className="inline-flex items-center gap-2 text-sm text-[#59645D] hover:text-[#087F3F]">
+      <Link to={`${portal.route}/riders/${id}`} className="inline-flex items-center gap-2 text-sm text-[#59645D] hover:text-[#087F3F]">
         <ArrowLeft className="h-4 w-4" /> Back to rider
       </Link>
       <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">

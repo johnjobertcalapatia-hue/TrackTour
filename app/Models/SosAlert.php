@@ -24,7 +24,7 @@ class SosAlert extends Model
     public const OUTCOME_FALSE_ALARM = 'false_alarm';
 
     protected $fillable = [
-        'reference', 'raised_by', 'raised_by_role', 'service', 'order_id', 'delivery_id', 'trip_status',
+        'reference', 'raised_by', 'raised_by_role', 'service', 'order_id', 'delivery_id', 'municipality_id', 'trip_status',
         'latitude', 'longitude', 'accuracy_m', 'location_at', 'location_source', 'message', 'status',
         'raised_at', 'sender_safe_at', 'acknowledged_at', 'acknowledged_by', 'responding_at', 'responding_by',
         'responder', 'response_note', 'resolved_at', 'resolved_by', 'outcome', 'resolution_note',
@@ -58,6 +58,12 @@ class SosAlert extends Model
     public function delivery(): BelongsTo
     {
         return $this->belongsTo(Delivery::class);
+    }
+
+    /** The municipal Tourism Office that handles this alert (Bansud sees every alert). */
+    public function municipality(): BelongsTo
+    {
+        return $this->belongsTo(Municipality::class);
     }
 
     public function acknowledger(): BelongsTo

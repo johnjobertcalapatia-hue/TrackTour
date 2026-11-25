@@ -7,6 +7,7 @@ const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }))
 vi.mock('@/shared/services/api', () => ({ ...api, apiErrorMessage: (_e: unknown, f: string) => f }))
 
 import AdminRiderCash from '@/features/admin/pages/AdminRiderCash'
+import { MUNICIPAL_PORTAL, OfficePortalProvider } from '@/features/admin/office-portal'
 
 const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date())
 
@@ -128,5 +129,32 @@ describe('Tourism Office Rider Cash board', () => {
     await screen.findByText(/Viewing the record for/)
     expect(screen.queryByRole('button', { name: /Issue cash/ })).toBeNull()
     expect(within(screen.getByRole('listitem', { name: 'Juan Rider' })).getByRole('link', { name: /Daily receipt/ })).toHaveAttribute('href', `/admin/riders/8/cash-reconciliation?date=${y}`)
+  })
+})
+
+describe('Municipal Tourism Office Rider Cash board (plan Stage 2)', () => {
+  it('uses /municipal for the overview, advances and the daily receipt link', async () => {
+    api.get.mockReset()
+    api.post.mockReset()
+    api.get.mockResolvedValue(overview(false))
+    api.post.mockResolvedValue({})
+
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <OfficePortalProvider value={MUNICIPAL_PORTAL}><AdminRiderCash /></OfficePortalProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    const juan = within(await screen.findByRole('listitem', { name: 'Juan Rider' }))
+    expect(api.get).toHaveBeenCalledWith('/municipal/cash-advances', { params: { date: today } })
+    expect(juan.getByRole('link', { name: /Daily receipt & remittance/ })).toHaveAttribute('href', `/municipal/riders/8/cash-reconciliation?date=${today}`)
+
+    const maria = within(screen.getByRole('listitem', { name: 'Maria Rider' }))
+    fireEvent.click(maria.getByRole('button', { name: /Issue cash/ }))
+    fireEvent.change(maria.getByLabelText('Cash advance for Maria Rider'), { target: { value: '300' } })
+    await act(async () => { fireEvent.click(maria.getByRole('button', { name: 'Record advance' })) })
+    expect(api.post.mock.calls[0]?.[0]).toBe('/municipal/riders/9/cash-fund/advances')
   })
 })

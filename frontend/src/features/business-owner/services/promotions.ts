@@ -6,6 +6,20 @@
 
 import type { PostMediaItem, PostSale } from '@/shared/components/posts/post-types'
 
+/** Business types with a menu: dish sales only make sense for these. */
+export const FOOD_CATEGORIES = ['Restaurant', 'Café', 'Food Hub', 'Food Hub / Food Park', 'Hotel & Restaurant Combination']
+
+/**
+ * Whether the business (or, with none chosen, any of the businesses) sells
+ * food. Resorts and tourist attractions get Posts + Deals instead of dish
+ * sales. An unknown category keeps the food layout (the earlier behaviour).
+ */
+export function sellsFood(businesses: { id: number; category?: string }[], businessId: number | null): boolean {
+  const list = businessId != null ? businesses.filter((b) => b.id === businessId) : businesses
+  if (list.length === 0) return true
+  return list.some((b) => !b.category || FOOD_CATEGORIES.includes(b.category))
+}
+
 export type SaleStatus = 'scheduled' | 'active' | 'ended' | 'stopped'
 
 export interface DishSaleSummary {

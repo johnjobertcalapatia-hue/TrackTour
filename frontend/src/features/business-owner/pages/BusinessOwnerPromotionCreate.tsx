@@ -10,6 +10,7 @@ import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { ArrowLeft, Save } from 'lucide-react'
 import { useBusinessPortal } from '../services/business-portal'
+import { dealsCopy, portalKind } from '../services/business-profile-kind'
 
 const schema = z.object({
   title: z.string().min(2, 'Title must be at least 2 characters'),
@@ -30,6 +31,7 @@ interface Business {
 
 export default function BusinessOwnerPromotionCreate() {
   const portal = useBusinessPortal()
+  const copy = dealsCopy(portalKind(portal.businesses, portal.businessId))
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [error, setError] = useState('')
@@ -74,25 +76,25 @@ export default function BusinessOwnerPromotionCreate() {
       </Link>
 
       <div>
-        <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">Create Promotion</h1>
-        <p className="mt-1 text-sm text-[#647067]">Create a new promotion to attract customers</p>
+        <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">Create {copy.dealNoun}</h1>
+        <p className="mt-1 text-sm text-[#647067]">{copy.dealFormSubtitle}</p>
       </div>
 
       {error && <Alert type="error" message={error} onDismiss={() => setError('')} />}
 
       <form onSubmit={handleSubmit((data) => mutation.mutate(data))} className="space-y-5">
         <div className="rounded-[20px] border border-[#E2E8E3] bg-[#fff] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-5 space-y-4">
-          <h2 className="text-lg font-semibold text-[#17201A]">Promotion Details</h2>
+          <h2 className="text-lg font-semibold text-[#17201A]">{copy.dealNoun} Details</h2>
 
           <div>
             <label className="block text-sm font-medium text-[#4B5563] mb-1.5">Title</label>
-            <input {...register('title')} placeholder="e.g. Summer Sale" className="w-full px-4 py-3 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition" />
+            <input {...register('title')} placeholder={copy.dealTitlePlaceholder} className="w-full px-4 py-3 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition" />
             {errors.title && <p className="text-[#B91C1C] text-xs mt-1">{errors.title.message}</p>}
           </div>
 
           <div>
             <label className="block text-sm font-medium text-[#4B5563] mb-1.5">Description</label>
-            <textarea {...register('description')} rows={3} placeholder="Describe the promotion..." className="w-full px-4 py-3 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition resize-none" />
+            <textarea {...register('description')} rows={3} placeholder={copy.dealDescriptionPlaceholder} className="w-full px-4 py-3 bg-white border border-[#E2E8E3] rounded-xl text-sm text-[#17201A] placeholder-[#9CA3AF] focus:outline-none focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition resize-none" />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -142,7 +144,7 @@ export default function BusinessOwnerPromotionCreate() {
           </button>
           <button type="submit" disabled={mutation.isPending} className="inline-flex items-center gap-2 bg-[#16803C] hover:bg-[#126B32] disabled:opacity-50 text-white px-5 py-2.5 rounded-xl text-sm font-semibold transition">
             <Save className="w-4 h-4" />
-            {mutation.isPending ? 'Creating...' : 'Create Promotion'}
+            {mutation.isPending ? 'Creating...' : `Create ${copy.dealNoun}`}
           </button>
         </div>
       </form>

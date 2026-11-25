@@ -250,7 +250,7 @@ function LocationSharingCard() {
         <div className="min-w-0 flex-1">
           <p id="share-location-label" className="text-sm font-semibold text-[#17201B]">Share my location with the tourism office</p>
           <p className="mt-0.5 text-xs leading-relaxed text-[#56615B]">
-            Lets the Bansud Tourism Office see where you are while the app is open, so they can help you faster in an emergency.
+            Lets the Bansud Tourism Office, and the tourism office of the town you are in, see where you are while the app is open, so they can help you faster in an emergency.
             Only your latest location is kept, and it is deleted when you turn this off.
           </p>
           {on && (

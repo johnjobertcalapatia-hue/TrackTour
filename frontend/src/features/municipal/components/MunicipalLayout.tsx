@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
-  Activity, Bike, ClipboardCheck, FileBarChart, FileCheck2, LayoutDashboard, Landmark, LogOut, Menu, Settings, Store, UserCheck, Users, X,
+  Activity, Bike, CalendarDays, CircleAlert, ClipboardCheck, FileBarChart, FileCheck2, LayoutDashboard, Landmark, LogOut, Map, MapPin, Megaphone, Menu, Package, Settings, Store, UserCheck, Users, Wallet, X,
   type LucideIcon,
   Percent,
 } from 'lucide-react'
@@ -11,12 +11,16 @@ import { useAuthStore } from '@/features/auth/services/auth-store'
 import { cn, toAssetUrl } from '@/shared/utils'
 import { MUNICIPAL_API, type MunicipalDashboardData, type MunicipalProfile } from '@/features/municipal/types'
 import { POPPINS } from '@/features/municipal/theme'
+import { MUNICIPAL_PORTAL, OfficePortalProvider } from '@/features/admin/office-portal'
+import AdminSosAlarm, { useSosSummary } from '@/features/admin/components/AdminSosAlarm'
 
 interface NavEntry {
   to: string
   label: string
   icon: LucideIcon
   badge?: number
+  /** Red badge (SOS) instead of the gold "waiting" badge. */
+  alert?: boolean
 }
 
 /**
@@ -48,31 +52,53 @@ export default function MunicipalLayout() {
     setMenuOpen(false)
   }, [location.pathname])
 
+  // The layout sits outside its own portal provider, so it names the portal.
+  const { data: sos } = useSosSummary(MUNICIPAL_PORTAL)
   const stats = dashboard?.stats
   const documentsWaiting = stats ? stats.documents.business_pending + stats.documents.riders_pending : undefined
+  // Municipal Office plan Stage 1: the same groups, in the same order, as the Bansud
+  // sidebar (AdminLayout), showing only the modules a municipal office has.
+  // Stages 2–3: Live operations for this municipality, including its SOS alerts.
   const sections: { label?: string; items: NavEntry[] }[] = [
-    { items: [{ to: '/municipal/dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
+    { label: 'Overview', items: [{ to: '/municipal/dashboard', label: 'Dashboard', icon: LayoutDashboard }] },
     {
-      label: 'Local management',
+      label: 'Live operations',
       items: [
-        { to: '/municipal/business-owners', label: 'Business Owners', icon: Users, badge: stats?.business_owners.pending },
+        { to: '/municipal/live/map', label: 'Live Map', icon: Map },
+        { to: '/municipal/live/deliveries', label: 'Deliveries', icon: Package },
+        { to: '/municipal/rider-cash', label: 'Rider Cash', icon: Wallet },
+        { to: '/municipal/live/sos', label: 'SOS Alerts', icon: CircleAlert, badge: sos?.active, alert: true },
+      ],
+    },
+    {
+      label: 'Tourism management',
+      items: [
         { to: '/municipal/businesses', label: 'Businesses', icon: Store, badge: stats?.businesses.pending },
+        { to: '/municipal/business-owners', label: 'Business Owners', icon: Users, badge: stats?.business_owners.pending },
         { to: '/municipal/riders', label: 'Riders', icon: Bike, badge: stats?.riders.pending },
         { to: '/municipal/onboarding', label: 'Rider Onboarding', icon: ClipboardCheck },
         { to: '/municipal/tourists', label: 'Tourists', icon: UserCheck },
       ],
     },
     {
-      label: 'Records',
+      label: 'Tourism content',
       items: [
-        { to: '/municipal/documents', label: 'Documents', icon: FileCheck2, badge: documentsWaiting },
-        { to: '/municipal/reports', label: 'Reports', icon: FileBarChart },
-        { to: '/municipal/activity-logs', label: 'Activity Logs', icon: Activity },
+        { to: '/municipal/destinations', label: 'Destinations', icon: MapPin },
+        { to: '/municipal/events', label: 'Events', icon: CalendarDays },
+        { to: '/municipal/announcements', label: 'Announcements', icon: Megaphone },
       ],
     },
     // Earnings Stage 1 (2026-11-24): this town's own commission rates.
-    { label: 'Finance', items: [{ to: '/municipal/commission-rates', label: 'Commission Rates', icon: Percent }] },
-    { label: 'Office', items: [{ to: '/municipal/profile', label: 'Profile & Settings', icon: Settings }] },
+    { label: 'Financial management', items: [{ to: '/municipal/commission-rates', label: 'Commission Rates', icon: Percent }] },
+    {
+      label: 'Records & analytics',
+      items: [
+        { to: '/municipal/reports', label: 'Reports', icon: FileBarChart },
+        { to: '/municipal/documents', label: 'Documents', icon: FileCheck2, badge: documentsWaiting },
+        { to: '/municipal/activity-logs', label: 'Activity Logs', icon: Activity },
+      ],
+    },
+    { label: 'System', items: [{ to: '/municipal/profile', label: 'Office Profile', icon: Settings }] },
   ]
 
   const municipalityName = profile?.municipality.name ?? dashboard?.municipality.name ?? 'Municipality'
@@ -130,7 +156,13 @@ export default function MunicipalLayout() {
                         <item.icon className={cn('w-[18px] h-[18px]', isActive ? 'text-[#FFD700]' : 'text-white/60 group-hover:text-white')} aria-hidden="true" />
                         <span className="flex-1">{item.label}</span>
                         {!!item.badge && (
-                          <span className="min-w-5 h-5 px-1.5 rounded-full bg-[#FFD700] text-[#5C4A00] text-[11px] font-bold flex items-center justify-center" aria-label={`${item.badge} waiting`}>
+                          <span
+                            className={cn(
+                              'min-w-5 h-5 px-1.5 rounded-full text-[11px] font-bold flex items-center justify-center',
+                              item.alert ? 'bg-red-600 text-white animate-pulse' : 'bg-[#FFD700] text-[#5C4A00]'
+                            )}
+                            aria-label={item.alert ? `${item.badge} active SOS` : `${item.badge} waiting`}
+                          >
                             {item.badge}
                           </span>
                         )}
@@ -208,7 +240,7 @@ export default function MunicipalLayout() {
                     <p className="text-xs text-[#66736B] truncate">{profile?.account.email ?? user?.email}</p>
                   </div>
                   <NavLink to="/municipal/profile" role="menuitem" className="flex items-center gap-2 px-4 py-2.5 text-sm hover:bg-[#FAF7F0]">
-                    <Settings className="w-4 h-4" /> Profile & Settings
+                    <Settings className="w-4 h-4" /> Office Profile
                   </NavLink>
                   <button type="button" role="menuitem" onClick={handleLogout} className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50">
                     <LogOut className="w-4 h-4" /> Logout
@@ -220,7 +252,12 @@ export default function MunicipalLayout() {
         </header>
 
         <main className="px-4 sm:px-6 lg:px-8 py-6 max-w-7xl">
-          <Outlet />
+          {/* Shared Bansud pages (Live Map, Deliveries, Rider Cash) call /municipal/* here. */}
+          <OfficePortalProvider value={MUNICIPAL_PORTAL}>
+            {/* Plan Stage 3: red banner and sound while one of this town's SOS alerts waits. */}
+            <AdminSosAlarm />
+            <Outlet />
+          </OfficePortalProvider>
         </main>
       </div>
     </div>

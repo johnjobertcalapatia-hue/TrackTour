@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Siren } from 'lucide-react'
 import { get } from '@/shared/services/api'
+import { useOfficePortal, type OfficePortal } from '@/features/admin/office-portal'
 
 export interface SosSummary {
   active: number
@@ -12,11 +13,17 @@ export interface SosSummary {
 
 export const SOS_SUMMARY_KEY = ['admin-sos-summary']
 
-/** Polled every 5 s; shared by the alarm banner and the sidebar badge. */
-export function useSosSummary() {
+/**
+ * Polled every 5 s; shared by the alarm banner and the sidebar badge. Bansud:
+ * every alert. A municipal office (plan Stage 3): its own alerts only. A layout
+ * that sits outside its portal provider passes the portal explicitly.
+ */
+export function useSosSummary(portalOverride?: OfficePortal) {
+  const fromContext = useOfficePortal()
+  const portal = portalOverride ?? fromContext
   return useQuery({
-    queryKey: SOS_SUMMARY_KEY,
-    queryFn: () => get<SosSummary>('/admin/live/sos/summary'),
+    queryKey: [...SOS_SUMMARY_KEY, portal.api],
+    queryFn: () => get<SosSummary>(`${portal.api}/live/sos/summary`),
     refetchInterval: 5000,
     refetchIntervalInBackground: true,
   })
@@ -50,6 +57,7 @@ function beep() {
  */
 export default function AdminSosAlarm() {
   const { pathname } = useLocation()
+  const portal = useOfficePortal()
   const { data } = useSosSummary()
   const pending = data?.pending ?? 0
   const last = useRef<number | null>(null)
@@ -59,7 +67,7 @@ export default function AdminSosAlarm() {
     last.current = pending
   }, [pending])
 
-  if (!pending || pathname.startsWith('/admin/live/sos')) return null
+  if (!pending || pathname.startsWith(`${portal.route}/live/sos`)) return null
   const latest = data?.latest_pending
 
   return (
@@ -73,7 +81,7 @@ export default function AdminSosAlarm() {
         SOS: {latest?.name ?? 'Someone'} ({latest?.raised_by_role === 'rider' ? 'rider' : 'tourist'}, {latest?.service === 'food' ? 'food delivery' : 'ride'}) needs help.
         {pending > 1 && <span className="font-normal"> {pending} alerts are waiting.</span>}
       </p>
-      <Link to="/admin/live/sos" className="rounded-xl bg-white px-3 py-1.5 text-sm font-bold text-red-700 hover:bg-red-50">Open SOS Alerts</Link>
+      <Link to={`${portal.route}/live/sos`} className="rounded-xl bg-white px-3 py-1.5 text-sm font-bold text-red-700 hover:bg-red-50">Open SOS Alerts</Link>
     </div>
   )
 }

@@ -7,6 +7,7 @@ import 'leaflet/dist/leaflet.css'
 import { get } from '@/shared/services/api'
 import { cn, getInitials, toAssetUrl } from '@/shared/utils'
 import LiveMapPanel, { type RiderFilter, type TownRow } from '@/features/admin/live-map/LiveMapPanel'
+import { useOfficePortal } from '@/features/admin/office-portal'
 import RiderRouteLayer from '@/features/admin/live-map/RiderRouteLayer'
 import { municipalityIcon, riderIcon, sosRadarIcon, touristIcon } from '@/features/admin/live-map/icons'
 import { beachPinIcon, businessLogoIcon, pinIcon } from '@/shared/utils/pin-icon'
@@ -66,14 +67,18 @@ function townPoints(towns: MunicipalityPin[]): [number, number][] {
   return towns.filter((t) => t.lat !== null && t.lng !== null).map((t) => [t.lat!, t.lng!])
 }
 
-/** Default view: all towns in frame (zoomed out, so town markers show). */
+/**
+ * Default view: all towns in frame (zoomed out, so town markers show). A
+ * municipal office's map has only its own town: open on it at street level.
+ */
 function FitWholeMindoro({ towns }: { towns: MunicipalityPin[] }) {
   const map = useMap()
   const fitted = useRef(false)
   useEffect(() => {
     const pts = townPoints(towns)
     if (pts.length === 0 || fitted.current) return
-    map.fitBounds(L.latLngBounds(pts), { padding: [70, 70], maxZoom: TOWN_ZOOM - 2 })
+    if (pts.length === 1) map.setView(pts[0]!, TOWN_VIEW_ZOOM)
+    else map.fitBounds(L.latLngBounds(pts), { padding: [70, 70], maxZoom: TOWN_ZOOM - 2 })
     fitted.current = true
   }, [towns, map])
   return null
@@ -119,27 +124,30 @@ export default function AdminLiveMap() {
   const [panelOpen, setPanelOpen] = useState(true)
   const [zoom, setZoom] = useState(10)
   const [map, setMap] = useState<L.Map | null>(null)
+  // Bansud: /admin (district-wide). Municipal office: /municipal (its own town).
+  const portal = useOfficePortal()
 
   const businessesQ = useQuery({
-    queryKey: ['admin-live-map', 'businesses'],
-    queryFn: () => get<{ businesses: BusinessPin[]; municipalities?: MunicipalityPin[] }>('/admin/map-data'),
+    queryKey: ['admin-live-map', portal.api, 'businesses'],
+    queryFn: () => get<{ businesses: BusinessPin[]; municipalities?: MunicipalityPin[] }>(`${portal.api}/map-data`),
     refetchInterval: live ? 60_000 : false,
   })
   const ridersQ = useQuery({
-    queryKey: ['admin-live-map', 'riders'],
-    queryFn: () => get<LiveRider[]>('/admin/live/riders'),
+    queryKey: ['admin-live-map', portal.api, 'riders'],
+    queryFn: () => get<LiveRider[]>(`${portal.api}/live/riders`),
     // Riders report GPS about every 5 seconds while on duty.
     refetchInterval: live ? (tab === 'riders' ? 5_000 : 15_000) : false,
   })
+  // Plan Stage 3: a municipal office sees its own town's SOS alerts; Bansud sees all.
   const sosQ = useQuery({
-    queryKey: ['admin-live-map', 'sos'],
-    queryFn: () => get<{ data: SosPin[] }>('/admin/live/sos', { params: { filter: 'active' } }),
+    queryKey: ['admin-live-map', portal.api, 'sos'],
+    queryFn: () => get<{ data: SosPin[] }>(`${portal.api}/live/sos`, { params: { filter: 'active' } }),
     refetchInterval: live ? 10_000 : false,
   })
 
   const touristsQ = useQuery({
-    queryKey: ['admin-live-map', 'tourists'],
-    queryFn: () => get<LiveTourist[]>('/admin/live/tourists'),
+    queryKey: ['admin-live-map', portal.api, 'tourists'],
+    queryFn: () => get<LiveTourist[]>(`${portal.api}/live/tourists`),
     // Tourists who opted in report about every 30 seconds.
     refetchInterval: live ? (tab === 'tourists' ? 15_000 : 30_000) : false,
   })
@@ -298,7 +306,9 @@ export default function AdminLiveMap() {
   const showTowns = zoom < TOWN_ZOOM
 
   return (
-    <div className="relative -m-4 flex h-[calc(100vh-8rem)] overflow-hidden sm:-m-6 lg:-m-8">
+    // isolate: keeps Leaflet's panes (z 400+) and the map controls (z-[1000]) inside this page,
+    // so the admin header's account menu (Office Profile, Logout) opens above the map.
+    <div className="relative isolate -m-4 flex h-[calc(100vh-8rem)] overflow-hidden sm:-m-6 lg:-m-8">
       <style>{`
         .leaflet-control-zoom { display: none !important; }
         .admin-live-rider, .admin-live-stop, .admin-live-business, .admin-live-sos, .admin-live-town, .admin-live-tourist { background: transparent; border: 0; }

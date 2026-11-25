@@ -63,7 +63,7 @@ class BusinessModuleBackfillTest extends TestCase
         }
         // "Attractions" (production's name) gets the Tourist Attraction modules.
         $this->assertEqualsCanonicalizing(
-            ['business_profile', 'facility_management', 'booking_requests', 'gallery', 'staff_management', 'customer_reviews', 'expenses'],
+            ['business_profile', 'facility_management', 'booking_requests', 'gallery', 'staff_management', 'promotions', 'customer_reviews', 'expenses'],
             $this->attraction->fresh()->module_codes,
         );
 

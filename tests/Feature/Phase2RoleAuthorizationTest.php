@@ -237,10 +237,19 @@ class Phase2RoleAuthorizationTest extends TestCase
             ->assertOk();
     }
 
-    public function test_municipality_tourism_admin_can_access_tourism_office_dashboard(): void
+    // Municipal Office plan Stage 0: the legacy /tourism-office dashboard and reports are
+    // district-wide aggregates, so only Bansud reads them (towns use /municipal/dashboard).
+    public function test_district_super_admin_can_access_tourism_office_dashboard(): void
     {
-        $this->actingAs($this->municipalityOfficer, 'sanctum')
+        $this->actingAs($this->districtAdmin, 'sanctum')
             ->getJson('/api/tourism-office/dashboard')
             ->assertOk();
+    }
+
+    public function test_municipality_tourism_admin_cannot_read_district_wide_tourism_office_aggregates(): void
+    {
+        foreach (['/api/tourism-office/dashboard', '/api/tourism-office/reports'] as $uri) {
+            $this->actingAs($this->municipalityOfficer, 'sanctum')->getJson($uri)->assertForbidden();
+        }
     }
 }

@@ -13,6 +13,7 @@ import HoldToSendButton from '@/shared/components/HoldToSendButton'
 import RiderSosButton from '@/features/rider/components/RiderSosButton'
 import AdminLiveSOS, { type AdminSos } from '@/features/admin/pages/AdminLiveSOS'
 import AdminSosAlarm from '@/features/admin/components/AdminSosAlarm'
+import { MUNICIPAL_PORTAL, OfficePortalProvider } from '@/features/admin/office-portal'
 
 /** SOS (owner decisions 2026-11-18): hold 3 s; rider + tourist send; the Bansud Tourism Office handles it. */
 
@@ -26,6 +27,7 @@ const SENDER_SOS = { id: 4, reference: 'SOS-261118-RD01', status: 'pending', act
 
 const ALERT: AdminSos = {
   id: 9, reference: 'SOS-261118-TR09', status: 'pending', active: true, raised_by_role: 'tourist', service: 'ride',
+  municipality: { id: 1, name: 'Bansud' }, bansud_involved: false,
   reporter: { name: 'Jayvie De Torres', phone: '09170000001' },
   other_party: { role: 'driver', name: 'Aldrin Robledo', phone: '09170000002', vehicle_type: 'motorcycle', plate_number: 'ABC 1234' },
   order: { id: 31, order_number: 'TRP-31', pickup: 'Bansud Plaza', dropoff: 'Pagasa' },
@@ -146,5 +148,38 @@ describe('Admin SOS alarm', () => {
     wrap(<AdminSosAlarm />, '/admin/live/sos')
     await waitFor(() => expect(api.get).toHaveBeenCalled())
     expect(screen.queryByRole('alert')).toBeNull()
+  })
+})
+
+describe('Municipal Tourism Office SOS (plan Stage 3)', () => {
+  const asTown = (ui: React.ReactNode) => <OfficePortalProvider value={MUNICIPAL_PORTAL}>{ui}</OfficePortalProvider>
+
+  it('Bansud sees which office handles each alert', async () => {
+    api.get.mockResolvedValue({ data: [{ ...ALERT, municipality: { id: 4, name: 'Gloria' } }], summary: { active: 1, pending: 1 } })
+    wrap(<AdminLiveSOS />, '/admin/live/sos')
+    expect(await screen.findByRole('article', { name: 'SOS SOS-261118-TR09' })).toHaveTextContent('Gloria office')
+  })
+
+  it('a municipal office reads and handles its own alerts on /municipal and sees when Bansud steps in', async () => {
+    api.get.mockResolvedValue({ data: [{ ...ALERT, municipality: { id: 4, name: 'Gloria' }, bansud_involved: true }], summary: { active: 1, pending: 1 } })
+    api.post.mockResolvedValue({})
+    wrap(asTown(<AdminLiveSOS />), '/municipal/live/sos')
+
+    const card = await screen.findByRole('article', { name: 'SOS SOS-261118-TR09' })
+    expect(api.get).toHaveBeenCalledWith('/municipal/live/sos?filter=active')
+    expect(card).toHaveTextContent('Bansud Tourism Office is helping')
+    expect(card).not.toHaveTextContent('Gloria office')
+
+    await act(async () => { fireEvent.click(within(card).getByRole('button', { name: 'Acknowledge' })) })
+    expect(api.post).toHaveBeenCalledWith('/municipal/live/sos/9/acknowledge', {})
+  })
+
+  it('the town alarm polls /municipal and links to the town SOS page', async () => {
+    api.get.mockResolvedValue({ active: 1, pending: 1, latest_pending: { id: 9, reference: 'SOS-1', raised_by_role: 'rider', service: 'food', name: 'Aldrin Robledo', raised_at: null } })
+    wrap(asTown(<AdminSosAlarm />), '/municipal/dashboard')
+
+    const banner = await screen.findByRole('alert')
+    expect(api.get).toHaveBeenCalledWith('/municipal/live/sos/summary')
+    expect(within(banner).getByRole('link', { name: 'Open SOS Alerts' })).toHaveAttribute('href', '/municipal/live/sos')
   })
 })

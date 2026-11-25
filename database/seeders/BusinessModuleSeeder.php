@@ -126,7 +126,7 @@ class BusinessModuleSeeder extends Seeder
                 'business_profile', 'cottage_management', 'room_management',
                 'facility_management', 'reservation_management',
                 'event_venue_booking', 'gallery',
-                'staff_management', 'reports', 'customer_reviews',
+                'staff_management', 'promotions', 'reports', 'customer_reviews',
                 'expenses',
             ],
             'Homestay' => [
@@ -168,7 +168,7 @@ class BusinessModuleSeeder extends Seeder
             'Tourist Attraction' => [
                 'business_profile', 'facility_management',
                 'booking_requests', 'gallery',
-                'staff_management', 'customer_reviews',
+                'staff_management', 'promotions', 'customer_reviews',
                 'expenses',
             ],
             'Dive Shop' => [
