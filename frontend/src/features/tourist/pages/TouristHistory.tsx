@@ -41,7 +41,10 @@ interface HistoryTrip {
 interface HistoryBooking {
   id: number
   booking_number: string
-  business_name: string
+  /** 'resort' for resort reservations (Stage 7), which open their own page. */
+  booking_type?: string
+  business_name?: string
+  business?: { business_name?: string; name?: string } | null
   status: string
   total_amount: number
   check_in_date: string
@@ -272,7 +275,7 @@ export default function TouristHistory({ embedded = false, only }: { embedded?: 
                       <Building2 className="w-5 h-5 text-purple-500" />
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-[#17201B] truncate">{booking.business_name}</p>
+                      <p className="text-sm font-semibold text-[#17201B] truncate">{booking.business_name ?? booking.business?.business_name ?? booking.business?.name}</p>
                       <p className="text-xs text-[#6B7280]">#{booking.booking_number}</p>
                       <p className="text-xs text-[#6B7280]">{formatDateTime(booking.created_at)}</p>
                     </div>
@@ -283,7 +286,7 @@ export default function TouristHistory({ embedded = false, only }: { embedded?: 
                       <StatusBadge status={booking.status} />
                     </div>
                     <button
-                      onClick={() => navigate(`/tourist/booking/${booking.id}`)}
+                      onClick={() => navigate(booking.booking_type === 'resort' ? `/tourist/reservations/${booking.id}` : `/tourist/booking/${booking.id}`)}
                       className="p-2 rounded-lg text-[#6B7280] hover:text-purple-500 hover:bg-purple-500/10 transition"
                       title="View Booking"
                     >

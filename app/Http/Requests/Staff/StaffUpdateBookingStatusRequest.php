@@ -14,7 +14,7 @@ class StaffUpdateBookingStatusRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'status' => ['required', 'string', 'in:confirmed,in_progress,completed,cancelled,rejected'],
+            'status' => ['required', 'string', 'in:confirmed,in_progress,completed,cancelled,rejected,no_show'],
             'cancellation_reason' => ['nullable', 'string', 'max:1000'],
         ];
     }

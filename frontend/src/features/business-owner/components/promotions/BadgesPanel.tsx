@@ -28,7 +28,8 @@ const ITEMS_PER_PAGE = 8
  * "20% OFF" on the business, without changing any price. Kept as they were;
  * dish sales that change prices live in the Sales tab.
  */
-export default function BadgesPanel() {
+export default function BadgesPanel({ variant = 'badges', explainer }: { variant?: 'badges' | 'deals'; explainer?: string } = {}) {
+  const deals = variant === 'deals'
   const portal = useBusinessPortal()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -62,17 +63,19 @@ export default function BadgesPanel() {
     <div>
       <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-lg font-bold text-[#17201B]">Badges</h2>
-          <p className="text-sm text-[#5E6B63]">A badge such as “20% OFF” on your business page. Badges do not change prices; use a sale for that.</p>
+          <h2 className="text-lg font-bold text-[#17201B]">{deals ? 'Deals' : 'Badges'}</h2>
+          <p className="text-sm text-[#5E6B63]">{explainer ?? (deals
+            ? 'A deal such as “20% OFF” shown on your business page and in the deals tourists browse. Deals do not change prices automatically, so honour them when the customer arrives.'
+            : 'A badge such as “20% OFF” on your business page. Badges do not change prices; use a sale for that.')}</p>
         </div>
         <button onClick={() => navigate(`${portal.prefix}/promotions/create`)} className="inline-flex shrink-0 items-center gap-2 bg-[#16803C] hover:bg-[#126B32] text-white px-4 py-2.5 rounded-xl text-sm font-semibold transition">
-          <Plus className="w-4 h-4" /> New badge
+          <Plus className="w-4 h-4" /> {deals ? 'New deal' : 'New badge'}
         </button>
       </div>
 
       {promos.length === 0 ? (
         <div className="bg-white rounded-2xl border border-[#E2E8E3] shadow-[0_6px_18px_rgba(22,101,52,0.06)] p-12 text-center">
-          <p className="text-[#647067]">No badges yet.</p>
+          <p className="text-[#647067]">{deals ? 'No deals yet.' : 'No badges yet.'}</p>
         </div>
       ) : (
         <>

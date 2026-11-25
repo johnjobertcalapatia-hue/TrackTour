@@ -7,6 +7,8 @@ import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { cn, toAssetUrl } from '@/shared/utils'
 import { useActiveResort } from '@/features/business-owner/services/use-active-resort'
+import BlockedDatesPanel from '@/features/business-owner/components/resort/BlockedDatesPanel'
+import CancellationPolicyPanel from '@/features/business-owner/components/resort/CancellationPolicyPanel'
 import { BOOKING_MODE_LABEL, priceLabel, togglePublishedFormData, type OfferingOptions, type OwnerOffering } from '@/features/business-owner/services/resort-offerings'
 
 const apiMessage = (e: unknown, fallback: string) =>
@@ -122,6 +124,9 @@ export default function BusinessOwnerResortOfferings() {
           ))}
         </ul>
       )}
+
+      {businessId != null && <BlockedDatesPanel businessId={businessId} offerings={offerings.map((o) => ({ id: o.id, name: o.name }))} />}
+      {businessId != null && <CancellationPolicyPanel businessId={businessId} />}
     </div>
   )
 }

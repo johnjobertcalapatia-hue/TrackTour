@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { cn } from '@/shared/utils'
 
 const widthClasses = {
@@ -42,8 +43,10 @@ export function Modal({ show, onClose, maxWidth = '2xl', children }: ModalProps)
 
   if (!show) return null
 
-  return (
-    <div className="fixed inset-0 overflow-y-auto px-4 py-6 sm:px-0 z-[1400]">
+  // Attached to <body> and layered above every portal's header, sidebar and
+  // bottom bar (tourist: z 2000–2001), so a dialog is never covered.
+  return createPortal(
+    <div className="fixed inset-0 overflow-y-auto px-4 py-6 sm:px-0 z-[2100]">
       <div className="fixed inset-0 transform transition-all" onClick={onClose}>
         <div className="absolute inset-0 bg-slate-900/30 backdrop-blur-sm" />
       </div>
@@ -56,6 +59,7 @@ export function Modal({ show, onClose, maxWidth = '2xl', children }: ModalProps)
       >
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

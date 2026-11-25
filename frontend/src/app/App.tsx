@@ -1,7 +1,8 @@
-import { lazy, Suspense, useEffect, useMemo } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { get } from '@/shared/services/api'
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { buildOwnerNav, pageBelongsTo } from '@/features/business-owner/navigation/owner-nav'
 import { AppProviders } from '@/app/providers'
 import ProtectedRoute from '@/shared/components/ProtectedRoute'
 import BusinessOwnerShell from '@/features/business-owner/components/shell/BusinessOwnerShell'
@@ -16,13 +17,7 @@ import { RiderOnboardingGate } from '@/features/onboarding/components/RiderOnboa
 import { useBusinessOwnerStore } from '@/features/business-owner/services/business-owner-store'
 import { useAuthStore } from '@/features/auth/services/auth-store'
 import {
-  LayoutDashboard, MapPin, Building2, Tag, Map, Shield, FileBarChart, Bell,
-  Settings, Navigation, Compass, UtensilsCrossed, CalendarCheck, Car,
-  Calendar, Heart, Star, Clock, MessageSquare, User, ClipboardList,
-  Package, BookOpen, BarChart3, Activity, ShoppingCart, UserPlus,
-  Megaphone, FileText, Wallet, CreditCard, ChefHat, CalendarDays,
-  BedDouble, Image, Home, ClipboardCheck, DollarSign, Archive, Eye,
-  Settings2
+  LayoutDashboard, MapPin, Building2, Map, FileBarChart, Bell, Settings, Navigation, Compass, UtensilsCrossed, CalendarCheck, Car, Calendar, Heart, Star, Clock, MessageSquare, User, ClipboardList, Package, Megaphone, FileText, Home, Settings2,
 } from 'lucide-react'
 
 // Auth pages (not lazy — small, needed immediately)
@@ -112,6 +107,7 @@ const TouristOrderDetails = lazy_(() => import('@/features/tourist/pages/Tourist
 const TouristWriteReview = lazy_(() => import('@/features/tourist/pages/TouristWriteReview'))
 const TouristBooking = lazy_(() => import('@/features/tourist/pages/TouristBooking'))
 const TouristBookingShow = lazy_(() => import('@/features/tourist/pages/TouristBookingShow'))
+const TouristReservationShow = lazy_(() => import('@/features/tourist/pages/TouristReservationShow'))
 const TouristTransport = lazy_(() => import('@/features/tourist/pages/TouristTransport'))
 const TouristBookRide = lazy_(() => import('@/features/tourist/pages/TouristBookRide'))
 const TouristChangeDestination = lazy_(() => import('@/features/tourist/pages/TouristChangeDestination'))
@@ -259,6 +255,9 @@ const MunicipalReports = lazy_(() => import('@/features/municipal/pages/Municipa
 const MunicipalActivityLogs = lazy_(() => import('@/features/municipal/pages/MunicipalActivityLogs'))
 const MunicipalProfile = lazy_(() => import('@/features/municipal/pages/MunicipalProfile'))
 const MunicipalCommissionRates = lazy_(() => import('@/features/municipal/pages/MunicipalCommissionRates'))
+const MunicipalDestinations = lazy_(() => import('@/features/municipal/pages/MunicipalTourismContent').then((m) => ({ default: m.MunicipalDestinations })))
+const MunicipalEvents = lazy_(() => import('@/features/municipal/pages/MunicipalTourismContent').then((m) => ({ default: m.MunicipalEvents })))
+const MunicipalAnnouncements = lazy_(() => import('@/features/municipal/pages/MunicipalTourismContent').then((m) => ({ default: m.MunicipalAnnouncements })))
 const MunicipalRiderOnboarding = lazy_(() => import('@/features/onboarding/pages/OnboardingOfficePages').then((m) => ({ default: m.MunicipalRiderOnboardingPage })))
 const AdminRiderOnboarding = lazy_(() => import('@/features/onboarding/pages/OnboardingOfficePages').then((m) => ({ default: m.AdminRiderOnboardingPage })))
 const BecomeRiderPage = lazy_(() => import('@/features/onboarding/pages/BecomeRiderPage'))
@@ -299,163 +298,6 @@ const touristSections = [
   { items: [{ to: '/tourist/profile', label: 'My Profile', icon: <User className="w-5 h-5" /> }] },
 ]
 
-interface CategoryNavItem {
-  to: string
-  label: string
-  icon: React.ReactNode
-  module?: string | string[]
-}
-
-interface CategorySubSection {
-  label?: string
-  items: CategoryNavItem[]
-}
-
-// Common navigation grouped into clear functional sections
-const businessOwnerCommonSections: CategorySubSection[] = [
-  {
-    label: 'Main',
-    items: [
-      { to: '/business-owner/dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-5 h-5" /> },
-      { to: '/business-owner/businesses', label: 'My Businesses', icon: <Building2 className="w-5 h-5" /> },
-      { to: '/business-owner/reports', label: 'Reports & Analytics', icon: <BarChart3 className="w-5 h-5" /> },
-    ],
-  },
-  {
-    label: 'Business',
-    items: [
-      { to: '/business-owner/profile', label: 'Business Profile', icon: <User className="w-5 h-5" /> },
-      { to: '/business-owner/gallery', label: 'Business Gallery', icon: <Image className="w-5 h-5" /> },
-      { to: '/business-owner/archive', label: 'Archive Vault', icon: <Archive className="w-5 h-5" /> },
-    ],
-  },
-  {
-    label: 'Operations',
-    items: [
-      { to: '/business-owner/orders', label: 'Orders', icon: <ShoppingCart className="w-5 h-5" />, module: 'food_ordering' },
-      { to: '/business-owner/promotions', label: 'Deals & Posts', icon: <Megaphone className="w-5 h-5" />, module: 'promotions' },
-    ],
-  },
-  {
-    label: 'Menu',
-    items: [
-      { to: '/business-owner/menu', label: 'Menu Items', icon: <UtensilsCrossed className="w-5 h-5" />, module: 'menu_management' },
-      { to: '/business-owner/offerings/categories', label: 'Menu Categories', icon: <Tag className="w-5 h-5" />, module: 'food_categories' },
-    ],
-  },
-  {
-    label: 'Staff & Access',
-    items: [
-      { to: '/business-owner/staff', label: 'Staff Management', icon: <UserPlus className="w-5 h-5" />, module: 'staff_management' },
-      { to: '/business-owner/roles', label: 'User Roles & Permissions', icon: <Shield className="w-5 h-5" /> },
-    ],
-  },
-  {
-    label: 'Finance',
-    items: [
-      { to: '/business-owner/settings?tab=payments', label: 'Payment Tracking', icon: <CreditCard className="w-5 h-5" /> },
-      { to: '/business-owner/expenses', label: 'Vendor & Expenses', icon: <CreditCard className="w-5 h-5" /> },
-    ],
-  },
-  {
-    label: 'Settings',
-    items: [
-      { to: '/business-owner/settings?tab=location', label: 'Location', icon: <MapPin className="w-5 h-5" /> },
-      { to: '/business-owner/settings?tab=visibility', label: 'Visibility', icon: <Eye className="w-5 h-5" /> },
-      { to: '/business-owner/settings?tab=documents', label: 'Documents', icon: <FileText className="w-5 h-5" /> },
-      { to: '/business-owner/settings?tab=payment-methods', label: 'Payment Methods', icon: <Wallet className="w-5 h-5" /> },
-    ],
-  },
-  {
-    label: 'System',
-    items: [
-      { to: '/business-owner/activity-logs', label: 'Activity Logs', icon: <Activity className="w-5 h-5" /> },
-      { to: '/business-owner/notifications', label: 'Notifications', icon: <Bell className="w-5 h-5" /> },
-    ],
-  },
-]
-
-// Routes already offered by the common navigation (dedupe business-specific sections)
-const commonCategoryRoutes = new Set([
-  '/business-owner/dashboard',
-  '/business-owner/businesses',
-  '/business-owner/reports',
-  '/business-owner/profile',
-  '/business-owner/gallery',
-  '/business-owner/archive',
-  '/business-owner/orders',
-  '/business-owner/bookings',
-  '/business-owner/promotions',
-  '/business-owner/menu',
-  '/business-owner/offerings/categories',
-  '/business-owner/tables',
-  '/business-owner/staff',
-  '/business-owner/roles',
-  '/business-owner/expenses',
-  '/business-owner/settings',
-  '/business-owner/activity-logs',
-  '/business-owner/notifications',
-])
-
-function isCommonRoute(to: string): boolean {
-  return commonCategoryRoutes.has(to.split('?')[0] ?? '')
-}
-
-// Per-category sub-sections grouped by usage (Business, Sales, Workforce, Reports)
-const categorySubSections: Record<string, CategorySubSection[]> = {
-  Restaurant: [
-    { label: 'Business', items: [
-      { to: '/business-owner/menu', label: 'Menu', icon: <BookOpen className="w-5 h-5" />, module: 'menu_management' },
-      { to: '/business-owner/offerings/categories', label: 'Menu Categories', icon: <Tag className="w-5 h-5" />, module: 'food_categories' },
-      { to: '/business-owner/staff', label: 'Staff', icon: <UserPlus className="w-5 h-5" />, module: 'staff_management' },
-    ]},
-    { label: 'Sales', items: [
-      { to: '/business-owner/pos', label: 'POS & Sales', icon: <CreditCard className="w-5 h-5" />, module: 'pos_sales' },
-      { to: '/business-owner/orders', label: 'Orders', icon: <ShoppingCart className="w-5 h-5" />, module: 'food_ordering' },
-      { to: '/business-owner/kitchen', label: 'Kitchen Display System', icon: <ChefHat className="w-5 h-5" />, module: 'kitchen_orders' },
-      { to: '/business-owner/promotions', label: 'Deals & Posts', icon: <Megaphone className="w-5 h-5" />, module: 'promotions' },
-    ]},
-    { label: 'Workforce', items: [
-      { to: '/business-owner/attendance', label: 'Attendance', icon: <ClipboardCheck className="w-5 h-5" />, module: 'attendance' },
-      { to: '/business-owner/scheduling', label: 'Employee Scheduling', icon: <CalendarDays className="w-5 h-5" />, module: 'employee_scheduling' },
-      { to: '/business-owner/payroll', label: 'Payroll', icon: <DollarSign className="w-5 h-5" />, module: 'payroll' },
-    ]},
-    { label: 'Reports', items: [
-      { to: '/business-owner/operational-reports', label: 'Operational Reports', icon: <FileBarChart className="w-5 h-5" />, module: 'operational_reports' },
-    ]},
-  ],
-  // Dynamic resort system (Stage 5). Setup is gated server-side by Resort
-  // category + ownership, not by module, so it is always listed for resorts.
-  Resort: [
-    { label: 'Setup', items: [
-      { to: '/business-owner/resort/profile', label: 'Resort Types & Facilities', icon: <Settings2 className="w-5 h-5" /> },
-      { to: '/business-owner/resort/offerings', label: 'Cottages & Offerings', icon: <Home className="w-5 h-5" /> },
-    ]},
-    { label: 'Operations', items: [
-      { to: '/business-owner/bookings', label: 'Reservations', icon: <CalendarCheck className="w-5 h-5" />, module: 'reservation_management' },
-    ]},
-  ],
-  Hotel: [
-    { label: 'Accommodation', items: [
-      { to: '/business-owner/offerings', label: 'Room Management', icon: <BedDouble className="w-5 h-5" />, module: 'room_management' },
-      { to: '/business-owner/offerings/categories', label: 'Room Categories', icon: <Tag className="w-5 h-5" />, module: 'room_management' },
-    ]},
-    { label: 'Operations', items: [
-      { to: '/business-owner/bookings', label: 'Reservations', icon: <CalendarCheck className="w-5 h-5" />, module: ['table_reservations', 'reservation_management'] },
-      { to: '/business-owner/bookings', label: 'Check-in / Check-out', icon: <ClipboardList className="w-5 h-5" />, module: 'check_in_out' },
-    ]},
-    { label: 'Sales', items: [
-      { to: '/business-owner/promotions', label: 'Deals & Posts', icon: <Megaphone className="w-5 h-5" />, module: 'promotions' },
-    ]},
-  ],
-}
-
-function itemMatchesModule(item: CategoryNavItem, moduleCodes: string[]): boolean {
-  if (!item.module) return true
-  const codes = Array.isArray(item.module) ? item.module : [item.module]
-  return codes.some((c) => moduleCodes.includes(c))
-}
-
 function BusinessOwnerLayout() {
   const businesses = useBusinessOwnerStore((s) => s.businesses)
   const selectedBusinessId = useBusinessOwnerStore((s) => s.selectedBusinessId)
@@ -478,53 +320,23 @@ function BusinessOwnerLayout() {
     }
   }, [switcherData, setBusinesses, setSelectedBusinessId, selectedBusinessId])
 
-  const filteredSections = useMemo(() => {
-    const sections: { label?: string; items: CategoryNavItem[] }[] = []
+  // The sidebar loads the modules of the switcher's business type
+  // (features/business-owner/navigation/owner-nav.tsx).
+  const filteredSections = useMemo(() => buildOwnerNav(businesses, selectedBusinessId), [businesses, selectedBusinessId])
 
-    const biz = selectedBusinessId ? businesses.find((b) => b.id === selectedBusinessId) : undefined
-    const moduleCodes = biz?.module_codes ?? businesses.flatMap((b) => b.module_codes ?? [])
-
-    // 1) Common navigation grouped into functional sections (always on top)
-    for (const section of businessOwnerCommonSections) {
-      const items = section.items.filter((item) => itemMatchesModule(item, moduleCodes))
-      if (items.length > 0) sections.push({ label: section.label, items })
+  // After switching business, leave a page that only another type (or another
+  // business) has, so the page matches the sidebar.
+  const location = useLocation()
+  const navigate = useNavigate()
+  const previousBusinessId = useRef(selectedBusinessId)
+  useEffect(() => {
+    if (previousBusinessId.current === selectedBusinessId) return
+    const switched = previousBusinessId.current !== null
+    previousBusinessId.current = selectedBusinessId
+    if (switched && !pageBelongsTo(filteredSections, location.pathname, selectedBusinessId)) {
+      navigate('/business-owner/dashboard', { replace: true })
     }
-
-    // 2) Business-specific sections (per category), placed below the common nav
-    const pushCategorySections = (category: string, codes: string[]) => {
-      const subSections = categorySubSections[category]
-      if (!subSections) return
-      for (const sub of subSections) {
-        const items = sub.items
-          .filter((item) => !isCommonRoute(item.to))
-          .filter((item) => itemMatchesModule(item, codes))
-        if (items.length === 0) continue
-        sections.push({ label: sub.label ? `${category} — ${sub.label}` : category, items })
-      }
-    }
-
-    if (biz && biz.module_codes) {
-      pushCategorySections(biz.category, biz.module_codes)
-    } else {
-      const seen = new Set<string>()
-      for (const b of businesses) {
-        if (!b.module_codes || seen.has(b.category)) continue
-        seen.add(b.category)
-        pushCategorySections(b.category, b.module_codes)
-      }
-    }
-
-    // Restaurant sales tools (POS & Sales, Kitchen Display System)
-    // go directly below the Menu section in the restaurant sidebar.
-    const menuIdx = sections.findIndex((s) => s.label === 'Menu')
-    const restaurantSalesIdx = sections.findIndex((s) => s.label === 'Restaurant — Sales')
-    if (menuIdx !== -1 && restaurantSalesIdx !== -1 && restaurantSalesIdx > menuIdx) {
-      const [salesSection] = sections.splice(restaurantSalesIdx, 1)
-      sections.splice(menuIdx + 1, 0, salesSection)
-    }
-
-    return sections
-  }, [businesses, selectedBusinessId])
+  }, [selectedBusinessId, filteredSections, location.pathname, navigate])
 
   // Redesigned owner shell (dark green sidebar, cream page); same sections and module filtering.
   return <BusinessOwnerShell sections={filteredSections} />
@@ -732,6 +544,8 @@ export default function App() {
               <Route path="transport/map" element={<TouristExploreMap mapOnly />} />
               <Route path="booking" element={<TouristBooking />} />
               <Route path="booking/:id" element={<TouristBookingShow />} />
+              {/* Resort reservations (Stage 7) */}
+              <Route path="reservations/:id" element={<TouristReservationShow />} />
               <Route path="favorites" element={<TouristFavorites />} />
               <Route path="reviews" element={<TouristReviews />} />
               <Route path="orders" element={<TouristOrders />} />
@@ -964,6 +778,16 @@ export default function App() {
             <Route path="profile" element={<MunicipalProfile />} />
             <Route path="commission-rates" element={<MunicipalCommissionRates />} />
             <Route path="onboarding" element={<MunicipalRiderOnboarding />} />
+            <Route path="destinations" element={<MunicipalDestinations />} />
+            <Route path="events" element={<MunicipalEvents />} />
+            <Route path="announcements" element={<MunicipalAnnouncements />} />
+            {/* Municipal Office plan Stage 2: the Bansud pages, scoped to this municipality
+                (MunicipalLayout provides MUNICIPAL_PORTAL, so they call /municipal/*). */}
+            <Route path="live/map" element={<AdminLiveMap />} />
+            <Route path="live/deliveries" element={<AdminLiveDeliveries />} />
+            <Route path="live/sos" element={<AdminLiveSOS />} />
+            <Route path="rider-cash" element={<AdminRiderCash />} />
+            <Route path="riders/:id/cash-reconciliation" element={<AdminRiderCashReconciliation />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />

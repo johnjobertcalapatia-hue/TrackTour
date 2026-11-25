@@ -28,9 +28,16 @@ class TourismOfficeApiTest extends TestCase
         ]);
     }
 
-    public function test_tourism_office_can_get_dashboard(): void
+    public function test_bansud_tourism_office_can_get_dashboard(): void
     {
-        $response = $this->actingAs($this->tourismOfficer, 'sanctum')
+        $bansud = User::create([
+            'email' => 'bansud@example.com',
+            'password' => Hash::make('Password123!'),
+            'role' => 'bansud_tourism_office',
+            'account_status' => 'approved',
+        ]);
+
+        $response = $this->actingAs($bansud, 'sanctum')
             ->getJson('/api/tourism-office/dashboard');
 
         $response->assertOk()
@@ -45,6 +52,14 @@ class TourismOfficeApiTest extends TestCase
                     'top_municipalities',
                 ],
             ]);
+    }
+
+    /** The dashboard is district-wide: a municipal office uses /municipal/dashboard instead. */
+    public function test_municipal_tourism_office_cannot_get_district_dashboard(): void
+    {
+        $this->actingAs($this->tourismOfficer, 'sanctum')
+            ->getJson('/api/tourism-office/dashboard')
+            ->assertForbidden();
     }
 
     public function test_tourism_office_can_list_business_owners(): void

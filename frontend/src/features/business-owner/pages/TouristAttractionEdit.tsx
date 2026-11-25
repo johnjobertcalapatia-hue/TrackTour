@@ -34,8 +34,6 @@ interface FormState {
   email: string
   latitude: string
   longitude: string
-  opening_time: string
-  closing_time: string
   attraction_type: string
   entrance_fee: string
   best_time_to_visit: string
@@ -75,8 +73,6 @@ export default function TouristAttractionEdit() {
         email: business.email ?? '',
         latitude: String(business.latitude ?? ''),
         longitude: String(business.longitude ?? ''),
-        opening_time: business.opening_time?.slice(0, 5) ?? '08:00',
-        closing_time: business.closing_time?.slice(0, 5) ?? '17:00',
         attraction_type: business.details?.attraction_type ?? '',
         entrance_fee: business.details?.entrance_fee ?? '0',
         best_time_to_visit: business.details?.best_time_to_visit ?? '',
@@ -160,10 +156,7 @@ export default function TouristAttractionEdit() {
             <label className="block text-sm font-medium text-[#4B5563]">Contact Number<input className={`${inputClass} mt-1.5`} value={form.contact_number} onChange={(e) => setField('contact_number', e.target.value)} /></label>
             <label className="block text-sm font-medium text-[#4B5563]">Business Email<input type="email" className={`${inputClass} mt-1.5`} value={form.email} onChange={(e) => setField('email', e.target.value)} /></label>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <label className="block text-sm font-medium text-[#4B5563]">Opening Time<input type="time" className={`${inputClass} mt-1.5`} value={form.opening_time} onChange={(e) => setField('opening_time', e.target.value)} /></label>
-            <label className="block text-sm font-medium text-[#4B5563]">Closing Time<input type="time" className={`${inputClass} mt-1.5`} value={form.closing_time} onChange={(e) => setField('closing_time', e.target.value)} /></label>
-          </div>
+          <p className="text-sm text-[#4B5563]"><span className="font-medium text-[#17201A]">Opening hours:</span> Always open — tourist attractions have no opening or closing time.</p>
           <p className="text-xs text-[#647067] inline-flex items-center gap-1"><MapPin className="w-3.5 h-3.5" /> Coordinates are used for the beach marker on TrackTour maps.</p>
         </section>
         <div className="flex justify-end"><button type="button" onClick={() => mutation.mutate()} disabled={mutation.isPending} className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-[#16803C] text-white text-sm font-semibold hover:bg-[#126B32] disabled:opacity-60"><Save className="w-4 h-4" />{mutation.isPending ? 'Saving...' : 'Save Attraction'}</button></div>

@@ -2,6 +2,8 @@ export interface RoleOption {
   id: number
   name: string
   description?: string | null
+  /** The owner's own role (Roles & Permissions page) rather than a built-in one. */
+  is_custom?: boolean
 }
 
 /**
@@ -32,7 +34,10 @@ export function RolePicker({ roles, value, onChange, error }: {
               >
                 <input type="checkbox" checked={checked} onChange={() => toggle(r.id)} className="mt-0.5 h-4 w-4 accent-[#16803C]" />
                 <span>
-                  <span className="block font-medium text-[#17201A]">{r.name}</span>
+                  <span className="block font-medium text-[#17201A]">
+                    {r.name}
+                    {r.is_custom && <span className="ml-1.5 rounded-full bg-[#EAF6ED] px-1.5 py-0.5 text-[10px] font-semibold text-[#126B32]">Custom</span>}
+                  </span>
                   {r.description && <span className="block text-xs text-[#647067]">{r.description}</span>}
                 </span>
               </label>

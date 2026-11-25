@@ -5,9 +5,15 @@ import { get, post, put, patch, del } from '@/shared/services/api'
 import { toAssetUrl } from '@/shared/utils'
 import { useActiveBusinessId } from '../services/use-active-business-id'
 import {
+  galleryCategories, galleryCategoryLabel, profileKind, profileNoun, profileTips, type ProfileKind,
+} from '../services/business-profile-kind'
+import {
+  AttractionHighlights, AttractionVisitInfo, ResortHighlights, ResortOfferingsTab, useResortOfferings,
+} from '../components/profile/ProfileTypeSections'
+import {
   ArrowLeft, Upload, Trash2, Image as ImageIcon, X, Star, Eye, EyeOff,
   Film, AlertTriangle, CheckCircle2, Camera, Check, Lightbulb, BarChart3,
-  Pencil, Plus, Clock, MapPin, Phone, Globe, Loader2, Utensils, Info,
+  Pencil, Plus, Clock, MapPin, Phone, Globe, Loader2, Utensils, Info, BedDouble, Compass,
 } from 'lucide-react'
 
 const FacebookIcon = ({ className }: { className?: string }) => (
@@ -71,6 +77,7 @@ interface BusinessData {
   business_category_id: number | null
   municipality: string | { id: number; name: string } | null
   barangay: string | { id: number; name: string } | null
+  details?: Record<string, string | null> | null
 }
 
 interface MenuItem {
@@ -130,24 +137,6 @@ type DraftStringKeys = Exclude<keyof ProfileDraft, 'business_category_id'>
 type EditField = 'name' | 'tagline' | 'welcome' | 'description' | 'address' | 'phone' | 'hours' | 'socials' | null
 type TabKey = 'about' | 'menu' | 'gallery' | 'reviews'
 
-const GALLERY_CATEGORIES = [
-  { value: 'all', label: 'All' },
-  { value: 'signature_dish', label: 'Signature Dishes' },
-  { value: 'best_seller', label: 'Best Sellers' },
-  { value: 'new_menu', label: 'New Menu' },
-  { value: 'promotion', label: 'Promotions' },
-  { value: 'dessert', label: 'Desserts' },
-  { value: 'drink', label: 'Drinks' },
-  { value: 'interior', label: 'Interior' },
-  { value: 'dining_area', label: 'Dining Area' },
-  { value: 'event', label: 'Events' },
-  { value: 'behind_the_scenes', label: 'Behind the Scenes' },
-  { value: 'food', label: 'Food' },
-  { value: 'restaurant', label: 'Restaurant' },
-]
-
-const POST_CATEGORIES = GALLERY_CATEGORIES.filter((c) => c.value !== 'all')
-
 const PRICE_RANGE_LABELS: Record<string, string> = {
   budget: 'Budget',
   affordable: 'Affordable',
@@ -156,21 +145,27 @@ const PRICE_RANGE_LABELS: Record<string, string> = {
   luxury: 'Luxury',
 }
 
-const TIPS = [
-  'Use high-quality images for your logo and banner.',
-  'Add a short and catchy welcome message.',
-  'Ensure your signature dishes are properly highlighted.',
-  'Keep your opening hours updated.',
-  'Upload at least 5 gallery posts.',
-  'Add your social media links.',
-]
+/**
+ * Tabs under the profile. The second tab depends on the business type
+ * (business-profile-kind.ts): a restaurant's menu, a resort's cottages and
+ * rooms, an attraction's visit information; other types have none.
+ */
+const SECOND_TAB: Record<ProfileKind, { label: string; icon: React.ReactNode } | null> = {
+  restaurant: { label: 'Menu', icon: <Utensils className="w-4 h-4" /> },
+  resort: { label: 'Cottages & Rooms', icon: <BedDouble className="w-4 h-4" /> },
+  attraction: { label: 'Visit Info', icon: <Compass className="w-4 h-4" /> },
+  general: null,
+}
 
-const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
-  { key: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
-  { key: 'menu', label: 'Menu', icon: <Utensils className="w-4 h-4" /> },
-  { key: 'gallery', label: 'Gallery', icon: <ImageIcon className="w-4 h-4" /> },
-  { key: 'reviews', label: 'Reviews', icon: <Star className="w-4 h-4" /> },
-]
+function tabsFor(kind: ProfileKind): { key: TabKey; label: string; icon: React.ReactNode }[] {
+  const second = SECOND_TAB[kind]
+  return [
+    { key: 'about', label: 'About', icon: <Info className="w-4 h-4" /> },
+    ...(second ? [{ key: 'menu' as TabKey, ...second }] : []),
+    { key: 'gallery', label: 'Gallery', icon: <ImageIcon className="w-4 h-4" /> },
+    { key: 'reviews', label: 'Reviews', icon: <Star className="w-4 h-4" /> },
+  ]
+}
 
 function InlineEdit({
   mode, active, value, placeholder, textarea, onEdit, onCancel, onSave, inputValue, setInputValue, className,
@@ -288,7 +283,7 @@ export default function BusinessOwnerBusinessGallery() {
   const [postModalOpen, setPostModalOpen] = useState(false)
   const [postTitle, setPostTitle] = useState('')
   const [postCaption, setPostCaption] = useState('')
-  const [postCategory, setPostCategory] = useState('signature_dish')
+  const [postCategory, setPostCategory] = useState('')
   const [postStatus, setPostStatus] = useState('published')
   const [postFiles, setPostFiles] = useState<File[]>([])
   const [postPreviews, setPostPreviews] = useState<string[]>([])
@@ -344,11 +339,25 @@ export default function BusinessOwnerBusinessGallery() {
     enabled: businessId !== null,
   })
 
+  // What this page shows depends on the business type (restaurant, resort, attraction, other).
+  const savedCategory = typeof business?.category === 'object' ? business?.category?.name : business?.category
+  const kind = profileKind(savedCategory)
+  const details = business?.details ?? {}
+  const postCategories = galleryCategories(kind)
+  const tabs = tabsFor(kind)
+  const noun = profileNoun(kind)
+  useEffect(() => {
+    setPostCategory((cur) => (postCategories.some((c) => c.value === cur) ? cur : postCategories[0]?.value ?? ''))
+    setFilterCategory('all')
+    if (!tabsFor(kind).some((t) => t.key === activeTab)) setActiveTab('about')
+  }, [kind]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const { data: menuRes } = useQuery({
     queryKey: ['bo-menu', businessId],
     queryFn: () => get<MenuResponse>(`/business-owner/menu?business_id=${businessId}&per_page=50`),
-    enabled: businessId !== null,
+    enabled: businessId !== null && kind === 'restaurant',
   })
+  const { data: resortOfferings } = useResortOfferings(businessId, kind === 'resort')
   const menuItems = menuRes?.data ?? []
 
   const { data: reviewsRes } = useQuery({
@@ -662,7 +671,7 @@ export default function BusinessOwnerBusinessGallery() {
 
   const closePostModal = () => {
     setPostModalOpen(false)
-    setPostTitle(''); setPostCaption(''); setPostCategory('signature_dish'); setPostStatus('published')
+    setPostTitle(''); setPostCaption(''); setPostCategory(postCategories[0]?.value ?? ''); setPostStatus('published')
     setPostFiles([]); setPostPreviews([]); setPostVideo(null)
     if (galleryInputRef.current) galleryInputRef.current.value = ''
     if (galleryVideoInputRef.current) galleryVideoInputRef.current.value = ''
@@ -737,8 +746,10 @@ export default function BusinessOwnerBusinessGallery() {
     { label: 'Banner Uploaded', done: !!business?.cover_photo },
     { label: 'Welcome Message Added', done: !!business?.welcome_message },
     { label: 'Category Selected', done: !!business?.business_category_id },
-    { label: 'Opening Hours Added', done: !!(business?.opening_time && business?.closing_time) },
-    { label: 'At Least 3 Signature Dishes', done: (business?.signature_dishes?.length ?? 0) >= 3 },
+    ...(kind === 'attraction' ? [] : [{ label: 'Opening Hours Added', done: !!(business?.opening_time && business?.closing_time) }]),
+    ...(kind === 'restaurant' ? [{ label: 'At Least 3 Signature Dishes', done: (business?.signature_dishes?.length ?? 0) >= 3 }] : []),
+    ...(kind === 'resort' ? [{ label: 'At Least 3 Offerings Published', done: (resortOfferings?.offerings.filter((o) => o.is_published).length ?? 0) >= 3 }] : []),
+    ...(kind === 'attraction' ? [{ label: 'Activities Listed', done: !!details.activities?.trim() }] : []),
     { label: 'Gallery Posts', done: (images?.length || 0) > 0 },
     { label: 'Social Links Added', done: !!(business?.facebook || business?.instagram || business?.website || business?.other_social_media) },
   ]
@@ -789,8 +800,8 @@ const categoryName = categories.find((c) => c.id === draft.business_category_id)
           <Link to="/business-owner/businesses" className="inline-flex items-center gap-2 text-sm text-[#4B5563] hover:text-[#16803C] mb-3 transition">
             <ArrowLeft className="w-4 h-4" /> Back to Businesses
           </Link>
-          <h1 className="text-2xl lg:text-3xl font-bold text-[#111827]">Restaurant Profile</h1>
-          <p className="text-sm text-[#4B5563] mt-1">This is how your customers see your restaurant.</p>
+          <h1 className="text-2xl lg:text-3xl font-bold text-[#111827]">{noun.charAt(0).toUpperCase() + noun.slice(1)} Profile</h1>
+          <p className="text-sm text-[#4B5563] mt-1">This is how {kind === 'attraction' ? 'visitors' : 'your customers'} see your {noun}.</p>
         </div>
         <div className="flex items-center gap-1 bg-[#F3F4F6] rounded-xl p-1 self-start">
           <button
@@ -879,7 +890,7 @@ const categoryName = categories.find((c) => c.id === draft.business_category_id)
               </div>
 
               <div className="text-2xl font-bold text-[#111827]">
-                <InlineEdit mode={mode} active={editingField === 'name'} value={draft.business_name} placeholder="Restaurant Name"
+                <InlineEdit mode={mode} active={editingField === 'name'} value={draft.business_name} placeholder={`${noun.charAt(0).toUpperCase() + noun.slice(1)} Name`}
                   onEdit={() => openEditor('name')} onCancel={closeEditor} onSave={saveEditor} inputValue={editText} setInputValue={setEditText} />
               </div>
               <div className="text-sm text-[#4B5563] mt-0.5 max-w-2xl">
@@ -896,7 +907,7 @@ const categoryName = categories.find((c) => c.id === draft.business_category_id)
               </div>
 
               <div className="mt-3 text-[#4B5563] text-sm max-w-2xl">
-                <InlineEdit mode={mode} active={editingField === 'description'} value={draft.business_description} placeholder="Write a short description of your restaurant..." textarea
+                <InlineEdit mode={mode} active={editingField === 'description'} value={draft.business_description} placeholder={`Write a short description of your ${noun}...`} textarea
                   onEdit={() => openEditor('description')} onCancel={closeEditor} onSave={saveEditor} inputValue={editText} setInputValue={setEditText} />
               </div>
 
@@ -914,7 +925,10 @@ const categoryName = categories.find((c) => c.id === draft.business_category_id)
 
                 <div className="flex items-center gap-2">
                   <Clock className="w-4 h-4 text-[#16803C] flex-shrink-0" />
-                  {editingField === 'hours' ? (
+                  {kind === 'attraction' ? (
+                    // Tourist attractions are always open: no hours to set.
+                    <span>Always open</span>
+                  ) : editingField === 'hours' ? (
                     <div className="mt-0.5">
                       <div className="flex items-center gap-2">
                         <input type="time" value={editOpen} onChange={(e) => setEditOpen(e.target.value)} className="bg-white border border-[#16803C] rounded-lg text-sm px-3 py-2 focus:ring-2 focus:ring-[#16803C]/25 transition" />
@@ -989,6 +1003,7 @@ const categoryName = categories.find((c) => c.id === draft.business_category_id)
             </div>
           </div>
 
+          {kind === 'restaurant' && (
           <div className="bg-white rounded-2xl border border-[#E5E7EB] shadow-[0_1px_3px_rgba(0,0,0,0.1)] p-6">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
               <h2 className="text-lg font-semibold text-[#111827] flex items-center gap-2"><Utensils className="w-5 h-5 text-[#16803C]" /> Signature Dishes</h2>
@@ -1019,9 +1034,12 @@ const categoryName = categories.find((c) => c.id === draft.business_category_id)
               <p className="text-sm text-[#6B7280]">No signature dishes yet{mode === 'edit' ? ' — add your best dishes above.' : '.'}</p>
             )}
           </div>
+          )}
+          {kind === 'resort' && <ResortHighlights businessId={businessId} editable={mode === 'edit'} />}
+          {kind === 'attraction' && <AttractionHighlights businessId={businessId} details={details} editable={mode === 'edit'} />}
           <div className="bg-white rounded-2xl border border-[#E5E7EB] shadow-[0_1px_3px_rgba(0,0,0,0.1)] overflow-hidden">
             <div className="flex border-b border-[#E5E7EB] px-4 overflow-x-auto">
-              {TABS.map((tab) => (
+              {tabs.map((tab) => (
                 <button key={tab.key} onClick={() => setActiveTab(tab.key)}
                   className={`inline-flex items-center gap-2 px-4 py-3 text-sm font-semibold border-b-2 whitespace-nowrap transition ${
                     activeTab === tab.key ? 'border-[#16803C] text-[#16803C]' : 'border-transparent text-[#6B7280] hover:text-[#16803C]'
@@ -1036,10 +1054,10 @@ const categoryName = categories.find((c) => c.id === draft.business_category_id)
                 <div className="space-y-6">
                   <div>
                     <h3 className="text-sm font-semibold text-[#111827] mb-2">About Us</h3>
-                    <InlineEdit mode={mode} active={editingField === 'description'} value={draft.business_description} placeholder="Write about your restaurant..." textarea
+                    <InlineEdit mode={mode} active={editingField === 'description'} value={draft.business_description} placeholder={`Write about your ${noun}...`} textarea
                       onEdit={() => openEditor('description')} onCancel={closeEditor} onSave={saveEditor} inputValue={editText} setInputValue={setEditText} />
                   </div>
-                  <div>
+                  {kind !== 'attraction' && <div>
                     <h3 className="text-sm font-semibold text-[#111827] mb-2">Opening Days</h3>
                     {businessDays.length > 0 ? (
                       <div className="flex flex-wrap gap-1.5">
@@ -1050,11 +1068,11 @@ const categoryName = categories.find((c) => c.id === draft.business_category_id)
                     ) : (
                       <p className="text-sm text-[#6B7280]">No opening days set.</p>
                     )}
-                  </div>
+                  </div>}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <h3 className="text-sm font-semibold text-[#111827] mb-1">Opening Hours</h3>
-                      <p className="text-sm text-[#4B5563]">{draft.opening_time && draft.closing_time ? `${fmtTime(draft.opening_time)} - ${fmtTime(draft.closing_time)}` : 'Not set'}</p>
+                      <p className="text-sm text-[#4B5563]">{kind === 'attraction' ? 'Always open' : draft.opening_time && draft.closing_time ? `${fmtTime(draft.opening_time)} - ${fmtTime(draft.closing_time)}` : 'Not set'}</p>
                     </div>
                     <div>
                       <h3 className="text-sm font-semibold text-[#111827] mb-1">Contact Number</h3>
@@ -1084,7 +1102,9 @@ const categoryName = categories.find((c) => c.id === draft.business_category_id)
                 </div>
               )}
 
-              {activeTab === 'menu' && (
+              {activeTab === 'menu' && kind === 'resort' && <ResortOfferingsTab businessId={businessId} editable={mode === 'edit'} />}
+              {activeTab === 'menu' && kind === 'attraction' && <AttractionVisitInfo details={details} />}
+              {activeTab === 'menu' && kind === 'restaurant' && (
                 <div>
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="text-sm font-semibold text-[#111827]">Menu Items</h3>
@@ -1144,7 +1164,7 @@ const categoryName = categories.find((c) => c.id === draft.business_category_id)
                     )}
                   </div>
                   <div className="flex flex-wrap gap-2 mb-4">
-                    {GALLERY_CATEGORIES.map((c) => (
+                    {[{ value: 'all', label: 'All' }, ...postCategories].map((c) => (
                       <button key={c.value} onClick={() => setFilterCategory(c.value)}
                         className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${
                           filterCategory === c.value ? 'bg-[#16803C] text-white' : 'bg-[#F9FAFB] text-[#4B5563] border border-[#E5E7EB] hover:text-[#16803C] hover:bg-white'
@@ -1300,7 +1320,7 @@ const categoryName = categories.find((c) => c.id === draft.business_category_id)
           <div className="bg-white rounded-2xl border border-[#E5E7EB] shadow-[0_1px_3px_rgba(0,0,0,0.1)] p-5">
             <h2 className="text-sm font-semibold text-[#111827] flex items-center gap-2 mb-3"><Lightbulb className="w-4 h-4 text-amber-400" /> Tips</h2>
             <ul className="space-y-2">
-              {TIPS.map((tip, i) => (
+              {profileTips(kind).map((tip, i) => (
                 <li key={i} className="flex items-start gap-2 text-xs text-[#4B5563]">
                   <span className="w-4 h-4 rounded-full bg-amber-100 text-amber-600 text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5">{i + 1}</span>
                   {tip}
@@ -1397,7 +1417,7 @@ const categoryName = categories.find((c) => c.id === draft.business_category_id)
                   <label className="block text-xs font-semibold text-[#4B5563] mb-1.5">Category</label>
                   <select value={postCategory} onChange={(e) => setPostCategory(e.target.value)}
                     className="w-full bg-white border border-[#D1D5DB] rounded-xl text-sm px-4 py-2.5 focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition">
-                    {POST_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                    {postCategories.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
                   </select>
                 </div>
                 <div>
@@ -1470,7 +1490,9 @@ const categoryName = categories.find((c) => c.id === draft.business_category_id)
                 <label className="block text-xs font-semibold text-[#4B5563] mb-1.5">Category</label>
                 <select value={editCategory} onChange={(e) => setEditCategory(e.target.value)}
                   className="w-full bg-white border border-[#D1D5DB] rounded-xl text-sm px-4 py-2.5 focus:ring-2 focus:ring-[#16803C]/25 focus:border-[#16803C] transition">
-                  {POST_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+                  {/* A photo posted under another category keeps it as an option. */}
+                  {editCategory && !postCategories.some((c) => c.value === editCategory) && <option value={editCategory}>{galleryCategoryLabel(editCategory)}</option>}
+                  {postCategories.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
                 </select>
               </div>
               <div className="grid grid-cols-2 gap-4">

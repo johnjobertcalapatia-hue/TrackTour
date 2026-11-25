@@ -145,6 +145,9 @@ class BusinessOwnerBusinessManageController extends Controller
         if ($business->owner_id !== $request->user()->id) {
             return $this->forbiddenResponse('You do not own this business.');
         }
+        if ($business->isTouristAttraction()) {
+            return $this->errorResponse('Tourist attractions are always open, so they have no opening hours.', 422);
+        }
 
         $validated = $request->validate([
             'business_hours' => ['nullable', 'array'],
@@ -251,6 +254,11 @@ class BusinessOwnerBusinessManageController extends Controller
                 ? (bool) $validated['force_closed']
                 : $business->force_closed,
         ]);
+
+        // Tourist attractions are always open (product owner, 2026-11-24): no hours are kept.
+        if ($business->isTouristAttraction()) {
+            $business->forceFill(['opening_time' => null, 'closing_time' => null, 'business_hours' => null])->save();
+        }
 
         if ($details !== null) {
             foreach ($details as $fieldName => $fieldValue) {
@@ -432,7 +440,7 @@ class BusinessOwnerBusinessManageController extends Controller
             'images.*' => ['file', 'mimes:jpg,jpeg,png,webp', 'max:10240'],
             'title' => ['required', 'string', 'max:100'],
             'caption' => ['nullable', 'string', 'max:500'],
-            'category' => ['nullable', 'string', 'in:food,restaurant,promotion,event,signature_dish,interior,dining_area,behind_the_scenes,new_menu,best_seller,dessert,drink,beach,nature,attraction'],
+            'category' => ['nullable', 'string', \Illuminate\Validation\Rule::in(\App\Models\BusinessMedia::GALLERY_CATEGORIES)],
             'status' => ['nullable', 'string', 'in:published,draft'],
         ]);
 
@@ -463,7 +471,7 @@ class BusinessOwnerBusinessManageController extends Controller
         $validated = $request->validate([
             'title' => ['nullable', 'string', 'max:100'],
             'caption' => ['nullable', 'string', 'max:500'],
-            'category' => ['nullable', 'string', 'in:food,restaurant,promotion,event,signature_dish,interior,dining_area,behind_the_scenes,new_menu,best_seller,dessert,drink,beach,nature,attraction'],
+            'category' => ['nullable', 'string', \Illuminate\Validation\Rule::in(\App\Models\BusinessMedia::GALLERY_CATEGORIES)],
             'visibility' => ['nullable', 'string', 'in:public,hidden'],
             'status' => ['nullable', 'string', 'in:published,draft,archived'],
         ]);
@@ -522,7 +530,7 @@ class BusinessOwnerBusinessManageController extends Controller
             'video' => ['required', 'file', 'mimes:mp4,mov,avi', 'max:102400'],
             'title' => ['required', 'string', 'max:100'],
             'caption' => ['nullable', 'string', 'max:500'],
-            'category' => ['nullable', 'string', 'in:food,restaurant,promotion,event,signature_dish,interior,dining_area,behind_the_scenes,new_menu,best_seller,dessert,drink,beach,nature,attraction'],
+            'category' => ['nullable', 'string', \Illuminate\Validation\Rule::in(\App\Models\BusinessMedia::GALLERY_CATEGORIES)],
             'status' => ['nullable', 'string', 'in:published,draft'],
         ]);
 

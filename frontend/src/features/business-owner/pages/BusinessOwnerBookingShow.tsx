@@ -5,6 +5,8 @@ import { StatusBadge } from '@/shared/components/StatusBadge'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { formatCurrency, formatDateTime } from '@/shared/utils'
 import { ArrowLeft, User, Mail, Phone, Building2, Calendar, Users, FileText } from 'lucide-react'
+import OwnerResortReservation from '../components/resort/OwnerResortReservation'
+import type { Reservation } from '@/shared/components/reservations/reservation-types'
 
 interface BookingItem {
   id: number
@@ -69,6 +71,8 @@ export default function BusinessOwnerBookingShow() {
 
   if (isLoading) return <DashboardSkeleton />
   if (!booking) return <div className="text-center py-20 text-[#647067]">Booking not found.</div>
+  // Resort reservations (Stage 7): priced items, policy, history and the allowed status changes.
+  if (booking.booking_type === 'resort') return <OwnerResortReservation reservation={booking as unknown as Reservation} />
 
   const transitions = BOOKING_TRANSITIONS[booking.status] || []
 

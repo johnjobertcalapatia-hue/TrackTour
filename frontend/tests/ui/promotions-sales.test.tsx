@@ -142,6 +142,11 @@ describe('owner sale form', () => {
     fireEvent.change(screen.getByLabelText('Percent off'), { target: { value: '25' } })
     fireEvent.change(screen.getByLabelText('Last day'), { target: { value: '2099-12-31' } })
 
+    // The visually hidden checkbox stays inside its row: otherwise ticking a dish lower in the
+    // list scrolls the whole page to an empty area (the "white screen" bug).
+    expect(dishes).toHaveClass('relative')
+    for (const box of within(dishes).getAllByRole('checkbox')) expect(box.closest('label')).toHaveClass('relative')
+
     const halo = within(dishes).getByRole('checkbox', { name: /Halo-halo/ })
     expect(halo).toBeDisabled()
     expect(within(dishes).getByText(/In “Summer” until/)).toBeInTheDocument()

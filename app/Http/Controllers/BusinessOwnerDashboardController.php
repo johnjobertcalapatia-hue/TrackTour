@@ -10,6 +10,12 @@ use App\Models\Review;
 use App\Models\Offering;
 use App\Models\Order;
 use App\Models\Promotion;
+use App\Models\BusinessPost;
+use App\Models\ResortBlockedDate;
+use App\Models\ResortOffering;
+use App\Services\ResortAvailabilityService;
+use App\Services\ResortClassificationService;
+use Carbon\CarbonImmutable;
 use App\Services\BusinessService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -35,28 +41,10 @@ class BusinessOwnerDashboardController extends Controller
         $business->loadMissing('category', 'details', 'municipality', 'barangay');
         $details = $business->details->mapWithKeys(fn ($d) => [$d->field_name => $d->field_value]);
 
-        // Unique daily viewers of the public page (BusinessEngagementRecorder), Manila days.
-        $today = now('Asia/Manila')->startOfDay();
-        $perDay = BusinessEngagementEvent::where('business_id', $business->id)
-            ->where('type', BusinessEngagementEvent::TYPE_PROFILE_VIEW)
-            ->where('viewed_on', '>=', $today->copy()->subDays(59)->toDateString())
-            ->selectRaw('viewed_on, COUNT(*) as n')
-            ->groupBy('viewed_on')
-            ->pluck('n', 'viewed_on')
-            ->mapWithKeys(fn ($n, $day) => [substr((string) $day, 0, 10) => (int) $n]);
-        $daily = [];
-        for ($i = 29; $i >= 0; $i--) {
-            $day = $today->copy()->subDays($i)->toDateString();
-            $daily[] = ['date' => $day, 'views' => (int) ($perDay[$day] ?? 0)];
-        }
-        $previous30 = 0;
-        for ($i = 59; $i >= 30; $i--) {
-            $previous30 += (int) ($perDay[$today->copy()->subDays($i)->toDateString()] ?? 0);
-        }
+        $views = $this->pageViews($business);
 
         $since = now()->subDays(30);
         $favorites = Favorite::where('favoritable_type', Business::class)->where('favoritable_id', $business->id);
-        $summary = Review::approvedSummaryFor($business->id);
         // Attractions use gallery media only (no logo or cover photo).
         $media = $business->media()->where('type', '!=', 'Logo')->where('status', 'published')->get(['file_path', 'featured', 'sort_order']);
         $isVideo = fn ($m) => (bool) preg_match('/\.(mp4|mov|webm)$/i', (string) $m->file_path);
@@ -86,18 +74,160 @@ class BusinessOwnerDashboardController extends Controller
                 'attraction_type' => $details['attraction_type'] ?? null,
                 'entrance_fee' => $details['entrance_fee'] ?? null,
             ],
-            'views' => ['last_30_days' => array_sum(array_column($daily, 'views')), 'previous_30_days' => $previous30, 'daily' => $daily],
+            'views' => $views,
             'saves' => ['total' => (clone $favorites)->count(), 'last_30_days' => (clone $favorites)->where('created_at', '>=', $since)->count()],
-            'reviews' => [
-                'average' => $summary['average'],
-                'count' => $summary['count'],
-                'breakdown' => $summary['breakdown'],
-                'last_30_days' => Review::where('business_id', $business->id)->whereIn('status', Review::PUBLIC_STATUSES)->where('created_at', '>=', $since)->count(),
-                'latest' => Review::publicFor($business->id, 4)->map->publicCard()->values(),
-            ],
+            'reviews' => $this->reviewsBlock($business, $since, 4),
             'gallery' => ['photos' => $photos, 'videos' => $media->filter($isVideo)->count()],
             'checklist' => $checklist,
         ]);
+    }
+
+    /**
+     * GET /business-owner/dashboard/resort/{business} (2026-11-24): the resort
+     * owner's dashboard — today at the resort (units free per offering, from the
+     * Stage 6 availability engine), reservations, offerings, closures, how
+     * tourists find and rate the resort, and a setup checklist.
+     */
+    public function resort(Request $request, Business $business, ResortAvailabilityService $availability): JsonResponse
+    {
+        if ((int) $business->owner_id !== (int) $request->user()->id) {
+            return $this->forbiddenResponse('You do not own this business.');
+        }
+        $business->loadMissing('category', 'municipality', 'barangay', 'resortTypes', 'resortFacilities', 'resortCustomFacilities');
+        if (! ResortClassificationService::isResort($business)) {
+            return $this->errorResponse('This dashboard is for Resort businesses.', 422);
+        }
+
+        $today = $availability->today();
+        $offerings = $business->resortOfferings()->with('images')->get();
+        $published = $offerings->where('is_published', true)->values();
+        $calendar = $availability->calendar($business, $published, $today, $today);
+        $todayRows = collect($calendar['offerings'])->map(fn (array $o) => [
+            'id' => $o['id'],
+            'name' => $o['name'],
+            'booking_mode' => $o['booking_mode'],
+            'capacity' => $o['capacity'],
+            'available' => $o['dates'][0]['available'],
+            'blocked' => $o['dates'][0]['blocked'],
+            'closed' => $o['dates'][0]['closed'],
+        ])->values();
+
+        // Stage 8: unpaid GCash holds are not reservations for the owner yet.
+        $bookings = Booking::where('business_id', $business->id)->where('payment_status', '!=', 'awaiting_payment');
+        $monthStart = now('Asia/Manila')->startOfMonth()->toDateString();
+        $next = (clone $bookings)->whereIn('status', ['pending', 'confirmed'])->whereDate('check_in_date', '>=', $today)
+            ->orderBy('check_in_date')->limit(5)
+            ->get(['id', 'booking_number', 'customer_name', 'status', 'check_in_date', 'check_out_date', 'guests', 'total_amount']);
+
+        $closures = ResortBlockedDate::where('business_id', $business->id)
+            ->where('end_date', '>=', $today)
+            ->where('start_date', '<=', CarbonImmutable::parse($today)->addDays(30)->toDateString())
+            ->with('offering:id,name')->orderBy('start_date')->limit(5)->get()
+            ->map(fn (ResortBlockedDate $b) => [
+                'id' => $b->id,
+                'start_date' => $b->start_date->toDateString(),
+                'end_date' => $b->end_date->toDateString(),
+                'offering' => $b->offering?->name,
+                'reason' => $b->reason,
+            ])->values();
+
+        $media = $business->media()->where('type', '!=', 'Logo')->where('status', 'published')->get(['file_path', 'featured', 'sort_order']);
+        $isVideo = fn ($m) => (bool) preg_match('/\.(mp4|mov|webm)$/i', (string) $m->file_path);
+        $photos = $media->reject($isVideo)->count();
+        $hero = $business->cover_photo ?: $media->reject($isVideo)->sortBy([['featured', 'desc'], ['sort_order', 'asc']])->first()?->file_path;
+        $since = now()->subDays(30);
+        $favorites = Favorite::where('favoritable_type', Business::class)->where('favoritable_id', $business->id);
+        $prices = $published->pluck('price')->map(fn ($p) => (float) $p)->filter(fn ($p) => $p > 0);
+        $filled = fn ($v) => trim((string) $v) !== '';
+
+        $checklist = [
+            ['key' => 'cover', 'label' => 'Cover photo', 'done' => $filled($business->cover_photo), 'hint' => 'The first thing tourists see'],
+            ['key' => 'types', 'label' => 'Resort type & facilities', 'done' => $business->resortTypes->isNotEmpty() && ($business->resortFacilities->isNotEmpty() || $business->resortCustomFacilities->isNotEmpty()), 'hint' => 'Beach, pool, cottages, parking…'],
+            ['key' => 'offerings', 'label' => 'At least 3 offerings published', 'done' => $published->count() >= 3, 'hint' => min($published->count(), 3).' of 3'],
+            ['key' => 'offering_photos', 'label' => 'Photos on every published offering', 'done' => $published->isNotEmpty() && $published->every(fn ($o) => $o->images->isNotEmpty()), 'hint' => 'Cottages and rooms with photos get chosen more'],
+            ['key' => 'photos', 'label' => 'At least 5 gallery photos', 'done' => $photos >= 5, 'hint' => min($photos, 5).' of 5'],
+            ['key' => 'description', 'label' => 'About the resort', 'done' => mb_strlen(trim((string) $business->business_description)) >= 60, 'hint' => 'A few sentences guests read first'],
+            ['key' => 'location', 'label' => 'Map pin', 'done' => $business->latitude !== null && $business->longitude !== null, 'hint' => 'Needed for TrackTour directions'],
+            ['key' => 'contact', 'label' => 'Contact number', 'done' => $filled($business->contact_number), 'hint' => 'For guest questions'],
+        ];
+
+        return $this->successResponse([
+            'business' => [
+                'id' => $business->id,
+                'name' => $business->business_name,
+                'address' => $business->address ?: collect([$business->barangay?->name, $business->municipality?->name])->filter()->implode(', '),
+                'photo' => $hero,
+                'open_status' => $business->openStatusLabel(),
+                'types' => $business->resortTypes->pluck('name')->values(),
+                'facilities' => $business->resortFacilities->pluck('name')->merge($business->resortCustomFacilities->pluck('name'))->values(),
+            ],
+            'today' => ['date' => $today, 'closed' => in_array($today, $calendar['closed_dates'], true), 'offerings' => $todayRows],
+            'reservations' => [
+                'pending' => (clone $bookings)->where('status', 'pending')->count(),
+                'upcoming' => (clone $bookings)->whereIn('status', ['pending', 'confirmed'])->whereDate('check_in_date', '>=', $today)->count(),
+                'this_month' => (clone $bookings)->whereNotIn('status', ['cancelled', 'rejected'])->whereDate('created_at', '>=', $monthStart)->count(),
+                'next' => $next,
+            ],
+            'offerings' => [
+                'total' => $offerings->count(),
+                'published' => $published->count(),
+                'from_price' => $prices->isEmpty() ? null : $prices->min(),
+                'by_category' => $published->groupBy('category')
+                    ->map(fn ($group, $category) => ['category' => $category, 'label' => ResortOffering::CATEGORIES[$category] ?? $category, 'count' => $group->count()])
+                    ->values(),
+            ],
+            'closures' => $closures,
+            'deals' => [
+                'active' => Promotion::where('business_id', $business->id)->active()->count(),
+                'posts' => BusinessPost::where('business_id', $business->id)->where('status', 'published')->count(),
+            ],
+            'views' => $this->pageViews($business),
+            'saves' => ['total' => (clone $favorites)->count(), 'last_30_days' => (clone $favorites)->where('created_at', '>=', $since)->count()],
+            'reviews' => $this->reviewsBlock($business, $since, 3),
+            'checklist' => $checklist,
+        ]);
+    }
+
+    /**
+     * Unique daily viewers of the public page (BusinessEngagementRecorder), Manila days:
+     * the last 30 days per day, and the 30 days before in total.
+     *
+     * @return array{last_30_days: int, previous_30_days: int, daily: list<array{date: string, views: int}>}
+     */
+    private function pageViews(Business $business): array
+    {
+        $today = now('Asia/Manila')->startOfDay();
+        $perDay = BusinessEngagementEvent::where('business_id', $business->id)
+            ->where('type', BusinessEngagementEvent::TYPE_PROFILE_VIEW)
+            ->where('viewed_on', '>=', $today->copy()->subDays(59)->toDateString())
+            ->selectRaw('viewed_on, COUNT(*) as n')
+            ->groupBy('viewed_on')
+            ->pluck('n', 'viewed_on')
+            ->mapWithKeys(fn ($n, $day) => [substr((string) $day, 0, 10) => (int) $n]);
+        $daily = [];
+        for ($i = 29; $i >= 0; $i--) {
+            $day = $today->copy()->subDays($i)->toDateString();
+            $daily[] = ['date' => $day, 'views' => (int) ($perDay[$day] ?? 0)];
+        }
+        $previous30 = 0;
+        for ($i = 59; $i >= 30; $i--) {
+            $previous30 += (int) ($perDay[$today->copy()->subDays($i)->toDateString()] ?? 0);
+        }
+
+        return ['last_30_days' => array_sum(array_column($daily, 'views')), 'previous_30_days' => $previous30, 'daily' => $daily];
+    }
+
+    private function reviewsBlock(Business $business, \DateTimeInterface $since, int $latest): array
+    {
+        $summary = Review::approvedSummaryFor($business->id);
+
+        return [
+            'average' => $summary['average'],
+            'count' => $summary['count'],
+            'breakdown' => $summary['breakdown'],
+            'last_30_days' => Review::where('business_id', $business->id)->whereIn('status', Review::PUBLIC_STATUSES)->where('created_at', '>=', $since)->count(),
+            'latest' => Review::publicFor($business->id, $latest)->map->publicCard()->values(),
+        ];
     }
 
     public function index(Request $request)

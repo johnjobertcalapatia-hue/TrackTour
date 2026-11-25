@@ -1280,6 +1280,17 @@ class RiderCashFundService
 
     private function officerMunicipalityId(User $officer): ?int
     {
+        // Municipal Office plan Stage 2: a municipal Tourism Office manages its own
+        // riders' cash funds. Its municipality is its account's; every check that
+        // calls this (rider, fund, overview, ledger) then limits it to that town.
+        if ($officer->role === User::ROLE_TOURISM_OFFICE) {
+            if ($officer->account_status !== User::ACCOUNT_STATUS_APPROVED || $officer->municipality_id === null) {
+                throw new AuthorizationException('This Tourism Office account is not assigned to an active municipality.');
+            }
+
+            return (int) $officer->municipality_id;
+        }
+
         if ($officer->role !== User::ROLE_BANSUD_TOURISM_OFFICE) {
             throw new AuthorizationException('This account is not authorized to manage Tourism Office cash funds.');
         }

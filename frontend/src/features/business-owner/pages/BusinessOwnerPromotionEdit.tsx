@@ -10,6 +10,7 @@ import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { ArrowLeft, Save } from 'lucide-react'
 import { useBusinessPortal } from '../services/business-portal'
+import { dealsCopy, portalKind } from '../services/business-profile-kind'
 
 const schema = z.object({
   title: z.string().min(2, 'Title must be at least 2 characters'),
@@ -36,6 +37,7 @@ interface Promotion {
 
 export default function BusinessOwnerPromotionEdit() {
   const portal = useBusinessPortal()
+  const copy = dealsCopy(portalKind(portal.businesses, portal.businessId))
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -99,7 +101,7 @@ export default function BusinessOwnerPromotionEdit() {
       </Link>
 
       <div>
-        <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">Edit Promotion</h1>
+        <h1 className="text-2xl lg:text-3xl font-bold text-[#17201B]">Edit {copy.dealNoun}</h1>
         <p className="mt-1 text-sm text-[#647067]">{promo.title}</p>
       </div>
 

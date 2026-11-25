@@ -222,7 +222,10 @@ export default function BusinessOwnerSaleForm() {
           {dishesQuery.isLoading ? <p className="py-6 text-center text-sm text-[#5E6B63]">Loading dishes…</p> : dishes.length === 0 ? (
             <p className="py-6 text-center text-sm text-[#5E6B63]">This business has no dishes yet. Add dishes in Menu first.</p>
           ) : (
-            <ul className="max-h-[420px] divide-y divide-[#EEF2EF] overflow-y-auto" aria-label="Dishes">
+            // `relative` on the list and on each row: the visually hidden checkbox must sit in its own
+            // row. Without it, it was placed against the page's scroll area, so ticking a dish lower in
+            // the list scrolled the whole page to that spot and left a blank (white) screen.
+            <ul className="relative max-h-[420px] divide-y divide-[#EEF2EF] overflow-y-auto" aria-label="Dishes">
               {visibleDishes.map((dish) => {
                 const chosen = selected.includes(dish.id)
                 const clash = clashFor(dish)
@@ -230,7 +233,7 @@ export default function BusinessOwnerSaleForm() {
                 const free = chosen && numericValue > 0 && salePrice < 0.01
                 return (
                   <li key={dish.id}>
-                    <label className={`flex cursor-pointer items-center gap-3 py-2.5 ${clash && !chosen ? 'opacity-60' : ''}`}>
+                    <label className={`relative flex cursor-pointer items-center gap-3 py-2.5 ${clash && !chosen ? 'opacity-60' : ''}`}>
                       <input type="checkbox" className="peer sr-only" checked={chosen} onChange={() => toggle(dish.id)} disabled={!!clash && !chosen} />
                       <span aria-hidden="true" className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md border peer-focus-visible:ring-2 peer-focus-visible:ring-[#16803C]/40 ${chosen ? 'border-[#16803C] bg-[#16803C] text-white' : 'border-[#C9D3CC] bg-[#fff]'}`}>
                         {chosen && <Check className="h-3.5 w-3.5" />}

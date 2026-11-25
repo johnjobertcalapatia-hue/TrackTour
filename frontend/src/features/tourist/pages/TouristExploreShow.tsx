@@ -585,11 +585,20 @@ export default function TouristExploreShow() {
             )}
 
             {/* Verified Visiting / Operating Hours */}
-            {business.opening_time && business.closing_time && (
+            {/* Tourist attractions are always open (no visiting hours). */}
+            {isSpot ? (
               <div className="flex items-start gap-2.5 text-sm text-[#4B5563]">
                 <Clock className="w-4 h-4 text-[#087F3F] mt-0.5 shrink-0" />
                 <div>
-                  <p className="font-medium text-[#17201B]">{isSpot ? 'Visiting Hours' : 'Hours'}</p>
+                  <p className="font-medium text-[#17201B]">Visiting Hours</p>
+                  <p className="text-xs text-[#68736D] mt-0.5">Always open</p>
+                </div>
+              </div>
+            ) : business.opening_time && business.closing_time && (
+              <div className="flex items-start gap-2.5 text-sm text-[#4B5563]">
+                <Clock className="w-4 h-4 text-[#087F3F] mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-medium text-[#17201B]">Hours</p>
                   <p className="text-xs text-[#68736D] mt-0.5">{business.opening_time} – {business.closing_time}</p>
                 </div>
               </div>

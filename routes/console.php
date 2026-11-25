@@ -51,6 +51,13 @@ Schedule::command(AutoCancelUndeliveredOrder::class)
     ->onOneServer()
     ->description('Flag accepted orders not delivered within 60 minutes (never cancels or refunds them)');
 
+// Resort reservations Stage 8: unpaid GCash holds expire after 30 minutes
+// (their units are released); refunds PayMongo refused are retried.
+Schedule::command(\App\Console\Commands\ProcessResortReservationPayments::class)
+    ->everyMinute()
+    ->onOneServer()
+    ->description('Expire unpaid GCash resort reservations and retry refused refunds');
+
 Schedule::command(DispatchScheduledDeliveries::class)
     ->everyMinute()
     ->onOneServer()

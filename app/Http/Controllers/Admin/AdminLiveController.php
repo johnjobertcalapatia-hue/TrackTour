@@ -11,6 +11,7 @@ use App\Models\RiderLocation;
 use App\Models\SosAlert;
 use App\Models\TouristLocationShare;
 use App\Models\User;
+use App\Services\MunicipalityLocator;
 use App\Services\SosAlertService;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
@@ -25,10 +26,21 @@ class AdminLiveController extends Controller
     private const BUCKETS = ['active', 'completed', 'cancelled', 'all'];
 
     /**
-     * Delivery record of the Bansud Tourism Office's own municipality.
+     * Municipal Office plan Stage 2: the same actions serve /municipal/*, where
+     * `municipal.scope` puts the officer's municipality on the request. Null
+     * means the Bansud Tourism Office on /admin/* (unchanged behaviour).
+     */
+    private function officeMunicipality(Request $request): ?Municipality
+    {
+        return $request->attributes->get('municipality');
+    }
+
+    /**
+     * Delivery record of one municipality: Bansud's own on /admin, the
+     * officer's on /municipal.
      *
-     * A delivery belongs to Bansud when its order's restaurant — or, for a
-     * multi-restaurant order, any of its restaurants — is in Bansud. A
+     * A delivery belongs to a municipality when its order's restaurant — or, for a
+     * multi-restaurant order, any of its restaurants — is there. A
      * ride-hailing trip has no restaurant, so it belongs to its rider's
      * municipality. Active deliveries (live, auto-refreshed) and the history
      * (completed / cancelled) come from the same scoped query.
@@ -43,7 +55,8 @@ class AdminLiveController extends Controller
             'to' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:from'],
             'per_page' => ['nullable', 'integer', 'min:5', 'max:100'],
         ]);
-        $home = Municipality::whereRaw('LOWER(name) = ?', [strtolower(Municipality::HOME_MUNICIPALITY)])->first();
+        $home = $this->officeMunicipality($request)
+            ?? Municipality::whereRaw('LOWER(name) = ?', [strtolower(Municipality::HOME_MUNICIPALITY)])->first();
         abort_if($home === null, 404, 'Municipality not found.');
 
         $base = fn () => $this->filtered(Delivery::query(), $home->id, $v);
@@ -171,16 +184,24 @@ class AdminLiveController extends Controller
      * and the drop-off, so the live map can draw the route.
      *
      * Read-only: pickup stops are read as stored, never seeded from here.
+     *
+     * On /municipal: the officer's own riders, plus any rider currently on a
+     * trip that belongs to the municipality (same rule as deliveries()).
      */
-    public function riders(): JsonResponse
+    public function riders(Request $request): JsonResponse
     {
         $onDuty = [User::RIDER_STATUS_ONLINE, User::RIDER_STATUS_AVAILABLE, User::RIDER_STATUS_BUSY];
+        $town = $this->officeMunicipality($request);
 
         $riders = User::query()
             ->where('role', User::ROLE_RIDER)
             ->where(fn ($q) => $q
                 ->whereHas('riderDetail', fn ($d) => $d->whereIn('rider_status', $onDuty))
                 ->orWhereIn('id', Delivery::query()->select('rider_id')->whereNotNull('rider_id')->whereIn('status', self::LIVE_TRIP)))
+            ->when($town, fn ($q) => $q->where(fn ($w) => $w
+                ->where('municipality_id', $town->id)
+                ->orWhereIn('id', $this->filtered(Delivery::query(), $town->id, [])
+                    ->select('rider_id')->whereNotNull('rider_id')->whereIn('status', self::LIVE_TRIP))))
             ->with(['profile:id,user_id,first_name,last_name,mobile_number,avatar', 'riderDetail', 'municipality:id,name'])
             ->get();
 
@@ -244,15 +265,23 @@ class AdminLiveController extends Controller
      * GET /admin/live/tourists — tourists who opted in to share their location
      * with the tourism office and whose app reported it in the last few
      * minutes. Latest position only; tourists who never opted in never appear.
+     *
+     * On /municipal: only tourists who are in the officer's municipality right
+     * now (nearest covered municipality to their shared position).
      */
-    public function tourists(): JsonResponse
+    public function tourists(Request $request, MunicipalityLocator $locator): JsonResponse
     {
+        $town = $this->officeMunicipality($request);
+
         $shares = TouristLocationShare::query()
             ->live()
             ->whereHas('user', fn ($u) => $u->where('role', User::ROLE_TOURIST))
             ->with('user:id,name,email', 'user.profile:id,user_id,first_name,last_name,mobile_number,avatar')
             ->orderByDesc('location_at')
-            ->get();
+            ->get()
+            ->when($town, fn ($all) => $all->filter(
+                fn (TouristLocationShare $s) => ($locator->nearest((float) $s->latitude, (float) $s->longitude)['municipality'] ?? null)?->id === $town->id
+            ));
 
         $data = $shares->map(function (TouristLocationShare $s) {
             $avatar = $s->user?->profile?->avatar;
@@ -331,7 +360,10 @@ class AdminLiveController extends Controller
     public function sos(Request $request, SosAlertService $service): JsonResponse
     {
         $filter = in_array($request->query('filter'), ['active', 'resolved', 'all'], true) ? $request->query('filter') : 'active';
+        // Municipal Office plan Stage 3: a municipal office sees its own alerts; Bansud sees all.
+        $town = $this->officeMunicipality($request);
         $alerts = SosAlert::query()
+            ->when($town, fn ($q) => $q->where('municipality_id', $town->id))
             ->when($filter === 'active', fn ($q) => $q->whereIn('status', SosAlert::ACTIVE))
             ->when($filter === 'resolved', fn ($q) => $q->where('status', SosAlert::STATUS_RESOLVED))
             ->orderByRaw("CASE status WHEN 'pending' THEN 0 WHEN 'acknowledged' THEN 1 WHEN 'responding' THEN 2 ELSE 3 END")
@@ -341,19 +373,21 @@ class AdminLiveController extends Controller
 
         return $this->successResponse([
             'data' => $alerts->map(fn ($a) => $service->presentForAdmin($a))->values(),
-            'summary' => $this->sosCounts(),
+            'summary' => $this->sosCounts($town?->id),
         ]);
     }
 
     /** GET /admin/live/sos/summary — for the alarm banner on every admin page. */
-    public function sosSummary(): JsonResponse
+    public function sosSummary(Request $request): JsonResponse
     {
+        $town = $this->officeMunicipality($request);
         $latest = SosAlert::with('sender:id,name')
+            ->when($town, fn ($q) => $q->where('municipality_id', $town->id))
             ->where('status', SosAlert::STATUS_PENDING)
             ->latest('raised_at')
             ->first();
 
-        return $this->successResponse($this->sosCounts() + [
+        return $this->successResponse($this->sosCounts($town?->id) + [
             'latest_pending' => $latest ? [
                 'id' => $latest->id,
                 'reference' => $latest->reference,
@@ -365,9 +399,11 @@ class AdminLiveController extends Controller
         ]);
     }
 
-    private function sosCounts(): array
+    /** @param  int|null  $municipalityId  null: every alert (Bansud) */
+    private function sosCounts(?int $municipalityId = null): array
     {
         $counts = SosAlert::whereIn('status', SosAlert::ACTIVE)
+            ->when($municipalityId !== null, fn ($q) => $q->where('municipality_id', $municipalityId))
             ->selectRaw('status, COUNT(*) as n')->groupBy('status')->pluck('n', 'status');
 
         return [
@@ -378,7 +414,7 @@ class AdminLiveController extends Controller
 
     public function acknowledgeSos(Request $request, SosAlertService $service, string $id): JsonResponse
     {
-        return $this->sosAction(fn () => $service->acknowledge($request->user(), (int) $id), $service, 'SOS acknowledged.');
+        return $this->sosAction(fn () => $service->acknowledge($request->user(), (int) $id, $this->officeMunicipality($request)?->id), $service, 'SOS acknowledged.');
     }
 
     public function respondSos(Request $request, SosAlertService $service, string $id): JsonResponse
@@ -388,7 +424,7 @@ class AdminLiveController extends Controller
             'note' => ['nullable', 'string', 'max:1000'],
         ]);
 
-        return $this->sosAction(fn () => $service->respond($request->user(), (int) $id, $data['responder'], $data['note'] ?? null), $service, 'Help sent.');
+        return $this->sosAction(fn () => $service->respond($request->user(), (int) $id, $data['responder'], $data['note'] ?? null, $this->officeMunicipality($request)?->id), $service, 'Help sent.');
     }
 
     public function resolveSos(Request $request, SosAlertService $service, string $id): JsonResponse
@@ -398,7 +434,7 @@ class AdminLiveController extends Controller
             'note' => ['required', 'string', 'min:3', 'max:1000'],
         ]);
 
-        return $this->sosAction(fn () => $service->resolve($request->user(), (int) $id, $data['outcome'], $data['note']), $service, 'SOS resolved.');
+        return $this->sosAction(fn () => $service->resolve($request->user(), (int) $id, $data['outcome'], $data['note'], $this->officeMunicipality($request)?->id), $service, 'SOS resolved.');
     }
 
     private function sosAction(callable $action, SosAlertService $service, string $message): JsonResponse

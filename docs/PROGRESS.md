@@ -1,5 +1,13 @@
 # Project Progress — Tourism Management Portal
 
+## Test reconciliation: municipal cashout routes (2026-11-25)
+
+`MunicipalCashoutTest` expected HTTP 405 when a town office used the Bansud-only
+`/api/municipal/payouts/{id}/mark-paid` and `mark-failed` actions. Those routes are
+deliberately **not registered** under `/municipal` (Municipal Office plan, decision
+D2: towns review/approve, Bansud alone pays), so Laravel correctly answers 404.
+The assertions now use `assertNotFound()`; no production route or guard was changed.
+
 ## Restaurant pickup: phone GPS up to ±200 m (2026-11-24)
 
 A rider stood at the restaurant for days and Confirm Pick Up never appeared. The server confirms a pickup only from a SAVED location (≤ 2 minutes old), and it saves a location only at ±50 m or better. The rider's phone/browser always reported worse than ±50 m, so nothing was saved, and the restaurant row only said "turn on your location".

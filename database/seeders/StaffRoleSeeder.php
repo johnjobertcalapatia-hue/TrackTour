@@ -85,7 +85,7 @@ class StaffRoleSeeder extends Seeder
 
         foreach ($roles as $role) {
             StaffRole::updateOrCreate(
-                ['name' => $role['name']],
+                ['name' => $role['name'], 'business_id' => null],
                 ['description' => $role['description']]
             );
         }

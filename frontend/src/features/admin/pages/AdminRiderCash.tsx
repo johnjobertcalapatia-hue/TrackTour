@@ -9,6 +9,7 @@ import { Alert } from '@/shared/components/Alert'
 import { DashboardSkeleton } from '@/shared/components/Skeleton'
 import { apiErrorMessage, get, post } from '@/shared/services/api'
 import { cn, formatCurrency, formatDateTime } from '@/shared/utils'
+import { useOfficePortal } from '@/features/admin/office-portal'
 
 /** Read-only day figures from the rider's daily receipt (RiderCashFundService::daySummary). */
 interface DaySummary {
@@ -83,6 +84,8 @@ const STATUS: Record<string, { label: string; tone: string; icon: typeof CheckCi
  * the daily COD cash policy.
  */
 export default function AdminRiderCash() {
+  // Bansud: /admin. Municipal office: /municipal — the server limits it to its own riders.
+  const portal = useOfficePortal()
   const [date, setDate] = useState(phToday)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [showLegend, setShowLegend] = useState(false)
@@ -91,7 +94,7 @@ export default function AdminRiderCash() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin-rider-cash', date],
-    queryFn: () => get<Overview>('/admin/cash-advances', { params: { date } }),
+    queryFn: () => get<Overview>(`${portal.api}/cash-advances`, { params: { date } }),
     refetchInterval: isToday ? 30000 : false,
   })
 
@@ -209,6 +212,7 @@ function RiderCashRecord({ rider, date, canRecord, onNotice }: {
   canRecord: boolean
   onNotice: (n: Notice) => void
 }) {
+  const portal = useOfficePortal()
   const queryClient = useQueryClient()
   const [amount, setAmount] = useState('')
   const [note, setNote] = useState('')
@@ -217,7 +221,7 @@ function RiderCashRecord({ rider, date, canRecord, onNotice }: {
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID())
 
   const record = useMutation({
-    mutationFn: () => post(`/admin/riders/${rider.rider_id}/cash-fund/advances`, {
+    mutationFn: () => post(`${portal.api}/riders/${rider.rider_id}/cash-fund/advances`, {
       amount: Number(amount),
       note: note.trim() || null,
       idempotency_key: idempotencyKey,
@@ -269,7 +273,7 @@ function RiderCashRecord({ rider, date, canRecord, onNotice }: {
             </button>
           )}
           <Link
-            to={`/admin/riders/${rider.rider_id}/cash-reconciliation?date=${date}`}
+            to={`${portal.route}/riders/${rider.rider_id}/cash-reconciliation?date=${date}`}
             className="inline-flex items-center gap-1 rounded-lg border border-[#D7E8DB] px-3 py-1.5 text-sm font-semibold text-[#16803C] hover:bg-[#F6F8F4]"
           >
             <ReceiptText className="h-4 w-4" aria-hidden="true" /> Daily receipt &amp; remittance

@@ -207,6 +207,19 @@ class PaymentController extends Controller
                       ->orWhereNull('user_id');
                 })
                 ->firstOrFail();
+            // Resort reservations (Stage 8): only a GCash reservation still inside its
+            // 30-minute hold can be paid; after that the units are released.
+            if ($booking->isResortReservation()) {
+                if ((int) $booking->user_id !== (int) $user->id) {
+                    return $this->notFoundResponse('Reservation not found.');
+                }
+                if (! app(\App\Services\ResortReservationService::class)->awaitingPayment($booking) || $booking->status !== Booking::STATUS_PENDING) {
+                    return $this->errorResponse('This reservation is not waiting for a GCash payment.', 422);
+                }
+                if ($booking->payment_due_at?->isPast()) {
+                    return $this->errorResponse('The time to pay for this reservation has run out. Please reserve again.', 422);
+                }
+            }
             $amount = (int) round($booking->total_amount * 100);
             $description = 'Track-Tour Booking #'.$booking->booking_number;
             $referenceNumber = $booking->booking_number;
@@ -1216,6 +1229,10 @@ class PaymentController extends Controller
             }
 
             $payable->refreshAggregateStatus();
+        } elseif ($payable instanceof Booking && $payable->isResortReservation()) {
+            // Resort reservations (Stage 8): in time → paid and sent to the owner;
+            // too late (expired / cancelled) → recorded and refunded in full.
+            app(\App\Services\ResortReservationService::class)->recordPayment($payable, $payment);
         } elseif ($payable instanceof Booking && $payable->status !== 'completed') {
             $payable->update([
                 'paid_amount' => $orderPaid,

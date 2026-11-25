@@ -8,6 +8,7 @@ vi.mock('@/shared/services/api', () => ({ ...api, API_BASE_URL: 'http://localhos
 vi.mock('@/features/admin/components/TripDiagnosticsPanel', () => ({ default: () => <div>diagnostics</div> }))
 
 import AdminLiveDeliveries from '@/features/admin/pages/AdminLiveDeliveries'
+import { MUNICIPAL_PORTAL, OfficePortalProvider } from '@/features/admin/office-portal'
 
 const record = (id: number, extra: Record<string, unknown> = {}) => ({
   id, order_id: id, order_number: `TT-${id}`, order_type: 'delivery', customer_name: 'Jayvie De Torres', customer_phone: null,
@@ -71,5 +72,26 @@ describe('Bansud admin — delivery record', () => {
     await waitFor(() =>
       expect(api.get).toHaveBeenLastCalledWith('/admin/live/deliveries', { params: { bucket: 'completed', page: 1, search: 'TT-14', type: 'delivery', from: '2026-11-01' } }),
     )
+  })
+})
+
+describe('Municipal Tourism Office — delivery record (plan Stage 2)', () => {
+  it('reads its own municipality from /municipal and has no trip diagnostics', async () => {
+    api.get.mockResolvedValue({ ...response('active', [record(31)]), meta: { ...response('active', []).meta, municipality: { id: 4, name: 'Gloria' } } })
+
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
+          <OfficePortalProvider value={MUNICIPAL_PORTAL}>
+            <AdminLiveDeliveries />
+          </OfficePortalProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    expect(await screen.findByText('TT-31')).toBeInTheDocument()
+    expect(api.get).toHaveBeenCalledWith('/municipal/live/deliveries', { params: { bucket: 'active', page: 1 } })
+    expect(api.get.mock.calls.some(([url]) => String(url).startsWith('/admin'))).toBe(false)
+    expect(screen.queryByRole('button', { name: /Diagnose trip/ })).not.toBeInTheDocument()
   })
 })

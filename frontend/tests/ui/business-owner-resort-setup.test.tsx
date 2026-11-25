@@ -195,6 +195,39 @@ describe('Offering form', () => {
     expect(screen.getByLabelText('Duration (minutes)')).toBeInTheDocument()
   })
 
+  it('shows a live preview and keeps rarely used limits under More options (redesign)', async () => {
+    api.get.mockResolvedValue({ offerings: [], options: OPTIONS })
+    renderAt(NEW, NEW, <BusinessOwnerResortOfferingForm />)
+    const preview = within(await screen.findByRole('complementary', { name: 'Preview' }))
+    expect(preview.getByText('Offering name')).toBeInTheDocument()
+    expect(preview.getByText('Draft — only you can see it.')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Family Cottage' } })
+    fireEvent.change(screen.getByLabelText('Price (₱)'), { target: { value: '800' } })
+    fireEvent.click(screen.getByRole('radio', { name: 'Overnight' }))
+    fireEvent.change(screen.getByLabelText('Charged'), { target: { value: 'per_night' } })
+    fireEvent.click(screen.getByRole('checkbox', { name: /Published/ }))
+    expect(preview.getByText('Family Cottage')).toBeInTheDocument()
+    expect(preview.getByText('₱800 / night')).toBeInTheDocument()
+    expect(preview.getByText('Published — visible on your resort page.')).toBeInTheDocument()
+
+    // Min/max per reservation and display order are folded away until asked for.
+    expect(screen.queryByLabelText('Max per reservation')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /More options/ }))
+    expect(screen.getByLabelText('Max per reservation')).toBeInTheDocument()
+    expect(screen.getByLabelText('Display order')).toBeInTheDocument()
+  })
+
+  it('opens More options by itself when one of its fields has an error', async () => {
+    api.get.mockResolvedValue({ offerings: [], options: OPTIONS })
+    api.post.mockRejectedValue({ response: { status: 422, data: { message: 'Check the form.', errors: { max_quantity: ['The maximum quantity must be at least the minimum.'] } } } })
+    renderAt(NEW, NEW, <BusinessOwnerResortOfferingForm />)
+    fireEvent.change(await screen.findByLabelText('Name'), { target: { value: 'Cottage' } })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Create offering/ })) })
+    expect(await screen.findByText('The maximum quantity must be at least the minimum.')).toBeInTheDocument()
+    expect(screen.getByLabelText('Max per reservation')).toBeInTheDocument()
+  })
+
   it('creates an offering with photos and returns to the list', async () => {
     api.get.mockResolvedValue({ offerings: [], options: OPTIONS })
     api.post.mockResolvedValue({})

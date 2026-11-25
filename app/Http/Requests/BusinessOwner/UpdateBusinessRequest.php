@@ -2,6 +2,8 @@
 
 namespace App\Http\Requests\BusinessOwner;
 
+use App\Enums\DiscoveryGroup;
+use App\Models\BusinessCategory;
 use Illuminate\Foundation\Http\FormRequest;
 
 class UpdateBusinessRequest extends FormRequest
@@ -11,8 +13,24 @@ class UpdateBusinessRequest extends FormRequest
         return true;
     }
 
+    /** The category after this update: the one sent, else the business's own. */
+    private function categoryId(): mixed
+    {
+        return $this->input('business_category_id', $this->route('business')?->business_category_id);
+    }
+
+    protected function prepareForValidation(): void
+    {
+        if ($this->isAttractionCategory($this->categoryId())) {
+            // Always open: any hours sent (or stored) are cleared.
+            $this->merge(['opening_time' => null, 'closing_time' => null]);
+        }
+    }
+
     public function rules(): array
     {
+        $attraction = $this->isAttractionCategory($this->categoryId());
+
         return [
             'business_name' => ['sometimes', 'required', 'string', 'max:255'],
             'business_description' => ['sometimes', 'required', 'string', 'max:2000'],
@@ -27,8 +45,8 @@ class UpdateBusinessRequest extends FormRequest
             'facebook' => ['nullable', 'url'],
             'instagram' => ['nullable', 'url'],
             'other_social_media' => ['nullable', 'string', 'max:500'],
-            'opening_time' => ['sometimes', 'required', 'date_format:H:i'],
-            'closing_time' => ['sometimes', 'required', 'date_format:H:i', 'after:opening_time'],
+            'opening_time' => $attraction ? ['nullable'] : ['sometimes', 'required', 'date_format:H:i'],
+            'closing_time' => $attraction ? ['nullable'] : ['sometimes', 'required', 'date_format:H:i', 'after:opening_time'],
             'business_days' => ['sometimes', 'required', 'array'],
             'latitude' => ['sometimes', 'required', 'numeric'],
             'longitude' => ['sometimes', 'required', 'numeric'],
@@ -74,5 +92,16 @@ class UpdateBusinessRequest extends FormRequest
             'longitude.required' => '经度为必填项。',
             'longitude.numeric' => '经度必须是数字。',
         ];
+    }
+
+    /**
+     * Tourist attractions are always open (product owner, 2026-11-24): they
+     * have no opening hours. "Attraction" is the Spot discovery group, the
+     * same rule as Business::isTouristAttraction() ("Always open").
+     */
+    private function isAttractionCategory(mixed $categoryId): bool
+    {
+        return $categoryId !== null && $categoryId !== ''
+            && BusinessCategory::query()->inDiscoveryGroup(DiscoveryGroup::Spot)->whereKey((int) $categoryId)->exists();
     }
 }

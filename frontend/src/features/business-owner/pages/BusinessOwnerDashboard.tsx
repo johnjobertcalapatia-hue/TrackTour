@@ -7,6 +7,7 @@ import { formatCurrency, formatDateTime } from '@/shared/utils'
 import { useBusinessOwnerStore } from '../services/business-owner-store'
 import RestaurantOwnerDashboard from './Dashboard/RestaurantOwnerDashboard'
 import AttractionDashboard from './Dashboard/AttractionDashboard'
+import ResortOwnerDashboard from './Dashboard/ResortOwnerDashboard'
 import { getDiscoveryGroup } from '@/shared/utils/category'
 import { Package, DollarSign, CalendarCheck, ClipboardList, Utensils, Megaphone, ArrowRight, ClipboardCheck, Leaf, Bed, Users, Car, MapPin, Truck, ShoppingBag } from 'lucide-react'
 
@@ -264,6 +265,11 @@ export default function BusinessOwnerDashboard() {
   const shownBusinessId = selectedBusinessId ?? (data.businesses?.length === 1 ? data.businesses[0]!.id : null)
   if (shownBusinessId && getDiscoveryGroup(category) === 'spot') {
     return <AttractionDashboard businessId={shownBusinessId} />
+  }
+
+  // One resort (redesign 2026-11-24): today's free units, reservations, closures and setup.
+  if (shownBusinessId && category.toLowerCase() === 'resort') {
+    return <ResortOwnerDashboard businessId={shownBusinessId} />
   }
 
   const categoryLabel: Record<string, string> = {

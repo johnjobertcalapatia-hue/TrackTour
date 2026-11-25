@@ -175,6 +175,10 @@ Route::prefix('tourist')->group(function () {
 
     Route::get('/explore/{business}', [ExploreController::class, 'show']);
     Route::get('/explore/{business}/reviews', [ExploreController::class, 'reviews'])->whereNumber('business')->middleware('throttle:60,1');
+    // Resort reservations Stage 6: availability calendar of a resort's published offerings.
+    Route::get('/resorts/{business}/availability', [\App\Http\Controllers\ResortAvailabilityController::class, 'show'])->whereNumber('business')->middleware('throttle:60,1');
+    // Resort reservations Stage 7: price a stay (read-only, no login needed).
+    Route::post('/resorts/{business}/quote', [\App\Http\Controllers\Tourist\ResortReservationController::class, 'quote'])->whereNumber('business')->middleware('throttle:60,1');
 
     // Food
     Route::get('/food', [FoodController::class, 'index']);
@@ -286,6 +290,10 @@ Route::middleware('token.only')->group(function () {
         Route::get('/booking/{business}', [BookingController::class, 'show']);
         Route::post('/booking/{business}', [BookingController::class, 'store']);
         Route::post('/booking/{id}/cancel', [BookingController::class, 'cancel']);
+        // Resort reservations Stage 7: reserve (pay at the resort), view, cancel before check-in.
+        Route::post('/resorts/{business}/reservations', [\App\Http\Controllers\Tourist\ResortReservationController::class, 'store'])->whereNumber('business')->middleware('throttle:10,1');
+        Route::get('/reservations/{booking}', [\App\Http\Controllers\Tourist\ResortReservationController::class, 'show'])->whereNumber('booking');
+        Route::post('/reservations/{booking}/cancel', [\App\Http\Controllers\Tourist\ResortReservationController::class, 'cancel'])->whereNumber('booking')->middleware('throttle:20,1');
 
         // Transport
         Route::get('/transport', [TransportController::class, 'index']);
@@ -368,6 +376,7 @@ Route::middleware('token.only')->group(function () {
             // Dashboard
             Route::get('/dashboard', [BusinessOwnerDashboardController::class, 'index']);
             Route::get('/dashboard/attraction/{business}', [BusinessOwnerDashboardController::class, 'attraction'])->whereNumber('business');
+            Route::get('/dashboard/resort/{business}', [BusinessOwnerDashboardController::class, 'resort'])->whereNumber('business');
 
             // Notifications
             Route::get('/notifications', [BusinessOwnerNotificationController::class, 'index']);
@@ -403,6 +412,14 @@ Route::middleware('token.only')->group(function () {
             Route::get('/businesses/{business}/resort-offerings/{offering}', [\App\Http\Controllers\ResortOfferingController::class, 'show']);
             Route::put('/businesses/{business}/resort-offerings/{offering}', [\App\Http\Controllers\ResortOfferingController::class, 'update']);
             Route::delete('/businesses/{business}/resort-offerings/{offering}', [\App\Http\Controllers\ResortOfferingController::class, 'destroy']);
+            // Resort reservations Stage 6: availability calendar + blocked dates
+            Route::get('/businesses/{business}/resort-availability', [\App\Http\Controllers\ResortAvailabilityController::class, 'ownerShow']);
+            Route::get('/businesses/{business}/resort-blocked-dates', [\App\Http\Controllers\ResortAvailabilityController::class, 'blockedIndex']);
+            Route::post('/businesses/{business}/resort-blocked-dates', [\App\Http\Controllers\ResortAvailabilityController::class, 'blockedStore'])->middleware('throttle:30,1');
+            Route::delete('/businesses/{business}/resort-blocked-dates/{block}', [\App\Http\Controllers\ResortAvailabilityController::class, 'blockedDestroy'])->whereNumber('block');
+            // Resort reservations Stage 7: the resort's cancellation policy
+            Route::get('/businesses/{business}/resort-policy', [\App\Http\Controllers\ResortPolicyController::class, 'show']);
+            Route::put('/businesses/{business}/resort-policy', [\App\Http\Controllers\ResortPolicyController::class, 'update'])->middleware('throttle:30,1');
             Route::put('/businesses/{business}/payment-methods', [BusinessOwnerBusinessManageController::class, 'updatePaymentMethods']);
             Route::get('/businesses/{business}/payments', [BusinessOwnerPaymentController::class, 'index']);
             Route::get('/businesses/{business}/payments/{order}', [BusinessOwnerPaymentController::class, 'show']);
@@ -512,25 +529,13 @@ Route::middleware('token.only')->group(function () {
 
             // Staff
             Route::get('/staff', [BusinessOwnerStaffController::class, 'index']);
-            Route::get('/staff/roles', function (\Illuminate\Http\Request $request) {
-                $query = \App\Models\StaffRole::select('id', 'name', 'description');
-
-                if ($businessId = $request->query('business_id')) {
-                    $business = \App\Models\Business::with('category.staffRoles')->find($businessId);
-                    if ($business && $business->owner_id === $request->user()->id) {
-                        $roleIds = $business->category?->staffRoles->pluck('id');
-                        if ($roleIds?->isNotEmpty()) {
-                            $query->whereIn('id', $roleIds);
-                        }
-                    }
-                }
-
-                return response()->json([
-                    'success' => true,
-                    'message' => 'Staff roles retrieved.',
-                    'data' => $query->get(),
-                ]);
-            });
+            // Built-in roles for the business type + its own custom roles (Staff Management §6).
+            Route::get('/staff/roles', [\App\Http\Controllers\BusinessOwner\BusinessOwnerRoleController::class, 'offered']);
+            // Roles & Permissions page (Staff Management §6): owner only.
+            Route::get('/roles', [\App\Http\Controllers\BusinessOwner\BusinessOwnerRoleController::class, 'index']);
+            Route::post('/roles', [\App\Http\Controllers\BusinessOwner\BusinessOwnerRoleController::class, 'store'])->middleware('throttle:30,1');
+            Route::put('/roles/{role}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerRoleController::class, 'update'])->whereNumber('role')->middleware('throttle:30,1');
+            Route::delete('/roles/{role}', [\App\Http\Controllers\BusinessOwner\BusinessOwnerRoleController::class, 'destroy'])->whereNumber('role')->middleware('throttle:30,1');
             Route::get('/staff/riders/{business}', [BusinessOwnerStaffController::class, 'getRiders']);
             // Staff Management Stage 1: overview, invitations, status, password reset link.
             Route::get('/staff/overview', [BusinessOwnerStaffController::class, 'overview']);
@@ -1054,17 +1059,63 @@ Route::middleware('token.only')->group(function () {
         // Earnings Stage 1 (2026-11-24, §R2): this town's own commission rates.
         Route::get('/commission-rates', [\App\Http\Controllers\Municipal\MunicipalCommissionRateController::class, 'show']);
         Route::put('/commission-rates', [\App\Http\Controllers\Municipal\MunicipalCommissionRateController::class, 'update'])->middleware('throttle:30,1');
+
+        // ─── Live operations (Municipal Office plan Stage 2) ───────────
+        // The Bansud controllers, scoped by `municipal.scope`: map, deliveries and
+        // live riders/tourists for this municipality; rider cash for its own riders
+        // (RiderCashFundService limits every action to the officer's municipality).
+        Route::get('/map-data', [AdminMapController::class, 'index']);
+        Route::get('/live/deliveries', [AdminLiveController::class, 'deliveries']);
+        Route::get('/live/riders', [AdminLiveController::class, 'riders']);
+        Route::get('/live/tourists', [AdminLiveController::class, 'tourists']);
+        Route::post('/deliveries/{delivery}/issue-purchasing-cash', [AdminPurchasingCashController::class, 'issue']);
+
+        // SOS (Municipal Office plan Stage 3, decision D1): this municipality's alerts;
+        // Bansud sees every alert on /admin/live/sos and can take any over.
+        Route::get('/live/sos', [AdminLiveController::class, 'sos']);
+        Route::get('/live/sos/summary', [AdminLiveController::class, 'sosSummary']);
+        Route::post('/live/sos/{id}/acknowledge', [AdminLiveController::class, 'acknowledgeSos'])->whereNumber('id');
+        Route::post('/live/sos/{id}/respond', [AdminLiveController::class, 'respondSos'])->whereNumber('id');
+        Route::post('/live/sos/{id}/resolve', [AdminLiveController::class, 'resolveSos'])->whereNumber('id');
+
+        // Cashouts (Municipal Office plan Stage 4, decision D2): review, approve and reject
+        // this municipality's riders' cashouts. No mark-paid / mark-failed: the Bansud
+        // Tourism Office sends every GCash payment.
+        Route::get('/payouts', [AdminPayoutController::class, 'index']);
+        Route::get('/payouts/summary', [AdminPayoutController::class, 'summary']);
+        Route::get('/payouts/{payout}', [AdminPayoutController::class, 'show']);
+        Route::post('/payouts/{payout}/validate', [AdminPayoutController::class, 'validateNow']);
+        Route::post('/payouts/{payout}/start-review', [AdminPayoutController::class, 'startReview']);
+        Route::post('/payouts/{payout}/approve', [AdminPayoutController::class, 'approve']);
+        Route::post('/payouts/{payout}/reject', [AdminPayoutController::class, 'reject']);
+        Route::get('/payouts/{payout}/proof', [AdminPayoutController::class, 'proof']);
+        Route::get('/payouts/{payout}/earnings/{earning}', [AdminPayoutController::class, 'investigate']);
+
+        Route::get('/cash-advances', [AdminPurchasingCashController::class, 'advanceOverview']);
+        Route::post('/riders/{rider}/cash-fund/advances', [AdminPurchasingCashController::class, 'recordAdvance']);
+        Route::get('/riders/{rider}/cash-fund', [AdminPurchasingCashController::class, 'riderLedger']);
+        Route::get('/riders/{rider}/cash-fund/daily-receipt', [AdminPurchasingCashController::class, 'riderDailyReceipt']);
+        Route::post('/riders/{rider}/cash-fund/returns', [AdminPurchasingCashController::class, 'recordCashFundReturn']);
+        Route::post('/riders/{rider}/cash-fund/returns/{movement}/reverse', [AdminPurchasingCashController::class, 'reverseCashFundReturn']);
+        Route::post('/riders/{rider}/cash-fund/daily-receipt/{reconciliation}/movements', [AdminPurchasingCashController::class, 'recordDailyCashMovement']);
+        Route::post('/riders/{rider}/cash-fund/daily-receipt/{reconciliation}/verify', [AdminPurchasingCashController::class, 'verifyDailyCashReconciliation']);
+        Route::post('/riders/{rider}/cash-fund/daily-receipt/{reconciliation}/close', [AdminPurchasingCashController::class, 'closeDailyCashReconciliation']);
+        Route::post('/riders/{rider}/cash-fund/daily-receipt/{reconciliation}/corrections/{correction}/review', [AdminPurchasingCashController::class, 'reviewDailyCashCorrection']);
+        Route::post('/riders/{rider}/cash-fund/daily-receipt/{reconciliation}/corrections/{correction}/close', [AdminPurchasingCashController::class, 'closeDailyCashCorrection']);
+        Route::post('/riders/{rider}/cash-fund/daily-receipt/{reconciliation}/movements/{movement}/reverse', [AdminPurchasingCashController::class, 'reverseDailyCashMovement']);
+        Route::post('/riders/{rider}/cash-fund/daily-receipt/{reconciliation}/movements/{movement}/adjust', [AdminPurchasingCashController::class, 'adjustDailyCashMovement']);
     });
 
     // ═══════════════════════════════════════════════════════════════════
     // Tourism Office API
     // ═══════════════════════════════════════════════════════════════════
     Route::middleware('role:tourism_office,bansud_tourism_office')->prefix('tourism-office')->group(function () {
-        Route::get('/dashboard', [TourismOfficeFullController::class, 'dashboard']);
+        // District-wide aggregates: Bansud only (municipal offices use /municipal/dashboard and /municipal/reports).
+        Route::get('/dashboard', [TourismOfficeFullController::class, 'dashboard'])->middleware('role:bansud_tourism_office');
         Route::get('/business-owners', [BusinessOwnerApprovalController::class, 'index']);
         Route::get('/business-owners/{id}', [TourismOfficeFullController::class, 'showBusinessOwner']);
         Route::patch('/business-owners/{id}/status', [TourismOfficeFullController::class, 'updateBusinessOwnerStatus']);
-        Route::get('/reports', [TourismOfficeFullController::class, 'reports']);
+        Route::get('/reports', [TourismOfficeFullController::class, 'reports'])->middleware('role:bansud_tourism_office');
 
         // ─── Municipalities (for forms) ────────────────────────────────
         Route::get('/municipalities', function () {
@@ -1073,28 +1124,32 @@ Route::middleware('token.only')->group(function () {
         });
 
         // ─── Tourism Management ────────────────────────────────────────
-        Route::get('/management/dashboard', [TourismManagementController::class, 'dashboard']);
+        // Municipal Office plan Stage 0: Bansud manages every municipality; a municipal
+        // office only reads and writes its own (municipality from the account, never the request).
+        Route::middleware('municipal.scope:district')->group(function () {
+            Route::get('/management/dashboard', [TourismManagementController::class, 'dashboard']);
 
-        // Destinations
-        Route::get('/destinations', [TourismManagementController::class, 'indexDestinations']);
-        Route::get('/destinations/{id}', [TourismManagementController::class, 'showDestination']);
-        Route::post('/destinations', [TourismManagementController::class, 'storeDestination']);
-        Route::put('/destinations/{id}', [TourismManagementController::class, 'updateDestination']);
-        Route::delete('/destinations/{id}', [TourismManagementController::class, 'destroyDestination']);
+            // Destinations
+            Route::get('/destinations', [TourismManagementController::class, 'indexDestinations']);
+            Route::get('/destinations/{id}', [TourismManagementController::class, 'showDestination']);
+            Route::post('/destinations', [TourismManagementController::class, 'storeDestination']);
+            Route::put('/destinations/{id}', [TourismManagementController::class, 'updateDestination']);
+            Route::delete('/destinations/{id}', [TourismManagementController::class, 'destroyDestination']);
 
-        // Events
-        Route::get('/events', [TourismManagementController::class, 'indexEvents']);
-        Route::get('/events/{id}', [TourismManagementController::class, 'showEvent']);
-        Route::post('/events', [TourismManagementController::class, 'storeEvent']);
-        Route::put('/events/{id}', [TourismManagementController::class, 'updateEvent']);
-        Route::delete('/events/{id}', [TourismManagementController::class, 'destroyEvent']);
+            // Events
+            Route::get('/events', [TourismManagementController::class, 'indexEvents']);
+            Route::get('/events/{id}', [TourismManagementController::class, 'showEvent']);
+            Route::post('/events', [TourismManagementController::class, 'storeEvent']);
+            Route::put('/events/{id}', [TourismManagementController::class, 'updateEvent']);
+            Route::delete('/events/{id}', [TourismManagementController::class, 'destroyEvent']);
 
-        // Announcements
-        Route::get('/announcements', [TourismManagementController::class, 'indexAnnouncements']);
-        Route::get('/announcements/{id}', [TourismManagementController::class, 'showAnnouncement']);
-        Route::post('/announcements', [TourismManagementController::class, 'storeAnnouncement']);
-        Route::put('/announcements/{id}', [TourismManagementController::class, 'updateAnnouncement']);
-        Route::delete('/announcements/{id}', [TourismManagementController::class, 'destroyAnnouncement']);
+            // Announcements
+            Route::get('/announcements', [TourismManagementController::class, 'indexAnnouncements']);
+            Route::get('/announcements/{id}', [TourismManagementController::class, 'showAnnouncement']);
+            Route::post('/announcements', [TourismManagementController::class, 'storeAnnouncement']);
+            Route::put('/announcements/{id}', [TourismManagementController::class, 'updateAnnouncement']);
+            Route::delete('/announcements/{id}', [TourismManagementController::class, 'destroyAnnouncement']);
+        });
 
         // Categories
         Route::get('/categories', [TourismManagementController::class, 'indexCategories']);

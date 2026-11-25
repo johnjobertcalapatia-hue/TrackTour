@@ -137,7 +137,8 @@ class StaffDashboardApiController extends Controller
         $type = $request->get('type');
         $search = $request->get('search');
 
-        $query = Booking::where('business_id', $business->id)->with('items');
+        // Stage 8: unpaid GCash holds are not reservations for staff yet.
+        $query = Booking::where('business_id', $business->id)->where('payment_status', '!=', 'awaiting_payment')->with('items');
 
         if ($status && $status !== 'all') {
             $query->where('status', $status);
@@ -179,6 +180,27 @@ class StaffDashboardApiController extends Controller
         $ctx = $this->context($request);
         if (! $ctx || (int) $booking->business_id !== (int) $ctx['business']->id) {
             return $this->forbiddenResponse('Unauthorized.');
+        }
+
+        // Resort reservations (Stage 7): the same rules as the owner (units released, logged, tourist told).
+        if ($booking->isResortReservation()) {
+            $service = app(\App\Services\ResortReservationService::class);
+            $reason = (string) ($request->cancellation_reason ?? '');
+            $user = $request->user();
+            try {
+                match ($request->status) {
+                    'confirmed' => $service->confirm($booking, $user, 'staff'),
+                    'rejected' => $service->reject($booking, $user, 'staff', $reason),
+                    'cancelled' => $service->cancelByOwner($booking, $user, 'staff', $reason),
+                    'completed' => $service->complete($booking, $user, 'staff'),
+                    'no_show' => $service->noShow($booking, $user, 'staff'),
+                    default => throw new \DomainException('That status is not used for resort reservations.'),
+                };
+            } catch (\DomainException $e) {
+                return $this->errorResponse($e->getMessage(), 422);
+            }
+
+            return $this->successResponse(null, "Reservation status updated to {$request->status}.");
         }
 
         $booking->update([

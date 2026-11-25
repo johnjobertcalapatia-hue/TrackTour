@@ -78,6 +78,97 @@ final class StaffPermissions
         self::PROMOTIONS_MANAGE => ['Food menu and services', 'Manage promotions and discounts'],
     ];
 
+    /**
+     * Modules shown on the owner's Roles & Permissions page (§6): what a role
+     * can manage. key => [label, description, permissions].
+     */
+    public const MODULES = [
+        'orders' => ['Orders', 'Food orders from tourists', [self::ORDERS_VIEW, self::ORDERS_UPDATE, self::ORDERS_REJECT]],
+        'rider_cash' => ['Rider cash payments', 'Cash the rider pays the restaurant for COD food', [self::PAYMENTS_CONFIRM_RIDER_CASH]],
+        'handover' => ['Rider handover', 'Handing finished food to the rider', [self::HANDOVER_CONFIRM]],
+        'bookings' => ['Bookings & reservations', 'Reservations made by tourists', [self::BOOKINGS_VIEW, self::BOOKINGS_UPDATE]],
+        'menu' => ['Menu', 'Dishes, photos, prices and availability', [self::MENU_VIEW, self::MENU_MANAGE]],
+        'promotions' => ['Promotions & discounts', 'Deals, discounts and posts', [self::PROMOTIONS_MANAGE]],
+        'finance' => ['Sales & reports', 'Sales, earnings, reports and COD settlements', [self::FINANCE_VIEW]],
+        'expenses' => ['Expenses', 'Recording business expenses', [self::EXPENSES_MANAGE]],
+    ];
+
+    /** Food modules: offered to restaurants, cafés, food hubs and hotel-restaurant combinations. */
+    private const FOOD_MODULES = ['orders', 'rider_cash', 'handover', 'menu'];
+
+    /** Booking modules: offered to every other business type (and combinations). */
+    private const BOOKING_MODULES = ['bookings'];
+
+    private const COMBINED_CATEGORIES = ['Hotel & Restaurant Combination'];
+
+    /** A "manage" permission is useless without seeing the list: granting it grants the view. */
+    private const IMPLIES = [
+        self::ORDERS_UPDATE => self::ORDERS_VIEW,
+        self::ORDERS_REJECT => self::ORDERS_VIEW,
+        self::MENU_MANAGE => self::MENU_VIEW,
+        self::BOOKINGS_UPDATE => self::BOOKINGS_VIEW,
+    ];
+
+    /** What staff can never do, shown to owners as locked "Owner only" rows. */
+    public const OWNER_ONLY_LABELS = [
+        'Add, edit or remove staff and their roles',
+        'Business settings, payouts and bank details',
+        'Delete expenses',
+        'Mark a GCash payment as paid',
+        'Mark the tourist\'s cash on delivery as collected',
+    ];
+
+    /**
+     * The modules an owner may give a custom role for this type of business.
+     *
+     * @return list<string>
+     */
+    public static function modulesForCategory(?string $category): array
+    {
+        $food = in_array($category, self::RESTAURANT_CATEGORIES, true);
+        $combined = in_array($category, self::COMBINED_CATEGORIES, true);
+        $keys = [];
+        foreach (array_keys(self::MODULES) as $module) {
+            $isFood = in_array($module, self::FOOD_MODULES, true);
+            $isBooking = in_array($module, self::BOOKING_MODULES, true);
+            if ($combined || (! $isFood && ! $isBooking) || ($isFood && $food) || ($isBooking && ! $food)) {
+                $keys[] = $module;
+            }
+        }
+
+        return $keys;
+    }
+
+    /** @return list<string> permission keys grantable for this type of business */
+    public static function grantableForCategory(?string $category): array
+    {
+        $keys = [];
+        foreach (self::modulesForCategory($category) as $module) {
+            $keys = [...$keys, ...self::MODULES[$module][2]];
+        }
+
+        return $keys;
+    }
+
+    /**
+     * Add the view a manage permission needs; keep catalogue order.
+     *
+     * @param  iterable<string>  $permissions
+     * @return list<string>
+     */
+    public static function withImplied(iterable $permissions): array
+    {
+        $set = [];
+        foreach ($permissions as $permission) {
+            $set[$permission] = true;
+            if (isset(self::IMPLIES[$permission])) {
+                $set[self::IMPLIES[$permission]] = true;
+            }
+        }
+
+        return array_values(array_filter(self::all(), fn ($key) => isset($set[$key])));
+    }
+
     private const FOOD_ORDER = [self::ORDERS_VIEW, self::ORDERS_UPDATE, self::MENU_VIEW];
 
     private const BOOKINGS = [self::BOOKINGS_VIEW, self::BOOKINGS_UPDATE];
