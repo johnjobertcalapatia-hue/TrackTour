@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Mail\EmailVerificationOtpMail;
+use App\Exceptions\OtpDeliveryException;
 use App\Models\User;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Hash;
@@ -48,7 +49,15 @@ class EmailVerificationOtpService
             $otp = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
             Cache::put($this->codeKey($user), Hash::make($otp), now()->addMinutes(self::TTL_MINUTES));
 
-            Mail::to($user->email)->send(new EmailVerificationOtpMail($otp));
+            try {
+                Mail::to($user->email)->send(new EmailVerificationOtpMail($otp));
+            } catch (\Throwable $e) {
+                Cache::forget($this->codeKey($user));
+                Cache::forget($this->cooldownKey($user));
+                report($e);
+
+                throw new OtpDeliveryException('The verification code could not be emailed.', 0, $e);
+            }
 
             Cache::put(
                 $cooldownKey,

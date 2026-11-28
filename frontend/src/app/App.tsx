@@ -423,6 +423,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<LandingPage />} />
           <Route path="/explore" element={<LandingExplorePage />} />
+          {/* Public map for guest directions from landing place pages. */}
+          <Route path="/explore/map" element={<SuspenseWrapper><TouristExploreMap /></SuspenseWrapper>} />
           <Route path="/explore/food/:id" element={<LandingRestaurantPage />} />
           {/* Attractions, resorts and other businesses, public like restaurants (2026-11-24). */}
           <Route path="/explore/place/:id" element={<LandingPlacePage />} />
@@ -542,6 +544,7 @@ export default function App() {
               <Route path="transport/tracking/:id/change-destination" element={<TouristChangeDestination />} />
               {/* Ride Hailing map (Map button): the business map without the places panel. */}
               <Route path="transport/map" element={<TouristExploreMap mapOnly />} />
+              <Route path="explore/map" element={<TouristExploreMap />} />
               <Route path="booking" element={<TouristBooking />} />
               <Route path="booking/:id" element={<TouristBookingShow />} />
               {/* Resort reservations (Stage 7) */}
@@ -570,7 +573,6 @@ export default function App() {
             <Route path="explore/:id" element={<TouristExploreShow />} />
             {/* Restaurant page is public like explore/:id (guests browse; checkout stays protected). */}
             <Route path="food/:id" element={<TouristFoodShow />} />
-            <Route path="explore/map" element={<TouristExploreMap />} />
             <Route path="stays" element={<TouristStays />} />
             <Route path="directory" element={<TouristDirectory />} />
             <Route path="events" element={<TouristEvents />} />

@@ -40,4 +40,25 @@ class RegistrationTest extends TestCase
             'email_verified_at' => null,
         ]);
     }
+
+    public function test_registration_normalizes_email_case_and_spaces(): void
+    {
+        $response = $this->postJson('/api/register', [
+            'email' => '  Tourist@Example.COM  ',
+            'password' => 'TestPass123!',
+            'password_confirmation' => 'TestPass123!',
+            'role' => User::ROLE_TOURIST,
+            'first_name' => 'Test',
+            'last_name' => 'User',
+            'date_of_birth' => '2000-01-01',
+            'mobile_number' => '09171234567',
+        ]);
+
+        $response->assertCreated()
+            ->assertJsonPath('data.user.email', 'tourist@example.com');
+
+        $this->assertDatabaseHas('users', [
+            'email' => 'tourist@example.com',
+        ]);
+    }
 }

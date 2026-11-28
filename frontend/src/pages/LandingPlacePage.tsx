@@ -7,7 +7,7 @@ import { categoryName, formatDateTime, toAssetUrl } from '@/shared/utils'
 import { getDiscoveryGroup } from '@/shared/utils/category'
 import ResortDetail, { type ResortBusiness, type ResortInfo, type ResortReview } from '@/features/tourist/components/resort/ResortDetail'
 import LandingShell from './components/LandingShell'
-import { canRouteTo, trackTourDirectionsPath } from '@/features/tourist/map-directions'
+import { canRouteTo, landingTrackTourDirectionsPath } from '@/features/tourist/map-directions'
 
 interface MediaItem { id: number; type: string; file_path: string; title?: string | null; caption?: string | null }
 interface Review { id: number; user_name: string; rating: number; comment: string; created_at: string }
@@ -153,8 +153,8 @@ export default function LandingPlacePage() {
   const where = [business.barangay?.name, business.municipality?.name].filter(Boolean).join(', ') || 'Oriental Mindoro'
   const details: Record<string, any> = business.category_details
     ?? (Array.isArray(business.details) ? Object.fromEntries(business.details.map((d) => [d.field_name, d.field_value])) : (business.details ?? {}))
-  // Directions open the TrackTour map with the route drawn (not Google Maps); the map is public.
-  const directionsPath = canRouteTo(business) ? trackTourDirectionsPath(business.id) : null
+  // Guest directions use the public map route; the tourist portal map remains protected.
+  const directionsPath = canRouteTo(business) ? landingTrackTourDirectionsPath(business.id) : null
   const signIn = { pathname: '/login' }
   const signInState = { from: `/tourist/explore/${business.id}` }
   const cardClass = 'rounded-3xl bg-white p-6 shadow-[0_12px_28px_rgba(6,40,20,0.08)] ring-1 ring-[#E7E2D6]'

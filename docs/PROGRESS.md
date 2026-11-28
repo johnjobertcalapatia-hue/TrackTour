@@ -1,5 +1,49 @@
 # Project Progress — Tourism Management Portal
 
+## Guest directions map and protected tourist map (2026-11-27)
+
+- The `/tourist/explore/map` route remains inside the existing tourist-only
+  `ProtectedRoute`, so the tourist portal map requires a tourist account.
+- Landing-place `Get Directions` now uses a separate public `/explore/map` route
+  with the same map component and `?directions={id}` target. Guests can see the map
+  and route without being sent to login. Public place details, restaurant pages and
+  Explore browsing remain public.
+- On the map, the mobile place/detail sheet now has 12px side and bottom insets,
+  the desktop sheet has 16px margins on all sides, route information has desktop
+  top/right margins and 16px mobile side/top insets, and floating map controls are
+  inset 20px from the sides so they no longer sit flush against the screen edge.
+- Frontend tests cover the public landing URL and map target, and the protected
+  tourist map. Full frontend regression: `1115 passed` across `160` files. After
+  the side-inset adjustment, the affected map/place tests passed (`31 passed`) and
+  the production build succeeded.
+
+## Registration, email verification and PayMongo server-error fixes (2026-11-27)
+
+- **Registration `422`:** normalized `email` by trimming and lowercasing it during
+  `RegisterRequest` validation. Mixed-case or whitespace-padded Gmail addresses no
+  longer fail the lowercase/unique checks after a browser submits them.
+- **Email verification `500`:** `EmailVerificationOtpService` now removes the newly
+  cached OTP and resend cooldown when mail delivery throws. The API returns a
+  controlled `503` instead of a generic server error. Rider OTP delivery already
+  used this same delivery-exception pattern.
+- **Password reset:** reset links now use the configured `FRONTEND_URL` instead of
+  a hardcoded `http://localhost:3000` URL. Mail failure removes the reset token and
+  returns a controlled `503`.
+- **PayMongo callbacks:** checkout success/cancel URLs now prefer the verified
+  frontend origin, then configured public `FRONTEND_URL`/`APP_URL`; localhost and
+  private hosts are not used as public callbacks. Local payment persistence after a
+  provider checkout is wrapped and logged without inventing a successful payment.
+- **Tests:** added registration normalization, SMTP verification-failure cleanup,
+  and public frontend callback resolver coverage.
+- **Regression:** Laravel `1572 passed / 10814 assertions / 0 failures / 2 skipped`
+  (the focused registration/email/payment suite: `56 passed / 164 assertions`,
+  `0 failures`).
+- **Railway deployment check still required:** set `MAIL_MAILER=resend` with a valid
+  `RESEND_API_KEY`, a verified `MAIL_FROM_ADDRESS`, public `APP_URL` and
+  `FRONTEND_URL`, and matching PayMongo live/test keys plus `PAYMONGO_WEBHOOK_SECRET`.
+  Redeploy and smoke-test registration, email OTP and an online checkout; code cannot
+  replace invalid provider credentials or an unverified sender domain.
+
 ## Test reconciliation: municipal cashout routes (2026-11-25)
 
 `MunicipalCashoutTest` expected HTTP 405 when a town office used the Bansud-only

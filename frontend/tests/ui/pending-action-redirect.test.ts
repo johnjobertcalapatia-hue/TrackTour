@@ -29,6 +29,13 @@ describe('post-auth tourist redirects', () => {
     expect(resolvePostAuthDestination('tourist', '/tourist/explore/12')).toBe('/tourist/explore/12')
   })
 
+  it('preserves a protected map directions destination through sign-in', () => {
+    const directionsPath = '/tourist/explore/map?directions=8'
+
+    expect(isSafeInternalTouristPath(directionsPath)).toBe(true)
+    expect(resolvePostAuthDestination('tourist', directionsPath)).toBe(directionsPath)
+  })
+
   it('falls back to destination intent when from is absent', () => {
     saveDestinationIntent(5, '/tourist/explore/5')
     expect(resolvePostAuthDestination('tourist')).toBe('/tourist/explore/5')
