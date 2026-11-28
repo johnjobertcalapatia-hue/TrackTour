@@ -63,7 +63,7 @@ describe('Public place page', () => {
     const info = within(screen.getByRole('complementary', { name: 'Visitor information' }))
     expect(info.getByText('₱20')).toBeInTheDocument()
     expect(info.getByText('08:00 – 20:00')).toBeInTheDocument()
-    expect(info.getByRole('link', { name: /Get Directions/ })).toHaveAttribute('href', '/tourist/explore/map?directions=2') // the TrackTour map, not Google
+    expect(info.getByRole('link', { name: /Get Directions/ })).toHaveAttribute('href', '/explore/map?directions=2') // public TrackTour map, not Google
     expect(screen.getByRole('link', { name: /Sign in/ })).toHaveAttribute('href', '/login')
     expect(screen.getByRole('link', { name: 'Back to Explore' })).toHaveAttribute('href', '/explore')
   })

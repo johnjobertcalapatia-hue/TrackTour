@@ -182,6 +182,7 @@ describe('Ride Hailing map (/tourist/transport/map, the Transport page Map butto
     renderMap()
     await screen.findByRole('button', { name: 'Gloria Bay Resort' })
     expect(panel()).toBeInTheDocument()
+    expect(panel()).toHaveClass('inset-x-3', 'bottom-3', 'sm:mx-4', 'sm:my-4')
     expect(screen.getAllByRole('navigation', { name: 'Explore views' }).length).toBeGreaterThan(0)
     expect(screen.getByTestId('map-controls')).toHaveAttribute('data-position', 'top')
     expect(screen.queryByRole('button', { name: 'Back to Ride Hailing' })).not.toBeInTheDocument()
@@ -481,6 +482,12 @@ describe('Place details: reviews and TrackTour directions (2026-11-24)', () => {
 
   it('?directions=<id> opens that place with its route (Get Directions from a place page)', async () => {
     renderMap(false, '/tourist/explore/map?directions=9')
+    const details = await screen.findByRole('complementary', { name: 'Place details' })
+    expect(details).toHaveTextContent('Tambangan Falls')
+  })
+
+  it('handles the same directions hand-off on the public landing map route', async () => {
+    renderMap(false, '/explore/map?directions=9')
     const details = await screen.findByRole('complementary', { name: 'Place details' })
     expect(details).toHaveTextContent('Tambangan Falls')
   })

@@ -13,6 +13,7 @@ use App\Models\Payment;
 use App\Models\User;
 use App\Services\PaymongoService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -300,7 +301,7 @@ class PaymentApiTest extends TestCase
         $order = $this->createOrder();
 
         Http::fake([
-            'api.paymongo.com/v1/payment_intents' => Http::response(null, 500),
+            'api.paymongo.com/v1/checkout_sessions' => Http::response(null, 500),
         ]);
 
         $response = $this->actingAs($this->tourist, 'sanctum')
@@ -312,6 +313,49 @@ class PaymentApiTest extends TestCase
 
         $response->assertStatus(502)
             ->assertJson(['message' => 'Failed to initialize payment. Please try again.']);
+    }
+
+    public function test_create_intent_uses_public_origin_for_callback_urls(): void
+    {
+        $order = $this->createOrder();
+        config(['app.frontend_url' => 'http://localhost:3000']);
+        config(['cors.allowed_origins' => [
+            'http://localhost:3000',
+            'https://frontend.example.test',
+        ]]);
+
+        Http::fake([
+            'api.paymongo.com/v1/checkout_sessions' => Http::response([
+                'data' => [
+                    'id' => 'cs_test_callback_urls',
+                    'attributes' => [
+                        'checkout_url' => 'https://checkout.paymongo.com/cs_test_callback_urls',
+                    ],
+                ],
+            ], 200),
+        ]);
+
+        $this->actingAs($this->tourist, 'sanctum')
+            ->withHeader('Origin', 'https://frontend.example.test')
+            ->postJson('/api/payments/create-intent', [
+                'payable_type' => 'order',
+                'payable_id' => $order->id,
+                'method' => 'gcash',
+            ])
+            ->assertOk();
+
+        Http::assertSent(fn (HttpRequest $request): bool =>
+            str_starts_with(
+                (string) data_get($request->data(), 'data.attributes.success_url'),
+                'https://frontend.example.test/payment/callback?'
+            )
+            && str_contains((string) data_get($request->data(), 'data.attributes.success_url'), 'status=success')
+            && str_starts_with(
+                (string) data_get($request->data(), 'data.attributes.cancel_url'),
+                'https://frontend.example.test/payment/callback?'
+            )
+            && str_contains((string) data_get($request->data(), 'data.attributes.cancel_url'), 'status=cancelled')
+        );
     }
 
     public function test_create_intent_404_for_nonexistent_order(): void

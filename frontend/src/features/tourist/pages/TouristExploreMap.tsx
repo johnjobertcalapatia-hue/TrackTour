@@ -902,7 +902,7 @@ export default function TouristExploreMap({ mapOnly = false }: { mapOnly?: boole
         {(!mapOnly || showDetail) && (
           <aside
             aria-label={showDetail ? 'Place details' : 'Places'}
-            className={`map-business-sheet absolute inset-x-0 bottom-0 z-[600] transition-[max-height] duration-300 ${(showDetail ? sheetCollapsed : listCollapsed) ? 'max-h-[72px]' : 'max-h-[62dvh]'} sm:max-h-full sm:static sm:inset-auto sm:w-[405px] sm:max-w-[90vw] sm:shrink-0 bg-white rounded-t-2xl sm:rounded-none border-t sm:border-t-0 sm:border-r border-[#E5E9E7] shadow-2xl sm:shadow-none flex flex-col overflow-hidden`}
+            className={`map-business-sheet absolute inset-x-3 bottom-3 z-[600] transition-[max-height] duration-300 ${(showDetail ? sheetCollapsed : listCollapsed) ? 'max-h-[72px]' : 'max-h-[62dvh]'} sm:max-h-full sm:static sm:inset-auto sm:mx-4 sm:my-4 sm:w-[405px] sm:max-w-[90vw] sm:shrink-0 bg-white rounded-2xl sm:rounded-none border border-[#E5E9E7] sm:border-0 sm:border-r shadow-2xl sm:shadow-none flex flex-col overflow-hidden`}
           >
             {!showDetail && (
               <>
@@ -1450,7 +1450,7 @@ export default function TouristExploreMap({ mapOnly = false }: { mapOnly?: boole
               : `${activeMode.label} fare: \u20B1${activeMode.baseFare} base + \u20B1${activeMode.perKm}/km`
 
           return (
-            <aside className="map-route-card absolute top-2 inset-x-2 z-[650] max-h-[48%] rounded-2xl border border-[#E5E9E7] shadow-lg sm:static sm:inset-auto sm:z-auto sm:max-h-none sm:w-[260px] sm:shrink-0 sm:rounded-none sm:border-0 sm:border-r sm:shadow-none bg-white flex flex-col overflow-y-auto" aria-label="Route">
+            <aside className="map-route-card absolute top-4 inset-x-4 z-[650] max-h-[48%] rounded-2xl border border-[#E5E9E7] shadow-lg sm:static sm:inset-auto sm:my-4 sm:mr-4 sm:z-auto sm:max-h-none sm:w-[260px] sm:shrink-0 sm:rounded-none sm:border-0 sm:border-r sm:shadow-none bg-white flex flex-col overflow-y-auto" aria-label="Route">
               <div className="p-3 sm:p-4 flex flex-col gap-2.5 sm:gap-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex flex-col gap-1 min-w-0 flex-1">
@@ -1599,14 +1599,14 @@ export default function TouristExploreMap({ mapOnly = false }: { mapOnly?: boole
               type="button"
               onClick={() => navigate('/tourist/transport')}
               aria-label="Back to Ride Hailing"
-              className="absolute top-3 left-3 z-[640] inline-flex h-11 items-center gap-1.5 rounded-full border border-[#E5E9E7] bg-[#fff] pl-2.5 pr-4 text-sm font-semibold text-[#087F3F] shadow-md transition hover:bg-[#E9F7EF]"
+              className="absolute top-5 left-5 z-[640] inline-flex h-11 items-center gap-1.5 rounded-full border border-[#E5E9E7] bg-[#fff] pl-2.5 pr-4 text-sm font-semibold text-[#087F3F] shadow-md transition hover:bg-[#E9F7EF]"
             >
               <ChevronLeft className="h-5 w-5" aria-hidden="true" />
               Ride Hailing
             </button>
           )}
           {!navActive && !mapOnly && (
-            <div className="absolute top-3 left-3 z-[640] flex max-w-[calc(100%-5rem)] sm:hidden">
+            <div className="absolute top-5 left-5 z-[640] flex max-w-[calc(100%-6rem)] sm:hidden">
               {/* Phones: Explore's views float over the map (the places list is a bottom sheet there);
                   computers show them at the top of the places panel. The category travels back to Businesses. */}
               <ExploreSectionTabs current="map" category={listViewTab} floating />
@@ -1620,7 +1620,7 @@ export default function TouristExploreMap({ mapOnly = false }: { mapOnly?: boole
             return (
               <aside
                 aria-label="Navigation"
-                className="map-nav-card absolute top-3 left-3 right-[72px] sm:right-auto sm:w-[320px] z-[650] rounded-2xl bg-white/95 backdrop-blur border border-[#E5E9E7] shadow-lg px-3 py-2"
+                className="map-nav-card absolute top-5 left-5 right-[84px] sm:right-auto sm:w-[320px] z-[650] rounded-2xl bg-white/95 backdrop-blur border border-[#E5E9E7] shadow-lg px-3 py-2"
               >
                 {/* Horizontal: Time | Distance | Speed side by side, exit on the right. */}
                 <div className="flex items-center gap-2">
@@ -1663,7 +1663,7 @@ export default function TouristExploreMap({ mapOnly = false }: { mapOnly?: boole
           <div
             data-testid="map-controls"
             data-position={mapOnly ? 'bottom' : 'top'}
-            className={`absolute right-3 z-[640] flex flex-col items-end gap-2 ${
+            className={`absolute right-5 z-[640] flex flex-col items-end gap-2 ${
               mapOnly
                 ? routeDistanceKm != null && !navActive
                   ? 'bottom-8 max-sm:bottom-24'

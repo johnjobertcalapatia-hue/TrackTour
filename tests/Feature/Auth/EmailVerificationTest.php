@@ -76,6 +76,22 @@ class EmailVerificationTest extends TestCase
         Mail::assertSent(EmailVerificationOtpMail::class, 1);
     }
 
+    public function test_mail_failure_returns_controlled_503_and_clears_the_code(): void
+    {
+        Mail::shouldReceive('to')->andThrow(
+            new \Symfony\Component\Mailer\Exception\TransportException('SMTP unavailable')
+        );
+
+        $this->authenticatedRequest()
+            ->postJson('/api/email/verification-notification')
+            ->assertStatus(503)
+            ->assertJsonPath('success', false)
+            ->assertJsonPath('message', 'The verification code could not be emailed. Please try again later.');
+
+        $this->assertFalse(Cache::has('email-verification-otp:'.$this->user->id));
+        $this->assertFalse(Cache::has('email-verification-otp:'.$this->user->id.':resend'));
+    }
+
     public function test_valid_code_marks_email_verified_and_cannot_be_replayed(): void
     {
         $this->authenticatedRequest()->postJson('/api/email/verification-notification')->assertOk();

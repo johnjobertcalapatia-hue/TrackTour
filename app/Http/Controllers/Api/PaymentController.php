@@ -260,7 +260,7 @@ class PaymentController extends Controller
         }
 
         $paymentNumber = 'PAY-'.Str::upper(Str::random(12));
-        $frontendUrl = rtrim(config('app.frontend_url', 'http://localhost:3000'), '/');
+        $frontendUrl = $this->resolveFrontendUrl($request);
         // A ride's payment page returns to the ride, not to a food order (2026-11-18).
         $returnKind = $payableType === 'order' && isset($order) && $order instanceof Order && $order->order_type === 'transport' ? '&kind=ride' : '';
         $backendUrl = rtrim(config('app.url', 'http://localhost'), '/');
@@ -296,30 +296,42 @@ class PaymentController extends Controller
             return $this->errorResponse('Failed to initialize payment. Please try again.', 502);
         }
 
-        $payment = Payment::create([
-            'payment_number' => $paymentNumber,
-            'payable_type' => match ($payableType) {
-                'order' => Order::class,
-                'group_order' => GroupCheckout::class,
-                'ride_penalty' => \App\Models\RideCancellationPenalty::class,
-                default => Booking::class,
-            },
-            'payable_id' => $payableId,
-            'user_id' => $user->id,
-            'amount' => $amount / 100,
-            'method' => $validated['method'],
-            'provider' => 'paymongo',
-            'provider_payment_id' => $session['id'],
-            'status' => 'pending',
-            'description' => $description,
-            'metadata' => $session,
-        ]);
-        foreach ($owedFees as $fee) {
-            \App\Models\PaymentPenaltyItem::create([
-                'payment_id' => $payment->id,
-                'penalty_id' => $fee->id,
-                'amount' => (float) $fee->penalty_amount,
+        try {
+            $payment = Payment::create([
+                'payment_number' => $paymentNumber,
+                'payable_type' => match ($payableType) {
+                    'order' => Order::class,
+                    'group_order' => GroupCheckout::class,
+                    'ride_penalty' => \App\Models\RideCancellationPenalty::class,
+                    default => Booking::class,
+                },
+                'payable_id' => $payableId,
+                'user_id' => $user->id,
+                'amount' => $amount / 100,
+                'method' => $validated['method'],
+                'provider' => 'paymongo',
+                'provider_payment_id' => $session['id'],
+                'status' => 'pending',
+                'description' => $description,
+                'metadata' => $session,
             ]);
+            foreach ($owedFees as $fee) {
+                \App\Models\PaymentPenaltyItem::create([
+                    'payment_id' => $payment->id,
+                    'penalty_id' => $fee->id,
+                    'amount' => (float) $fee->penalty_amount,
+                ]);
+            }
+        } catch (\Throwable $e) {
+            Log::error('PayMongo checkout created but local payment persistence failed', [
+                'payment_number' => $paymentNumber,
+                'provider_checkout_id' => $session['id'] ?? null,
+                'payable_type' => $payableType,
+                'payable_id' => $payableId,
+                'exception' => $e->getMessage(),
+            ]);
+
+            return $this->errorResponse('Payment was started but could not be recorded. Please contact support.', 503);
         }
 
         return $this->successResponse([
@@ -327,6 +339,37 @@ class PaymentController extends Controller
             'checkout_url' => $checkoutUrl,
             'cancellation_fees' => round((float) $owedFees->sum('penalty_amount'), 2),
         ]);
+    }
+
+    private function resolveFrontendUrl(Request $request): string
+    {
+        $origin = rtrim(trim((string) $request->header('Origin', '')), '/');
+        $allowedOrigins = (array) config('cors.allowed_origins', []);
+        if ($origin !== '' && in_array($origin, $allowedOrigins, true)) {
+            $host = strtolower((string) (parse_url($origin, PHP_URL_HOST) ?? ''));
+            if (! in_array($host, ['localhost', '127.0.0.1', '::1'], true)) {
+                return $origin;
+            }
+        }
+
+        $candidates = [
+            (string) config('app.frontend_url', ''),
+            (string) config('app.url', ''),
+        ];
+
+        foreach ($candidates as $candidate) {
+            $candidate = rtrim(trim($candidate), '/');
+            if (! preg_match('#^https?://#i', $candidate)) {
+                continue;
+            }
+
+            $host = strtolower((string) (parse_url($candidate, PHP_URL_HOST) ?? ''));
+            if (! in_array($host, ['localhost', '127.0.0.1', '::1'], true)) {
+                return $candidate;
+            }
+        }
+
+        return 'http://localhost:3000';
     }
 
     public function paymongoReturn(Request $request): RedirectResponse

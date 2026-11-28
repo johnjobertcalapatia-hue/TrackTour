@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
 use App\Http\Requests\Auth\RegisterRequest;
 use App\Http\Resources\UserResource;
+use App\Exceptions\OtpDeliveryException;
 use App\Models\Barangay;
 use App\Models\User;
 use App\Services\DeliveryService;
@@ -296,9 +297,17 @@ class AuthController extends Controller
             ]
         );
 
-        $resetUrl = "http://localhost:3000/reset-password?token={$token}&email=" . urlencode($user->email);
+        $frontendUrl = rtrim((string) config('app.frontend_url', 'http://localhost:3000'), '/');
+        $resetUrl = $frontendUrl.'/reset-password?token='.$token.'&email='.urlencode($user->email);
 
-        Mail::to($user->email)->send(new \App\Mail\ResetPasswordMail($user->name ?? 'User', $resetUrl));
+        try {
+            Mail::to($user->email)->send(new \App\Mail\ResetPasswordMail($user->name ?? 'User', $resetUrl));
+        } catch (\Throwable $e) {
+            \DB::table('password_resets')->where('email', $user->email)->delete();
+            report($e);
+
+            return $this->errorResponse('Password reset email could not be sent. Please try again later.', 503);
+        }
 
         return $this->successResponse(null, 'If an account exists with that email, a password reset link has been sent.');
     }
@@ -358,7 +367,11 @@ class AuthController extends Controller
             ], 429);
         }
 
-        $retryAfter = $this->emailVerificationOtpService->send($user);
+        try {
+            $retryAfter = $this->emailVerificationOtpService->send($user);
+        } catch (OtpDeliveryException $e) {
+            return $this->errorResponse('The verification code could not be emailed. Please try again later.', 503);
+        }
 
         return $this->successResponse(
             ['retry_after' => $retryAfter],
